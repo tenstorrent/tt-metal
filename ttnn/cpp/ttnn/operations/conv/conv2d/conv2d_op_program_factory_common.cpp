@@ -504,38 +504,38 @@ static bool is_split_reader_viable_noc_estimator(
     const uint32_t num_act_transactions = activation_data_bytes / std::max(noc_transfer_unit_bytes, 1u);
 
     // Activation read: unicast L1-to-L1 loopback reads
-    NocEstimatorParams act_params{};
-    act_params.mechanism = NocMechanism::UNICAST;
-    act_params.pattern = NocPattern::ONE_FROM_ONE;
-    act_params.memory = MemoryType::L1;
-    act_params.arch = est_arch;
-    act_params.num_transactions = num_act_transactions;
-    act_params.num_transactions_per_barrier = num_act_transactions;
-    act_params.transaction_size_bytes = noc_transfer_unit_bytes;
-    act_params.loopback = true;
-    const double activation_cycles = estimate_noc_latency(act_params);
+    const double activation_cycles = estimate_noc_latency({
+        .mechanism = NocMechanism::UNICAST,
+        .pattern = NocPattern::ONE_FROM_ONE,
+        .memory = MemoryType::L1,
+        .arch = est_arch,
+        .num_transactions = num_act_transactions,
+        .num_transactions_per_barrier = num_act_transactions,
+        .transaction_size_bytes = noc_transfer_unit_bytes,
+        .loopback = true,
+    });
 
     // Weight DRAM read: unicast from interleaved DRAM
-    NocEstimatorParams dram_params{};
-    dram_params.mechanism = NocMechanism::UNICAST;
-    dram_params.pattern = NocPattern::ONE_FROM_ALL;
-    dram_params.memory = MemoryType::DRAM_INTERLEAVED;
-    dram_params.arch = est_arch;
-    dram_params.num_transactions = weights_block_ntiles;
-    dram_params.num_transactions_per_barrier = weights_block_ntiles;
-    dram_params.transaction_size_bytes = weights_tile_size;
-    const double dram_cycles = estimate_noc_latency(dram_params);
+    const double dram_cycles = estimate_noc_latency({
+        .mechanism = NocMechanism::UNICAST,
+        .pattern = NocPattern::ONE_FROM_ALL,
+        .memory = MemoryType::DRAM_INTERLEAVED,
+        .arch = est_arch,
+        .num_transactions = weights_block_ntiles,
+        .num_transactions_per_barrier = weights_block_ntiles,
+        .transaction_size_bytes = weights_tile_size,
+    });
 
     // Weight multicast: linked multicast L1-to-L1
-    NocEstimatorParams mcast_params{};
-    mcast_params.mechanism = NocMechanism::MULTICAST_LINKED;
-    mcast_params.pattern = NocPattern::ONE_TO_ALL;
-    mcast_params.memory = MemoryType::L1;
-    mcast_params.arch = est_arch;
-    mcast_params.num_transactions = weights_block_ntiles;
-    mcast_params.num_transactions_per_barrier = weights_block_ntiles;
-    mcast_params.transaction_size_bytes = weights_tile_size;
-    const double mcast_cycles = estimate_noc_latency(mcast_params);
+    const double mcast_cycles = estimate_noc_latency({
+        .mechanism = NocMechanism::MULTICAST_LINKED,
+        .pattern = NocPattern::ONE_TO_ALL,
+        .memory = MemoryType::L1,
+        .arch = est_arch,
+        .num_transactions = weights_block_ntiles,
+        .num_transactions_per_barrier = weights_block_ntiles,
+        .transaction_size_bytes = weights_tile_size,
+    });
 
     // Weight transfer = DRAM read + multicast (sequential)
     const double weight_cycles = dram_cycles + mcast_cycles;
