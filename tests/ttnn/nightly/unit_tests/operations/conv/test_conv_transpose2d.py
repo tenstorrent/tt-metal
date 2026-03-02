@@ -230,7 +230,7 @@ def run_conv_transpose2d(
         (1,  256, 256,  64, 64,  3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
         (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2 , SliceWidth ),
         (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 2, 2, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2 , SliceWidth ),
-        (16,  16,  16, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED,  1, SliceWidth ), # max slices is 1
+        (16,  16,  16, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED,  2, SliceWidth ),
         (1, 512,  512, 512, 512, 3, 3, 1, 1, 1, 1, 0, 0, {'act_block_h' : 256}, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 8, SliceWidth ),
         # fmt: on
     ),
@@ -279,10 +279,23 @@ def test_convt2d_dram(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    # for TILE layout, the maximum number of slices for the (16,  16,  16, 256, 128) test case is 1 due to tile boundary constraints
+    adjusted_num_slices = num_slices
+    if (
+        batch_size == 16
+        and input_height == 16
+        and input_width == 16
+        and input_channels == 256
+        and output_channels == 128
+        and layout == ttnn.TILE_LAYOUT
+    ):
+        adjusted_num_slices = 1
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
-        num_slices=0 if auto_slice else num_slices,
+        num_slices=0 if auto_slice else adjusted_num_slices,
     )
+
     if is_blackhole() and config is not None:
         # Blackhole requires different act_block_h to be divisble
         config["act_block_h"] = 32
