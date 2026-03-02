@@ -788,6 +788,38 @@ bool is_flattened(const GroupingInfo& grouping) {
 
 namespace tt::tt_fabric {
 
+// Helper: add forbidden constraints for used ASICs so they won't be reused.
+// Returns false if any constraint could not be added (e.g. would overconstrain).
+static bool add_forbidden_for_used_asics(
+    const std::set<AsicID>& used_asic_ids,
+    const std::set<uint32_t>& target_nodes,
+    MappingConstraints<uint32_t, AsicID>& constraints) {
+    for (const auto& asic_id : used_asic_ids) {
+        if (!constraints.add_forbidden_constraint(target_nodes, asic_id)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Helper: add forbidden constraints to all groupings (ASICs shared globally).
+static bool add_forbidden_for_used_asics_to_all_groupings(
+    const std::set<AsicID>& used_asic_ids,
+    const std::vector<GroupingInfo>& groupings,
+    std::vector<MappingConstraints<uint32_t, AsicID>>& constraints) {
+    for (size_t j = 0; j < groupings.size(); ++j) {
+        const auto& nodes = groupings[j].adjacency_graph.get_nodes();
+        if (nodes.empty()) {
+            continue;
+        }
+        std::set<uint32_t> targets(nodes.begin(), nodes.end());
+        if (!add_forbidden_for_used_asics(used_asic_ids, targets, constraints[j])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // TODO: Opimize constraints for maximum usage
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
@@ -818,31 +850,15 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
             break;
         }
 
-        // Add this result to our collection
         results.push_back(result);
 
-        // Collect all ASIC IDs that were used in this mapping
         std::set<AsicID> used_asic_ids;
-        for (const auto& [target_node, asic_id] : result.target_to_global) {
+        for (const auto& [_, asic_id] : result.target_to_global) {
             used_asic_ids.insert(asic_id);
         }
 
-        // Get set of all target nodes for forbidden constraints
         std::set<uint32_t> all_target_nodes(flat_mesh.get_nodes().begin(), flat_mesh.get_nodes().end());
-
-        // Add forbidden constraints: prevent all target nodes from mapping to any of the used ASIC IDs
-        // This ensures these ASIC IDs won't be used in future iterations
-        bool all_constraints_added = true;
-        for (const auto& asic_id : used_asic_ids) {
-            bool constraint_added = current_constraints.add_forbidden_constraint(all_target_nodes, asic_id);
-            if (!constraint_added) {
-                // If we can't add the constraint (e.g., it would make mapping impossible), we're done
-                all_constraints_added = false;
-                break;
-            }
-        }
-
-        if (!all_constraints_added) {
+        if (!add_forbidden_for_used_asics(used_asic_ids, all_target_nodes, current_constraints)) {
             break;
         }
     }
@@ -862,6 +878,8 @@ solve_for_many_groupings_to_psd_heterogeneous(
     std::vector<std::vector<MappingResult<uint32_t, AsicID>>> results(groupings.size());
     // Per-grouping constraints, same pattern as homogeneous current_constraints
     std::vector<MappingConstraints<uint32_t, AsicID>> current_constraints(groupings.size());
+    // Track seen (grouping_idx, used_asic_ids) to detect infinite loop when add_forbidden_constraint isn't working
+    std::vector<std::set<std::set<AsicID>>> seen_asic_sets_per_grouping(groupings.size());
 
     while (true) {
         bool found_any = false;
@@ -882,39 +900,27 @@ solve_for_many_groupings_to_psd_heterogeneous(
                 continue;
             }
 
-            results[i].push_back(result);
-            found_any = true;
-
-            // Add forbidden constraints after success (same as homogeneous)
             std::set<AsicID> used_asic_ids;
             for (const auto& [_, asic_id] : result.target_to_global) {
                 used_asic_ids.insert(asic_id);
             }
 
-            bool all_constraints_added = true;
-            for (const auto& asic_id : used_asic_ids) {
-                // Add to ALL groupings' constraints - ASICs are shared globally
-                for (size_t j = 0; const auto& other_grouping : groupings) {
-                    if (other_grouping.adjacency_graph.get_nodes().empty()) {
-                        ++j;
-                        continue;
-                    }
-                    std::set<uint32_t> targets_j(
-                        other_grouping.adjacency_graph.get_nodes().begin(),
-                        other_grouping.adjacency_graph.get_nodes().end());
-                    if (!current_constraints[j].add_forbidden_constraint(targets_j, asic_id)) {
-                        all_constraints_added = false;
-                        break;
-                    }
-                    ++j;
-                }
-                if (!all_constraints_added) {
-                    break;
-                }
+            // Guard against infinite loop when forbidden constraints don't take effect
+            if (seen_asic_sets_per_grouping[i].contains(used_asic_ids)) {
+                log_warning(
+                    tt::LogFabric,
+                    "Heterogeneous solver: grouping {} repeated result - stopping to prevent infinite loop",
+                    i);
+                overconstrained = true;
+                break;
             }
+            seen_asic_sets_per_grouping[i].insert(used_asic_ids);
 
-            if (!all_constraints_added) {
-                overconstrained = true;  // Matches homogeneous: stop entirely
+            results[i].push_back(result);
+            found_any = true;
+
+            if (!add_forbidden_for_used_asics_to_all_groupings(used_asic_ids, groupings, current_constraints)) {
+                overconstrained = true;
                 break;
             }
             ++i;
