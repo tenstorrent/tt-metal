@@ -23,8 +23,29 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape,
     const std::optional<ttnn::Tensor>& persistent_output_buffer) {
     TT_FATAL(!dim.empty() && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
+    const size_t num_dims = dim.size();
+    for (size_t i = 0; i < num_dims; i++) {
+        TT_FATAL(dim[i] >= 0, "dim[{}] must be non-negative, got {}", i, dim[i]);
+    }
+    TT_FATAL(
+        padding_left.size() == num_dims,
+        "padding_left size ({}) must match dim size ({})",
+        padding_left.size(),
+        num_dims);
+    TT_FATAL(
+        padding_right.size() == num_dims,
+        "padding_right size ({}) must match dim size ({})",
+        padding_right.size(),
+        num_dims);
+    TT_FATAL(
+        cluster_axis.size() == num_dims,
+        "cluster_axis size ({}) must match dim size ({})",
+        cluster_axis.size(),
+        num_dims);
+    TT_FATAL(!neighbor_semaphore.empty(), "neighbor_semaphore must not be empty");
+    TT_FATAL(!barrier_semaphore.empty(), "barrier_semaphore must not be empty");
 
-    std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(dim.size(), 1));
+    std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(num_dims, 1));
 
     // neighbor_semaphore[0] is always the H (primary) neighbor semaphore.
     // neighbor_semaphore[1] is the W (secondary) neighbor semaphore for 2D padding.
