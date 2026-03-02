@@ -305,8 +305,6 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
-    auto all_devices = cluster_->all_chip_ids();
-
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
@@ -325,8 +323,10 @@ void MetalContext::teardown() {
     }
     watcher_server_.reset();
 
-    risc_firmware_initializer_->teardown(risc_fw_init_done_);
-    risc_firmware_initializer_.reset();
+    if (risc_firmware_initializer_) {
+        risc_firmware_initializer_->teardown(risc_fw_init_done_);
+        risc_firmware_initializer_.reset();
+    }
     risc_fw_context_descriptor_.reset();
 
     if (profiler_state_manager_) {
