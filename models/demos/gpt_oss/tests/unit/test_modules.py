@@ -940,8 +940,9 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         num_layers: Number of layers to use (overrides config.num_hidden_layers)
         reset_seeds: Fixture to reset random seeds
     """
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-    from models.demos.gpt_oss.tt.model_config import ModelArgs
 
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
@@ -954,7 +955,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
 
     # Override number of layers
@@ -968,13 +969,10 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     # Create mesh config
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # Load state dict in HF format for reference model
-    model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False)
-    state_dict_hf = model_args.load_state_dict(
-        weights_path=model_args.model_path,
-        dummy_weights=False,
-        convert_to_meta_format=False,  # HF format for reference
-    )
+    # Use randomly-initialized weights (config already has num_hidden_layers overridden to num_layers,
+    # so this creates a small model — no need to deserialize the full checkpoint shards).
+    reference_model_hf = GptOssForCausalLM(config)
+    state_dict_hf = reference_model_hf.state_dict()
 
     # Convert to meta format for TT model
     state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
