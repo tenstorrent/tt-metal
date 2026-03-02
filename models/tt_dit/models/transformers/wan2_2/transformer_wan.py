@@ -22,7 +22,7 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor, float32_tensor, from_torch
+from ....utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
 from .attention_wan import WanAttention
 
 
@@ -421,8 +421,7 @@ class WanTransformer3DModel(Module):
         # TODO: Cleanup and move out of prepare_timestep_conditioning.
         timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
         tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
-        tt_timestep_proj_1BTD = ttnn.reshape(tt_timestep_proj_1BTD, list(tt_timestep_proj_1BTD.shape)[:-2] + [6, -1])
-
+        tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
         return tt_temb_11BD, tt_timestep_proj_1BTD
