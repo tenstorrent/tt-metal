@@ -167,6 +167,7 @@ class RunTimeOptions {
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
+        bool enable_speedy_path = false;
     } fabric_profiling_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
@@ -649,9 +650,9 @@ public:
 
     // If true, enables code profiling for receiver channel forward operations
     bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
-    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
-        fabric_profiling_settings.enable_rx_ch_fwd = enable;
-    }
+
+    // If true, enables code profiling for speedy path operations
+    bool get_enable_fabric_code_profiling_speedy_path() const { return fabric_profiling_settings.enable_speedy_path; }
 
     // If true, enables channel trimming resource usage capture on fabric routers
     bool get_enable_channel_trimming_capture() const { return enable_channel_trimming_capture; }
