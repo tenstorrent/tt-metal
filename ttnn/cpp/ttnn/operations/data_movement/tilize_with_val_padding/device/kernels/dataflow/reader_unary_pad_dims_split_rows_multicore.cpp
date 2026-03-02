@@ -102,8 +102,6 @@ void kernel_main() {
                 src_noc_addr = s.get_noc_addr(base_page_id + k * num_pages_in_row + i);
                 // Read from DRAM to tmp buffer
                 noc_async_read(src_noc_addr, l1_write_addr, page_size);
-                // Block before copying data from tmp to cb buffer
-                noc_async_read_barrier();
                 l1_write_addr += page_size;
             }
             // Process the last page in a row separately, as it may have padding at the end
@@ -111,11 +109,11 @@ void kernel_main() {
             noc_async_read(src_noc_addr, l1_write_addr, size_of_valid_data_in_last_page_in_row);
             uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
             fill_with_val<elem_size>(start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
-            noc_async_read_barrier();
             l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
         }
 
         fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+        noc_async_read_barrier();
         cb_push_back(cb_id_in0, num_tiles_per_row * has_rows);
     };
 
