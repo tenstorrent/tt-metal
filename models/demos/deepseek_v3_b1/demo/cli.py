@@ -21,7 +21,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_fabric_router_config,
     create_pipeline_configuration_from_num_procs,
-    create_synthetic_weights,
+    create_synthetic_weights_for_lm_head_stage,
     token_page_size_bytes,
 )
 from models.demos.deepseek_v3_b1.prepare_weights import (
@@ -189,7 +189,9 @@ def run_demo(
             raise RuntimeError(f"Pod pipeline requires 4 or 16 distributed processes; got {num_procs}")
         ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
-        embedding_tensor, lmhead_weights, _ = create_synthetic_weights(iterations)
+        # TODO: extend to all stages and allow for flipping between synthetic and real weights
+        embedding_tensor, lmhead_weights, _ = create_synthetic_weights_for_lm_head_stage(iterations)
+
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
             embedding_tensor=embedding_tensor,

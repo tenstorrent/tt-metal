@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     LMHeadWeights,
     create_single_galaxy_pipeline_configuration,
     create_single_pod_pipeline_configuration,
-    create_synthetic_weights,
+    create_synthetic_weights_for_lm_head_stage,
     token_page_size_bytes,
 )
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -1937,7 +1937,7 @@ def test_persistent_mode(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
-    embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights(iterations)
+    embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights_for_lm_head_stage(iterations)
     config = create_single_galaxy_pipeline_configuration(
         embedding_tensor=embedding_tensor,
         lmhead_weights=lmhead_weights,
@@ -2003,7 +2003,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
 
     iterations = 100
-    embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights(iterations)
+    embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights_for_lm_head_stage(iterations)
     config = create_single_pod_pipeline_configuration(
         embedding_tensor=embedding_tensor,
         lmhead_weights=lmhead_weights,

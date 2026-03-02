@@ -50,6 +50,44 @@ class LMHeadWeights:
     indices: torch.Tensor  # [1, n_total]
 
 
+def create_synthetic_weights_for_lm_head_stage(
+    iterations: int,
+) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
+    """
+    Build deterministic synthetic weights and expected output indices for the LMHead stage.
+    Returns (embedding_tensor, lmhead_weights, expected_indices).
+    """
+    torch_gamma = torch.ones((M, K), dtype=torch.bfloat16)
+    row_indices = torch.arange(iterations, dtype=torch.int64) % K
+    torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
+    torch_embedding_table[torch.arange(iterations), row_indices] = 1
+    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
+    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
+    torch_b[torch.arange(K), winner_per_row] = 1
+    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+    torch_expected_indices = torch.stack(
+        [
+            LMHeadSampling.golden(
+                torch_embedding_table[iteration : iteration + 1].float(),
+                torch_gamma.float(),
+                torch_b.float().unsqueeze(0),
+                indices=torch_indices_flat,
+                k=1,
+                p=1.0,
+            ).to(torch.uint32)
+            for iteration in range(iterations)
+        ],
+        dim=0,
+    )
+    embedding_tensor = torch_embedding_table.reshape(iterations, 1, 1, K)
+    lmhead_weights = LMHeadWeights(
+        gamma=torch_gamma,
+        weight_matrix=torch_b,
+        indices=torch_indices_flat,
+    )
+    return embedding_tensor, lmhead_weights, torch_expected_indices
+
+
 @dataclass
 class StageContext:
     """Bundles arguments passed to StageKind methods."""

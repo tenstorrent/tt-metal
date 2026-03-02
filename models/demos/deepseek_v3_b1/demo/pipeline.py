@@ -16,17 +16,13 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
     EmbeddingStage,
-    K,
     LMHeadStage,
     LMHeadWeights,
-    M,
     PassthroughPayload,
     PassthroughStage,
     StageContext,
     StageKind,
-    n_total,
 )
-from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 
 
@@ -34,44 +30,6 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
-
-
-def create_synthetic_weights(
-    iterations: int,
-) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
-    """
-    Build deterministic synthetic weights and expected output indices.
-    Returns (embedding_tensor, lmhead_weights, expected_indices).
-    """
-    torch_gamma = torch.ones((M, K), dtype=torch.bfloat16)
-    row_indices = torch.arange(iterations, dtype=torch.int64) % K
-    torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
-    torch_embedding_table[torch.arange(iterations), row_indices] = 1
-    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
-    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
-    torch_b[torch.arange(K), winner_per_row] = 1
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_indices = torch.stack(
-        [
-            LMHeadSampling.golden(
-                torch_embedding_table[iteration : iteration + 1].float(),
-                torch_gamma.float(),
-                torch_b.float().unsqueeze(0),
-                indices=torch_indices_flat,
-                k=1,
-                p=1.0,
-            ).to(torch.uint32)
-            for iteration in range(iterations)
-        ],
-        dim=0,
-    )
-    embedding_tensor = torch_embedding_table.reshape(iterations, 1, 1, K)
-    lmhead_weights = LMHeadWeights(
-        gamma=torch_gamma,
-        weight_matrix=torch_b,
-        indices=torch_indices_flat,
-    )
-    return embedding_tensor, lmhead_weights, torch_expected_indices
 
 
 def create_single_galaxy_pipeline_configuration(
