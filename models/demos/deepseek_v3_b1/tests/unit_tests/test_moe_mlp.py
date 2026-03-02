@@ -374,12 +374,11 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(
-        bdw, state_dict, layer_idx=ROUTED_EXPERT_LAYER_IDX, is_moe=True, move_to_device=True
-    )
+    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
     ttnn_gate_mm_weights = attn.gate_mm
     ttnn_rmsnorm_gamma = attn.ffn_norm
-    compute_core_grid = ttnn_gate_mm_weights.core_range_set
+    if ttnn_gate_mm_weights is not None:
+        compute_core_grid = ttnn_gate_mm_weights.core_range_set
 
     # Routing tensors (only when enable_routing=True)
     if not enable_routing:
@@ -472,8 +471,9 @@ def create_routed_expert_tensors(
         down_proj_expert_tensors = None
 
     if enable_routing:
+        assert is_moe, "enable_routing=True is only supported with MoE weights"
         # Gate bias/indices from prepare_weights helpers.
-        raw_bias = state_dict[f"model.layers.{ROUTED_EXPERT_LAYER_IDX}.mlp.gate.e_score_correction_bias"]
+        raw_bias = state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"]
         ttnn_gate_bias = create_gate_bias_tensor(raw_bias, device, input_core_grid, mesh_mapper=mesh_mapper)
         ttnn_gate_indices = create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
         # Gate output buffers (scores and indices on sender core)
@@ -561,9 +561,6 @@ def create_routed_expert_tensors(
     )
 
 
-# ============================================================================
-# Helper: extract valid data from padded routed expert output
-# ============================================================================
 def extract_routed_expert_output(
     output_final_torch, num_gate_proj_cores, final_output_width_per_core, per_core_down_proj_N
 ):
@@ -576,9 +573,6 @@ def extract_routed_expert_output(
     return torch.cat(result_valid, dim=-1)
 
 
-# ============================================================================
-# Helper: create reference DeepseekV3MoE model for comparison
-# ============================================================================
 def create_reference_moe_model(state_dict, layer_idx):
     """Instantiate DeepseekV3MoE, load state dict (with auto-dequantization for real weights), return model and config."""
     from transformers import AutoConfig
@@ -599,9 +593,6 @@ def create_reference_moe_model(state_dict, layer_idx):
     return reference_model, hf_config
 
 
-# ============================================================================
-# Helper: create reference dense MLP slices (shared + 8 routed) for comparison
-# ============================================================================
 def create_reference_dense_mlp_slices(state_dict, layer_idx):
     """Build shared (first 2048) and 8 routed MLP slices from dense layer state dict for reference comparison.
 
@@ -650,9 +641,6 @@ def create_reference_dense_mlp_slices(state_dict, layer_idx):
     return shared_mlp, routed_mlps
 
 
-# ============================================================================
-# Helper: create reference full dense MLP (single 18432-wide) for block-level comparison
-# ============================================================================
 def create_reference_dense_full_mlp(state_dict, layer_idx):
     """Build one DeepseekV3MLP(intermediate_size=18432) from dense layer state dict.
 
@@ -677,9 +665,6 @@ def create_reference_dense_full_mlp(state_dict, layer_idx):
     return full_mlp
 
 
-# ============================================================================
-# Helper: create reference DeepseekV3MLP models (expert 0 + shared) for comparison
-# ============================================================================
 def create_reference_mlp_models(state_dict, layer_idx):
     """Instantiate expert-0 and shared-expert DeepseekV3MLP from state dict for reference comparison."""
     from transformers import AutoConfig
@@ -718,9 +703,6 @@ def create_reference_mlp_models(state_dict, layer_idx):
     return expert_mlp, shared_mlp
 
 
-# ============================================================================
-# Test: Fused MoE (routed expert + shared expert)
-# ============================================================================
 @pytest.mark.parametrize(
     "use_hardcoded_expert_index",
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
@@ -874,9 +856,6 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     logger.info(f"Fused MoE test PASSED! (PCC={pcc})")
 
 
-# ============================================================================
-# Test: Fused MoE with reduce_to_one on 4x2 mesh
-# ============================================================================
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
@@ -1194,14 +1173,11 @@ def test_moe_fused_with_reduce(
     logger.info("Fused MoE with reduce test PASSED!")
 
 
-# ============================================================================
-# Test: Fused MoE with enable_routing=False (dense MLP mode)
-# ============================================================================
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
-    """Test MoeOp with enable_routing=False: same as MLP, no routing logic."""
+    """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
 
     M = RoutedExpert.M
     K = RoutedExpert.K
@@ -1320,9 +1296,6 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     logger.info(f"MoeOp no-routing test PASSED! (PCC={pcc})")
 
 
-# ============================================================================
-# Test: Fused MLP (enable_routing=False) with reduce_to_one on 4x2 mesh
-# ============================================================================
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
