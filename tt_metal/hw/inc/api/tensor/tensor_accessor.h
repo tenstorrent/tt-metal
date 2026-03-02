@@ -76,7 +76,7 @@ public:
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
-        const uint32_t page_size_in = 0) :
+        const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
         dspec_instance(args), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     constexpr const auto& dspec() const {
