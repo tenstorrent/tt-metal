@@ -76,6 +76,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        nlohmann_json::nlohmann_json
 )
 add_dependencies(distributed metalium_GeneratedHeaders)
 
