@@ -33,8 +33,7 @@ jobs:
         id: generate
         run: |
           # Owner mapping:
-          # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama models
-          # Djordje Ivanovic (U053W15B6JF) - Qwen 3 32B text model
+          # Pavle Petrovic (U08E1JCDVNX), Salar Hosseini Khorasgani (U08CEGF78ET) - Llama and Qwen3-32B models
           # Gongyu Wang (U07RY6B5FLJ) - Qwen 2.5 VL models
           # Sarva Sanjay (U08H31YMN4Q) - Qwen 3 VL models
           # Ambrose Ling (U08GELBB1AP) - BH tests
@@ -239,7 +238,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
               "sampling-tests": true,
               "multimodal": false,
-              "co-owner-1-id": "U053W15B6JF",
+              "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
@@ -255,7 +254,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
               "structured-output": true,
               "multimodal": false,
-              "co-owner-1-id": "U053W15B6JF",
+              "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
