@@ -7,7 +7,7 @@ import ttnn
 import math
 import pytest
 
-from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
+from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices
 
 
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
