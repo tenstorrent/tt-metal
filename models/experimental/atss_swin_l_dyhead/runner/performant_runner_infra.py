@@ -13,6 +13,7 @@ from PIL import Image
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.tt_cnn.tt.pipeline import get_memory_config_for_persistent_dram_tensor
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
