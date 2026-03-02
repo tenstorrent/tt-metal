@@ -33,6 +33,7 @@
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
+#include "utils/config_path.hpp"
 #include "utils/memory_utils.hpp"
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
@@ -288,8 +289,7 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string training_config_name = std::filesystem::current_path().string() +
-                                       "/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name = "training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -297,8 +297,12 @@ int main(int argc, char **argv) {
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
 
-    app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
-    app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
+    app.add_option(
+           "-c,--config", training_config_name, "Training config name (resolved from configs/training_configs/)")
+        ->default_val(training_config_name);
+    app.add_option(
+           "--multihost", multihost_config_name, "Multihost config name (resolved from configs/multihost_configs/)")
+        ->default_val(multihost_config_name);
 
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
@@ -309,15 +313,14 @@ int main(int argc, char **argv) {
         ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
-    auto yaml_config = YAML::LoadFile(training_config_name);
+    auto resolved_training_config = ttml::utils::resolve_training_config(training_config_name);
+    auto yaml_config = YAML::LoadFile(resolved_training_config.string());
 
     TrainingConfig training_config = parse_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
-    // Resolve model_config path relative to tt-train root (configs/training_configs/ -> configs/ -> tt-train)
-    auto training_config_path = std::filesystem::path(training_config_name).parent_path();
-    std::string model_config_path =
-        (training_config_path.parent_path().parent_path() / training_config.model_config).string();
-    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
+    // Resolve model_config path relative to configs root
+    auto model_config_path = ttml::utils::resolve_config_path(training_config.model_config);
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path.string()));
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
     // of model that doesn't fit in the memory of the device.
@@ -325,7 +328,8 @@ int main(int argc, char **argv) {
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
-        multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
+        auto resolved_multihost_config = ttml::utils::resolve_multihost_config(multihost_config_name);
+        multihost_config = parse_multihost_config(YAML::LoadFile(resolved_multihost_config.string()));
     }
 
     if (multihost_config.enable_mpi) {
