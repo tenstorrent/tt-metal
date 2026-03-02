@@ -11,7 +11,7 @@ import ttnn
 from diffusers import DiffusionPipeline
 from loguru import logger
 
-from models.experimental.stable_diffusion_xl_base.lora.lora_weights_manager import TtLoRAWeightsManager
+from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
@@ -21,18 +21,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
 
 
-def _get_base_state_dict_and_pipeline_with_lora(is_ci_env):
-    """Load pipeline, get base UNet state_dict, load LoRA (do not fuse yet). Returns (base_state_dict, pipeline)."""
+def _get_diffusers_pipeline(is_ci_env):
     pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
-    pipeline.unet.eval()
-    base_state_dict = {k: v.clone() for k, v in pipeline.unet.state_dict().items()}
-    pipeline.load_lora_weights(LORA_PATH)
-    return base_state_dict, pipeline
+    return pipeline
 
 
 @pytest.mark.parametrize(
@@ -44,13 +40,19 @@ def _get_base_state_dict_and_pipeline_with_lora(is_ci_env):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
-    """Compare TT GEGLU (with fused LoRA) vs Diffusers GEGLU (with fused LoRA) via output PCC."""
-    base_state_dict, pipeline = _get_base_state_dict_and_pipeline_with_lora(is_ci_env)
+    pipeline = _get_diffusers_pipeline(is_ci_env)
+    pipeline.unet.eval()
 
-    lora_mgr = TtLoRAWeightsManager(device, pipeline)
-    tt_geglu = TtGEGLU(device, base_state_dict, module_path, ModelOptimisations(), lora_weights_manager=lora_mgr)
-    lora_mgr.fuse_lora_weights(lora_scale=1.0)
-    pipeline.fuse_lora()
+    pipeline_for_tt = _get_diffusers_pipeline(is_ci_env)
+    state_dict = pipeline_for_tt.unet.state_dict()
+
+    lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
+    tt_geglu = TtGEGLU(device, state_dict, module_path, ModelOptimisations(), lora_weights_manager=lora_mgr)
+
+    lora_mgr.load_lora_weights(LORA_PATH)
+    lora_mgr.fuse_lora(lora_scale=1.0)
+    pipeline.load_lora_weights(LORA_PATH)
+    pipeline.fuse_lora(lora_scale=1.0)
 
     try:
         torch_geglu = reduce(
@@ -75,8 +77,8 @@ def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env,
     ttnn_output_tensor = tt_geglu.forward(ttnn_input_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor).squeeze()
 
-    del pipeline, tt_geglu, lora_mgr
+    del pipeline, pipeline_for_tt, tt_geglu, lora_mgr
     gc.collect()
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    logger.info(f"LoRA GEGLU PCC is {pcc_message}")
+    logger.info(f"PCC is {pcc_message}")

@@ -9,7 +9,7 @@ import ttnn
 from diffusers import DiffusionPipeline
 from loguru import logger
 
-from models.experimental.stable_diffusion_xl_base.lora.lora_weights_manager import TtLoRAWeightsManager
+from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
@@ -19,18 +19,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
 
 
-def _get_base_state_dict_and_pipeline_with_lora(is_ci_env):
-    """Load pipeline, get base UNet state_dict, load LoRA (do not fuse yet). Returns (base_state_dict, pipeline)."""
+def _get_diffusers_pipeline(is_ci_env):
     pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
-    pipeline.unet.eval()
-    base_state_dict = {k: v.clone() for k, v in pipeline.unet.state_dict().items()}
-    pipeline.load_lora_weights(LORA_PATH)
-    return base_state_dict, pipeline
+    return pipeline
 
 
 @pytest.mark.parametrize(
@@ -76,13 +72,16 @@ def test_lora_fusion_pcc_crossattnup(
     is_ci_env,
     reset_seeds,
 ):
-    """Compare TT CrossAttnUpBlock2D (with fused LoRA) vs Diffusers (with fused LoRA) via output PCC."""
-    base_state_dict, pipeline = _get_base_state_dict_and_pipeline_with_lora(is_ci_env)
+    pipeline = _get_diffusers_pipeline(is_ci_env)
+    pipeline.unet.eval()
 
-    lora_mgr = TtLoRAWeightsManager(device, pipeline)
+    pipeline_for_tt = _get_diffusers_pipeline(is_ci_env)
+    state_dict = pipeline_for_tt.unet.state_dict()
+
+    lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
     tt_crosattn = TtCrossAttnUpBlock2D(
         device,
-        base_state_dict,
+        state_dict,
         f"up_blocks.{block_id}",
         ModelOptimisations(),
         query_dim,
@@ -92,8 +91,11 @@ def test_lora_fusion_pcc_crossattnup(
         debug_mode=debug_mode,
         lora_weights_manager=lora_mgr,
     )
-    lora_mgr.fuse_lora_weights(lora_scale=1.0)
-    pipeline.fuse_lora()
+
+    lora_mgr.load_lora_weights(LORA_PATH)
+    lora_mgr.fuse_lora(lora_scale=1.0)
+    pipeline.load_lora_weights(LORA_PATH)
+    pipeline.fuse_lora(lora_scale=1.0)
 
     torch_crosattn = pipeline.unet.up_blocks[block_id]
 
@@ -141,8 +143,8 @@ def test_lora_fusion_pcc_crossattnup(
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    del pipeline, tt_crosattn, lora_mgr
+    del pipeline, pipeline_for_tt, tt_crosattn, lora_mgr
     gc.collect()
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    logger.info(f"LoRA CrossAttnUpBlock2D PCC is {pcc_message}")
+    logger.info(f"PCC is {pcc_message}")

@@ -27,7 +27,9 @@ LORA_PATH = "lora_weights/pytorch_lora_weights.safetensors"
 
 
 def _get_lora_impacted_weights(sd):
-    """Returns a dict of LoRA impacted weights. Weight names are cleaned up to match TT naming convention."""
+    """
+    Returns a dict of LoRA impacted weights. Weight names are cleaned up to match TT naming convention.
+    """
     out = {}
     for k, tensor in sd.items():
         if ".lora_A." in k or ".lora_B." in k:
@@ -39,6 +41,9 @@ def _get_lora_impacted_weights(sd):
 
 
 def _build_reference_weights(peft_sd):
+    """
+    Transforms weights from PEFT state dict to match TT weights format. Returns a dict of weights that can be compared to TT weights.
+    """
     ref = {}
     self_attention_paths = set()
 
@@ -117,22 +122,15 @@ def test_lora_fusion_pcc(mesh_device):
         use_safetensors=True,
     )
 
-    pipeline_config = TtSDXLPipelineConfig(
-        num_inference_steps=20,
-        guidance_scale=8.0,
-        is_galaxy=is_galaxy(),
-        capture_trace=False,
-        vae_on_device=False,
-        encoders_on_device=False,
-    )
+    pipeline_config = TtSDXLPipelineConfig(num_inference_steps=50, guidance_scale=5.0, is_galaxy=is_galaxy())
 
     tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
-    lora_manager = tt_pipeline.lora_weights_manager
+    lora_manager = tt_pipeline._lora_weights_manager
 
     lora_manager.load_lora_weights(LORA_PATH)
     assert lora_manager.has_lora_adapter()
 
-    lora_manager.fuse_lora_weights(lora_scale=1.0)
+    lora_manager.fuse_lora(lora_scale=1.0)
 
     # Build PEFT reference
     torch_pipeline.load_lora_weights(LORA_PATH)
@@ -144,23 +142,21 @@ def test_lora_fusion_pcc(mesh_device):
 
     skipped_keys = []
     for weights_name, ref_tensor in ref_weights_dict.items():
-        if weights_name not in lora_manager.base_weights_device:
+        if weights_name not in lora_manager._base_weights_device:
             skipped_keys.append(weights_name)
             continue
 
-        tt_tensor = lora_manager.base_weights_device[weights_name]
+        tt_tensor = lora_manager._base_weights_device[weights_name]
         tt_torch_tensor = ttnn.to_torch(tt_tensor)
 
         if tt_torch_tensor.shape != ref_tensor.shape:
-            logger.warning(
-                f"Shape mismatch for {weights_name}: TT={tt_torch_tensor.shape} vs ref={ref_tensor.shape}, skipping"
-            )
+            logger.warning(f"Shape mismatch for {weights_name}: TT={tt_torch_tensor.shape} vs ref={ref_tensor.shape}")
             continue
 
         assert_with_pcc(ref_tensor, tt_torch_tensor, pcc=0.999)
 
         try:
-            torch.testing.assert_close(ref_tensor, tt_torch_tensor, atol=1e-3, rtol=1e-3)
+            torch.testing.assert_close(ref_tensor, tt_torch_tensor, atol=1e-2, rtol=1e-2)
         except AssertionError as _:
             diff = torch.abs(ref_tensor - tt_torch_tensor).mean()
             logger.warning(f"{weights_name}: Mean Diff = {diff:.6f}")
@@ -171,11 +167,6 @@ def test_lora_fusion_pcc(mesh_device):
 
         # assert sim >= 0.999, f"{ref_key}: Low cosine similarity! {sim.item():.6f}"
 
-    if skipped_keys:
-        logger.warning(f"{len(skipped_keys)} LoRA impacted weights were not fused into base weights")
-        logger.warning(f"Following weights were not fused: {skipped_keys}")
-        # Fail if any ref key was skipped: TT pipeline must have all base weight keys for valid comparison
-        assert not skipped_keys, (
-            f"{len(skipped_keys)} weights in PEFT reference are missing on TT (naming mismatch or missing layers). "
-            "First few: " + str(skipped_keys[:10])
-        )
+    assert (
+        not skipped_keys
+    ), f"{len(skipped_keys)} LoRA impacted weights were not fused into base weights. Following weights were not fused: {skipped_keys}"

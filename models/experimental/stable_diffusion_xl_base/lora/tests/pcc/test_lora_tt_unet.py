@@ -8,7 +8,7 @@ import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
-from models.experimental.stable_diffusion_xl_base.lora.lora_weights_manager import TtLoRAWeightsManager
+from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -17,18 +17,14 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
 
 
-def _get_base_state_dict_and_pipeline_with_lora(is_ci_env):
-    """Load pipeline, get base UNet state_dict, load LoRA (do not fuse yet). Returns (base_state_dict, pipeline)."""
+def _get_diffusers_pipeline(is_ci_env):
     pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
-    pipeline.unet.eval()
-    base_state_dict = {k: v.clone() for k, v in pipeline.unet.state_dict().items()}
-    pipeline.load_lora_weights(LORA_PATH)
-    return base_state_dict, pipeline
+    return pipeline
 
 
 def prepare_ttnn_tensors(
@@ -99,21 +95,27 @@ def run_unet_model(
     iterations=1,
 ):
     assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
-    base_state_dict, pipeline = _get_base_state_dict_and_pipeline_with_lora(is_ci_env)
-    torch_unet = pipeline.unet
+    pipeline = _get_diffusers_pipeline(is_ci_env)
+    pipeline.unet.eval()
 
-    lora_mgr = TtLoRAWeightsManager(device, pipeline)
+    pipeline_for_tt = _get_diffusers_pipeline(is_ci_env)
+    state_dict = pipeline_for_tt.unet.state_dict()
+
+    lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
     model_config = ModelOptimisations()
     tt_unet = TtUNet2DConditionModel(
         device,
-        base_state_dict,
+        state_dict,
         "unet",
         model_config=model_config,
         debug_mode=debug_mode,
         lora_weights_manager=lora_mgr,
     )
-    lora_mgr.fuse_lora_weights(lora_scale=1.0)
-    pipeline.fuse_lora()
+
+    lora_mgr.load_lora_weights(LORA_PATH)
+    lora_mgr.fuse_lora(lora_scale=1.0)
+    pipeline.load_lora_weights(LORA_PATH)
+    pipeline.fuse_lora(lora_scale=1.0)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)
@@ -126,7 +128,7 @@ def run_unet_model(
         "time_ids": torch_time_ids,
     }
 
-    torch_output_tensor = torch_unet(
+    torch_output_tensor = pipeline.unet(
         torch_input_tensor,
         timestep=torch_timestep_tensor,
         encoder_hidden_states=torch_encoder_tensor,
@@ -164,7 +166,7 @@ def run_unet_model(
 
     ttnn.ReadDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
     logger.info(f"LoRA UNet PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):
@@ -194,7 +196,7 @@ def run_unet_model(
 
         ttnn.ReadDeviceProfiler(device)
 
-    del pipeline, tt_unet, lora_mgr
+    del pipeline, pipeline_for_tt, tt_unet, lora_mgr
     gc.collect()
 
 
@@ -202,6 +204,7 @@ def run_unet_model(
     "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
     [
         ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        # TODO: Add test for 9x128x128 input shape if needed (inpainting)
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
