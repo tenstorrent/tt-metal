@@ -400,6 +400,9 @@ public:
         NocSendType noc_send_type;
 
         static PackedPayloadAndSendType load(const volatile Derived* hdr) {
+            static_assert(
+                offsetof(PacketHeaderBase, payload_size_bytes) % 4 == 0,
+                "payload_size_bytes must be 4B-aligned for packed load to function properly");
             // offset 40 from header start is 4B-aligned (sizeof(NocCommandFields)==40)
             auto raw = *reinterpret_cast<const volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(hdr) + offsetof(PacketHeaderBase, payload_size_bytes));
