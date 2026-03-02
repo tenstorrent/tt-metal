@@ -29,8 +29,11 @@ void kernel_main() {
         // Read seed from message
         const uint32_t seed = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/1);
 
-        // Set random generator with seed
-        rand_tile_init(seed);
+        // A seed value of UINT32_MAX (0xFFFFFFFF) is a special value
+        // that skips rand_tile_init, leaving the PRNG state unchanged.
+        if (seed != UINT32_MAX) {
+            rand_tile_init(seed);
+        }
     }
 
     // Pop the communication entry
