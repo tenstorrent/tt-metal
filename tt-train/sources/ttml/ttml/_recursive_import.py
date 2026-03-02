@@ -24,9 +24,7 @@ def _should_import(name: str, target_module: types.ModuleType) -> bool:
     return not hasattr(target_module, name)
 
 
-def _ensure_submodule_exists(
-    parent_module: types.ModuleType, submodule_name: str
-) -> types.ModuleType:
+def _ensure_submodule_exists(parent_module: types.ModuleType, submodule_name: str) -> types.ModuleType:
     """
     Ensure a submodule exists in the parent module, creating it if necessary.
 
@@ -65,9 +63,7 @@ def _ensure_submodule_exists(
         if inspect.ismodule(existing_module):
             # Only use existing module if it's a real package (has __path__ or __file__)
             # Otherwise, we may have a synthetic module that should be replaced
-            if hasattr(existing_module, "__path__") or hasattr(
-                existing_module, "__file__"
-            ):
+            if hasattr(existing_module, "__path__") or hasattr(existing_module, "__file__"):
                 if (
                     not hasattr(parent_module, submodule_name)
                     or getattr(parent_module, submodule_name) is not existing_module
@@ -168,8 +164,6 @@ def _recursive_import_from_ttml(
                 setattr(target_module, "__all__", tuple(target_all))
             else:
                 # Create __all__ from source, filtered by what actually exists
-                filtered_all = [
-                    item for item in source_all if hasattr(target_module, item)
-                ]
+                filtered_all = [item for item in source_all if hasattr(target_module, item)]
                 if filtered_all:
                     setattr(target_module, "__all__", tuple(filtered_all))
