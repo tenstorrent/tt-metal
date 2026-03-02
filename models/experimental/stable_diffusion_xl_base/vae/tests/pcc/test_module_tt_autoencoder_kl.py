@@ -22,8 +22,11 @@ from loguru import logger
         # 1024x1024 image resolution
         ((1024, 1024), (1, 4, 128, 128), 0.933, "decoder"),
         ((1024, 1024), (1, 3, 1024, 1024), 0.9769, "encoder"),
+        # 512x512 image resolution
+        ((512, 512), (1, 4, 64, 64), 0.936, "decoder"),
+        ((512, 512), (1, 3, 512, 512), 0.9797, "encoder"),
     ],
-    ids=("test_decode", "test_encode"),
+    ids=("test_1024x1024_decode", "test_1024x1024_encode", "test_512x512_decode", "test_512x512_encode"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae(
@@ -38,10 +41,6 @@ def test_vae(
     is_ci_v2_env,
     model_location_generator,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     model_location = model_location_generator(
         "stable-diffusion-xl-base-1.0/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )

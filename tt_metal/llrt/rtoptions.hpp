@@ -217,8 +217,6 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
-    bool skip_deleting_built_cache = false;
-
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
@@ -384,7 +382,9 @@ public:
     bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+    bool watcher_eth_disabled() const { return watcher_feature_disabled(watcher_eth_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
+    bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
@@ -585,8 +585,6 @@ public:
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
-
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
@@ -643,7 +641,11 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
-    void set_enable_all_telemetry() { enable_fabric_telemetry = true; fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask; fabric_telemetry_settings.enabled = true; }
+    void set_enable_all_telemetry() {
+        enable_fabric_telemetry = true;
+        fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask;
+        fabric_telemetry_settings.enabled = true;
+    }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
@@ -750,9 +752,11 @@ private:
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
+    const std::string watcher_eth_str = "ETH";
     const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
     const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
     const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
+    const std::string watcher_cb_sanitize_str = "CB_SANITIZE";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };

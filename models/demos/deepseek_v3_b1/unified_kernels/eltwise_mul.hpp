@@ -179,7 +179,7 @@ struct EltwiseMul {
                         CTArgs::cb_in0, CTArgs::cb_scalar, i, 0, i);
                 }
                 // Step 2: dest * cb_in1 -> dest (using binary dest reuse)
-                deepseek_binary_dest_reuse_tiles_init<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in1);
+                deepseek_binary_dest_reuse_tiles_init(CTArgs::cb_in1);
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     deepseek_binary_dest_reuse_tiles<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in1, i, i);
                 }

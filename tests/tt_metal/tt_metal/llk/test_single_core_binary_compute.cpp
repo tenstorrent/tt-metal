@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -311,6 +312,7 @@ bool single_core_binary(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
