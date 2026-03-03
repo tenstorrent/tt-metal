@@ -22,9 +22,8 @@ ttnn::Tensor swiglu_fw(
     SwigluFwPath path) {
     switch (path) {
         case SwigluFwPath::Composite: {
-            // This path is used when TTML_SWIGLU_PATH=composite_metal (LlamaMLP calls ops::swiglu
-            // with path=Composite, which invokes this block). Same math as LlamaMLP composite:
-            // silu(X@W1), X@W3, mul, then (result)@W2; for perf comparison.
+            // Composite path: performs the same math as LlamaMLP composite.
+            // silu(X@W1), X@W3, multiply, then (result)@W2; used for performance comparison.
             auto xw1 = ttnn_fixed::matmul(input_tensor, w1);
             auto xw3 = ttnn_fixed::matmul(input_tensor, w3);
             auto swished = ttnn::silu(xw1);
