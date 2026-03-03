@@ -120,10 +120,17 @@ class WanAttention(Module):
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
+        # Single-device (sp=1, tp=1): use smaller chunks to avoid SDPA hang on seq_len 1152.
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        if sp_factor == 1 and tp_factor == 1:
+            q_chunk, k_chunk = 128, 128
+        else:
+            q_chunk, k_chunk = 256, 256
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
