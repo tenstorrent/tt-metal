@@ -7,8 +7,14 @@ Matmul operation descriptor.
 
 Creates an OpDescriptor for matrix multiplication using the
 MatmulMultiCoreReuseOptimizedProgramFactory descriptor path.
+
+Note: This descriptor always uses MatmulMultiCoreReuseOptimizedProgramFactory.
+The ttnn.matmul() path may select a different factory (e.g. multicast) for the
+same shapes. This will converge when descriptors support factory selection via
+the device op variant pattern.
 """
 
+import math
 from typing import Optional
 
 import ttnn
@@ -55,7 +61,8 @@ def matmul(
 
     # Auto-generate a simple program config if not provided
     if program_config is None:
-        program_config = _default_program_config(input_a, input_b, transpose_a, transpose_b)
+        fp32 = getattr(compute_kernel_config, "fp32_dest_acc_en", False) if compute_kernel_config else False
+        program_config = _default_program_config(input_a, input_b, transpose_a, transpose_b, core_range_set, fp32)
 
     # Use create_matmul_attributes to finalize params (computes bcast_batch, output_dtype, etc.)
     base_params = ttnn.MatmulParams()
@@ -114,10 +121,12 @@ def _default_program_config(
     input_b: "ttnn.Tensor",
     transpose_a: bool,
     transpose_b: bool,
+    core_range_set: "ttnn.CoreRangeSet",
+    fp32_dest_acc_en: bool,
 ) -> "ttnn.MatmulMultiCoreReuseProgramConfig":
-    """Generate a simple single-core MatmulMultiCoreReuseProgramConfig.
+    """Generate a MatmulMultiCoreReuseProgramConfig from tensor shapes and core grid.
 
-    Uses a single core with all tiles processed on that core.
+    Distributes M rows across cores. Each core handles all N columns.
     """
     TILE_HEIGHT = 32
     TILE_WIDTH = 32
@@ -137,11 +146,35 @@ def _default_program_config(
     else:
         N = b_shape[-1] // TILE_WIDTH
 
+    # Count cores and compute bounding box from the core range set
+    num_cores = 0
+    max_x = 0
+    max_y = 0
+    for cr in core_range_set.ranges():
+        start = cr.start
+        end = cr.end
+        num_cores += (end.x - start.x + 1) * (end.y - start.y + 1)
+        max_x = max(max_x, end.x)
+        max_y = max(max_y, end.y)
+
+    grid_size = ttnn.CoreCoord(max_x + 1, max_y + 1)
+
+    per_core_M = math.ceil(M / num_cores)
+    per_core_N = N
+    in0_block_w = K
+
+    # Subblock tiling: maximize out_subblock_w under fp32/fp16 limit
+    limit = 4 if fp32_dest_acc_en else 8
+    out_subblock_w = min(per_core_N, limit)
+    while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
+        out_subblock_w -= 1
+    out_subblock_h = 1
+
     return ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
-        in0_block_w=K,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=M,
-        per_core_N=N,
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
     )
