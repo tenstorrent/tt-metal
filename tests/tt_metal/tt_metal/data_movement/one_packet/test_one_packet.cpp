@@ -68,7 +68,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     vector<uint32_t> compile_args = {
         (uint32_t)test_config.num_packets, (uint32_t)test_config.packet_size_bytes, (uint32_t)test_config.test_id};
 
-
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_packet/kernels/";
     std::string read_kernel_filename = "read_one_packet";
     std::string write_kernel_filename = "write_one_packet";
