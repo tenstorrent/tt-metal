@@ -125,7 +125,7 @@ class TtSwinLBackbone:
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
             math_approx_mode=False,
         )
