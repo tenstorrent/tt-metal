@@ -3998,8 +3998,8 @@ class MoeOp:
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
 
-        cb_id_manager = CircularBufferIdManager()
-        cb_id_context = cb_id_manager.create_context()
+        self.cb_id_manager = CircularBufferIdManager()
+        cb_id_context = self.cb_id_manager.create_context()
 
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             shared_residual_mcast_src_tensor,
@@ -4140,21 +4140,13 @@ class MoeOp:
         return cb_descriptors
 
     def _build_dummy_cb_descs(self):
-        """Build dummy CB descriptors — only preserve format_descriptors.
+        """Build dummy CB descriptors from the ID manager's allocation table.
 
-        Everything else is dummied out. No buffer pointer, no address offset,
-        minimal total_size, full device grid for core_ranges.
+        Everything is dummied out. No buffer pointer, no address offset,
+        minimal total_size (one page), full device grid for core_ranges.
         The reconfig tensor provides the real config at kernel start.
         """
-        full_grid = self.ctx.full_device_grid
-        dummy_descs = []
-        for desc in self.cb_descriptors:
-            dummy_desc = ttnn.CBDescriptor()
-            dummy_desc.total_size = desc.format_descriptors[0].page_size
-            dummy_desc.core_ranges = full_grid
-            dummy_desc.format_descriptors = desc.format_descriptors
-            dummy_descs.append(dummy_desc)
-        return dummy_descs
+        return self.cb_id_manager.build_dummy_cb_descriptors(self.ctx.full_device_grid)
 
     def _build_cb_reconfig_tensor(self):
         """Build L1-sharded CB reconfig tensor using shared utility."""

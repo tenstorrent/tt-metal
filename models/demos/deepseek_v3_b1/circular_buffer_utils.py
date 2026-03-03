@@ -47,6 +47,32 @@ class CircularBufferIdManager:
     def create_context(self) -> "CircularBufferIdContext":
         return CircularBufferIdContext(self)
 
+    def build_dummy_cb_descriptors(self, core_ranges) -> list:
+        """Build minimal CB descriptors for every allocated CB ID.
+
+        Each descriptor carries the correct format (data_format, tile, page_size)
+        but uses dummy sizing (total_size = page_size) and the supplied
+        ``core_ranges`` instead of real buffer addresses.  Useful when the real
+        CB configuration is applied at runtime via a reconfig tensor.
+        """
+        descs = []
+        for cb_id, (data_format, tile_desc) in self._id_to_format.items():
+            tile = ttnn.Tile([tile_desc.height, tile_desc.width])
+            page_size = tile.get_tile_size(data_format)
+
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=cb_id,
+                data_format=data_format,
+                page_size=page_size,
+                tile=tile_desc,
+            )
+            desc = ttnn.CBDescriptor()
+            desc.total_size = page_size
+            desc.core_ranges = core_ranges
+            desc.format_descriptors = [fmt]
+            descs.append(desc)
+        return descs
+
 
 class CircularBufferIdContext:
     """A scoped view into a :class:`CircularBufferIdManager`.
