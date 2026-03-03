@@ -74,8 +74,8 @@ def collect_debug_bus_signals(
         risc_debug = noc_block.get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
             continue
-
         try:
+            raise RiscHaltError(risc_name, location)
             with risc_debug.ensure_halted():
                 pass
         except RiscHaltError:
@@ -98,12 +98,12 @@ def collect_debug_bus_signals(
     original_data = read_words_from_device(location, l1_address, word_count=4)
     try:
         # Collect all debug bus groups as group_name -> 128-bit hex value
-        debug_bus_data: dict[str, str] = {}
+        debug_bus_data: dict[str, str] = defaultdict(dict)
         for group_name in sorted(all_groups):
             # Read the signal group (this writes the 128-bit value to l1_address)
             group_sample = debug_bus.read_signal_group(group_name, l1_address)
             # Read the raw 128-bit value from l1_address
-            debug_bus_data[group_name] = f"0x{group_sample.raw_data:032x}"
+            debug_bus_data[group_name] = {signal_name: value for signal_name, value in group_sample.items()}
 
         # Return only the core data - location/device info comes from PerBlockCheckResult
         return {
