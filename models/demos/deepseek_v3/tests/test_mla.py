@@ -194,6 +194,7 @@ def run_test_forward_pass_mla2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    perf_mode=False,
 ):
     # Check params
     if mode == "prefill":
@@ -288,49 +289,57 @@ def run_test_forward_pass_mla2d(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
-
-    if mode == "prefill":
-        tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+    if perf_mode:
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            for _ in range(10):
+                tt_output = MLA2D.forward_decode(
+                    tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
+                )
+        tt_output.deallocate()
     else:
-        tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        # Convert to interleaved to match model behavior and avoid implicit conversion in to_torch
+        tt_output = ttnn.to_memory_config(tt_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Convert to interleaved to match model behavior and avoid implicit conversion in to_torch
-    tt_output = ttnn.to_memory_config(tt_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tt_output_torch = ttnn.to_torch(
+            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
+        ).reshape(
+            -1, seq_len, hf_config_short.hidden_size
+        )  # Concatenate all batches together
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    ).reshape(
-        -1, seq_len, hf_config_short.hidden_size
-    )  # Concatenate all batches together
-
-    # Check PCC
-    tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
-        torch_page_table,
-        mesh_device.get_num_devices(),
-    )
-    if mode == "prefill":
-        assert (
-            check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
-            and check_cache_matches(
-                tt_cache[user_id : user_id + 1, :, :seq_len],
-                output_cache,
+        # Check PCC
+        tt_cache = torch_cache_from_paged(
+            get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
+            torch_page_table,
+            mesh_device.get_num_devices(),
+        )
+        if mode == "prefill":
+            assert (
+                check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
+                and check_cache_matches(
+                    tt_cache[user_id : user_id + 1, :, :seq_len],
+                    output_cache,
+                    hf_config_short.kv_lora_rank,
+                    pcc_required=PCC_REQUIRED_KVPE,
+                )
+                and check_cache_unchanged(
+                    tt_cache, (slice(user_id, user_id + 1), slice(None), slice(None, seq_len), slice(None))
+                )
+            ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+        else:
+            assert check_output_matches(
+                tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
+            ) and check_cache_matches(
+                tt_cache[torch.arange(batch_size), :, position_ids, :].unsqueeze(2),
+                output_cache[:, :, -1:, :],
                 hf_config_short.kv_lora_rank,
                 pcc_required=PCC_REQUIRED_KVPE,
-            )
-            and check_cache_unchanged(
-                tt_cache, (slice(user_id, user_id + 1), slice(None), slice(None, seq_len), slice(None))
-            )
-        ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
-    else:
-        assert check_output_matches(
-            tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
-        ) and check_cache_matches(
-            tt_cache[torch.arange(batch_size), :, position_ids, :].unsqueeze(2),
-            output_cache[:, :, -1:, :],
-            hf_config_short.kv_lora_rank,
-            pcc_required=PCC_REQUIRED_KVPE,
-        ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
 
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
@@ -353,6 +362,14 @@ optimal_topology = (
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "perf_mode",
+    [
+        [
+            True,
+        ]
+    ],
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
@@ -380,6 +397,7 @@ def test_forward_pass(
     ccl,
     model_path,
     module_path,
+    perf_mode,
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
@@ -406,6 +424,7 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        perf_mode,
     )
 
 
