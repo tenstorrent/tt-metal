@@ -104,9 +104,14 @@ NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsD
         tt_metal::WriterDataMovementConfig(reader_compile_time_args));
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
-        // the upper half of the tile and rest are in the lower half of tile.
-        uint32_t in_tile_offset_by_batch = i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
+        // in_tile_offset_by_head is the offset within an input core's buffer to get to head index i (supports >32
+        // heads).
+        uint32_t tile_row_index = i / TILE_HEIGHT;
+        uint32_t row_in_tile = i % TILE_HEIGHT;
+        uint32_t offset_in_tile = row_in_tile < face_h
+                                      ? row_in_tile * sub_tile_line_bytes
+                                      : (row_in_tile - face_h) * sub_tile_line_bytes + face_hw * element_size;
+        uint32_t in_tile_offset_by_batch = tile_row_index * head_size + offset_in_tile;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -152,10 +157,20 @@ void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
     auto& reader_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);
 
+    const auto& input_shape = input_tensor.padded_shape();
+    const uint32_t head_dim = input_shape[3];
+    const uint32_t head_tiles = head_dim / shared_variables.tile_w;
+    const uint32_t head_size =
+        head_tiles * tt::tile_size(tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
+    const uint32_t face_h = shared_variables.face_h;
+    const uint32_t face_hw = face_h * shared_variables.tile_w;  // face_hw for offset_in_tile
     for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
-        uint32_t in_tile_offset_by_batch = i < shared_variables.face_h
-                                               ? i * shared_variables.sub_tile_line_bytes
-                                               : (i + shared_variables.face_h) * shared_variables.sub_tile_line_bytes;
+        uint32_t tile_row_index = i / TILE_HEIGHT;
+        uint32_t row_in_tile = i % TILE_HEIGHT;
+        uint32_t offset_in_tile = row_in_tile < face_h ? row_in_tile * shared_variables.sub_tile_line_bytes
+                                                       : (row_in_tile - face_h) * shared_variables.sub_tile_line_bytes +
+                                                             face_hw * input_tensor.element_size();
+        uint32_t in_tile_offset_by_batch = tile_row_index * head_size + offset_in_tile;
         const auto& core = shared_variables.cores[i];
         auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
         runtime_args_reader[0] = in_tile_offset_by_batch;
