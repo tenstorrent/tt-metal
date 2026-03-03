@@ -4,9 +4,11 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <vector>
 #include <algorithm>
+#include <numeric>
 #include <unordered_map>
 #include <string_view>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
