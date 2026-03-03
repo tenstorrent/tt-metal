@@ -674,7 +674,26 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device, cluster_axis",
     [
-        pytest.param((1, 8), (1, 8), 1, id="1x8"),
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
     ],
     indirect=["mesh_device"],
 )
