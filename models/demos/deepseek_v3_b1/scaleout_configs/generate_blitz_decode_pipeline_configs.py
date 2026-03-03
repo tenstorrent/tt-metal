@@ -55,7 +55,7 @@ def sort_hosts_canonical(hosts):
 
 
 def generate_slice_to_pcie_device_mapping(
-    mapping_file, host_vector, mpi_user=None, worker_tt_metal_home=None, output_dir=None
+    mapping_file, host_vector, mpi_user=None, worker_tt_metal_home=None, shared_dir=None
 ):
     if worker_tt_metal_home:
         wh = Path(worker_tt_metal_home)
@@ -91,8 +91,8 @@ def generate_slice_to_pcie_device_mapping(
 
     cmd.extend(["--bind-to", "none", "--tag-output"])
 
-    if output_dir:
-        cmd.extend(["--wdir", output_dir])
+    if shared_dir:
+        cmd.extend(["--wdir", shared_dir])
 
     if worker_tt_metal_home:
         wh = Path(worker_tt_metal_home)
@@ -111,7 +111,7 @@ def generate_slice_to_pcie_device_mapping(
         logger.error(f"{cmd} Interrupted")
         sys.exit(1)
 
-    actual_mapping_file = os.path.join(output_dir, mapping_file) if output_dir else mapping_file
+    actual_mapping_file = os.path.join(shared_dir, mapping_file) if shared_dir else mapping_file
 
     if not os.path.exists(actual_mapping_file):
         logger.error(f"{actual_mapping_file} not found")
@@ -176,7 +176,7 @@ def generate_pipeline_config_files(
     mpi_user=None,
     hostfile=None,
     worker_tt_metal_home=None,
-    output_dir=None,
+    shared_dir=None,
 ):
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
@@ -215,7 +215,7 @@ def generate_pipeline_config_files(
     host_vector = config_hosts
     physical_mapping_file = "slice_to_pcie_device_mapping.yaml"
     actual_mapping_file = generate_slice_to_pcie_device_mapping(
-        physical_mapping_file, host_vector, mpi_user, worker_tt_metal_home, output_dir
+        physical_mapping_file, host_vector, mpi_user, worker_tt_metal_home, shared_dir
     )
     generate_rank_bindings(config, actual_mapping_file, worker_tt_metal_home)
     generate_rank_file(config)
@@ -246,11 +246,12 @@ if __name__ == "__main__":
         "skips local checks, skips btl_tcp_if_include, and overrides TT_MESH_GRAPH_DESC_PATH for workers.",
     )
     parser.add_argument(
-        "--output-dir",
+        "--shared-dir",
         type=str,
         default=None,
-        help="Shared NFS directory for mpirun output (e.g. /ci/pipeline-123). "
-        "When set, mpirun uses --wdir to write generated files here, avoiding scp.",
+        help="Shared NFS directory passed to mpirun via --wdir (e.g. /ci/pipeline-123). "
+        "Workers write generated files (e.g. slice_to_pcie_device_mapping.yaml) here "
+        "so the runner can read them back, avoiding scp.",
     )
     args = parser.parse_args()
     generate_pipeline_config_files(
@@ -258,5 +259,5 @@ if __name__ == "__main__":
         args.mpi_user,
         args.hostfile,
         args.worker_tt_metal_home,
-        args.output_dir,
+        args.shared_dir,
     )
