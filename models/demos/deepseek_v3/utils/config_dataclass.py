@@ -193,6 +193,32 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
 class DeepseekMoEReduceScatterConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.deepseek_moe_reduce_scatter op"""
 
+    @classmethod
+    def create_default_input_memory_config(
+        cls, users_per_row: int, hidden_size: int, tp_size: int
+    ) -> ttnn.MemoryConfig:
+        NUM_DECODE_RS_SHARD_CORES = 7
+
+        return ttnn.MemoryConfig(
+            ttnn.BufferType.L1,
+            ttnn.NdShardSpec(
+                ttnn.Shape([1, 1, users_per_row, hidden_size // tp_size // NUM_DECODE_RS_SHARD_CORES]),
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                    ]
+                ),
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+
     output_memory_config: ttnn.MemoryConfig
     dim: int
     num_links: int = 4
