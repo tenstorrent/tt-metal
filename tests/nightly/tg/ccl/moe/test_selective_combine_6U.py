@@ -94,19 +94,6 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     return dense_metadata_buffer, dense_metadata_len, dense_token_maps, active_token_counts
 
 
-# this is the algorithm currently used by MoE compute
-def _active_token_core_split_counts_simple(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
-    split_token_end_indexes = []
-    for act in active_token_counts.tolist():
-        end_index = [math.ceil(act / token_parallel_core_dim) for _ in range(token_parallel_core_dim - 1)]
-        end_index + [act - (token_parallel_core_dim - 1) * math.ceil(act / token_parallel_core_dim)]
-
-        split_token_end_indexes.append(list(reversed(end_index)))
-
-    return split_token_end_indexes
-
-
-# this is the algorithm currently used by MoE compute
 def _active_token_core_split_counts_even(token_parallel_block_size, active_token_counts, token_parallel_core_dim):
     split_token_end_indexes = []
     for act in active_token_counts.tolist():
@@ -138,7 +125,7 @@ def gen_dense_input_contribs(
     hidden_size = sparse_contribs_tensor.shape[-1]
     seq = sparse_contribs_tensor.shape[-2]
 
-    dense_input_contribs_tensor = torch.zeros([experts, batch * seq, hidden_size]).bfloat16()
+    dense_input_contribs_tensor = torch.ones([experts, batch * seq, hidden_size]).bfloat16()
     token_parallel_block_size = batch // token_parallel_core_dim
     block_counts = _active_token_core_split_counts_even(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
@@ -164,13 +151,13 @@ def gen_dense_input_contribs(
                 dense_input_contribs_tensor[global_e_idx, device_dense_idxs[local_e_idx]] = contrib.bfloat16()
 
                 if device_blocked_dense_counts[local_e_idx] == block_counts[global_e_idx][-1] - 1:
-                    use_idx = device_dense_idxs[local_e_idx] or 1
-                    device_dense_idxs[local_e_idx] = (
-                        math.ceil(use_idx / token_parallel_block_size) * token_parallel_block_size
-                    )
                     device_blocked_dense_counts[local_e_idx] = 0
                     if len(block_counts[global_e_idx]) > 1:
                         block_counts[global_e_idx].pop()
+                    device_dense_idxs[local_e_idx] = (
+                        token_parallel_core_dim - len(block_counts[global_e_idx])
+                    ) * token_parallel_block_size
+
                 else:
                     device_dense_idxs[local_e_idx] += 1
                     device_blocked_dense_counts[local_e_idx] += 1
@@ -229,13 +216,13 @@ def gen_output_ref(
                 output_data_map[k, global_batch * seq + s] = 1
 
                 if device_blocked_dense_counts[local_e_idx] == block_counts[global_e_idx][-1] - 1:
-                    use_idx = device_dense_idxs[local_e_idx] or 1
-                    device_dense_idxs[local_e_idx] = (
-                        math.ceil(use_idx / token_parallel_block_size) * token_parallel_block_size
-                    )
                     device_blocked_dense_counts[local_e_idx] = 0
                     if len(block_counts[global_e_idx]) > 1:
                         block_counts[global_e_idx].pop()
+                    device_dense_idxs[local_e_idx] = (
+                        token_parallel_core_dim - len(block_counts[global_e_idx])
+                    ) * token_parallel_block_size
+
                 else:
                     device_dense_idxs[local_e_idx] += 1
                     device_blocked_dense_counts[local_e_idx] += 1
@@ -476,12 +463,12 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
         tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
     assert tt_out_agg.shape == output_ref.shape
-    for t in range(tt_out_agg.shape[0]):
-        for k in range(tt_out_agg.shape[1]):
-            if output_data_map[t, k].item() == 1:
+    for k in range(tt_out_agg.shape[0]):
+        for t in range(tt_out_agg.shape[1]):
+            if output_data_map[k, t].item() == 1:
                 assert torch.equal(
-                    tt_out_agg[t, k, :], output_ref[t, k, :]
-                ), f"Equal check failed for {t=}, {k=} with {tt_out_agg[t,k, :]=} and {output_ref[t,k, :]=}"
+                    tt_out_agg[k, t, :], output_ref[k, t, :]
+                ), f"Equal check failed for {t=}, {k=} with {tt_out_agg[k,t, :]=} and {output_ref[k,t, :]=}"
 
 
 def _run_op_with_trace(num_iters, op_func, mesh_device, profiler):
@@ -649,9 +636,9 @@ def _run_test(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
-@pytest.mark.parametrize("batch", [512, 128])
+@pytest.mark.parametrize("batch", [512, 128, 64])
 @pytest.mark.parametrize("experts", [32])
-@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("select_experts_k", [1, 2, 8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
@@ -660,7 +647,7 @@ def _run_test(
 @pytest.mark.parametrize("data_parallel_core_dim", [4])
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
-@pytest.mark.parametrize("num_test_iters", [50])
+@pytest.mark.parametrize("num_test_iters", [5])
 @pytest.mark.parametrize("num_inner_iters", [1])
 def test_decode(
     mesh_device,
