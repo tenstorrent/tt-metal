@@ -4,6 +4,9 @@ name: "[internal] Validate installation step from instructions impl"
 on:
   workflow_call:
 
+env:
+  TT_INSTALLER_VERSION: v2.1.0
+
 jobs:
   install-and-run-mnist:
     name: TT-Installer and run MNIST MLP
@@ -20,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
+          timeout 60 curl -fsSL "https://github.com/tenstorrent/tt-installer/releases/download/${TT_INSTALLER_VERSION}/install.sh" -O
           chmod +x install.sh
 
           timeout 600 bash ./install.sh \
@@ -53,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
+          timeout 60 curl -fsSL "https://github.com/tenstorrent/tt-installer/releases/download/${TT_INSTALLER_VERSION}/install.sh" -O
           chmod +x install.sh
 
           timeout 600 bash ./install.sh \
