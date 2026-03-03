@@ -177,6 +177,9 @@ class Penalties1D(LightweightModule):
         self._cluster_shape = cfg.mesh_device.shape
         self._num_devices = max(self._cluster_shape[-1], self._cluster_shape[-2])
         self._op_kwargs = {"sub_core_grids": cfg.sub_core_grids} if cfg.sub_core_grids else {}
+        self._replicate_mapper = ttnn.ShardTensor2dMesh(
+            cfg.mesh_device, dims=(None, None), mesh_shape=self._cluster_shape
+        )
 
         # Slice tensors for scatter → slice (port from tt_penalties.py:117-139)
         self._slice_start, self._slice_end = self._build_slice_tensors()
@@ -212,12 +215,16 @@ class Penalties1D(LightweightModule):
             device=self.config.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         src_tt = ttnn.from_torch(
             src_host,
             device=self.config.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self._token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=params.prompt_mask)
 
@@ -308,6 +315,8 @@ class Penalties1D(LightweightModule):
                 device=self.config.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._replicate_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         self._token_bin_counts_and_mask(
             new_tokens=new_tokens,
@@ -345,12 +354,16 @@ class Penalties1D(LightweightModule):
                 device=self.config.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._replicate_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             src_tt = ttnn.from_torch(
                 src_host,
                 device=self.config.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._replicate_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self._token_bin_counts_and_mask(
                 new_tokens=tokens_tt,

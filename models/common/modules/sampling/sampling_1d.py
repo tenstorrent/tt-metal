@@ -22,7 +22,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
 from models.common.modules.tt_ccl import get_tt_ccl
-from models.common.utils import LogProbsCalculator
 
 # ---------------------------------------------------------------------------
 # Config
@@ -142,6 +141,8 @@ class Sampling1D(LightweightModule):
         self._local_indices = _materialize(cfg.local_indices)
         self._seeds = _materialize(cfg.seeds)
         self._user_ids = _materialize(cfg.user_ids)
+        from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
+
         self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
 
         self._device_buffers_loaded = True
