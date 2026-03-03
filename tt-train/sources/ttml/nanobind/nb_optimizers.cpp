@@ -82,73 +82,53 @@ void py_module_types(nb::module_& m) {
 
 namespace {
 
-YAML::Node dict_to_yaml(nb::dict config) {
-    YAML::Node node;
-    for (auto [key, val] : config) {
-        std::string k = nb::cast<std::string>(key);
-        if (nb::isinstance<nb::bool_>(val)) {
-            node[k] = nb::cast<bool>(val);
-        } else if (nb::isinstance<nb::int_>(val)) {
-            node[k] = nb::cast<int64_t>(val);
-        } else if (nb::isinstance<nb::float_>(val)) {
-            node[k] = nb::cast<double>(val);
-        } else if (nb::isinstance<nb::str>(val)) {
-            node[k] = nb::cast<std::string>(val);
+YAML::Node obj_to_yaml(nb::object obj) {
+    if (nb::isinstance<nb::dict>(obj)) {
+        YAML::Node node;
+        for (auto [key, val] : nb::cast<nb::dict>(obj)) {
+            node[nb::cast<std::string>(key)] = obj_to_yaml(nb::borrow(val));
         }
+        return node;
     }
-    return node;
-}
-
-nb::dict yaml_to_dict(const YAML::Node& node) {
-    nb::dict result;
-    for (auto it = node.begin(); it != node.end(); ++it) {
-        auto key = it->first.as<std::string>();
-        const auto& val = it->second;
-        if (!val.IsScalar()) {
-            continue;
+    if (nb::isinstance<nb::list>(obj)) {
+        YAML::Node node;
+        for (auto item : nb::cast<nb::list>(obj)) {
+            node.push_back(obj_to_yaml(nb::borrow(item)));
         }
-        auto str = val.Scalar();
-        if (str == "true") {
-            result[key.c_str()] = true;
-        } else if (str == "false") {
-            result[key.c_str()] = false;
-        } else {
-            bool converted = false;
-            try {
-                size_t pos = 0;
-                auto i = std::stoll(str, &pos);
-                if (pos == str.size()) {
-                    result[key.c_str()] = i;
-                    converted = true;
-                }
-            } catch (...) {
-            }
-            if (!converted) {
-                try {
-                    size_t pos = 0;
-                    auto d = std::stod(str, &pos);
-                    if (pos == str.size()) {
-                        result[key.c_str()] = d;
-                        converted = true;
-                    }
-                } catch (...) {
-                }
-            }
-            if (!converted) {
-                result[key.c_str()] = str;
-            }
-        }
+        return node;
     }
-    return result;
+    if (nb::isinstance<nb::bool_>(obj)) {
+        return YAML::Node(nb::cast<bool>(obj));
+    }
+    if (nb::isinstance<nb::int_>(obj)) {
+        return YAML::Node(nb::cast<int64_t>(obj));
+    }
+    if (nb::isinstance<nb::float_>(obj)) {
+        return YAML::Node(nb::cast<double>(obj));
+    }
+    if (nb::isinstance<nb::str>(obj)) {
+        return YAML::Node(nb::cast<std::string>(obj));
+    }
+    return YAML::Node();
 }
 
 }  // namespace
 
 void py_module(nb::module_& m) {
+    // Python-side registry for optimizers defined in Python.
+    // Kept separate from the C++ registry to avoid unique_ptr ownership issues
+    // (Python-constructed trampoline objects can't be transferred to C++ unique_ptr).
+    nb::dict py_registry;
+    m.attr("_py_optimizer_registry") = py_registry;
+
     m.def(
         "create_optimizer",
-        [](nb::dict config, serialization::NamedParameters params) {
-            return create_optimizer(dict_to_yaml(config), std::move(params));
+        [py_registry](nb::dict config, serialization::NamedParameters params) -> nb::object {
+            auto type = nb::cast<std::string>(config.attr("get")("type", "AdamW"));
+            if (py_registry.contains(type.c_str())) {
+                return py_registry[type.c_str()](config, std::move(params));
+            }
+            return nb::cast(create_optimizer(obj_to_yaml(config), std::move(params)));
         },
         nb::arg("config"),
         nb::arg("params"),
@@ -156,20 +136,15 @@ void py_module(nb::module_& m) {
 
     m.def(
         "register_optimizer",
-        [](const std::string& type, nb::object creator) {
-            OptimizerRegistry::instance().register_optimizer(
-                type,
-                [creator](
-                    const YAML::Node& config, serialization::NamedParameters params) -> std::unique_ptr<OptimizerBase> {
-                    return nb::cast<std::unique_ptr<OptimizerBase>>(creator(yaml_to_dict(config), std::move(params)));
-                });
-        },
+        [py_registry](const std::string& type, nb::object creator) { py_registry[type.c_str()] = creator; },
         nb::arg("type"),
         nb::arg("creator"),
         "Register a custom optimizer creator function");
 
     {
-        auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
+        auto py_optimizer_base =
+            static_cast<nb::class_<OptimizerBase, OptimizerBaseTrampoline>>(m.attr("OptimizerBase"));
+        py_optimizer_base.def(nb::init<serialization::NamedParameters>(), nb::arg("parameters"));
         py_optimizer_base.def("get_name", &OptimizerBase::get_name, "Get optimizer name");
         py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad, "Zero out gradient");
         py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
