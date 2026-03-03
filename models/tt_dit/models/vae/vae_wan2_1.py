@@ -286,7 +286,7 @@ class WanCausalConv3d(Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             on_host=True,
             pad_value=0,
-            dtype=dtype
+            dtype=dtype,
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
@@ -737,7 +737,7 @@ class WanConv2d(Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             on_host=True,
             pad_value=0,
-            dtype=dtype
+            dtype=dtype,
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0)
 
