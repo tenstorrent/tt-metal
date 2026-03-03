@@ -218,6 +218,7 @@ def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_pa
 # =============================================================================
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_rmsnorm_post_all_gather(device):
     """
     Test rms_norm_post_all_gather operation.
@@ -361,6 +362,7 @@ def test_rmsnorm_post_all_gather(device):
     assert_with_pcc(ref_out_local, tt_out_cpu, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
@@ -609,6 +611,7 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     assert_with_pcc(ref_out, tt_out_cpu, pcc=0.99)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "inp_shape, weight_shape",
     [
