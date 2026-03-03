@@ -308,12 +308,12 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
         graph[current_op_id.top()].connections.push_back(counter);
     }
 
-    // Capture buffer pages for this address once (at first allocation).
-    // Pages are stored per-address instead of per-operation to keep the
-    // JSON report small (~0.5 MB vs ~1 GB for per-operation snapshots).
+    // Capture buffer pages for this address on every allocation.
+    // The same address may be re-allocated with a different page configuration
+    // (e.g. fold at ps=448 then max_pool2d at ps=128).  Each allocation is
+    // recorded with its graph counter so the importer can pick the right version.
     uint64_t addr = buffer->address();
-    if (capture_buffer_pages_ && !captured_mesh_devices.empty() &&
-        buffer_pages_by_address_.find(addr) == buffer_pages_by_address_.end()) {
+    if (capture_buffer_pages_ && !captured_mesh_devices.empty()) {
         auto all_pages = ttnn::reports::get_buffer_pages(captured_mesh_devices);
         std::vector<ttnn::reports::BufferPageInfo> pages_for_addr;
         for (auto& page : all_pages) {
@@ -322,7 +322,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
             }
         }
         if (!pages_for_addr.empty()) {
-            buffer_pages_by_address_[addr] = std::move(pages_for_addr);
+            buffer_pages_by_address_[addr].emplace_back(counter, std::move(pages_for_addr));
         }
     }
 }
@@ -862,26 +862,30 @@ nlohmann::json GraphProcessor::get_report() const {
         report["per_operation_buffers"] = std::move(per_op_json);
     }
 
-    // Buffer pages keyed by address (captured once per unique buffer allocation).
-    // The importer reconstructs per-operation buffer_pages by cross-referencing
-    // these with per_operation_buffers (which tracks active addresses per op).
+    // Buffer pages keyed by address, versioned by allocation counter.
+    // Each address maps to a list of snapshots so the importer can pick
+    // the correct page config when an address is re-used.
     if (!buffer_pages_by_address_.empty()) {
         nlohmann::json bp_json = nlohmann::json::object();
-        for (const auto& [addr, pages] : buffer_pages_by_address_) {
-            nlohmann::json pages_json = nlohmann::json::array();
-            for (const auto& page : pages) {
-                pages_json.push_back(
-                    {{"device_id", page.device_id},
-                     {"address", page.address},
-                     {"core_y", page.core_y},
-                     {"core_x", page.core_x},
-                     {"bank_id", page.bank_id},
-                     {"page_index", page.page_index},
-                     {"page_address", page.page_address},
-                     {"page_size", page.page_size},
-                     {"buffer_type", static_cast<int>(page.buffer_type)}});
+        for (const auto& [addr, snapshots] : buffer_pages_by_address_) {
+            nlohmann::json snaps_json = nlohmann::json::array();
+            for (const auto& [alloc_counter, pages] : snapshots) {
+                nlohmann::json pages_json = nlohmann::json::array();
+                for (const auto& page : pages) {
+                    pages_json.push_back(
+                        {{"device_id", page.device_id},
+                         {"address", page.address},
+                         {"core_y", page.core_y},
+                         {"core_x", page.core_x},
+                         {"bank_id", page.bank_id},
+                         {"page_index", page.page_index},
+                         {"page_address", page.page_address},
+                         {"page_size", page.page_size},
+                         {"buffer_type", static_cast<int>(page.buffer_type)}});
+                }
+                snaps_json.push_back({{"alloc_counter", alloc_counter}, {"pages", std::move(pages_json)}});
             }
-            bp_json[std::to_string(addr)] = std::move(pages_json);
+            bp_json[std::to_string(addr)] = std::move(snaps_json);
         }
         report["buffer_pages_by_address"] = std::move(bp_json);
     }
@@ -1011,24 +1015,28 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
         report["per_operation_buffers"] = std::move(per_op_json);
     }
 
-    // Buffer pages keyed by address (captured once per unique buffer allocation)
+    // Buffer pages keyed by address, versioned by allocation counter
     if (!processor->buffer_pages_by_address_.empty()) {
         nlohmann::json bp_json = nlohmann::json::object();
-        for (const auto& [addr, pages] : processor->buffer_pages_by_address_) {
-            nlohmann::json pages_json = nlohmann::json::array();
-            for (const auto& page : pages) {
-                pages_json.push_back(
-                    {{"device_id", page.device_id},
-                     {"address", page.address},
-                     {"core_y", page.core_y},
-                     {"core_x", page.core_x},
-                     {"bank_id", page.bank_id},
-                     {"page_index", page.page_index},
-                     {"page_address", page.page_address},
-                     {"page_size", page.page_size},
-                     {"buffer_type", static_cast<int>(page.buffer_type)}});
+        for (const auto& [addr, snapshots] : processor->buffer_pages_by_address_) {
+            nlohmann::json snaps_json = nlohmann::json::array();
+            for (const auto& [alloc_counter, pages] : snapshots) {
+                nlohmann::json pages_json = nlohmann::json::array();
+                for (const auto& page : pages) {
+                    pages_json.push_back(
+                        {{"device_id", page.device_id},
+                         {"address", page.address},
+                         {"core_y", page.core_y},
+                         {"core_x", page.core_x},
+                         {"bank_id", page.bank_id},
+                         {"page_index", page.page_index},
+                         {"page_address", page.page_address},
+                         {"page_size", page.page_size},
+                         {"buffer_type", static_cast<int>(page.buffer_type)}});
+                }
+                snaps_json.push_back({{"alloc_counter", alloc_counter}, {"pages", std::move(pages_json)}});
             }
-            bp_json[std::to_string(addr)] = std::move(pages_json);
+            bp_json[std::to_string(addr)] = std::move(snaps_json);
         }
         report["buffer_pages_by_address"] = std::move(bp_json);
     }
