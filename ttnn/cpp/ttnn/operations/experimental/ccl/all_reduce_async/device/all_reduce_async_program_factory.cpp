@@ -296,7 +296,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     /*
         Overview of algorithm:
 
-        - Ouput: each link gets assigned a start and end core index, since multiple links
+        - Output: each link gets assigned a start and end core index, since multiple links
             may have to read different offesets within a shard on the same core
         - First, assign all the necessary cores needed for a link. This may result in the link
             containing extra pages. This will result in an overflow, which is used to detect

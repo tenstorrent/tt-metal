@@ -90,7 +90,7 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
-    // Boths CQs on the device must be idle when this is called.
+    // Both CQs on the device must be idle when this is called.
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 

@@ -142,7 +142,7 @@ from enum import Enum
             None,
             None,
         ),
-        # (1, 1, 32, 8192) (32 to 8 cores width shardrd)
+        # (1, 1, 32, 8192) (32 to 8 cores width sharded)
         (
             32,
             8192,
@@ -152,7 +152,7 @@ from enum import Enum
             (32, 256),
             None,
         ),
-        # (1, 1, 32, 8192) (64 to 8 cores width shardrd)
+        # (1, 1, 32, 8192) (64 to 8 cores width sharded)
         (
             32,
             8192,
@@ -162,7 +162,7 @@ from enum import Enum
             (32, 128),
             None,
         ),
-        # (1, 1, 32, 1280) (8 to 1 cores width shardrd)
+        # (1, 1, 32, 1280) (8 to 1 cores width sharded)
         (
             32,
             1280,

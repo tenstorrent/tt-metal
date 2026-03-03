@@ -512,7 +512,7 @@ Tensor run_remainder(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
-    // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
+    // explicitly using binary_ng to avoid fallback to legacy because of row broadcast
     Tensor result = ttnn::subtract(
         input_a,
         ttnn::multiply(

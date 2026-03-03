@@ -1261,7 +1261,7 @@ ALWI void matmul_blocks(
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     // precondition: in0_cb has M*K produced
-    // preconditino: in1_cb has K*N produced
+    // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 

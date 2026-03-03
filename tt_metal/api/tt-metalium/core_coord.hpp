@@ -214,7 +214,7 @@ using CoreRange [[deprecated("Use tt::tt_metal::CoreRange")]] = tt::tt_metal::Co
 using CoreRangeSet [[deprecated("Use tt::tt_metal::CoreRangeSet")]] = tt::tt_metal::CoreRangeSet;
 
 // Deprecated function wrappers - use tt::tt_metal namespace versions instead
-// template to depriorize the wrappers in overloading to avoid ambigous selection from compiler.
+// template to depriorize the wrappers in overloading to avoid ambiguous selection from compiler.
 
 template <bool _compiler_deprioritize_this = true>
 [[deprecated("Use tt::tt_metal::corerange_to_cores")]] inline std::vector<CoreCoord> corerange_to_cores(
