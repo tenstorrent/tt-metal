@@ -217,6 +217,12 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 // - Takes the device out of reset
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
+// Dispatches an already-compiled program to a device. Unlike LaunchProgram, this function assumes the program has
+// already been compiled, finalized, and had circular buffers allocated by a prior LaunchProgram call on another device.
+// It performs per-device PCIe writes (runtime args, device configuration, launch messages) using thread-local copies
+// of launch messages to avoid mutating shared program state, making it safe for concurrent invocation across devices.
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
+
 /**
  * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is
  * used by the performance profiler.
