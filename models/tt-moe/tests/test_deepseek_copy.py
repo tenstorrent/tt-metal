@@ -22,20 +22,17 @@ import ttnn
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # Add tt-moe directory to path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))  # Already there - allows importing from tt-moe
-from deepseek_reference.moe import MoE as CopiedMoE
+# Import our local modules from tt-moe
+from moe_block import MoEBlock
+from utils.test_utils import get_test_weight_config
 
+# Import reference implementations for comparison
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
-
-# Also import originals for comparison
 from models.demos.deepseek_v3.tt.moe import MoE as ReferenceMoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
-    get_model_config,
-    get_test_weight_config,
-    run_module_forward,
-)
+
+# Import remaining functions from original location
+from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, get_model_config
 
 
 def verify_bytewise_identical(tensor1, tensor2, name="tensor"):
@@ -160,7 +157,10 @@ def test_moe_only(
 
     # Run forward pass using reference TTNN implementation
     ref_tt_input = ttnn.to_memory_config(ref_tt_input, ref_run_config["input_memory_config"])
-    ref_tt_output = run_module_forward(ReferenceMoE, mode, ref_tt_input, ref_run_config)
+    if mode == "decode":
+        ref_tt_output = ReferenceMoE.forward_decode(ref_tt_input, ref_run_config, handle_tensor_parallel=True)
+    else:
+        ref_tt_output = ReferenceMoE.forward_prefill(ref_tt_input, ref_run_config, handle_tensor_parallel=True)
 
     # Convert output back to torch
     reference_output = ttnn.to_torch(
@@ -187,7 +187,7 @@ def test_moe_only(
     # Run the exact same thing again but using the copied module
     # Since the copied files import from the originals, they should produce identical results
     copy_weight_config = get_test_weight_config(
-        CopiedMoE,  # Use our copied class
+        MoEBlock,  # Use our copied class
         hf_config,
         (state_dict,),
         cache_path / "copied_moe",
@@ -195,11 +195,11 @@ def test_moe_only(
         False,  # force_recalculate_weight_config
     )
 
-    copy_model_config = get_model_config(CopiedMoE, mode, hf_config, mesh_device)
+    copy_model_config = get_model_config(MoEBlock, mode, hf_config, mesh_device)
     copy_model_config.update({"topk_fallback": topk_fallback})
 
-    copy_model_state = CopiedMoE.create_state(hf_config, mesh_device, ccl)
-    copy_model_shared_state = CopiedMoE.create_shared_state(hf_config, mesh_device)
+    copy_model_state = MoEBlock.create_state(hf_config, mesh_device, ccl)
+    copy_model_shared_state = MoEBlock.create_shared_state(hf_config, mesh_device)
 
     copy_run_config = create_run_config(
         copy_model_config, copy_weight_config, copy_model_state, copy_model_shared_state
@@ -217,7 +217,10 @@ def test_moe_only(
 
     # Run forward pass using COPIED implementation
     copy_tt_input = ttnn.to_memory_config(copy_tt_input, copy_run_config["input_memory_config"])
-    copy_tt_output = run_module_forward(CopiedMoE, mode, copy_tt_input, copy_run_config)
+    if mode == "decode":
+        copy_tt_output = MoEBlock.forward_decode(copy_tt_input, copy_run_config, handle_tensor_parallel=True)
+    else:
+        copy_tt_output = MoEBlock.forward_prefill(copy_tt_input, copy_run_config, handle_tensor_parallel=True)
 
     # Convert output back to torch
     copied_output = ttnn.to_torch(

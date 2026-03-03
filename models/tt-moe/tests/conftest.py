@@ -9,7 +9,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 import os
 from copy import deepcopy
 
-import mock_llama_models  # noqa: F401
 import pytest
 import torch
 from loguru import logger
@@ -152,7 +151,9 @@ def mesh_device(request, device_params):
 @pytest.fixture(scope="session")
 def model_path():
     """Get model path and resolve symlinks to ensure all operations can find files."""
-    path = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+    # Use absolute path to the reference directory from tt-moe location
+    default_path = Path(__file__).parent.parent.parent / "demos/deepseek_v3/reference"
+    path = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", str(default_path)))
     # Resolve symlinks to ensure AutoConfig and other operations can find config.json and other files
     return path.resolve()
 
