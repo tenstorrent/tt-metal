@@ -78,7 +78,7 @@ def count_convs(module: Module) -> int:
 
 def conv_pad_height(tensor_BTHWC, h_factor):
     """
-    For Wan2.2, in some parallism schemes height can't be fractured by the factor.
+    For Wan2.2, in some parallelism schemes height can't be fractured by the factor.
     This function pads the height to the next multiple of the factor.
     """
     B, T, H, W, C = tensor_BTHWC.shape
