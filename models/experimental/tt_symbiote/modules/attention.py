@@ -1435,10 +1435,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
 
-        past_key_values._seq_lengths[layer_idx] += seq_length
-        if layer_idx == 0:
-            past_key_values._seen_tokens += seq_length
-
         # --- paged SDPA decode (Q stays in DRAM) ---
         attn_output = past_key_values.paged_sdpa_decode(
             query_states,
