@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLK Asserts &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/llk_asserts.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Inspector" href="inspector.html" />
+    <link rel="prev" title="Lightweight Kernel Asserts" href="lightweight_kernel_asserts.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/labs/index.html">Lab Exercises</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="lightweight_kernel_asserts.html">Lightweight Kernel Asserts</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">LLK Asserts</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-llk-asserts-validate">What LLK Asserts Validate</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#examples-from-tt-llk-code">Examples from tt-llk Code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#location-in-codebase">Location in Codebase</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#ci-cd-integration">CI/CD Integration</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#when-to-use-llk-asserts">When to Use LLK Asserts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#performance-impact">Performance Impact</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#debugging-failed-llk-asserts">Debugging Failed LLK Asserts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#see-also">See Also</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
+<li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="noc_debug_dump.html">NOC Debug Dump</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">LLK Asserts</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tools/llk_asserts.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="llk-asserts">
+<h1>LLK Asserts<a class="headerlink" href="#llk-asserts" title="Permalink to this heading"></a>
+</h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>LLK Asserts provide runtime validation checks within the tt-llk codebase that implements core tensor operations. These asserts validate critical assumptions about tensor dimensions, data formats, and hardware configuration parameters within the device-side compute stack, executing on the accelerator hardware itself.</p>
+<p>LLK asserts complement Lightweight Kernel Asserts and the Watcher tool by providing specialized validation for the low-level kernel library that handles:</p>
+<ul class="simple">
+<li><p>Tensor unpacking (moving data from L1 memory into source registers)</p></li>
+<li><p>Math operations (matrix multiplication, element-wise operations)</p></li>
+<li><p>Tensor packing (moving results from destination register back to L1 memory)</p></li>
+<li><p>Tilization and untilization (data layout transformations)</p></li>
+</ul>
+</section>
+<section id="enabling">
+<h2>Enabling<a class="headerlink" href="#enabling" title="Permalink to this heading"></a>
+</h2>
+<p>LLK Asserts are controlled independently from Lightweight Kernel Asserts and the Watcher. To enable them, set the following environment variable:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_LLK_ASSERTS</span><span class="o">=</span><span class="m">1</span><span class="w">  </span><span class="c1"># Enable LLK Asserts. Default is `0` (disabled).</span>
+</pre></div>
+</div>
+<p><strong>Important:</strong> LLK Asserts require either Lightweight Kernel Asserts or the Watcher to be enabled for proper failure reporting.
+Lightweight Kernel Asserts at present provide more detailed information about the assertion failure.</p>
+<p>It is recommended to enable at least one of these mechanisms for comprehensive debugging:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Option 1: Enable LLK Asserts with Lightweight Kernel Asserts</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_LLK_ASSERTS</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS</span><span class="o">=</span><span class="m">1</span>
+
+<span class="c1"># Option 2: Enable LLK Asserts with Watcher (more comprehensive debugging)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_LLK_ASSERTS</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_WATCHER</span><span class="o">=</span><span class="m">1</span>
+</pre></div>
+</div>
+<p>When an LLK assert fails, it triggers:</p>
+<ol class="arabic simple">
+<li><p>An <code class="docutils literal notranslate"><span class="pre">ebreak</span></code> instruction (in case of Lightweight Kernel Asserts)</p></li>
+<li><p>Watcher assertion (in case of Watcher)</p></li>
+</ol>
+<p>This causes the kernel to hang.
+If Watcher is used, the assertion message will be printed to stderr and the watcher log file.
+If Lightweight Kernel Asserts are used, use <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> to analyze the failure state.</p>
+</section>
+<section id="what-llk-asserts-validate">
+<h2>What LLK Asserts Validate<a class="headerlink" href="#what-llk-asserts-validate" title="Permalink to this heading"></a>
+</h2>
+<p>LLK asserts perform runtime validation of low-level kernel operations. Common checks include:</p>
+<dl class="simple">
+<dt><strong>Tensor Dimension Validation</strong></dt>
+<dd>
+<ul class="simple">
+<li><p>Number of faces (must be 1, 2, or 4)</p></li>
+<li><p>Tile dimensions match expected values (TILE_R_DIM, TILE_C_DIM)</p></li>
+<li><p>Face dimensions are valid (FACE_R_DIM, FACE_C_DIM)</p></li>
+</ul>
+</dd>
+<dt><strong>Data Format Checks</strong></dt>
+<dd>
+<ul class="simple">
+<li><p>Pack/unpack source and destination formats are compatible</p></li>
+<li><p>Partial face configurations are valid for the operation</p></li>
+<li><p>Narrow tile parameters are supported by the operation</p></li>
+</ul>
+</dd>
+<dt><strong>Matrix Multiplication Constraints</strong></dt>
+<dd>
+<ul class="simple">
+<li><p>Input tile dimensions are standard (TILE_R_DIM × TILE_C_DIM)</p></li>
+<li><p>Partial face operations are not used with certain configurations</p></li>
+<li><p>Transpose and dimension parameters are compatible</p></li>
+</ul>
+</dd>
+<dt><strong>Memory and Configuration</strong></dt>
+<dd>
+<ul class="simple">
+<li><p>Block dimensions divide evenly into full dimensions</p></li>
+<li><p>Address mode configurations are valid</p></li>
+<li><p>Unused parameters are not set (defensive programming)</p></li>
+</ul>
+</dd>
+</dl>
+</section>
+<section id="examples-from-tt-llk-code">
+<h2>Examples from tt-llk Code<a class="headerlink" href="#examples-from-tt-llk-code" title="Permalink to this heading"></a>
+</h2>
+<p>Here are some representative LLK asserts from the codebase:</p>
+<p><strong>From llk_unpack_tilize.h:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">LLK_ASSERT</span><span class="p">(</span><span class="n">num_faces</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">num_faces</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">num_faces</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+<span class="w">           </span><span class="s">"num_faces must be 1, 2, or 4"</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>From llk_math_matmul.h:</strong></p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">LLK_ASSERT</span><span class="p">(</span>
+<span class="w">    </span><span class="p">(</span><span class="n">in0_tile_r_dim</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TILE_R_DIM</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">    </span><span class="p">(</span><span class="n">in0_tile_c_dim</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TILE_C_DIM</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">    </span><span class="p">(</span><span class="n">in1_tile_r_dim</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TILE_R_DIM</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">    </span><span class="p">(</span><span class="n">in1_tile_c_dim</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">TILE_C_DIM</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+<span class="w">    </span><span class="o">!</span><span class="n">partial_face</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"Matmul requires standard tile dimensions and no partial faces"</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="location-in-codebase">
+<h2>Location in Codebase<a class="headerlink" href="#location-in-codebase" title="Permalink to this heading"></a>
+</h2>
+<p>LLK asserts are defined and used throughout the tt-llk library under:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>tt_metal/third_party/tt_llk/
+├── tt_llk_blackhole/
+│   ├── llk_lib/
+│   │   ├── llk_assert.h          # Assert macro definitions
+│   │   ├── llk_unpack_*.h        # Unpack operation asserts
+│   │   ├── llk_math_*.h          # Math operation asserts
+│   │   ├── llk_pack*.h           # Pack operation asserts
+│   │   └── ...
+│   └── common/inc/
+│       ├── cunpack_common.h      # Common unpack asserts
+│       ├── cpack_common.h        # Common pack asserts
+│       └── ...
+├── tt_llk_wormhole_b0/
+│   └── (similar structure)
+└── tt_llk_quasar/
+    └── (similar structure)
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">LLK_ASSERT</span></code> macro is defined in <code class="docutils literal notranslate"><span class="pre">llk_assert.h</span></code> and expands to either:</p>
+<ul class="simple">
+<li><p>An <code class="docutils literal notranslate"><span class="pre">ebreak</span></code> instruction (when used standalone in low-level infrastructure)</p></li>
+<li><p>The standard <code class="docutils literal notranslate"><span class="pre">ASSERT</span></code> macro (when compiled within tt-metal context)</p></li>
+</ul>
+</section>
+<section id="ci-cd-integration">
+<h2>CI/CD Integration<a class="headerlink" href="#ci-cd-integration" title="Permalink to this heading"></a>
+</h2>
+<p>LLK asserts are fully integrated into the tt-metal CI/CD system through the <code class="docutils literal notranslate"><span class="pre">enable-llk-asserts</span></code> parameter. This parameter is available in some workflow files and can be enabled during testing (via checkbox).</p>
+<p><strong>Available Workflows</strong></p>
+<p>The following workflows support LLK asserts:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">all-post-commit-workflows.yaml</span></code> - Selective APC test execution</p></li>
+</ul>
+</section>
+<section id="when-to-use-llk-asserts">
+<h2>When to Use LLK Asserts<a class="headerlink" href="#when-to-use-llk-asserts" title="Permalink to this heading"></a>
+</h2>
+<p>As a user, you typically don’t need to add LLK asserts—they are already present in the system library code. However, you should enable them during development and testing to catch:</p>
+<ol class="arabic simple">
+<li><p><strong>Incorrect tensor operation parameters</strong> - Catches dimension mismatches early</p></li>
+<li><p><strong>Unsupported operation configurations</strong> - Validates that hardware capabilities aren’t exceeded</p></li>
+<li><p><strong>Library integration issues</strong> - Ensures operations are called with valid parameters</p></li>
+</ol>
+</section>
+<section id="performance-impact">
+<h2>Performance Impact<a class="headerlink" href="#performance-impact" title="Permalink to this heading"></a>
+</h2>
+<p>LLK asserts have zero overhead when disabled (compiled out as no-ops). When enabled, they add conditional checks at critical points in low-level operations. The performance impact is generally acceptable for development and testing builds but should be disabled in production for maximum performance.</p>
+</section>
+<section id="debugging-failed-llk-asserts">
+<h2>Debugging Failed LLK Asserts<a class="headerlink" href="#debugging-failed-llk-asserts" title="Permalink to this heading"></a>
+</h2>
+<p>When an LLK assert fails:</p>
+<ol class="arabic simple">
+<li><p>The kernel hangs at the assertion point (<code class="docutils literal notranslate"><span class="pre">ebreak</span></code> instruction)</p></li>
+<li><p>Run <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> to analyze the device state</p></li>
+<li><p>If Lightweight Kernel Asserts are enabled, use <code class="docutils literal notranslate"><span class="pre">dump_lightweight_asserts.py</span></code> to see call stacks and local variables</p></li>
+<li><p>Check the assertion message to understand what constraint was violated</p></li>
+</ol>
+<p>Common failure scenarios:</p>
+<ul class="simple">
+<li><p>Attempting operations on tiles with unsupported dimensions</p></li>
+<li><p>Passing incompatible data formats between operations</p></li>
+<li><p>Using narrow tiles or partial faces where not supported</p></li>
+<li><p>Dimension mismatches in matrix multiplications</p></li>
+</ul>
+</section>
+<section id="see-also">
+<h2>See Also<a class="headerlink" href="#see-also" title="Permalink to this heading"></a>
+</h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="lightweight_kernel_asserts.html"><span class="doc">Lightweight Kernel Asserts</span></a> - User-level kernel assertions</p></li>
+<li><p><a class="reference internal" href="watcher.html"><span class="doc">Watcher</span></a> - Device monitoring and debug</p></li>
+<li><p><a class="reference internal" href="triage.html"><span class="doc">tt-triage</span></a> - Failure analysis and debugging</p></li>
+</ul>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="lightweight_kernel_asserts.html" class="btn btn-neutral float-left" title="Lightweight Kernel Asserts" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="inspector.html" class="btn btn-neutral float-right" title="Inspector" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
