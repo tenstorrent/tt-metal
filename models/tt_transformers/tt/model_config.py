@@ -2526,7 +2526,14 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
+        tile_size = 32
+        if self.is_galaxy:
+            self.padded_vocab_size = 128 * 1024
+        else:
+            self.padded_vocab_size = math.ceil(self.vocab_size / (tile_size * self.num_devices)) * (
+                tile_size * self.num_devices
+            )
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
