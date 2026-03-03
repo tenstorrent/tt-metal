@@ -172,4 +172,100 @@ autograd::TensorPtr swiglu_optimized(
     return out;
 }
 
+autograd::TensorPtr swiglu_fused(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& w1,
+    const autograd::TensorPtr& w2,
+    const autograd::TensorPtr& w3,
+    float dropout_prob) {
+    // Composite forward: weights are [out, in] (LinearLayer convention)
+    // Save linear1 and gate for backward (2 tensors vs autograd's 4+).
+    // Fuse silu into multiply: silu(linear1) * gate in one kernel, no separate silu alloc.
+    using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
+    const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
+    const tt::stl::Span<const EltwiseUnary> no_acts;
+    const tt::stl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
+
+    auto saved_linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value(), false, true);
+    auto saved_gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value(), false, true);
+    auto saved_gated =
+        ttnn::multiply(saved_linear1, saved_gate, std::nullopt, std::nullopt, std::nullopt, no_acts, silu_lhs);
+    auto swiglu_result = ttnn_fixed::matmul(saved_gated, w2->get_value(), false, true);
+
+    uint32_t dropout_seed = 0;
+    float dropout_scaler = 1.0F;
+    if (dropout_prob > 0.0F) {
+        dropout_seed = static_cast<uint32_t>(autograd::ctx().get_generator()());
+        dropout_scaler = 1.0F / (1.0F - dropout_prob);
+        ttnn::experimental::dropout(
+            swiglu_result, dropout_prob, dropout_scaler, dropout_seed, true, std::nullopt, swiglu_result);
+    }
+    auto out = autograd::create_tensor(swiglu_result);
+
+    autograd::GradFunction grad = [tensor,
+                                   w1,
+                                   w2,
+                                   w3,
+                                   out,
+                                   saved_linear1 = std::move(saved_linear1),
+                                   saved_gate = std::move(saved_gate),
+                                   saved_gated = std::move(saved_gated),
+                                   dropout_prob,
+                                   dropout_seed,
+                                   dropout_scaler]() mutable {
+        auto dL_dout = out->get_grad();
+
+        if (dropout_prob > 0.0F) {
+            dL_dout = ttnn::experimental::dropout(dL_dout, dropout_prob, dropout_scaler, dropout_seed);
+        }
+
+        auto linear1 = std::move(saved_linear1);
+        auto gate = std::move(saved_gate);
+        auto gated = std::move(saved_gated);
+
+        // W2 grad: use saved gated directly — no recompute
+        {
+            auto dL_dW2 = ttnn_fixed::matmul(flatten_leading(dL_dout), flatten_leading(gated), true, false);
+            w2->add_grad(dL_dW2.reshape(w2->get_value().logical_shape()));
+        }
+        gated.deallocate();
+
+        // dL/d(prod) = dL_dout @ w2 (no transpose — w2 is [D, H])
+        auto dL_dprod = ttnn_fixed::matmul(dL_dout, w2->get_value());
+        dL_dout.deallocate();
+
+        // Fused kernel: reads (linear1, gate, dL_dprod) once, produces (dL_dlinear1, dL_dgate)
+        auto [dL_dlinear1, dL_dgate] = ttml::metal::swiglu_grad(linear1, gate, dL_dprod, linear1);
+        gate.deallocate();
+        dL_dprod.deallocate();
+
+        // Input grads: dL @ w (no transpose — w1,w3 are [H, D])
+        auto dL_dtensor = ttnn_fixed::matmul(dL_dlinear1, w1->get_value());
+        auto dL_dtensor_from_w3 = ttnn_fixed::matmul(dL_dgate, w3->get_value());
+        ttnn::add_(dL_dtensor, dL_dtensor_from_w3);
+        dL_dtensor_from_w3.deallocate();
+        tensor->add_grad(dL_dtensor);
+        dL_dtensor.deallocate();
+
+        // W1 & W3 grads
+        auto flat_x = flatten_leading(tensor->get_value());
+        {
+            auto dL_dW1 = ttnn_fixed::matmul(flatten_leading(dL_dlinear1), flat_x, true, false);
+            w1->add_grad(dL_dW1.reshape(w1->get_value().logical_shape()));
+        }
+        dL_dlinear1.deallocate();
+
+        {
+            auto dL_dW3 = ttnn_fixed::matmul(flatten_leading(dL_dgate), flat_x, true, false);
+            w3->add_grad(dL_dW3.reshape(w3->get_value().logical_shape()));
+        }
+        dL_dgate.deallocate();
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 }  // namespace ttml::ops
