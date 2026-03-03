@@ -746,7 +746,7 @@ def _make_proper_params_accum(pen: Penalties1D):
 
     Uses the config's LazyBuffer mesh_mappers to guarantee the correct dtype/layout/
     sharding for whatever device topology is active. This is required for methods like
-    prefill_forward and update_output_tokens that call _token_bin_counts_and_mask,
+    init_prompt_penalties and update_output_tokens that call _token_bin_counts_and_mask,
     which expects properly sharded output tensors.
     """
     params = PenaltyParams(
@@ -832,34 +832,27 @@ class TestPenalties1DDeviceExtra:
         assert pen._decode_src is decode_src_first
 
     # ------------------------------------------------------------------
-    # prefill_forward (lines 198-222) + _token_bin_counts_and_mask counts=None path (line 421)
+    # init_prompt_penalties + _token_bin_counts_and_mask counts=None path
     # ------------------------------------------------------------------
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_prefill_forward(self, ttnn_mesh_device, vocab_size):
-        """prefill_forward scatters prompt tokens into prompt_mask and returns logits unchanged."""
+    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size):
+        """init_prompt_penalties scatters prompt tokens into prompt_mask."""
         B = 32
         pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         pen.load_device_buffers()
         params, accum = _make_proper_params_accum(pen)
 
-        logits_tt = ttnn.from_torch(
-            torch.randn(B, vocab_size, dtype=torch.bfloat16),
-            device=ttnn_mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
         prompt_tokens = torch.randint(0, vocab_size, (B, 10))
-        result = pen.prefill_forward(logits_tt, params, accum, prompt_tokens)
-        assert result is logits_tt  # returns logits unchanged
+        pen.init_prompt_penalties(params, accum, prompt_tokens)
 
     # ------------------------------------------------------------------
-    # forward() prefill dispatch (lines 278-280)
+    # forward() prompt init dispatch
     # ------------------------------------------------------------------
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_forward_dispatches_to_prefill(self, ttnn_mesh_device, vocab_size):
-        """forward() with prompt_tokens kwarg routes to prefill_forward (lines 278-279)."""
+    def test_forward_dispatches_to_init_prompt(self, ttnn_mesh_device, vocab_size):
+        """forward() with prompt_tokens kwarg routes to init_prompt_penalties."""
         B = 32
         pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         pen.load_device_buffers()

@@ -183,21 +183,20 @@ class Penalties1D(LightweightModule):
 
         self._device_buffers_loaded = True
 
-    # -- Forward methods ------------------------------------------------------
+    # -- Lifecycle methods (per-request setup) ---------------------------------
 
-    # todo)) this does not look right
-    def prefill_forward(
+    def init_prompt_penalties(
         self,
-        logits: ttnn.Tensor,
         params: PenaltyParams,
         accum: PenaltyAccumulator,
         prompt_tokens: "torch.Tensor",
-    ) -> ttnn.Tensor:
-        """Set prompt_mask from prompt tokens. Returns logits unchanged.
+    ) -> None:
+        """Record prompt token positions into params.prompt_mask via scatter_add.
 
+        Called once per request before the decode loop.
         Port of TTPenalties.reset_prompt_tokens (tt_penalties.py:194-212).
         """
-        # todo)) can we get rid of the torch import here?
+        # todo)) can we get rid of the torch import here? --> will rethink the boundaries of the module when active development is done on the TTTv1 side
         import torch
 
         self.load_device_buffers()
@@ -222,7 +221,7 @@ class Penalties1D(LightweightModule):
         )
         self._token_bin_counts_and_mask(new_tokens=prompt_tokens_tt, src=src_tt, mask=params.prompt_mask)
 
-        return logits
+    # -- Forward methods ------------------------------------------------------
 
     def decode_forward(
         self,
@@ -279,7 +278,8 @@ class Penalties1D(LightweightModule):
         if params is None or accum is None:
             return logits
         if "prompt_tokens" in kwargs:
-            return self.prefill_forward(logits, params, accum, kwargs["prompt_tokens"])
+            self.init_prompt_penalties(params, accum, kwargs["prompt_tokens"])
+            return logits
         return self.decode_forward(logits, params, accum)
 
     # -- Accumulator operations (called AFTER sampling) -----------------------
@@ -296,7 +296,7 @@ class Penalties1D(LightweightModule):
             new_tokens = ttnn.reshape(new_tokens, [self.config.max_batch_size, 1], **self._op_kwargs)
             src = self._decode_src
         else:
-            # todo)) can we get rid of the torch import here?
+            # todo)) can we get rid of the torch import here? --> will rethink the boundaries of the module when active development is done on the TTTv1 side
             import torch
 
             src = ttnn.from_torch(
@@ -328,7 +328,7 @@ class Penalties1D(LightweightModule):
         )
 
         if tokens is not None:
-            # todo)) can we get rid of the torch import here?
+            # todo)) can we get rid of the torch import here? --> will rethink the boundaries of the module when active development is done on the TTTv1 side
             import torch
 
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
@@ -363,6 +363,7 @@ class Penalties1D(LightweightModule):
 
         Port of tt_penalties.py:117-139.
         """
+        # todo)) can we get rid of the torch import here? --> will rethink the boundaries of the module when active development is done on the TTTv1 side
         import torch
 
         cfg = self.config
@@ -396,7 +397,7 @@ class Penalties1D(LightweightModule):
 
     def _pad_batch_to_max(self, tokens_2d: "torch.Tensor", pad_value: int) -> "torch.Tensor":
         """Pad/truncate first dim to max_batch_size."""
-        # todo)) can we get rid of the torch import here?
+        # todo)) can we get rid of the torch import here? --> will rethink the boundaries of the module when active development is done on the TTTv1 side
         import torch
 
         if tokens_2d.dim() != 2:
@@ -450,7 +451,6 @@ def _resolve_penalties1d_config(config: Penalties1DConfig) -> Penalties1DConfig:
     Power users who set fields explicitly will NOT have them overwritten.
     Mirrors the ``_resolve_mlp1d_config()`` pattern.
     """
-    # todo)) can we get rid of the torch import here?
     import torch  # lazy import — only needed for source tensor construction
 
     to_set: dict = {}
