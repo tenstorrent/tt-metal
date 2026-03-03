@@ -320,15 +320,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr), sbh=1 and sbh=2.
-    // Mask stays Bfp4_b — streaming path only reads -inf tiles (skips zero tiles to avoid
-    // Bfp4_b→Float16_b round-trip artifacts in L1 accumulate).
+    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
+    // Lightweight mask uses Float16_b single -inf tile to avoid Bfp4_b L1 accumulate artifacts.
     // cb_qkt_im must be reserved fully upfront (Sq_chunk_t * Sk_chunk_t tiles), which
     // can cause CB deadlock if too large. Limit to 64 tiles (~128 KB in Float16_b).
     const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_attention_sink &&
-                                       sliding_window_size.value_or(0) == 0 && !is_chunked &&
-                                       qk_out_subblock_h * vDHt <= dst_size && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && vDHt <= 8;
+                                       sliding_window_size.value_or(0) == 0 && !is_chunked && qk_out_subblock_h <= 2 &&
+                                       Sk_chunk_t % (8 / qk_out_subblock_h) == 0;
     log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
