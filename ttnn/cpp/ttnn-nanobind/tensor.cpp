@@ -31,6 +31,7 @@
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/overlapped_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -609,6 +610,67 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("device") = nullptr,
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
+            )doc");
+
+    m_tensor
+        .def(
+            "dump_overlapped_tensors",
+            [](const std::string& file_name, nb::list py_views) {
+                constexpr std::string_view kExt = ".overlappedtensorbin";
+                if (file_name.size() < kExt.size() ||
+                    file_name.compare(file_name.size() - kExt.size(), kExt.size(), kExt) != 0) {
+                    throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
+                }
+                std::vector<OverlappedTensorView> views;
+                views.reserve(nb::len(py_views));
+                for (auto item : py_views) {
+                    nb::object obj = nb::borrow(item);
+                    views.push_back(OverlappedTensorView{
+                        .fused_tensor = nb::cast<Tensor>(obj.attr("fused_tensor")),
+                        .tensor_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("tensor_shape")),
+                        .shard_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("shard_shape")),
+                        .core_range_set = nb::cast<CoreRangeSet>(obj.attr("core_range_set")),
+                        .dtype = nb::cast<DataType>(obj.attr("dtype")),
+                        .tile_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("tile_shape")),
+                        .byte_offset = nb::cast<uint64_t>(obj.attr("byte_offset")),
+                    });
+                }
+                dump_overlapped_tensors(file_name, views);
+            },
+            nb::arg("file_name"),
+            nb::arg("views"),
+            R"doc(
+                Dump a list of OverlappedTensor to a single file using FlatBuffer format.
+                All views must reference the same fused tensor.
+            )doc")
+        .def(
+            "load_overlapped_tensors",
+            [](const std::string& file_name, MeshDevice* device) -> nb::list {
+                constexpr std::string_view kExt = ".overlappedtensorbin";
+                if (file_name.size() < kExt.size() ||
+                    file_name.compare(file_name.size() - kExt.size(), kExt.size(), kExt) != 0) {
+                    throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
+                }
+                auto views = load_overlapped_tensors(file_name, device);
+                nb::module_ mod = nb::module_::import_("models.demos.deepseek_v3_b1.blitz_overlap_tensors");
+                nb::object cls = mod.attr("OverlappedTensor");
+                nb::list result;
+                for (const auto& v : views) {
+                    result.append(
+                        cls(nb::cast(v.fused_tensor),
+                            nb::make_tuple(v.tensor_shape[0], v.tensor_shape[1]),
+                            nb::make_tuple(v.shard_shape[0], v.shard_shape[1]),
+                            nb::cast(v.core_range_set),
+                            nb::cast(v.dtype),
+                            nb::make_tuple(v.tile_shape[0], v.tile_shape[1]),
+                            nb::cast(v.byte_offset)));
+                }
+                return result;
+            },
+            nb::arg("file_name"),
+            nb::arg("device") = nullptr,
+            R"doc(
+                Load a list of OverlappedTensor from a file serialized with dump_overlapped_tensors.
             )doc");
 }
 

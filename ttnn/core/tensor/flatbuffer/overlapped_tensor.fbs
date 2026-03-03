@@ -1,0 +1,23 @@
+include "tensor_spec.fbs";
+include "tensor.fbs";
+
+namespace ttnn.flatbuffer;
+
+table OverlappedView {
+    tensor_shape_h: uint32;
+    tensor_shape_w: uint32;
+    shard_shape_h:  uint32;
+    shard_shape_w:  uint32;
+    core_range_set: CoreRangeSet;
+    dtype:          DataType;
+    tile_h:         uint32;
+    tile_w:         uint32;
+    byte_offset:    uint64;
+}
+
+table OverlappedTensors {
+    fused_tensor: Tensor;
+    views: [OverlappedView];
+}
+
+root_type OverlappedTensors;

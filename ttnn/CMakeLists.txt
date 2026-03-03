@@ -83,6 +83,7 @@ set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/overlapped_tensor.fbs
 )
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
@@ -149,6 +150,8 @@ target_sources(
         core/reports.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
+        core/tensor/flatbuffer/overlapped_tensor_flatbuffer.cpp
+        core/tensor/overlapped_serialization.cpp
         core/tensor/host_buffer/functions.cpp
         core/tensor/serialization.cpp
         core/tensor/storage.cpp
