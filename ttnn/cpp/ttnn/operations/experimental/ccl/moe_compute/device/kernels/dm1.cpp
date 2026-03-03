@@ -303,20 +303,20 @@ void kernel_main() {
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
-                    if (++shard_row == (dest_height_shard < tokens_per_height_shard_rem)
-                            ? tokens_per_height_shard_chunk + 1
-                            : tokens_per_height_shard_chunk) {
+                    if (++shard_row == ((dest_height_shard < tokens_per_height_shard_rem)
+                                            ? tokens_per_height_shard_chunk + 1
+                                            : tokens_per_height_shard_chunk)) {
                         ++dest_height_shard;
                         shard_row = 0;
-
-                        if (width_tiles_to_send == width_transfer_tiles) {
-                            ++dest_height_shard_start;
-                            shard_row_start = 0;
-                        }
                     }
                 }
                 width_tiles_sent += width_transfer_tiles;
                 width_tiles_to_send -= width_transfer_tiles;
+
+                if (width_tiles_to_send == 0) {
+                    dest_height_shard_start = dest_height_shard;
+                    shard_row_start = shard_row;
+                }
             }
 
             noc_async_posted_writes_flushed(1);
