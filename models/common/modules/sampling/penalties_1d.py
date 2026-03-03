@@ -180,6 +180,7 @@ class Penalties1D(LightweightModule):
         self._replicate_mapper = ttnn.ShardTensor2dMesh(
             cfg.mesh_device, dims=(None, None), mesh_shape=self._cluster_shape
         )
+        self._use_low_perf_tilize = cfg.sub_core_grids is not None
 
         # Slice tensors for scatter → slice (port from tt_penalties.py:117-139)
         self._slice_start, self._slice_end = self._build_slice_tensors()
@@ -436,9 +437,7 @@ class Penalties1D(LightweightModule):
         counts_new = ttnn.scatter_add(self._zeros, 1, new_tokens, src, **op)
 
         new_tokens.deallocate()
-        counts_new = ttnn.tilize(
-            counts_new, **op, use_low_perf=True if self.config.sub_core_grids is not None else False
-        )
+        counts_new = ttnn.tilize(counts_new, **op, use_low_perf=self._use_low_perf_tilize)
         if counts is not None:
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **op)
         else:
@@ -549,7 +548,7 @@ def _resolve_penalties1d_config(config: Penalties1DConfig) -> Penalties1DConfig:
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=replicate_mapper,
-        memory_config=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     zeros_B1 = lambda: torch.zeros(B, 1, dtype=torch.float32)
     for field_name in (

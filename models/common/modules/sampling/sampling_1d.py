@@ -60,12 +60,22 @@ class Sampling1DConfig:
     seeds: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
     user_ids: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
 
+    @staticmethod
+    def _buf_resolved(buf) -> bool:
+        if buf is None:
+            return False
+        if isinstance(buf, ttnn.Tensor):
+            return True
+        return buf.is_resolved()
+
     def is_resolved(self) -> bool:
         if self.mesh_device is None:
             return False
         if self.mesh_device.get_num_devices() > 1 and self.tt_ccl is None:
             return False
-        return True
+        return all(
+            self._buf_resolved(getattr(self, f)) for f in ("index_offsets", "local_indices", "seeds", "user_ids")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +120,20 @@ class Sampling1D(LightweightModule):
         else:
             self._topk = self._topk_multi_device
 
+        # Argmax strategy: single vs multi-device
+        num_devices = self.config.mesh_device.get_num_devices()
+        if num_devices > 1:
+            self._pre_argmax_gather = self._argmax_all_gather
+        else:
+            self._pre_argmax_gather = self._argmax_noop
+
+        # Memory config strategy for top-k post-processing
+        cfg = self.config
+        if cfg.sampling_memory_config is not None and cfg.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            self._prepare_topk_memory = self._topk_memory_sharded_roundtrip
+        else:
+            self._prepare_topk_memory = self._topk_memory_noop
+
         # CCL introspection (port from TTSampling.__init__ lines 77-91)
         self._line_all_gather = getattr(self.config.tt_ccl, "line_all_gather", None) if self.config.tt_ccl else None
         self._line_all_gather_supports_buffer_key = False
@@ -144,6 +168,15 @@ class Sampling1D(LightweightModule):
         from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
 
         self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
+
+        # Pre-compute static sub_core_grids for ttnn.sampling()
+        self._sampling_sub_core_grids = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                cfg.start_core, cfg.max_batch_size, cfg.sub_core_grids, row_wise=True
+            )
+            if cfg.sub_core_grids is not None
+            else None
+        )
 
         self._device_buffers_loaded = True
 
@@ -192,26 +225,7 @@ class Sampling1D(LightweightModule):
     # -- Argmax path (port from tt_sampling.py:310-341) -----------------------
 
     def _sample_argmax(self, logits, tt_out_tok):
-        cfg = self.config
-        num_devices = cfg.mesh_device.get_num_devices()
-
-        if num_devices > 1:
-            cluster_axis = 1
-            logits = ttnn.experimental.all_gather_async(
-                logits,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.config.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=cfg.num_argmax_gather_links,
-                memory_config=logits.memory_config(),
-                cluster_axis=cluster_axis,
-                topology=cfg.ag_topology,
-                barrier_semaphore=self.config.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=1,
-                num_buffers_per_channel=2,
-            )
-
+        logits = self._pre_argmax_gather(logits)
         x_untilized = ttnn.untilize(logits, use_multicore=True)
         tt_out_tok = ttnn.argmax(
             x_untilized,
@@ -222,6 +236,48 @@ class Sampling1D(LightweightModule):
         )
         log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
         return tt_out_tok, log_probs
+
+    def _argmax_all_gather(self, logits):
+        """Multi-device: all-gather logits before argmax."""
+        cfg = self.config
+        cluster_axis = 1
+        return ttnn.experimental.all_gather_async(
+            logits,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=cfg.num_argmax_gather_links,
+            memory_config=logits.memory_config(),
+            cluster_axis=cluster_axis,
+            topology=cfg.ag_topology,
+            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=1,
+            num_buffers_per_channel=2,
+        )
+
+    @staticmethod
+    def _argmax_noop(logits):
+        """Single-device: no gather needed."""
+        return logits
+
+    # -- Top-k memory strategies (bound at init, no if-else in forward) -------
+
+    def _topk_memory_sharded_roundtrip(self, topk_values, topk_indices_int32):
+        """Non-DRAM sampling_memory_config: round-trip through sharded memory."""
+        cfg = self.config
+        topk_values_sharded = ttnn.to_memory_config(
+            topk_values, memory_config=cfg.sampling_memory_config, dtype=ttnn.bfloat16
+        )
+        topk_values = ttnn.to_memory_config(topk_values_sharded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(topk_values_sharded)
+        topk_indices_int32 = ttnn.to_memory_config(topk_indices_int32, cfg.sampling_memory_config)
+        return topk_values, topk_indices_int32
+
+    @staticmethod
+    def _topk_memory_noop(topk_values, topk_indices_int32):
+        """DRAM memory config: no extra round-trip needed."""
+        return topk_values, topk_indices_int32
 
     # -- Top-k sampling (port from tt_sampling.py:343-481) --------------------
 
@@ -236,13 +292,7 @@ class Sampling1D(LightweightModule):
         # Convert indices to int32
         topk_indices_int32 = ttnn.typecast(topk_indices, dtype=ttnn.int32, sub_core_grids=cfg.sub_core_grids)
 
-        if cfg.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
-            topk_values_sharded = ttnn.to_memory_config(
-                topk_values, memory_config=cfg.sampling_memory_config, dtype=ttnn.bfloat16
-            )
-            topk_values = ttnn.to_memory_config(topk_values_sharded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(topk_values_sharded)
-            topk_indices_int32 = ttnn.to_memory_config(topk_indices_int32, cfg.sampling_memory_config)
+        topk_values, topk_indices_int32 = self._prepare_topk_memory(topk_values, topk_indices_int32)
 
         # Add device offsets for global vocabulary indices
         topk_global_indices = ttnn.add(
@@ -271,13 +321,7 @@ class Sampling1D(LightweightModule):
             k=k,
             p=p,
             temp=temp,
-            sub_core_grids=(
-                ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    cfg.start_core, cfg.max_batch_size, cfg.sub_core_grids, row_wise=True
-                )
-                if cfg.sub_core_grids is not None
-                else None
-            ),
+            sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
         )
 
@@ -426,7 +470,7 @@ class Sampling1D(LightweightModule):
             vocab_size=vocab_size,
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
-            max_batch_size=32,
+            max_batch_size=getattr(args, "max_batch_size", 32),
             max_top_k=getattr(args, "max_top_k", 32),
             sub_core_grids=getattr(args, "sub_core_grids", None),
             sub_core_grid_topk=getattr(args, "sub_core_grid_topk", None),
