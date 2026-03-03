@@ -89,7 +89,8 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ inputs.recreate_weights_cache == 'Yes' && '/mnt/MLPerf:/mnt/MLPerf' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ inputs.recreate_weights_cache == 'Yes' && '/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache:/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache' || '/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache:/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -109,13 +110,15 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Prepare custom weights cache directory
         if: ${{ inputs.recreate_weights_cache == 'Yes' }}
+        env:
+          INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
         run: |
           CACHE_BASE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
-          if [[ -z "${{ inputs.new_cache_dir }}" ]]; then
+          if [[ -z "${INPUT_CACHE_DIR}" ]]; then
             echo "::error::recreate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
             exit 1
           fi
-          DIR_NAME="${{ inputs.new_cache_dir }}"
+          DIR_NAME="${INPUT_CACHE_DIR}"
           if [[ "${DIR_NAME}" =~ [/[:space:][:cntrl:]] || "${DIR_NAME}" == "." || "${DIR_NAME}" == ".." ]]; then
             echo "::error::new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
             exit 1
