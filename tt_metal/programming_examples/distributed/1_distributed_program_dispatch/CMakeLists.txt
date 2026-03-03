@@ -8,7 +8,9 @@ target_link_libraries(
         pthread
 )
 
-target_precompile_headers(distributed_program_dispatch REUSE_FROM TT::CommonPCH)
+if(TARGET TT::CommonPCH)
+    target_precompile_headers(distributed_program_dispatch REUSE_FROM TT::CommonPCH)
+endif()
 
 target_include_directories(distributed_program_dispatch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
