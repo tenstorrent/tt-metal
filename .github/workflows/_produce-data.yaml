@@ -85,6 +85,7 @@ on:
       - "Profiler CI"
       - "Git bisect dispatch"
       - "Custom test dispatch"
+      - "Validate installation step from instructions"
     types:
       - completed
 
