@@ -138,7 +138,6 @@ def record_cb_metadata(cb_descriptors):
     Returns:
         dict mapping cb_id → (addr, total_size, num_pages, page_size, core_ranges)
     """
-    import ttnn
 
     cb_metadata = {}
     for desc in cb_descriptors:
@@ -178,8 +177,6 @@ def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
         ttnn.Tensor: HEIGHT_SHARDED L1 tensor with 1 shard (264 uint32) per core
     """
     import torch
-
-    import ttnn
 
     all_cores = ttnn.corerange_to_cores(full_device_grid, row_wise=True)
     num_cores = len(all_cores)
