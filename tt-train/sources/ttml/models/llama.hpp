@@ -34,6 +34,8 @@ struct LlamaConfig {
     RunnerType runner_type = RunnerType::Default;
     WeightTyingType weight_tying = WeightTyingType::Enabled;
 
+    bool use_fused_swiglu = false;
+
     // RoPE NTK-aware scaling parameters
     float scaling_factor = 0.0F;  // 0.0 means no scaling
     float high_freq_factor = 4.0F;
