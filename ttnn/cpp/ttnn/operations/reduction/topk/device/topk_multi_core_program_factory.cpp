@@ -55,8 +55,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
             config.selected_x,
             config.selected_y};
     }
-    const auto max_cores =
-        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
+    const auto max_cores = core_range.size();
     return {max_cores + 1, width, 0, width * k, 0, 0};
 }
 
