@@ -75,12 +75,14 @@ void kernel_main() {
                 noc.async_read_barrier();
                 if constexpr (LAST_W > 0) {
                     if (w == Wt - 1) {
-                        apply_width_padding<IN_DF, LAST_W, NEUTRAL>(l1_write_addr);
+                        uint32_t wr_addr = cb_in0.get_write_ptr();
+                        apply_width_padding<IN_DF, LAST_W, NEUTRAL>(wr_addr);
                     }
                 }
                 if constexpr (LAST_H > 0) {
                     if (j == Ht - 1) {
-                        apply_height_padding<IN_DF, LAST_H, NEUTRAL>(l1_write_addr);
+                        uint32_t wr_addr = cb_in0.get_write_ptr();
+                        apply_height_padding<IN_DF, LAST_H, NEUTRAL>(wr_addr);
                     }
                 }
                 cb_in0.push_back(onetile);
