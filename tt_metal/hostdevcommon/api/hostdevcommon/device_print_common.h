@@ -10,15 +10,15 @@
 
 #pragma once
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
-
-#include "core_config.h"
-
 enum class DevicePrintRiscCoreState : uint8_t {
     KernelNotPrinted = 0,
     KernelPrinted = 1,
     PrintingDisabled = 2,
 };
+
+#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(HAL_BUILD)
+
+#include "core_config.h"
 
 struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)

@@ -882,10 +882,11 @@ void DevicePrintImpl::enable_print_buffers_for_core(
     uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
     uint64_t device_print_buffer_address = GetDevicePrintBufAddr(device_id, virtual_core);
     uint64_t risc_flags_address = device_print_buffer_address + 8;  // sizeof(wpos) + sizeof(rpos)
-    std::vector<uint8_t> risc_flags((num_processors + 3) / 4 * 4, 0);
+    std::vector<uint8_t> risc_flags(
+        (num_processors + 3) / 4 * 4, static_cast<uint8_t>(DevicePrintRiscCoreState::KernelNotPrinted));
     for (int risc_index = 0; risc_index < num_processors; risc_index++) {
         if (!RiscEnabled(core_type, risc_index)) {
-            risc_flags[risc_index] = 2;  // TODO: use enum value?!?
+            risc_flags[risc_index] = static_cast<uint8_t>(DevicePrintRiscCoreState::PrintingDisabled);
         }
     }
 
