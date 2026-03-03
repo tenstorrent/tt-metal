@@ -1361,7 +1361,7 @@ def _make_mock_core_range_set(coord_ranges):
     return crs
 
 
-def _make_op_with_cores(core_range_set, allowed_core_range=None):
+def _make_op_with_cores(core_range_set):
     """Create a mock OpDescriptor whose kernels use the given core ranges.
 
     The returned mock has .descriptor.kernels[0].core_ranges set to the
@@ -1370,8 +1370,6 @@ def _make_op_with_cores(core_range_set, allowed_core_range=None):
 
     Args:
         core_range_set: Mock CoreRangeSet for the kernel's actual core ranges.
-        allowed_core_range: Optional mock CoreRangeSet for topology validation.
-            Defaults to None (use actual range).
     """
     kernel = MagicMock()
     kernel.core_ranges = core_range_set
@@ -1379,7 +1377,6 @@ def _make_op_with_cores(core_range_set, allowed_core_range=None):
     descriptor.kernels = [kernel]
     op = MagicMock()
     op.descriptor = descriptor
-    op.allowed_core_range = allowed_core_range
     return op
 
 
@@ -1389,34 +1386,6 @@ def _make_op_with_cores(core_range_set, allowed_core_range=None):
 # one kernel, returning that kernel's core_ranges directly is equivalent and
 # keeps the mock CoreRangeSet that _core_range_set_to_coords can iterate.
 _mock_graph._get_node_core_range = lambda node: node.op.descriptor.kernels[0].core_ranges
-# Also patch common module so that _get_node_allowed_coords (which calls
-# common._get_node_core_range internally) uses the mock-compatible version.
-_mock_common._get_node_core_range = _mock_graph._get_node_core_range
-
-
-def _mock_coords_to_core_range_set(coords):
-    """Mock-compatible _coords_to_core_range_set.
-
-    Creates a mock CoreRangeSet with proper .ranges() support from a set of
-    (x,y) coordinate tuples.  Each coordinate becomes a single-core range.
-    This replaces _coords_to_core_range_set which uses real ttnn classes.
-    """
-    ranges = []
-    for x, y in sorted(coords):
-        cr = MagicMock()
-        cr.start.x = x
-        cr.start.y = y
-        cr.end.x = x
-        cr.end.y = y
-        ranges.append(cr)
-    crs = MagicMock()
-    crs.ranges.return_value = ranges
-    return crs
-
-
-# Monkeypatch _coords_to_core_range_set so that _propagate_allowed_ranges()
-# can produce mock-compatible CoreRangeSets when computing unions.
-_mock_graph._coords_to_core_range_set = _mock_coords_to_core_range_set
 
 
 class TestOpGraphTopologyValidation:
@@ -1437,28 +1406,20 @@ class TestOpGraphTopologyValidation:
         with pytest.raises(ValueError, match="overlapping cores"):
             builder._validate_topology()
 
-    def test_child_outside_parent_rejected(self):
-        """Child range that extends beyond its parent's allowed range should be rejected."""
+    def test_child_wider_than_parent_accepted(self):
+        """Child range extending beyond parent is accepted (narrow->wide)."""
         OpGraphBuilder = _mock_graph.OpGraphBuilder
         OpNode = _mock_graph.OpNode
 
-        # Intermediate parent: actual (0,0)-(3,0), allowed (0,0)-(3,0)
-        # One child extends to (5,0) — outside parent's allowed range
-        parent_crs = _make_mock_core_range_set([((0, 0), (3, 0))])
-        parent_op = _make_op_with_cores(parent_crs, allowed_core_range=parent_crs)
-        leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
-        leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (5, 0))])))
-        parent_node = OpNode(parent_op, children=[leaf_a, leaf_b])
-
-        # Root covers the full superset; explicit allowed_core_range so
-        # root's own actual-⊆-allowed check passes before recursing.
-        root_crs = _make_mock_core_range_set([((0, 0), (5, 0))])
-        root_op = _make_op_with_cores(root_crs, allowed_core_range=root_crs)
-        root = OpNode(root_op, children=[parent_node])
+        # Parent on (0,0)-(1,0) = 2 cores, children extend to (5,0)
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))]))
+        leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (2, 0))])))
+        leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((3, 0), (5, 0))])))
+        root = OpNode(parent_op, children=[leaf_a, leaf_b])
 
         builder = OpGraphBuilder(root)
-        with pytest.raises(ValueError, match="outside parent range"):
-            builder._validate_topology()
+        # Should not raise — narrow->wide is now valid
+        builder._validate_topology()
 
     def test_overlapping_children_rejected(self):
         """Sibling children with overlapping ranges should be rejected."""
@@ -1558,120 +1519,98 @@ class TestOpGraphTopologyValidation:
         builder._validate_topology()
 
 
-class TestAllowedCoreRange:
-    """Tests for allowed_core_range topology validation."""
+class TestNarrowWideTopology:
+    """Tests for narrow->wide topology support."""
 
-    def test_allowed_range_wider_than_actual(self):
-        """Parent with allowed_core_range wider than actual should permit children
-        that use cores within the allowed range but outside the parent's actual range."""
+    def test_child_subset_of_parent(self):
+        """Children on subsets of parent cores should pass (existing behavior)."""
         OpGraphBuilder = _mock_graph.OpGraphBuilder
         OpNode = _mock_graph.OpNode
 
-        # Parent actual range: (0,0)-(1,0) = 2 cores
-        # Parent allowed range: (0,0)-(3,0) = 4 cores
-        parent_actual = _make_mock_core_range_set([((0, 0), (1, 0))])
-        parent_allowed = _make_mock_core_range_set([((0, 0), (3, 0))])
-        parent_op = _make_op_with_cores(parent_actual, allowed_core_range=parent_allowed)
-
-        # Children use cores (0,0)-(1,0) and (2,0)-(3,0) — within allowed range
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
         child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
         child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
         root = OpNode(parent_op, children=[child_a, child_b])
 
         builder = OpGraphBuilder(root)
-        # Should not raise — children are within parent's allowed range
+        # Should not raise
         builder._validate_topology()
 
-    def test_actual_outside_allowed_raises(self):
-        """Node with actual cores outside its allowed_core_range should be rejected."""
+    def test_child_wider_than_parent_accepted(self):
+        """Child on 4 cores with parent on 2 cores should pass (narrow->wide)."""
         OpGraphBuilder = _mock_graph.OpGraphBuilder
         OpNode = _mock_graph.OpNode
 
-        # Actual range: (0,0)-(3,0) = 4 cores
-        # Allowed range: (0,0)-(1,0) = 2 cores — actual extends beyond allowed
-        actual = _make_mock_core_range_set([((0, 0), (3, 0))])
-        allowed = _make_mock_core_range_set([((0, 0), (1, 0))])
-        op = _make_op_with_cores(actual, allowed_core_range=allowed)
-
-        root = OpNode(op)
-        builder = OpGraphBuilder(root)
-        with pytest.raises(ValueError, match="outside its allowed range"):
-            builder._validate_topology()
-
-    def test_allowed_propagation_from_children(self):
-        """Stem without allowed_core_range should propagate union from children."""
-        OpGraphBuilder = _mock_graph.OpGraphBuilder
-        OpNode = _mock_graph.OpNode
-
-        # Stem actual: (0,0)-(1,0) — only 2 cores
-        # Children: (0,0)-(1,0) and (2,0)-(3,0) — total 4 cores
-        # Stem has no allowed_core_range — should propagate from children = 4 cores
-        stem_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))]))
+        # Parent on 2 cores, children on 4 cores total
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))]))
         child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
         child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
-        root = OpNode(stem_op, children=[child_a, child_b])
+        root = OpNode(parent_op, children=[child_a, child_b])
 
         builder = OpGraphBuilder(root)
-        # Should not raise — stem's propagated allowed range is union of children (4 cores),
-        # and stem's actual (2 cores) ⊆ propagated allowed (4 cores)
+        # Should not raise — narrow->wide is valid
         builder._validate_topology()
 
-    def test_allowed_sibling_overlap_raises(self):
-        """Siblings with overlapping allowed ranges should be rejected even if
-        actual ranges are disjoint."""
+    def test_sibling_overlap_raises(self):
+        """Overlapping siblings should still be rejected."""
         OpGraphBuilder = _mock_graph.OpGraphBuilder
         OpNode = _mock_graph.OpNode
 
-        # Parent covers (0,0)-(5,0)
-        parent_op = _make_op_with_cores(
-            _make_mock_core_range_set([((0, 0), (5, 0))]),
-            allowed_core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
-        )
-
-        # Child A: actual (0,0)-(0,0), allowed (0,0)-(3,0)
-        # Child B: actual (4,0)-(5,0), allowed (2,0)-(5,0)
-        # Actual ranges disjoint, but allowed ranges overlap at (2,0)-(3,0)
-        child_a = OpNode(
-            _make_op_with_cores(
-                _make_mock_core_range_set([((0, 0), (0, 0))]),
-                allowed_core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-            )
-        )
-        child_b = OpNode(
-            _make_op_with_cores(
-                _make_mock_core_range_set([((4, 0), (5, 0))]),
-                allowed_core_range=_make_mock_core_range_set([((2, 0), (5, 0))]),
-            )
-        )
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
+        child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))])))
+        child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (5, 0))])))
         root = OpNode(parent_op, children=[child_a, child_b])
 
         builder = OpGraphBuilder(root)
         with pytest.raises(ValueError, match="overlapping cores"):
             builder._validate_topology()
 
-    def test_child_allowed_outside_parent_allowed_raises(self):
-        """Child's allowed range exceeding parent's allowed range should be rejected."""
+    def test_noop_entries_in_walk(self):
+        """_compute_core_groups() should produce no-op entries for extra cores."""
         OpGraphBuilder = _mock_graph.OpGraphBuilder
         OpNode = _mock_graph.OpNode
 
-        # Parent allowed: (0,0)-(3,0) = 4 cores
-        parent_op = _make_op_with_cores(
-            _make_mock_core_range_set([((0, 0), (3, 0))]),
-            allowed_core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-        )
-
-        # Child allowed: (0,0)-(5,0) = 6 cores — exceeds parent's allowed
-        child = OpNode(
-            _make_op_with_cores(
-                _make_mock_core_range_set([((0, 0), (1, 0))]),
-                allowed_core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
-            )
-        )
-        root = OpNode(parent_op, children=[child])
+        # Parent on (0,0)-(1,0) = 2 cores, child on (0,0)-(3,0) = 4 cores
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))]))
+        child_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        root = OpNode(parent_op, children=[OpNode(child_op)])
 
         builder = OpGraphBuilder(root)
-        with pytest.raises(ValueError, match="outside parent range"):
-            builder._validate_topology()
+        groups, unique_ops = builder._compute_core_groups()
+
+        # unique_ops should contain only the two real ops (not the noop)
+        assert len(unique_ops) == 2
+
+        # Cores (2,0) and (3,0) should have no-op at parent position + real child.
+        # Use _mock_common (same module object as _mock_graph's import) for identity check.
+        noop_op = _mock_common._NOOP_OP
+
+        # Find the group containing core (2,0)
+        found_noop = False
+        for group in groups:
+            for phase in group.phases:
+                if phase is noop_op:
+                    found_noop = True
+                    break
+        assert found_noop, "Expected no-op entries for cores (2,0)-(3,0)"
+
+    def test_groups_have_aligned_phase_counts(self):
+        """For narrow->wide, all groups should have consistent phase counts."""
+        OpGraphBuilder = _mock_graph.OpGraphBuilder
+        OpNode = _mock_graph.OpNode
+
+        # Parent on (0,0)-(1,0), child on (0,0)-(3,0)
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))]))
+        child_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        root = OpNode(parent_op, children=[OpNode(child_op)])
+
+        builder = OpGraphBuilder(root)
+        groups, _ = builder._compute_core_groups()
+
+        # All groups should have 2 phases (parent + child)
+        phase_counts = {len(g.phases) for g in groups}
+        assert len(phase_counts) == 1, f"Expected uniform phase count, got {phase_counts}"
+        assert phase_counts == {2}
 
 
 class TestEffectiveLeafRange:
