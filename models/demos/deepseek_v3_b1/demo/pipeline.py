@@ -11,19 +11,17 @@ from __future__ import annotations
 
 from typing import Any
 
-import torch
-
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
     EmbeddingStage,
     LMHeadStage,
-    LMHeadWeights,
     PassthroughPayload,
     PassthroughStage,
     StageContext,
     StageKind,
 )
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -34,17 +32,17 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
 
 def create_single_galaxy_pipeline_configuration(
     *,
-    embedding_tensor: torch.Tensor,
-    lmhead_weights: LMHeadWeights,
+    embedding_weights: DeepSeekV3EmbeddingLayerWeights,
+    lm_head_weights: DeepSeekV3LMHeadWeights,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
     return PipelineConfiguration(
         {
-            0: EmbeddingStage(embedding_tensor),
+            0: EmbeddingStage(embedding_weights),
             1: LMHeadStage(
-                weights=lmhead_weights,
+                weights=lm_head_weights,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 persistent_mode=persistent_mode,
             ),
@@ -56,17 +54,17 @@ def create_single_galaxy_pipeline_configuration(
 
 def create_single_pod_pipeline_configuration(
     *,
-    embedding_tensor: torch.Tensor,
-    lmhead_weights: LMHeadWeights,
+    embedding_weights: DeepSeekV3EmbeddingLayerWeights,
+    lm_head_weights: DeepSeekV3LMHeadWeights,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """16-stage single-pod: Embed -> 13x Activation fwd -> LMHead -> Token fwd."""
-    stages: dict[int, StageKind] = {0: EmbeddingStage(embedding_tensor)}
+    stages: dict[int, StageKind] = {0: EmbeddingStage(embedding_weights)}
     for i in range(1, 14):
         stages[i] = PassthroughStage(PassthroughPayload.ACTIVATION)
     stages[14] = LMHeadStage(
-        weights=lmhead_weights,
+        weights=lm_head_weights,
         fp32_dest_acc_en=fp32_dest_acc_en,
         persistent_mode=persistent_mode,
     )
@@ -77,23 +75,23 @@ def create_single_pod_pipeline_configuration(
 def create_pipeline_configuration_from_num_procs(
     num_procs: int,
     *,
-    embedding_tensor: torch.Tensor,
-    lmhead_weights: LMHeadWeights,
+    embedding_weights: DeepSeekV3EmbeddingLayerWeights,
+    lm_head_weights: DeepSeekV3LMHeadWeights,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod)."""
     if num_procs == 4:
         return create_single_galaxy_pipeline_configuration(
-            embedding_tensor=embedding_tensor,
-            lmhead_weights=lmhead_weights,
+            embedding_weights=embedding_weights,
+            lm_head_weights=lm_head_weights,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
     if num_procs == 16:
         return create_single_pod_pipeline_configuration(
-            embedding_tensor=embedding_tensor,
-            lmhead_weights=lmhead_weights,
+            embedding_weights=embedding_weights,
+            lm_head_weights=lm_head_weights,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
