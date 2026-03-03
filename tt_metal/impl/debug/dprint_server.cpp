@@ -54,6 +54,7 @@
 #include "impl/debug/inspector/inspector.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "tt_stl/span.hpp"
+#include "jit_build/build_env_manager.hpp"
 
 using std::flush;
 using std::int32_t;
@@ -385,7 +386,7 @@ private:
     };
 
     struct RiscData {
-        std::string firmare_elf_path;
+        std::string firmware_elf_path;
         ElfFileCacheEntry* firmware_elf_cache_entry = nullptr;
         std::string kernel_elf_path;
         ElfFileCacheEntry* kernel_elf_cache_entry = nullptr;
@@ -672,6 +673,11 @@ std::string DevicePrintImpl::format_message(ParsedStringInfo& string_info, std::
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
     std::size_t word_index = 0;
+    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        device_id, logical_core.coord, logical_core.type);
+    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+    uint32_t programmable_core_type_idx =
+        MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     while (word_index < data.size()) {
         // New data always starts with a DevicePrintHeader, so lets parse it.
@@ -714,6 +720,7 @@ void DevicePrintImpl::print_buffer_data(
             if (elf_cache_it != elf_cache_.end()) {
                 // Kernel already in cache, just increase reference count and continue.
                 elf_cache_it->second.ref_count++;
+                risc_data.kernel_elf_cache_entry = &elf_cache_it->second;
                 continue;
             }
 
@@ -738,7 +745,35 @@ void DevicePrintImpl::print_buffer_data(
             if (header->is_kernel) {
                 elf_entry_ptr = risc_data.kernel_elf_cache_entry;
             } else {
-                // TODO: Find firmware elf. If it is still not loaded, load it into cache.
+                // Check if firmware elf is already loaded for this risc.
+                if (risc_data.firmware_elf_cache_entry == nullptr) {
+                    // Find firmware elf path from BuildEnvManager.
+                    auto [processor_class, processor_type_idx] =
+                        MetalContext::instance().hal().get_processor_class_and_type_from_index(
+                            programmable_core_type, header->risc_id);
+                    auto firmware_elf_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                        device_id,
+                        programmable_core_type_idx,
+                        static_cast<uint32_t>(processor_class),
+                        processor_type_idx);
+
+                    risc_data.firmware_elf_path = firmware_elf_path;
+
+                    // Find firmware elf. If it is still not loaded, load it into cache.
+                    auto elf_cache_it = elf_cache_.find(risc_data.firmware_elf_path);
+                    if (elf_cache_it != elf_cache_.end()) {
+                        // Firmware already in cache, just increase reference count and continue.
+                        elf_cache_it->second.ref_count++;
+                        risc_data.firmware_elf_cache_entry = &elf_cache_it->second;
+                    } else {
+                        // Load elf file
+                        auto& elf_cache_entry = elf_cache_[risc_data.firmware_elf_path];
+                        elf_cache_entry.ref_count = 1;
+                        risc_data.firmware_elf_cache_entry = &elf_cache_entry;
+                        elf_cache_entry.load_elf(firmware_elf_path);
+                    }
+                }
+                elf_entry_ptr = risc_data.firmware_elf_cache_entry;
             }
 
             // Check if we found elf file for this print message.
