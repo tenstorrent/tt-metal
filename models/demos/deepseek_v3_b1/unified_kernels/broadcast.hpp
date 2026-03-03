@@ -173,9 +173,6 @@ struct Broadcast {
                 // Reset pool so broadcast can be called across loop iterations
                 PacketHeaderPool::reset();
 
-                // Reset pool so broadcast can be called across loop iterations
-                PacketHeaderPool::reset();
-
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 // Allocate separate route for secondary axis unicast (if applicable)
