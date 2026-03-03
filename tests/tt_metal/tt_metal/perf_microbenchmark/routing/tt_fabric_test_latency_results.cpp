@@ -146,7 +146,6 @@ void LatencyResultsManager::setup_latency_test_workers(
     const auto& dest = pattern.destination.value();
 
     // Use default core if not specified (latency tests typically use a fixed core)
-    // TODO: Implement core sweep for sequential_neighbor_exchange
     CoreCoord sender_core = sender.core.value_or(CoreCoord{0, 0});
     CoreCoord receiver_core = dest.core.value_or(CoreCoord{0, 0});
     FabricNodeId sender_device_id = sender.device;
@@ -382,6 +381,12 @@ void LatencyResultsManager::report_latency_results(
         sample_result.ftype = ftype_str;
         sample_result.ntype = ntype_str;
         sample_result.topology = topology_str;
+        sample_result.sender_device_id = sender_location.node_id.chip_id;
+        sample_result.responder_device_id = responder_location.node_id.chip_id;
+        sample_result.sender_core_x = sender_location.core.x;
+        sample_result.sender_core_y = sender_location.core.y;
+        sample_result.responder_core_x = responder_location.core.x;
+        sample_result.responder_core_y = responder_location.core.y;
         sample_result.num_devices = num_devices;
         sample_result.num_links = num_links;
         sample_result.num_samples = 1;  // Each row represents one sample
@@ -557,7 +562,8 @@ void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ 
     }
 
     // Write header for detailed results (no tolerance_percent column)
-    csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+    csv_stream << "test_name,ftype,ntype,topology,sender_device,sender_core_x,sender_core_y,"
+                  "responder_device,responder_core_x,responder_core_y,num_devices,num_links,num_samples,payload_size,"
                   "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                   "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
@@ -636,6 +642,8 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
     }
 
     csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
+               << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
+               << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
                << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
