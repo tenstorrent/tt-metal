@@ -1,0 +1,55 @@
+# This file defines the test matrix for the Blackhole demo tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command to run.
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: whisper performance
+  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  skus:
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: whisper
+
+- name: whisper nightly
+  cmd: pytest tests/nightly/single_card/whisper
+  skus:
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U05RWH3QUPM # Salar Hosseini
+  team: models
+  model-name: whisper
+
+- name: llama3.1-8b performance
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
+  skus:
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
+- name: llama3.1-8b stress
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --timeout=1800
+  skus:
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3.1-8b
+
+- name: unet-shallow performance
+  cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
+  skus:
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U06ECNVR0EN # Evan Smal
+  team: models
+  model-name: unet-shallow
