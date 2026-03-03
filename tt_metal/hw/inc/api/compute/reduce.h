@@ -161,6 +161,7 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
+    ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
     const ckernel::TensorShape tensor_shape = {
         MAX_FACE_R_DIM,
         MAX_FACE_C_DIM,
@@ -180,7 +181,7 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  * | Template   | reduce_dim                | The dimension of reduce op - row, column or both                                        | ReduceDim            | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
  * | Template   | enforce_fp32_accumulation | Enable accumulation of reduction in full FP32 precision (Requires DST_ACCUM_MODE==true) | bool                 | {true, false}                                  | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t             | Must be less than the acquired size of DST REG | True     |
- * | Function   | tensor_shape              | The shape of the tensor to reduce (optional, default: 32x32)                            | ckernel::TensorShape | N/A                                            | False    |
+ * | Function   | tensor_shape              | The shape of the tensor to reduce                                                       | ckernel::TensorShape | N/A                                            | True     |
  */
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
