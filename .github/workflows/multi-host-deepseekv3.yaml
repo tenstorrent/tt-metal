@@ -293,7 +293,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
