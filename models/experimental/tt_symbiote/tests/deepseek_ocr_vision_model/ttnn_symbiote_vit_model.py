@@ -465,6 +465,7 @@ class TTNNNoTPAttention(TTNNModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         if x.layout != ttnn.TILE_LAYOUT:
@@ -515,8 +516,8 @@ class TTNNNoTPAttention(TTNNModule):
 
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            q_chunk_size=min(256, seqlen),
-            k_chunk_size=min(256, seqlen),
+            q_chunk_size=max(256, seqlen),
+            k_chunk_size=max(256, seqlen),
             exp_approx_mode=False,
         )
 
