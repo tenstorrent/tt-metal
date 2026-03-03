@@ -13,6 +13,11 @@ Tensor layout convention (FLA style):
   beta: [B, T, H]      (batch, time, heads)
   g:    [B, T, H]      (batch, time, heads) -- log-space decay
   state:[B, H, K, V]   (batch, heads, key_dim, value_dim)
+
+Performance optimizations for recurrent (decode) mode:
+  - L1 / height-sharded memory configs to keep state and matmul outputs in L1
+  - fp32 accumulation for critical matmuls via compute_kernel_config
+  - Reduced precision overhead by using L1 and selective fp32_dest_acc
 """
 
 import math
@@ -28,6 +33,49 @@ def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     return ttnn.multiply(x, inv_norm)
 
 
+def _get_recurrent_compute_kernel_config(device):
+    """Compute kernel config for recurrent matmuls: HiFi with fp32 accumulation for precision."""
+    if device is None:
+        return None
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def _get_recurrent_state_memory_config(device, B, H, K, V):
+    """
+    Memory config for recurrent state and step outputs.
+    Use DRAM for large state tensors to avoid L1 exhaustion and circular buffer clash.
+    When state fits and dimensions are compatible, use height-sharded L1.
+    Otherwise use L1 interleaved for smaller states.
+    """
+    if device is None:
+        return None
+    # Avoid L1 exhaustion: use DRAM when state would use >~50% of per-core L1
+    state_size_bytes = B * H * K * V * 4  # float32 = 4 bytes
+    l1_size_per_core = 1024 * 1024  # ~1MB L1 per core
+    if state_size_bytes > l1_size_per_core * 0.5:
+        return ttnn.DRAM_MEMORY_CONFIG
+    try:
+        grid = device.compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
+        total_cores = grid.x * grid.y
+        # Height sharding: shape (B, H, K, V) -> shard_height = B*H*K must divide total_cores
+        if (B * H * K) % total_cores == 0:
+            return ttnn.create_sharded_memory_config(
+                (B, H, K, V),
+                core_grid=core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+    except Exception:
+        pass
+    return ttnn.L1_MEMORY_CONFIG
+
+
 def recurrent_delta_rule_step_ttnn(
     q_t,
     k_t,
@@ -35,12 +83,15 @@ def recurrent_delta_rule_step_ttnn(
     beta_t,
     g_t,
     h,
+    *,
+    memory_config=None,
+    compute_kernel_config=None,
 ):
     """
     Single recurrent step of the gated delta rule using TTNN ops.
 
     Uses ttnn.matmul for K-dimension reductions to leverage hardware
-    float32 accumulation, improving numerical precision.
+    float32 accumulation when compute_kernel_config has fp32_dest_acc_en.
 
     Args:
         q_t: [B, H, K] query for this timestep
@@ -49,6 +100,8 @@ def recurrent_delta_rule_step_ttnn(
         beta_t: [B, H] write strength
         g_t: [B, H] log-space decay
         h: [B, H, K, V] recurrent state
+        memory_config: optional ttnn.MemoryConfig for matmul/add outputs (e.g. L1 or height-sharded)
+        compute_kernel_config: optional config with fp32_dest_acc_en for critical matmuls
 
     Returns:
         o_t: [B, H, V] output
@@ -59,6 +112,16 @@ def recurrent_delta_rule_step_ttnn(
     K = q_t.shape[2]
     V = v_t.shape[2]
 
+    matmul_kw = {}
+    if memory_config is not None:
+        matmul_kw["memory_config"] = memory_config
+    if compute_kernel_config is not None:
+        matmul_kw["compute_kernel_config"] = compute_kernel_config
+
+    add_kw = {}
+    if memory_config is not None:
+        add_kw["memory_config"] = memory_config
+
     # 1. Decay the state: h = h * exp(g_t)
     decay = ttnn.exp(g_t)  # [B, H]
     decay = ttnn.reshape(decay, [B, H, 1, 1])  # [B, H, 1, 1]
@@ -66,7 +129,7 @@ def recurrent_delta_rule_step_ttnn(
 
     # 2. Read from state via matmul: v_read = k^T @ h
     k_row = ttnn.reshape(k_t, [B, H, 1, K])  # [B, H, 1, K]
-    v_read = ttnn.matmul(k_row, h)  # [B, H, 1, V]
+    v_read = ttnn.matmul(k_row, h, **matmul_kw)  # [B, H, 1, V]
     v_read = ttnn.reshape(v_read, [B, H, V])  # [B, H, V]
 
     # 3. Compute delta: delta = (v_t - v_read) * beta_t
@@ -77,12 +140,12 @@ def recurrent_delta_rule_step_ttnn(
     # 4. Write to state via matmul outer product: h += k @ delta^T
     k_col = ttnn.reshape(k_t, [B, H, K, 1])  # [B, H, K, 1]
     d_row = ttnn.reshape(delta, [B, H, 1, V])  # [B, H, 1, V]
-    outer = ttnn.matmul(k_col, d_row)  # [B, H, K, V]
-    h = ttnn.add(h, outer)
+    outer = ttnn.matmul(k_col, d_row, **matmul_kw)  # [B, H, K, V]
+    h = ttnn.add(h, outer, **add_kw)
 
     # 5. Query state via matmul: o_t = q^T @ h
     q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
-    o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
+    o_t = ttnn.matmul(q_row, h, **matmul_kw)  # [B, H, 1, V]
     o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
 
     return o_t, h
@@ -151,11 +214,25 @@ def recurrent_gated_delta_rule_ttnn(
     beta = ttnn.typecast(beta, ttnn.float32)
     g = ttnn.typecast(g, ttnn.float32)
 
-    # Initialize state in float32
+    # Memory and compute configs for decode: L1 (or height-sharded) + fp32 accumulation
+    state_memory_config = _get_recurrent_state_memory_config(device, B, H, K, V)
+    compute_kernel_config = _get_recurrent_compute_kernel_config(device)
+
+    # Initialize state in float32; use L1 or height-sharded when device is set
     if initial_state is not None:
         h = ttnn.typecast(initial_state, ttnn.float32)
+        if state_memory_config is not None:
+            h = ttnn.to_memory_config(h, state_memory_config)
     else:
         h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.float32)
+        if state_memory_config is not None:
+            h = ttnn.to_memory_config(h, state_memory_config)
+
+    step_kw = {}
+    if state_memory_config is not None:
+        step_kw["memory_config"] = state_memory_config
+    if compute_kernel_config is not None:
+        step_kw["compute_kernel_config"] = compute_kernel_config
 
     outputs = []
     for i in range(T):
@@ -165,11 +242,14 @@ def recurrent_gated_delta_rule_ttnn(
         beta_t = beta[:, :, i]  # [B, H]
         g_t = g[:, :, i]  # [B, H]
 
-        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h)
+        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h, **step_kw)
         outputs.append(o_t)
 
-    # Concat outputs: reshape each [B, H, V] -> [B, H, 1, V] then concat
-    outputs_4d = [ttnn.reshape(o, [B, H, 1, V]) for o in outputs]
+    # Concat outputs: move each to DRAM before reshape to avoid L1 circular buffer clash
+    outputs_4d = []
+    for o in outputs:
+        o_dram = ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG)
+        outputs_4d.append(ttnn.reshape(o_dram, [B, H, 1, V]))
     o = ttnn.concat(outputs_4d, dim=2)  # [B, H, T, V]
 
     # Transpose back to [B, T, H, V]
