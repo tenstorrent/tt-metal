@@ -61,11 +61,14 @@ def test_unet(
 
 
 @pytest.mark.parametrize(
-    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        # 512x512 image resolution
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
     ],
+    ids=["1024x1024", "512x512"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
@@ -77,6 +80,7 @@ def test_refiner_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    pcc,
     iterations,
     is_ci_env,
     is_ci_v2_env,
@@ -91,6 +95,7 @@ def test_refiner_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        pcc,
         debug_mode=False,
         is_ci_env=is_ci_env,
         is_ci_v2_env=is_ci_v2_env,
@@ -123,10 +128,20 @@ def test_refiner_unet(
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
         ),
         (
-            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
+            'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet -k "1024x1024"',
             244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-            "sdxl_refiner_unet",
-            "sdxl_refiner_unet",
+            "sdxl_refiner_unet_1024x1024",
+            "sdxl_refiner_unet_1024x1024",
+            1,
+            1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            0.06,
+            f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+        ),
+        (
+            'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet -k "512x512"',
+            79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            "sdxl_refiner_unet_512x512",
+            "sdxl_refiner_unet_512x512",
             1,
             1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             0.06,
@@ -196,7 +211,8 @@ def test_refiner_unet(
     ids=[
         "test_sdxl_unet_1024x1024",
         "test_sdxl_unet_512x512",
-        "test_sdxl_refiner_unet",
+        "test_sdxl_refiner_unet_1024x1024",
+        "test_sdxl_refiner_unet_512x512",
         "test_sdxl_vae_decode_1024x1024",
         "test_sdxl_vae_decode_512x512",
         "test_sdxl_vae_encode_1024x1024",

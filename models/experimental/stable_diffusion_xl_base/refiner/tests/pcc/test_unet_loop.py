@@ -27,7 +27,10 @@ import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
-UNET_LOOP_PCC = {"10": 0.996, "50": 0.996}
+UNET_LOOP_PCC = {
+    "1024x1024": {"10": 0.997, "50": 0.996},
+    "512x512": {"10": 0.999, "50": 0.998},
+}
 
 
 @torch.no_grad()
@@ -46,10 +49,10 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     guidance_rescale = 0.0
     denoising_start = 0.8
 
-    pcc = UNET_LOOP_PCC.get(str(num_inference_steps), 0)
-
     # 0. Set up default height and width for unet
     height, width = image_resolution
+    resolution_key = f"{height}x{width}"
+    pcc_threshold = UNET_LOOP_PCC.get(resolution_key, {}).get(str(num_inference_steps), 0)
 
     # 1. Load components
     base = DiffusionPipeline.from_pretrained(
@@ -155,6 +158,8 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
 
     latents = base(
         prompt=prompts,
+        height=height,
+        width=width,
         num_inference_steps=num_inference_steps,
         denoising_end=denoising_start,
         output_type="latent",
@@ -344,7 +349,7 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, pcc)
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, pcc_threshold)
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
@@ -354,6 +359,8 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     [
         # 1024x1024 image resolution
         (1024, 1024),
+        # 512x512 image resolution
+        (512, 512),
     ],
 )
 @pytest.mark.parametrize(
@@ -372,8 +379,4 @@ def test_unet_loop(
     loop_iter_num,
     debug_mode,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)

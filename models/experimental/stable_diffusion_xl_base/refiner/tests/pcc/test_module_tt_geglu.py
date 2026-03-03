@@ -22,13 +22,13 @@ from functools import reduce
         ((1024, 1024), (256, 1536), "mid_block.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
         ((1024, 1024), (1024, 1536), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.952),
         ((1024, 1024), (4096, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.947),
+        # 512x512 image resolution
+        ((512, 512), (64, 1536), "mid_block.attentions.0.transformer_blocks.0.ff.net.0", 0.952),
+        ((512, 512), (256, 1536), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.952),
+        ((512, 512), (1024, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.947),
     ],
 )
 def test_geglu(device, image_resolution, input_shape, module_path, pcc, is_ci_env, reset_seeds):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
