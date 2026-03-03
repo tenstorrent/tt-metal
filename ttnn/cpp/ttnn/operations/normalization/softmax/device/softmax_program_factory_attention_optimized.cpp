@@ -57,7 +57,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
     const tt::DataFormat reduce_scaler_cb_data_format =
-        (in0_cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        (in0_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
     const uint32_t reduce_scaler_tile_size = tt::tile_size(reduce_scaler_cb_data_format);
     const uint32_t fused_attention_scale_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 

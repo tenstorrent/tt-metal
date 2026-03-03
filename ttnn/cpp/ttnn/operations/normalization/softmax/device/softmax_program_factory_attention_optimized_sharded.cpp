@@ -38,7 +38,9 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                                              : tt::DataFormat::Float16_b;
     tt::DataFormat fused_attention_scale_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat reduce_scaler_cb_data_format =
-        (in0_cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        (in0_cb_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
 
     log_debug(tt::LogOp, "in0_cb_data_format: {}", in0_cb_data_format);
     log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
