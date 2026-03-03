@@ -25,7 +25,7 @@ class DecoderLayer:
         mesh_config=None,
         create_kv_cache=True,
         transformation_mats=None,
-        max_seq_len=1024,
+        max_seq_len=4096,
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
@@ -117,7 +117,6 @@ class DecoderLayer:
             batch_size=batch_size,
         )
         hidden_states_post_norm.deallocate(True)
-
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)

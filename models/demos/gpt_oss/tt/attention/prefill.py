@@ -127,7 +127,6 @@ def prefill_forward(
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
-
     # Scaled dot-product attention
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,

@@ -11,7 +11,7 @@ from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
-from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
+from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
@@ -237,7 +237,7 @@ class ModelWithMP:
         )
 
         # Initialize on-device sampling (supported when per-device vocab fits in 64K)
-        self._supports_on_device_sampling = self.vocab_size // sampling_splits <= 64 * 1024
+        self._supports_on_device_sampling = True  # self.vocab_size // sampling_splits <= 64 * 1024
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_shape[0] if users_row_sharded else 1
@@ -270,17 +270,17 @@ class ModelWithMP:
 
         args = _SamplingArgs()
         args.vocab_size = hf_config.vocab_size
-        num_tp = mesh_shape[1]
+        num_tp = 1
         # padded_vocab_size: per-device vocab must be tile-aligned (multiple of 32)
         # for TTPenalties scatter operations.
         # The lm_head weight is padded to this size BEFORE column-parallel sharding,
         # so device shard boundaries align with TTSampling device offset strides.
         per_device_vocab = ((args.vocab_size + num_tp - 1) // num_tp + 31) // 32 * 32
         args.padded_vocab_size = per_device_vocab * num_tp
-        args.cluster_shape = tuple(mesh_shape)
+        args.cluster_shape = (1, 1)
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
-        args.is_galaxy = mesh_shape[0] > 1
+        args.is_galaxy = self.mesh_shape[0] > 1
         args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
@@ -289,8 +289,10 @@ class ModelWithMP:
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         """On-device position increment for traced decode loops with sampling."""
-        ttnn.plus_one(current_pos, skip_negative_entries=True)
-        ttnn.plus_one(rot_mat_idxs)
+        for pos in current_pos:
+            ttnn.plus_one(pos, skip_negative_entries=True)
+        for idx in rot_mat_idxs:
+            ttnn.plus_one(idx)
 
     @classmethod
     def create_transformer_compatible(
@@ -406,27 +408,23 @@ class ModelWithMP:
             # Layer i is on submesh given by worker_for_task (same mapping as in __init__)
             next_submesh_id = worker_for_task(i, self.hf_config.num_hidden_layers, num_submeshes)
             if next_submesh_id != current_submesh_id:
-                logger.info(
-                    f"Copying hidden_states from submesh {current_submesh_id}, {hidden_states.device().id()} to {next_submesh_id} for layer {i}"
-                )
+                # logger.info(
+                #     f"Copying hidden_states from submesh {current_submesh_id}, {hidden_states.device().id()} to {next_submesh_id} for layer {i}"
+                # )
                 # Copy hidden_states from current submesh to the submesh that runs this layer
                 hidden_states = self._copy_hidden_states_between_submeshes(
                     hidden_states, current_submesh_id, next_submesh_id
                 )
-                logger.info(f"Copied hidden_states with device id {hidden_states.device().id()} for layer {i}")
+                # logger.info(f"Copied hidden_states with device id {hidden_states.device().id()} for layer {i}")
                 current_submesh_id = next_submesh_id
-            logger.info(f"Running layer {i} on submesh {current_submesh_id}")
 
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-            this_rope_mats_setup = rope_mats[current_submesh_id]
-            this_rope_mats = [
-                this_rope_mats_setup.cos_matrix_prefill[:, :, :seq_len, :],
-                this_rope_mats_setup.sin_matrix_prefill[:, :, :seq_len, :],
-            ]
+            this_rope_mats = rope_mats[current_submesh_id]
+            # logger.info(f"Running layer {i} on submesh {current_submesh_id}, kv_device = {layer_kv_cache[0].device().id()}, rope_device = {this_rope_mats[0].device().id()}, position_device = {current_pos[current_submesh_id].device().id() if current_pos is not None else None}")
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=this_rope_mats,
-                position_idx=current_pos,
+                position_idx=current_pos[current_submesh_id] if current_pos is not None else None,
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
@@ -478,7 +476,7 @@ class ModelWithMP:
         # No post-matmul padding needed: the lm_head weight is pre-padded to
         # padded_vocab_size before column-parallel sharding, so each device's
         # matmul output is already tile-aligned (per_device_padded width).
-        logger.info("Synchronzing last submesh")
+        # logger.info("Synchronzing last submesh")
         ttnn.synchronize_device(self.mp_submeshes[-1])
         return logits
 
@@ -497,7 +495,7 @@ class ModelWithMP:
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
         # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
-        actual_batch = current_pos.shape[-1]
+        actual_batch = current_pos[0].shape[-1]
         if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
@@ -506,8 +504,12 @@ class ModelWithMP:
             tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
         )
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
-        # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
-        rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
+        # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
+        rope_mats = []
+        for i in range(len(self.mp_submeshes)):
+            rope_mats.append(
+                self.rope_setup[i].get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs[i], self.mp_submeshes[i]))
+            )
 
         # Forward through layers and head (shared with prefill)
         out = self._forward_layers_and_head(
@@ -585,26 +587,26 @@ class ModelWithMP:
         )
         return logits
 
-    def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
-        """
-        Prepare inputs for decode mode - matches tt_transformers interface (4 values).
-        Returns: tokens, current_pos, rope_idxs, page_table
+    # def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
+    #     """
+    #     Prepare inputs for decode mode - matches tt_transformers interface (4 values).
+    #     Returns: tokens, current_pos, rope_idxs, page_table
 
-        Note: rope_idxs are position indices that will be used with get_rot_mats()
-        for on-device RoPE embedding lookup.
-        """
-        host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        # Return 4 values to match tt_transformers interface:
-        # tokens, current_pos, rope_idxs, page_table
-        return (
-            device_inputs[0],  # tokens
-            device_inputs[1],  # current_pos
-            device_inputs[2],  # rope_idxs - position indices for embedding lookup
-            device_inputs[3],  # page_table
-        )
+    #     Note: rope_idxs are position indices that will be used with get_rot_mats()
+    #     for on-device RoPE embedding lookup.
+    #     """
+    #     host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
+    #     device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+    #     # Return 4 values to match tt_transformers interface:
+    #     # tokens, current_pos, rope_idxs, page_table
+    #     return (
+    #         device_inputs[0],  # tokens
+    #         device_inputs[1],  # current_pos
+    #         device_inputs[2],  # rope_idxs - position indices for embedding lookup
+    #         device_inputs[3],  # page_table
+    #     )
 
-    def get_tt_pos_idx(self, current_pos):
+    def get_tt_pos_idx(self, current_pos, device):
         if isinstance(current_pos, ttnn.Tensor):
             return current_pos
         else:
@@ -617,21 +619,18 @@ class ModelWithMP:
             # Add padding if needed
             pad_size = nearest_32(B) - B
             rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
-            mesh_mapper = (
-                ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_shape)
-                if self.users_row_sharded
-                else ttnn.ReplicateTensorToMesh(self.mesh_device)
-            )
-            rope_idxs = ttnn.as_tensor(
-                rot_current_pos,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
+            rope_idxs = ttnn.to_device(
+                ttnn.as_tensor(
+                    rot_current_pos,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                device=device,
             )
 
             return rope_idxs
 
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+    def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
         Prepare decode inputs on host before transferring to device.
         Matches tt-transformers Transformer.prepare_decode_inputs_host (model.py lines 204-252).
@@ -652,21 +651,20 @@ class ModelWithMP:
         # Pad token buffer to 32 for non-row-sharded b<32 (TTSampling requirement)
         if not self.users_row_sharded and tokens.view(-1).shape[-1] < 32:
             tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), "constant", 0)
-        if self.users_row_sharded:
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_shape)
-        else:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-        tokens = ttnn.from_torch(tokens.squeeze(), device=None, dtype=ttnn.uint32, mesh_mapper=mesh_mapper)
+
+        tokens = ttnn.from_torch(tokens.squeeze(), device=self.mp_submeshes[0], dtype=ttnn.uint32)
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
-        rope_idxs = self.get_tt_pos_idx(current_pos)
+        rope_idxs = [self.get_tt_pos_idx(current_pos, device=submesh) for submesh in self.mp_submeshes]
 
         # Prepare current position tensor
-        current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
+        current_pos_tt = [
+            ttnn.from_torch(current_pos, device=submesh, dtype=ttnn.int32) for submesh in self.mp_submeshes
+        ]
 
         # Prepare page table if provided
         if page_table is not None:
-            page_table = ttnn.from_torch(page_table, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
+            page_table = ttnn.from_torch(page_table, device=self.mp_submeshes[0], dtype=ttnn.int32)
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
@@ -742,7 +740,13 @@ class ModelWithMP:
 
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = self.rope_setup
+        rot_mats_global = [
+            [
+                x.cos_matrix_prefill[:, :, :seq_len, :],
+                x.sin_matrix_prefill[:, :, :seq_len, :],
+            ]
+            for x in self.rope_setup
+        ]
         rot_mats_local = None
 
         # Prepare page tables if provided

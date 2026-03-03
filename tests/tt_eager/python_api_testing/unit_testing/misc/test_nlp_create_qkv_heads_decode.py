@@ -141,6 +141,7 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
 
     proj_output_tt = proj_output_tt.to(device=device, mem_config=CREATE_HEAD_INPUT_MEMCFG)
+    print(f"proj_output_tt: {proj_output_tt.shape}, {proj_output_tt.memory_config()}")
 
     # tt operation
     (
@@ -193,6 +194,7 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
         (8, 1, 128, 8),
         (32, 8, 128, 4),
         (64, 8, 96, 1),
+        (64, 8, 64, 1),
     ),
 )
 def test_create_head_max_width_shard(

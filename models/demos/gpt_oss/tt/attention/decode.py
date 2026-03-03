@@ -56,17 +56,23 @@ def decode_forward(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
-
+    xqkv_fused_memory_config = xqkv_fused.memory_config().with_shard_spec(
+        ttnn.ShardSpec(
+            ttnn.num_cores_to_corerangeset(40, mesh_device.compute_with_storage_grid_size(), row_wise=True),
+            (32, xqkv_fused.shape[-1] // 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    )
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
 
+    xqkv_fused = ttnn.to_memory_config(xqkv_fused, xqkv_fused_memory_config)
     tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
 
     xqkv_fused.deallocate(True)
@@ -144,8 +150,8 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=height_sharded_mem_config,
         )
+        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection

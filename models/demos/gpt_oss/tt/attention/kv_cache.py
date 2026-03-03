@@ -6,7 +6,6 @@ import torch
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.gpt_oss.config import MeshConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from .config import AttentionConfig
 
@@ -52,6 +51,10 @@ def init_kv_cache(
             config.head_dim,
         ]
 
+    print(
+        f"cache_shape: {cache_shape}, max_local_batch_size: {config.max_local_batch_size}, max_seq_len: {config.max_seq_len}, num_kv_heads: {config.num_kv_heads}, head_dim: {config.head_dim}"
+    )
+    print(f"cache on {mesh_device.shape} with id {mesh_device.id()}")
     # Create K cache
     mesh_mapper = (
         ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, None))
@@ -64,7 +67,6 @@ def init_kv_cache(
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -75,7 +77,6 @@ def init_kv_cache(
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

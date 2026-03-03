@@ -805,11 +805,8 @@ class Generator(WarmupForwardMixin):
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
 
-            host_inputs = self.model[i].prepare_decode_inputs_host(
-                tokens[i], current_pos[i], page_table=user_page_table
-            )
+            device_inputs_i = self.model[i].prepare_decode_inputs(tokens[i], current_pos[i], page_table=user_page_table)
 
-            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):

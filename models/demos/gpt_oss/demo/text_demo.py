@@ -224,8 +224,8 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            True,  # enable_decode_trace
-            True,  # enable_prefill_trace
+            False,  # enable_decode_trace
+            False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
             True,  # stop_at_eos
@@ -447,7 +447,7 @@ def test_gpt_oss_demo(
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
-    paged_attention = True  # Always use paged attention for GPT-OSS
+    paged_attention = False  # Always use paged attention for GPT-OSS
     global_batch_size = batch_size * data_parallel  # Total batch across all devices
 
     # Validate data parallel configuration (like tt-transformers)
@@ -978,7 +978,7 @@ def test_gpt_oss_demo(
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
-            logger.info(f"Starting prefill...")
+            logger.info(f"Starting prefill on shape {input_tokens_prefill_pt.shape}")
             profiler.start(f"inference_prefill", iteration=batch_idx)
             logits = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
