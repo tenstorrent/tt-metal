@@ -371,8 +371,21 @@ output[i,j,k,...] = f(input[...], params...)
 compute_kernel_lib::{helper_name}<{template_params}>(
     cb_in, cb_out, {shape_params});
 ```
+- A: cb_name [N tiles, ALREADY WAITED from Phase Y / FRESHLY PUSHED by Phase Y, pop policy]
+- B: cb_name [N tiles, lifecycle note, pop policy]
+- Out: cb_name [N tiles, output policy]
 
-{Continue for each phase. Notes ONLY for non-obvious patterns.}
+**CB state after Phase X:**
+| CB | Tiles | State |
+|----|-------|-------|
+| cb_name | N | waited, not popped — persists for Phase Z |
+| cb_name | N | freshly pushed |
+| cb_name | 0 | freed (popped at end of phase) |
+
+{Continue for each phase. Notes ONLY for non-obvious patterns.
+Include lifecycle annotations on EVERY phase that uses binary/reduce helpers.
+Include CB state table after phases where CB ownership transfers or tiles persist.
+Omit the state table for simple phases where the state change is obvious (e.g., tilize: input freed, output pushed).}
 
 ### Writer Kernel
 {Brief description}

@@ -209,12 +209,32 @@ compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
 4. **Assemble ProgramDescriptor**
 
 ### Step 5: Implement Stub Kernels
-Create minimal kernels that compile but don't perform real computation:
+Create minimal kernels that compile but don't perform real computation.
+
+**CRITICAL: Generate includes from op_design.md.** Scan Part 2 of the design document for helper references and emit the corresponding `#include` lines in stub kernels. This prevents wasted compilation-error retries during TDD.
+
+Helper-to-include mapping:
+
+| Design reference | Required include |
+|-----------------|-----------------|
+| `tilize` | `#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"` |
+| `untilize` | `#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"` |
+| `reduce` | `#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"` |
+| `add`, `sub`, `mul`, `square`, `binary_op` | `#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"` |
+| `prepare_reduce_scaler` | `#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"` |
+| `rsqrt_tile` | `#include "api/compute/eltwise_unary/rsqrt.h"` |
+| `exp_tile` | `#include "api/compute/eltwise_unary/exp.h"` |
+| `recip_tile` | `#include "api/compute/eltwise_unary/recip.h"` |
+| `TensorAccessor` | `#include "ttnn/cpp/ttnn/tensor/accessor/tensor_accessor.hpp"` |
+
+Also always include:
+- Compute stubs: `#include "api/compute/compute_kernel_hw_startup.h"`
+- Dataflow stubs: `#include "api/dataflow/dataflow_api.h"`
 
 **Reader stub (`{op_name}_reader.cpp`):**
 ```cpp
-// CRITICAL: Use full include path, not just "dataflow_api.h"
 #include "api/dataflow/dataflow_api.h"
+// + includes derived from op_design.md (e.g., reduce_helpers_dataflow, tensor_accessor)
 
 void kernel_main() {
     // Stub: Just signal completion to compute
@@ -224,8 +244,8 @@ void kernel_main() {
 
 **Compute stub (`{op_name}_compute.cpp`):**
 ```cpp
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+// + includes derived from op_design.md (e.g., tilize_helpers, binary_op_helpers, rsqrt)
 
 void kernel_main() {
     // Stub: Initialize and return
@@ -235,8 +255,8 @@ void kernel_main() {
 
 **Writer stub (`{op_name}_writer.cpp`):**
 ```cpp
-// CRITICAL: Use full include path, not just "dataflow_api.h"
 #include "api/dataflow/dataflow_api.h"
+// + includes derived from op_design.md (e.g., tensor_accessor)
 
 void kernel_main() {
     // Stub: Just complete
