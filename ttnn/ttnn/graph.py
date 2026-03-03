@@ -77,16 +77,11 @@ def begin_graph_capture(run_mode=None):
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             logger.warning(
-                "Graph capture started with enable_fast_runtime_mode=true. "
-                "Python-level argument recording and per-operation captured graphs "
-                "require enable_fast_runtime_mode=false (slow dispatch). "
+                "Graph capture started with enable_fast_runtime_mode=true (fast dispatch). "
+                "FastOperation records arguments and output tensor IDs, but does not "
+                "assign versioned tensor IDs (force=True) or per-operation captured graphs. "
+                "For full tensor connectivity parity, disable fast runtime mode. "
                 "Set TTNN_CONFIG_OVERRIDES or use ttnn.manage_config to disable fast runtime mode."
-            )
-        if not ttnn.CONFIG.enable_logging:
-            logger.warning(
-                "Graph capture started with enable_logging=false. "
-                "Python-level argument recording requires enable_logging=true. "
-                "Set TTNN_CONFIG_OVERRIDES or use ttnn.manage_config to enable logging."
             )
     if run_mode is None:
         return _cpp_begin_graph_capture()
@@ -128,7 +123,7 @@ def _safe_arg_str(v):
 def record_python_operation(name, function_args, function_kwargs):
     """Record a Python-level operation's arguments and I/O tensor ids.
 
-    Called from ``runtime_decorator.call_wrapper`` (top-level operations only)
+    Called from ``runtime_decorator.call_wrapper`` (runtime_decorator.call_wrapper)
     to capture the Python-visible arguments (named kwargs + positional args)
     that the C++ graph trace does not see.
     """
@@ -150,7 +145,10 @@ def record_python_operation(name, function_args, function_kwargs):
 
 
 def store_output_tensor_ids(output_tensor_ids):
-    """Attach output tensor IDs to the most recent _python_io_data entry."""
+    """Attach output tensor IDs to the most recent _python_io_data entry.
+
+    Called from both ``FastOperation.__call__`` and ``runtime_decorator.call_wrapper``.
+    """
     if _python_io_data:
         _python_io_data[-1]["output_tensor_ids"] = output_tensor_ids
 
@@ -158,10 +156,9 @@ def store_output_tensor_ids(output_tensor_ids):
 def store_captured_graph(captured_graph_json):
     """Attach a per-op captured graph to the most recent _python_io_data entry.
 
-    Called from ``runtime_decorator.call_wrapper`` right after
-    ``end_graph_capture()``.  Since ``record_python_operation`` and this
-    function are both called only for top-level operations, ``[-1]`` is
-    always the correct entry.
+    Called from ``runtime_decorator.call_wrapper`` (slow dispatch) right after
+    ``end_graph_capture()``.  ``[-1]`` is always the correct entry since
+    ``record_python_operation`` is called first for the same operation.
     """
     if _python_io_data:
         _python_io_data[-1]["captured_graph"] = captured_graph_json
