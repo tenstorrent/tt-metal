@@ -5,7 +5,6 @@
 """Tests for the optimizer registry with Python-defined optimizers."""
 
 import pytest
-import ttnn
 import ttml
 
 
