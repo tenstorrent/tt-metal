@@ -82,7 +82,7 @@ tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorr
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-bypass
-tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
+tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
 tt_metal/impl/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
