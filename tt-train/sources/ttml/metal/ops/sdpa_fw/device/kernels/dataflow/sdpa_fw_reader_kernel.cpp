@@ -31,8 +31,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(1);               // (S / TILE_H)
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // num of heads per group
-    constexpr uint32_t pairs_per_seq = get_compile_time_arg_val(4);    // Ht/2 - pairs per sequence for balanced mode
-    constexpr auto query_args = TensorAccessorArgs<5>();
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+    constexpr auto query_args = TensorAccessorArgs<4>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
 
@@ -56,12 +56,11 @@ void kernel_main() {
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
 #ifdef BALANCED_PARALLELISM
-    // Balanced parallelism mode: process pairs of rows (light + heavy)
-    // Runtime args: num_rows_to_process = num_pairs, start_row = start_pair_idx
-    const uint32_t num_pairs = num_rows_to_process;
-    const uint32_t start_pair_idx = start_row;
-
-    auto read_row = [&](uint32_t global_row_idx) {
+    // Balanced parallelism mode: read Q/K/V for pairs of rows (light + heavy).
+    // Each pair combines an early-sequence row (few K/V tiles) with a late-sequence row (many tiles),
+    // so every core reads roughly the same amount of data.
+    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
+    auto read_row = [&](const uint32_t global_row_idx) {
         const uint32_t q_start_idx = global_row_idx * qWt;
         read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
@@ -79,8 +78,8 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t p = 0; p < num_pairs; ++p) {
-        const uint32_t global_pair_idx = start_pair_idx + p;
+    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
+        const uint32_t global_pair_idx = start_row + p;
 
         // Map pair index to sequence and position within sequence
         const uint32_t seq_idx = global_pair_idx / pairs_per_seq;

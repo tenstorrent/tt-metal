@@ -38,7 +38,7 @@ constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_le
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-1e9F
-constexpr uint32_t pairs_per_seq = get_compile_time_arg_val(7);    // Ht/2 - pairs per sequence for balanced mode
+constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;

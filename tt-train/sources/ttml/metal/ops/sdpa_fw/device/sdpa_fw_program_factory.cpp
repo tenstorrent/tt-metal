@@ -467,7 +467,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         St,               // num tile in seq len dim (S/TILE_H)
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
-        pairs_per_seq,    // pairs per sequence (St/2) - for balanced parallelism
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -482,10 +481,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,            // num tile in inner dim in query(d/TILE_W)
-        St,             // num tile in seq len dim (S/TILE_H)
-        qNH,            // number of heads in query
-        pairs_per_seq,  // pairs per sequence (St/2) - for balanced parallelism
+        qWt,  // num tile in inner dim in query(d/TILE_W)
+        St,   // num tile in seq len dim (S/TILE_H)
+        qNH,  // number of heads in query
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -509,7 +507,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             scaler,              // sqrt(Et) - sdpa scaler factor
             minus_one,           // used to transform mask from 1/0 to 0/-1
             custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
-            pairs_per_seq,       // pairs per sequence (St/2) - for pair-to-row mapping
         };
 
         kernels.compute_group_1 = create_compute_kernel(
@@ -526,7 +523,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-            pairs_per_seq,              // pairs per sequence (unused in standard mode, but kept for consistency)
         };
 
         kernels.compute_group_1 = create_compute_kernel(
@@ -542,7 +538,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 scaler,                     // sqrt(Et) - sdpa scaler factor
                 minus_one,                  // used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-                pairs_per_seq,              // pairs per sequence (unused in standard mode)
             };
 
             kernels.compute_group_2 = create_compute_kernel(

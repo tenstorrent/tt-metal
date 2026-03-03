@@ -19,14 +19,14 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);            // number of tiles in inner dimension
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);             // number of tiles in sequence dimension
-    constexpr uint32_t q_heads = get_compile_time_arg_val(2);        // num of heads in query
-    constexpr uint32_t pairs_per_seq = get_compile_time_arg_val(3);  // Ht/2 - pairs per sequence for balanced mode
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // number of tiles in inner dimension
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
+    constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
+    constexpr uint32_t pairs_per_seq = Ht / 2;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<4>();
+    constexpr auto output_args = TensorAccessorArgs<3>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
 #ifdef RETURN_INTERMEDIATES
@@ -55,12 +55,11 @@ void kernel_main() {
     constexpr uint32_t kIntermediateTilesPerRow = 2U;
 
 #ifdef BALANCED_PARALLELISM
-    // Balanced parallelism mode: write outputs for pairs of rows (light + heavy)
-    // Runtime args: num_rows_to_process = num_pairs, start_row = start_pair_idx
-    const uint32_t num_pairs = num_rows_to_process;
-    const uint32_t start_pair_idx = start_row;
-
-    auto write_row = [&](uint32_t r) {
+    // Balanced parallelism mode: write outputs for pairs of rows (light + heavy).
+    // Each pair combines an early-sequence row (few attention tiles) with a late-sequence row (many tiles),
+    // so every core writes roughly the same amount of data.
+    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
+    auto write_row = [&](const uint32_t r) {
         const uint32_t s_tile_idx = r % Ht;
         const uint32_t q_head_idx = (r / Ht) % q_heads;
         const uint32_t batch_idx = r / (Ht * q_heads);
@@ -82,8 +81,8 @@ void kernel_main() {
 #endif
     };
 
-    for (uint32_t p = 0; p < num_pairs; ++p) {
-        const uint32_t global_pair_idx = start_pair_idx + p;
+    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
+        const uint32_t global_pair_idx = start_row + p;
 
         // Map pair index to sequence and position within sequence
         const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
