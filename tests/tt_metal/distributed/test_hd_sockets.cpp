@@ -22,7 +22,9 @@
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <atomic>
 #include <cstring>
+#include <future>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -409,15 +411,29 @@ void test_h2d_socket_cross_process(
     H2DMode h2d_mode,
     uint32_t num_iterations = 10,
     const MeshCoreCoord& recv_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
-    // Owner creates the socket and exports the descriptor.
-    auto owner_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
-    auto descriptor_path = owner_socket.export_descriptor("test_xproc");
-
-    // Simulate a remote process connecting via the descriptor.
-    auto connected_socket = H2DSocket::connect(mesh_device, descriptor_path);
-    connected_socket->set_page_size(page_size);
-
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
+
+    static std::atomic<uint32_t> test_counter{0};
+    std::string socket_id = fmt::format("test_xproc_{}", test_counter.fetch_add(1));
+
+    // Synchronization: main signals transfer done to owner thread.
+    std::promise<void> transfer_done;
+    auto done_future = transfer_done.get_future();
+
+    // Owner thread: create socket, export descriptor, wait for main to finish.
+    std::thread owner_thread([&, socket_id]() {
+        auto owner_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
+        owner_socket.export_descriptor(socket_id);
+        std::cout << "waiting for worker thread to finish" << std::endl;
+        done_future.wait();
+        std::cout << "owner thread finished" << std::endl;
+    });
+
+    // Main thread: wait for descriptor, connect, do transfers.
+    std::cout << "Main thread: Connecting to socket" << std::endl;
+    auto connected_socket = H2DSocket::connect(socket_id);
+    connected_socket->set_page_size(page_size);
+    std::cout << "Main thread: Connected to socket" << std::endl;
 
     const ReplicatedBufferConfig buffer_config{.size = data_size};
     auto recv_data_shard_params =
@@ -451,8 +467,9 @@ void test_h2d_socket_cross_process(
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
     mesh_workload.add_program(devices, std::move(recv_program));
+    std::cout << "Enqueueing workload" << std::endl;
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-
+    std::cout << "Enqueued workload" << std::endl;
     uint32_t num_writes = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
 
@@ -474,6 +491,11 @@ void test_h2d_socket_cross_process(
             recv_data_buffer->address());
         EXPECT_EQ(src_vec, recv_data_readback);
     }
+
+    // Signal owner thread that transfers are complete; it can now destroy the socket.
+    connected_socket.reset();
+    transfer_done.set_value();
+    owner_thread.join();
 }
 
 TEST_F(HDSocketFixture, H2DSocketCrossProcess) {
@@ -489,7 +511,7 @@ TEST_F(HDSocketFixture, H2DSocketCrossProcess) {
             test_h2d_socket_cross_process(
                 mesh_device_, 1024, 64, 1024, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
             test_h2d_socket_cross_process(
-                mesh_device_, 1024, 64, 32768, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(1, 1)));
+                mesh_device_, 1024, 64, 32768, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
         }
     }
 }

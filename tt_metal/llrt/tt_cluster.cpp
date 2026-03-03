@@ -321,7 +321,12 @@ void Cluster::initialize_device_drivers() {
     }
 
     umd::DeviceParams default_params;
-    this->start_driver(default_params);
+    bool start_driver = std::getenv("TT_METAL_SKIP_DRIVER_START") == nullptr;
+    if (start_driver) {
+        this->start_driver(default_params);
+    } else {
+        log_info(tt::LogDevice, "Skipping driver start");
+    }
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
@@ -629,6 +634,7 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
     if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
         TT_THROW("Undefined conversion for core type.");
     }
+    // Coord Translation done here
 
     const auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {

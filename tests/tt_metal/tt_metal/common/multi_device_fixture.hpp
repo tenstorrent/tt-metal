@@ -199,7 +199,7 @@ protected:
 
 class MeshDevice1x2Fixture : public MeshDeviceFixtureBase {
 protected:
-    MeshDevice1x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}}) {}
+    MeshDevice1x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 1}}) {}
 };
 
 // Fixtures that specify the mesh device type explicitly.

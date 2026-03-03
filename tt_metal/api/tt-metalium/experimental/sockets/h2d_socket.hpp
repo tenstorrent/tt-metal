@@ -88,8 +88,7 @@ public:
      * @param descriptor_path Path to the JSON descriptor file exported by the owner.
      * @return A connected H2DSocket ready for data transfer.
      */
-    static std::unique_ptr<H2DSocket> connect(
-        const std::shared_ptr<MeshDevice>& mesh_device, const std::string& descriptor_path);
+    static std::unique_ptr<H2DSocket> connect(const std::string& socket_id);
 
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.
@@ -156,7 +155,8 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& bytes_acked_info,
         const PinnedBufferInfo& data_info);
-    void init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_receiver_tlb(
+        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
