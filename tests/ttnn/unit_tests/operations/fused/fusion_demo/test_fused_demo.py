@@ -1160,7 +1160,7 @@ void kernel_main() {
     def _demo5_make_ops(self, device):
         """Create all OpDescriptors for Demo 5's sharded tree."""
         from models.experimental.ops.descriptors.normalization import layer_norm
-        from models.experimental.ops.descriptors.data_movement.slice import slice_op
+        from models.experimental.ops.descriptors.data_movement.slice import slice
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
 
         (
@@ -1189,14 +1189,14 @@ void kernel_main() {
         )
 
         # Level 1: slice (sharded on 8 cores) → matmul (sharded output on 8 cores)
-        sl_top = slice_op(
+        sl_top = slice(
             ln_stem.output_tensors[0],
             [0, 0, 0, 0],
             [1, 1, half, cols],
             core_range_set=left_cores,
             memory_config=shards["left"],
         )
-        sl_bot = slice_op(
+        sl_bot = slice(
             ln_stem.output_tensors[0],
             [0, 0, half, 0],
             [1, 1, rows, cols],
@@ -1222,28 +1222,28 @@ void kernel_main() {
         )
 
         # Level 2: slice (sharded on 4 cores) → LN (auto-detects from sharded input)
-        sl_tl = slice_op(
+        sl_tl = slice(
             mm_left.output_tensors[0],
             [0, 0, 0, 0],
             [1, 1, quarter, mm_n],
             core_range_set=ll_cores,
             memory_config=shards["ll"],
         )
-        sl_bl = slice_op(
+        sl_bl = slice(
             mm_left.output_tensors[0],
             [0, 0, quarter, 0],
             [1, 1, half, mm_n],
             core_range_set=lr_cores,
             memory_config=shards["lr"],
         )
-        sl_tr = slice_op(
+        sl_tr = slice(
             mm_right.output_tensors[0],
             [0, 0, 0, 0],
             [1, 1, quarter, mm_n],
             core_range_set=rl_cores,
             memory_config=shards["rl"],
         )
-        sl_br = slice_op(
+        sl_br = slice(
             mm_right.output_tensors[0],
             [0, 0, quarter, 0],
             [1, 1, half, mm_n],
@@ -1626,7 +1626,7 @@ void kernel_main() {
     def test_demo6_fused(self, device, single_run_only):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
-        from models.experimental.ops.descriptors.data_movement.slice import slice_op
+        from models.experimental.ops.descriptors.data_movement.slice import slice
 
         (
             stem_cores,
@@ -1648,14 +1648,14 @@ void kernel_main() {
         )
 
         # Split to disjoint branches
-        sl_left = slice_op(
+        sl_left = slice(
             ln_stem.output_tensors[0],
             [0, 0, 0, 0],
             [1, 1, half, cols],
             core_range_set=left_cores,
             memory_config=shards["left"],
         )
-        sl_right = slice_op(
+        sl_right = slice(
             ln_stem.output_tensors[0],
             [0, 0, half, 0],
             [1, 1, rows, cols],

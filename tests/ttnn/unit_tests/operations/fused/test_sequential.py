@@ -7539,10 +7539,10 @@ class TestNestedParallelStress:
         op1 = descriptors.matmul(tt_a, tt_b1, core_range_set=full_cores, compute_kernel_config=compute_cfg)
 
         # ── op2: slice left half → [1,1,256,128] on 4 cores ──
-        op2 = descriptors.slice_op(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, 256, 128], core_range_set=left_cores)
+        op2 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, 256, 128], core_range_set=left_cores)
 
         # ── op3: slice right half → [1,1,256,128] on 4 cores ──
-        op3 = descriptors.slice_op(op1.output_tensors[0], [0, 0, 0, 128], [1, 1, 256, 256], core_range_set=right_cores)
+        op3 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 128], [1, 1, 256, 256], core_range_set=right_cores)
 
         # ── op4: matmul [1,1,256,128]×[1,1,128,128] on 2 cores ──
         op4 = descriptors.matmul(
