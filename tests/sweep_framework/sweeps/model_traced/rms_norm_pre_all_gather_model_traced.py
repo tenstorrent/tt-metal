@@ -8,7 +8,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_compute_kernel_config, parse_dtype
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -129,10 +129,22 @@ def run(
             inplace=bool(program_config.get("inplace", 0)),
         )
 
+    # Parse compute_kernel_config and dtype from traced config
+    compute_kernel_config = kwargs.get("compute_kernel_config", None)
+    if isinstance(compute_kernel_config, dict):
+        compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
+    output_dtype = kwargs.get("dtype", ttnn.bfloat16)
+    if isinstance(output_dtype, dict):
+        output_dtype = parse_dtype(output_dtype)
+    if output_dtype is None:
+        output_dtype = ttnn.bfloat16
+
     start_time = start_measuring_time()
-    op_kwargs = {"dtype": ttnn.bfloat16}
+    op_kwargs = {"dtype": output_dtype}
     if ttnn_program_config is not None:
         op_kwargs["program_config"] = ttnn_program_config
+    if compute_kernel_config is not None:
+        op_kwargs["compute_kernel_config"] = compute_kernel_config
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, **op_kwargs)
     tt_stats_torch = mesh_tensor_to_torch(tt_stats, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

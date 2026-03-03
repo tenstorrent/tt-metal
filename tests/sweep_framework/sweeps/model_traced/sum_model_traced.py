@@ -78,7 +78,11 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    dim = dim or kwargs.get("arg1", None)
+    if dim is None:
+        dim = kwargs.get("arg1", None)
+    keepdim = kwargs.get("keepdim", True)
+    if keepdim is None:
+        keepdim = True
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -91,7 +95,7 @@ def run(
     if dim is None:
         torch_output_tensor = torch.sum(torch_input_tensor_a)
     else:
-        torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim)
+        torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -120,7 +124,7 @@ def run(
     if dim is None:
         output_tensor = ttnn.sum(input_tensor_a, memory_config=output_memory_config)
     else:
-        output_tensor = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
+        output_tensor = ttnn.sum(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

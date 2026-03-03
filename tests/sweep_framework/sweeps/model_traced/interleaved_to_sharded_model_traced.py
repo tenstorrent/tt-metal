@@ -11,7 +11,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_memory_config
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -89,6 +89,13 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
+    # arg1 is the target sharded memory config for interleaved_to_sharded
+    arg1 = kwargs.get("arg1", None)
+    if isinstance(arg1, dict):
+        arg1 = dict_to_memory_config(arg1)
+
+    if output_memory_config is None and arg1 is not None:
+        output_memory_config = arg1
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -133,7 +140,7 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.interleaved_to_sharded(input_tensor_a, output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - should be identical since it's just a memory layout change

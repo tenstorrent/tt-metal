@@ -10,7 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_compute_kernel_config
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -88,6 +88,9 @@ def run(
 
     # Extract dims from kwargs (from traced config) or use default
     dims = kwargs.get("dims", [0, 1])
+    compute_kernel_config = kwargs.get("compute_kernel_config", None)
+    if isinstance(compute_kernel_config, dict):
+        compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
@@ -124,7 +127,10 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, dims=dims, output=None)
+    op_kwargs = {"dims": dims, "output": None}
+    if compute_kernel_config is not None:
+        op_kwargs["compute_kernel_config"] = compute_kernel_config
+    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)

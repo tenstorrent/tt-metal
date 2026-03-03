@@ -80,8 +80,18 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    k_val = k or kwargs.get("arg1", 5)
-    dim_val = dim or kwargs.get("arg2", -1)
+    if k is None:
+        k = kwargs.get("arg1", 5)
+    k_val = k
+    if dim is None:
+        dim = kwargs.get("arg2", -1)
+    dim_val = dim
+    largest = kwargs.get("largest", True)
+    if largest is None:
+        largest = True
+    sorted_flag = kwargs.get("sorted", True)
+    if sorted_flag is None:
+        sorted_flag = True
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -91,7 +101,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    torch_values, torch_indices = torch.topk(torch_input_tensor_a, k_val, dim=dim_val)
+    torch_values, torch_indices = torch.topk(
+        torch_input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag
+    )
     torch_output_tensor = torch_values
 
     is_host = storage_type and "HOST" in str(storage_type)
@@ -118,7 +130,9 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, memory_config=output_memory_config)
+    topk_result = ttnn.topk(
+        input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag, memory_config=output_memory_config
+    )
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

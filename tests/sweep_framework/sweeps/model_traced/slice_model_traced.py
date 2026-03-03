@@ -85,9 +85,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    slice_start = kwargs.get("arg1", [0] * len(shape))
-    slice_end = kwargs.get("arg2", list(shape))
-    slice_step = kwargs.get("arg3", [1] * len(shape))
+    # Some configs use named params (starts/ends/steps), others use positional (arg1/arg2/arg3)
+    slice_start = kwargs.get("starts", None) or kwargs.get("arg1", None) or [0] * len(shape)
+    slice_end = kwargs.get("ends", None) or kwargs.get("arg2", None)
+    slice_step = kwargs.get("steps", None) or kwargs.get("arg3", None) or [1] * len(shape)
 
     if not slice_end:
         slice_end = list(shape)
