@@ -1167,8 +1167,10 @@ def ttnn_graph_report():
         if json_path.exists():
             from ttnn.graph_report import import_report
 
-            logger.info(f"Saving graph report to {json_path}")
             import_report(json_path, report_path)
+
+        config_path = report_path / "config.json"
+        ttnn.save_config_to_json_file(config_path)
 
 
 @pytest.fixture(scope="function", autouse=True)
