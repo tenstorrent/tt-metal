@@ -51,7 +51,6 @@ def create_global_semaphores(mesh_device, cores, initial_value):
 
 def run_minimal_matmul_strided_reduce_scatter_impl(
     mesh_device,
-    num_devices,
     M,
     K,
     N,
@@ -85,6 +84,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     torch.manual_seed(0)
 
     TILE_SIZE = 32
+
+    num_devices = mesh_device.shape[cluster_axis]
 
     # Default RS core grid offset: place RS cores below MM cores
     if rs_core_grid_offset is None:
@@ -120,6 +121,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     weight_tensor_mesh_list = []
     torch_mm_output_per_device_list = []  # list of lists, [iter][device]
     torch_rs_output_list = []
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = 0
 
     for i in range(num_iters):
         torch_input = torch.randn(input_shape, dtype=torch.float32)
@@ -155,7 +158,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             layout=layout,
             dtype=input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=[None, 0], mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -304,14 +307,23 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             logger.info(f"Done iteration {i}")
 
     ##### Verify results #####
+    # Setup concat mesh to use 1D mesh concatenation.
+    concat_mesh_shape = list(mesh_device.shape)
+    concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
     for i in range(num_iters):
         golden_idx = i if not enable_trace else 0
 
         # Check MM output (each device has different output since weights differ)
-        tt_mm_out = ttnn.from_device(tt_mm_out_tensor_list[i])
+        # Setup concatenation dimension per axis
+        concat_dims = [0, 0]
+        concat_dims[
+            1 - cluster_axis
+        ] = 1  # Dimensions have to be unique. Set to anything but the concatenation dimension.
         tt_mm_out_torch = ttnn.to_torch(
-            tt_mm_out,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            tt_mm_out_tensor_list[i],
+            mesh_composer=ttnn.create_mesh_composer(
+                mesh_device, ttnn.MeshComposerConfig(concat_dims, ttnn.MeshShape(concat_mesh_shape))
+            ),
         )
         mm_goldens = torch_mm_output_per_device_list[golden_idx]
 
@@ -322,10 +334,16 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             assert eq, f"iter {i} device {device_id} MM FAILED: {output}"
 
         # Check RS output
-        tt_rs_out = ttnn.from_device(tt_rs_out_tensor_list[i])
+        # Setup concatenation dimension per axis
+        concat_dims = [dim, dim]
+        concat_dims[1 - cluster_axis] = (
+            0 if dim != 0 else 1
+        )  # Get any other index not dim (needs to be unique). Setting the number of devices to 1 on that dimension will prevent concatenations.
         tt_rs_out_torch = ttnn.to_torch(
-            tt_rs_out,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim),
+            tt_rs_out_tensor_list[i],
+            mesh_composer=ttnn.create_mesh_composer(
+                mesh_device, ttnn.MeshComposerConfig(concat_dims, ttnn.MeshShape(concat_mesh_shape))
+            ),
         )
         torch_rs_golden = torch_rs_output_list[golden_idx]
 
@@ -338,9 +356,10 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     logger.info("All checks passed!")
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+# @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8), (4, 8)], indirect=True, ids=["1x8", "4x8"])
+@pytest.mark.parametrize("num_links", [1, 4], ids=["1link", "4link"])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0", "axis_1"])
 @pytest.mark.parametrize(
     "test_config",
     [
@@ -655,6 +674,7 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     topology,
     num_iters,
     rs_mode,
+    cluster_axis,
 ):
     cfg = test_config
     TILE_SIZE = 32
@@ -666,7 +686,6 @@ def test_minimal_matmul_strided_reduce_scatter_async(
 
     run_minimal_matmul_strided_reduce_scatter_impl(
         mesh_device,
-        mesh_device.get_num_devices(),
         cfg.M,
         cfg.K,
         cfg.N,
@@ -689,4 +708,5 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         mm_core_grid=cfg.mm_core_grid,
         chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
         rs_mode=rs_mode,
+        cluster_axis=cluster_axis,
     )
