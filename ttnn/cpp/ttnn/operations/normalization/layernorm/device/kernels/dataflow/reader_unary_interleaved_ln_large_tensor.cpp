@@ -41,7 +41,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
 #include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
@@ -121,13 +120,17 @@ void kernel_main() {
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
     {
+        // Scaler(s) for reduce: full tile, then optional partial tile for last tile
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-        constexpr auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        if constexpr (partial_last_tile_cols > 0) {
-            uint32_t packed_scaler = dataflow_kernel_lib::float_to_scaler_bits<get_dataformat(cb_in_2)>(1.0f);
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, packed_scaler, partial_last_tile_cols);
+        constexpr uint32_t partial_tile_columns = W % tt::constants::TILE_WIDTH;
+        if constexpr (partial_tile_columns > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_in_2,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                partial_tile_columns>();
         }
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");

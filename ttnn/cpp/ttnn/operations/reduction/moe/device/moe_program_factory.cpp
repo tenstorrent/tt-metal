@@ -29,7 +29,8 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     tt::DataFormat expert_mask_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
     tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
     tt::DataFormat value_cb_data_format = tt::DataFormat::Float16_b;
 

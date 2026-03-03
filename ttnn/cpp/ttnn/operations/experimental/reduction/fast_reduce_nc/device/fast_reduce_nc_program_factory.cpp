@@ -64,7 +64,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     const auto single_tile_size = tt::tile_size(cb_data_format);
-    const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
+    const auto cb_1_data_format =
+        (cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const auto cb_1_tile_size = tt::tile_size(cb_1_data_format);
 
     const auto& input_shape = tensor_args.input.padded_shape();
