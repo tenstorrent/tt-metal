@@ -18,6 +18,7 @@
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/reflection.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
