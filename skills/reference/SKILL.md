@@ -1,0 +1,247 @@
+# SKILL: PyTorch Reference Implementation
+
+## Purpose
+Create standalone PyTorch reference modules for each block to generate golden outputs for TTNN verification.
+
+## Prerequisites
+- **Read ARCHITECTURE.md** first from `models/demos/{model_name}/ARCHITECTURE.md`
+- **CRITICAL: Verify Component Inventory is COMPLETE** before starting
+- Use the block mappings to understand which reference implementations to follow
+- Check similar models' reference implementations listed in ARCHITECTURE.md
+
+## CRITICAL: Verify Official Package Works First
+
+**Before writing ANY reference code, verify the official package produces correct output!**
+
+### Step 0: End-to-End Verification with Official Package
+
+```python
+# Example for TTS model
+from official_package import Model
+
+model = Model.from_pretrained("model_name")
+output = model.generate("Hello world")
+
+# VERIFY THE OUTPUT IS CORRECT
+# - For TTS: Listen to the audio, confirm it sounds correct
+# - For LLM: Read the text, confirm it makes sense
+# - For Vision: Look at the output, confirm it's correct
+
+# Save the official output for comparison
+torch.save({"output": output, "input": input}, "official_output.pt")
+```
+
+**If the official package doesn't work in your environment:**
+1. Create a separate conda environment where it DOES work
+2. Run the official model there and save outputs
+3. Use those outputs as ground truth for your reference implementation
+
+### Why This Matters
+- PCC > 0.99 against a BROKEN reference is meaningless
+- Your reference must match a KNOWN-WORKING implementation
+- "Working" means producing correct END OUTPUT, not just running without errors
+
+## Step-by-Step Process
+
+### 1. Directory Structure
+```
+models/demos/{model_name}/
+├── reference/
+│   ├── functional.py      # Standalone block implementations
+│   ├── test_functional.py # Tests against HuggingFace
+│   └── golden/            # Saved golden outputs (.pt files)
+└── tt/
+    └── ...                # TTNN implementations
+```
+
+### 2. Create Standalone Modules
+Extract each block as a standalone function in `functional.py`:
+
+```python
+import torch
+import torch.nn.functional as F
+from typing import Dict, Tuple
+
+def attention_forward(
+    x: torch.Tensor,
+    state_dict: Dict,
+    num_heads: int,
+    head_dim: int,
+) -> torch.Tensor:
+    """Standalone attention forward pass.
+
+    Args:
+        x: Input tensor [batch, seq_len, hidden_size]
+        state_dict: Dict with 'q_proj', 'k_proj', 'v_proj', 'o_proj' weights
+        num_heads: Number of attention heads
+        head_dim: Dimension per head
+
+    Returns:
+        Output tensor [batch, seq_len, hidden_size]
+    """
+    batch, seq_len, hidden = x.shape
+
+    q = F.linear(x, state_dict["q_proj"]["weight"])
+    k = F.linear(x, state_dict["k_proj"]["weight"])
+    v = F.linear(x, state_dict["v_proj"]["weight"])
+
+    # Reshape for attention
+    q = q.view(batch, seq_len, num_heads, head_dim).transpose(1, 2)
+    k = k.view(batch, seq_len, num_heads, head_dim).transpose(1, 2)
+    v = v.view(batch, seq_len, num_heads, head_dim).transpose(1, 2)
+
+    # Scaled dot-product attention
+    attn = torch.matmul(q, k.transpose(-2, -1)) / (head_dim ** 0.5)
+    attn = F.softmax(attn, dim=-1)
+    out = torch.matmul(attn, v)
+
+    # Reshape and project
+    out = out.transpose(1, 2).contiguous().view(batch, seq_len, hidden)
+    return F.linear(out, state_dict["o_proj"]["weight"])
+
+
+def mlp_forward(x: torch.Tensor, state_dict: Dict) -> torch.Tensor:
+    """SwiGLU MLP forward pass."""
+    gate = F.silu(F.linear(x, state_dict["gate_proj"]["weight"]))
+    up = F.linear(x, state_dict["up_proj"]["weight"])
+    return F.linear(gate * up, state_dict["down_proj"]["weight"])
+
+
+def rmsnorm_forward(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """RMSNorm forward pass."""
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
+```
+
+### 3. Reproducibility Requirements
+**CRITICAL**: Always set seeds for reproducibility:
+
+```python
+import torch
+
+def generate_golden_outputs():
+    torch.manual_seed(0)
+
+    # Generate deterministic inputs
+    batch_size, seq_len, hidden_size = 1, 128, 4096
+    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float32)
+
+    # Run reference
+    output = attention_forward(x, state_dict, num_heads=32, head_dim=128)
+
+    # Save golden output
+    torch.save({
+        'input': x,
+        'output': output,
+        'config': {'batch': batch_size, 'seq': seq_len, 'hidden': hidden_size}
+    }, 'reference/golden/attention_golden.pt')
+```
+
+### 4. Dtype Considerations
+- **Reference computation**: Use `torch.float32` for maximum precision
+- **TTNN comparison**: Convert to `torch.bfloat16` before PCC calculation
+- **Save both**: Store float32 golden and note expected dtype
+
+```python
+# For PCC comparison
+golden_bf16 = golden_output.to(torch.bfloat16)
+ttnn_output_torch = ttnn.to_torch(ttnn_output)
+pcc = torch.corrcoef(torch.stack([
+    golden_bf16.flatten(),
+    ttnn_output_torch.flatten()
+]))[0, 1].item()
+assert pcc > 0.99, f"PCC {pcc} < 0.99"
+```
+
+### 5. Test Against HuggingFace
+Verify reference correctness in `test_functional.py`:
+
+```python
+import pytest
+import torch
+from transformers import AutoModel, AutoConfig
+
+from reference.functional import attention_forward
+
+def test_attention_matches_hf():
+    torch.manual_seed(0)
+
+    # Load HuggingFace model
+    config = AutoConfig.from_pretrained("model_name")
+    hf_model = AutoModel.from_pretrained("model_name")
+
+    # Extract weights for standalone function
+    layer = hf_model.model.layers[0].self_attn
+    state_dict = {
+        "q_proj": {"weight": layer.q_proj.weight},
+        "k_proj": {"weight": layer.k_proj.weight},
+        "v_proj": {"weight": layer.v_proj.weight},
+        "o_proj": {"weight": layer.o_proj.weight},
+    }
+
+    # Generate input
+    x = torch.randn(1, 128, config.hidden_size)
+
+    # Compare outputs
+    ref_output = attention_forward(x, state_dict, config.num_attention_heads, config.head_dim)
+    hf_output = layer(x.unsqueeze(0))[0].squeeze(0)
+
+    assert torch.allclose(ref_output, hf_output, atol=1e-5)
+```
+
+### 6. Block Checklist
+Create reference implementations for all blocks:
+
+- [ ] Embedding layer
+- [ ] Attention (with RoPE if applicable)
+- [ ] MLP/FFN
+- [ ] Normalization (RMSNorm/LayerNorm)
+- [ ] Output projection / LM head
+- [ ] Vision encoder blocks (for VLMs)
+- [ ] Audio codec decoder (for TTS - tokens → waveform)
+- [ ] Full decoder layer
+- [ ] Full model forward
+
+## CRITICAL: Functional Verification (Not Just PCC!)
+
+### For Audio/TTS Models
+
+**PCC is NOT sufficient for audio models!** You must also:
+
+1. **Generate actual audio output**
+2. **Listen to the audio**
+3. **Confirm it sounds correct** (intelligible speech, not noise)
+
+```python
+# Run reference decoder on known-good RVQ codes
+audio = reference_decoder(official_rvq_codes)
+
+# Save and LISTEN
+import soundfile as sf
+sf.write("/tmp/reference_output.wav", audio.numpy(), 24000)
+print("LISTEN to /tmp/reference_output.wav before proceeding!")
+print("If it's noise, your reference implementation is WRONG!")
+```
+
+### Verification Checklist
+
+Before marking a reference component as "DONE":
+
+- [ ] PCC > 0.99 against official package output
+- [ ] **Functional output is correct** (not just numerically close)
+- [ ] For audio: Listened to output, confirmed it's intelligible speech
+- [ ] For text: Read output, confirmed it makes sense
+- [ ] For vision: Viewed output, confirmed it's correct
+
+### When Reference Produces Noise/Garbage
+
+If your reference produces noise but official produces good audio:
+1. **DO NOT** proceed to TTNN implementation
+2. **DO NOT** mark the component as "DONE"
+3. **DEBUG** the reference until it matches official EXACTLY
+4. **COMPARE** intermediate tensors between reference and official
+
+## Output
+- `models/demos/{model}/reference/functional.py` - Standalone implementations
+- `models/demos/{model}/reference/test_functional.py` - Verification tests
+- `models/demos/{model}/reference/golden/*.pt` - Saved golden tensors
+- **VERIFIED working end-to-end output** (audio file, generated text, etc.)
