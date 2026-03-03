@@ -399,13 +399,14 @@ target_precompile_headers(
 
 if(ENABLE_LIBCXX)
     target_link_libraries(
+        ttml
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
 endif()
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+target_compile_definitions(ttml PUBLIC TOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
 set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
 set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
