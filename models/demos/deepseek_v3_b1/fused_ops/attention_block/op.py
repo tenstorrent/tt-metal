@@ -852,8 +852,8 @@ class AttentionBlock:
         bcast_pkt_cb = 43  # Packet buffer for CCL broadcast
 
         # SDPA CB indices (14-24, after existing CBs 0-13)
-        sdpa_cb_local_l = 44
-        sdpa_cb_local_ms = 45
+        sdpa_cb_local_l = mla_out_o_cb
+        sdpa_cb_local_ms = mla_out_ms_cb
         sdpa_cb_neighbor_l = 46
         sdpa_cb_neighbor_ms = 47
         sdpa_cb_r1_result_l = 48
@@ -1816,7 +1816,7 @@ class AttentionBlock:
         for row in range(mesh_rows):
             # ("start of loop for device row {}".format(row))
             for col in range(mesh_cols):
-                coord = ttnn.MeshCoordinate(row, col)
+                mesh_coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
                 # CCL role calculation (only matters if not skipping CCL)
@@ -1875,12 +1875,16 @@ class AttentionBlock:
                 device_local = input_tensor_device.device()
                 device_input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
                 device_shard_grid_start = device_input_shard_grid.bounding_box().start
-                worker_core = ttnn.CoreCoord(device_shard_grid_start.x, device_shard_grid_start.y)
-                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
-                assert rmsnorm_core_grid == worker_core_set, "RMSNorm core grid does not match worker core"
+                broadcast_worker_core = ttnn.CoreCoord(device_shard_grid_start.x, device_shard_grid_start.y)
+                broadcast_worker_core_set = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(broadcast_worker_core, broadcast_worker_core)]
+                )
+                assert (
+                    rmsnorm_core_grid == broadcast_worker_core_set
+                ), "RMSNorm core grid does not match broadcast worker core"
 
                 # Get physical core for NOC addressing
-                data_core_physical = device_local.worker_core_from_logical_core(worker_core)
+                data_core_physical = device_local.worker_core_from_logical_core(broadcast_worker_core)
                 core_noc_x = data_core_physical.x
                 core_noc_y = data_core_physical.y
 
@@ -2726,17 +2730,18 @@ class AttentionBlock:
                 sdpa_output_l_device = ttnn.get_device_tensors(sdpa_output_l_mesh)[device_idx]
                 sdpa_intermediate_recv_device = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[device_idx]
 
+                # Get from fused
                 # CB 14: SDPA local L (aliased to input tensor)
-                sdpa_local_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    sdpa_cb_local_l, sdpa_input_l_device
-                )
-                post_sdpa_cb_list.append(sdpa_local_l_cb_descriptor)
+                # sdpa_local_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                #    sdpa_cb_local_l, sdpa_input_l_device
+                # )
+                # post_sdpa_cb_list.append(sdpa_local_l_cb_descriptor)
 
                 # CB 15: SDPA local MS (aliased to input tensor)
-                sdpa_local_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    sdpa_cb_local_ms, sdpa_input_ms_device
-                )
-                post_sdpa_cb_list.append(sdpa_local_ms_cb_descriptor)
+                # sdpa_local_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                #    sdpa_cb_local_ms, sdpa_input_ms_device
+                # )
+                # post_sdpa_cb_list.append(sdpa_local_ms_cb_descriptor)
 
                 # CB 16: SDPA neighbor L (aliased to intermediate recv buffer)
                 # The recv buffer holds both L and MS data, but this CB should only
@@ -2997,10 +3002,10 @@ class AttentionBlock:
                     # TRISC per-core runtime args (common args: pos_addr)
                     mla_trisc_args = [
                         do_reduce,
-                        is_output_core,
+                        0,  # do_output, set to 0 in fused
                         cur_batch,
                         core_num_in_reduce,
-                        is_sender_after_reduce,
+                        1,  # is_sender_after_reduce, set to 1 in fused
                     ]
                     for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
                         mla_trisc_args.extend([role_code, partner_s_block_idx])
@@ -3022,7 +3027,7 @@ class AttentionBlock:
                     out_ready_sem_wait_value = 1 * num_links
 
                     # Build dst_nodes first to compute num_connections = len(dst_nodes)
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    fabric_node_id = mesh_device.get_fabric_node_id(mesh_coord)
                     dst_nodes = []
 
                     # Primary axis connections (forward and backward in column)
@@ -3166,7 +3171,7 @@ class AttentionBlock:
                     + post_sdpa_trisc_named_compile_time_args
                 )
 
-                if coord == ttnn.MeshCoordinate(0, 0):
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
                     core_grids = {
                         "is_input_core": rmsnorm_core,
                         "is_matmul_core": matmul_weights_core_grid,
@@ -3387,7 +3392,7 @@ class AttentionBlock:
                 ccl_receiver_ncrisc_common_rt_args = [
                     ccl_receiver_semaphore_addr,
                 ]
-                fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                fabric_node_id = mesh_device.get_fabric_node_id(mesh_coord)
                 neighbor_coord_obj = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
                 neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord_obj)
                 ccl_ctx = {
@@ -3411,7 +3416,7 @@ class AttentionBlock:
                 device = sdpa_intermediate_recv_device.device()
 
                 # Get fabric node IDs for SDPA CCL
-                sdpa_fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                sdpa_fabric_node_id = mesh_device.get_fabric_node_id(mesh_coord)
 
                 # Calculate neighbor coordinates for SDPA (forward and backward)
                 def get_sdpa_neighbor_coord(mesh_shape, row, col, direction, axis):
@@ -3634,7 +3639,7 @@ class AttentionBlock:
 
                 per_device_contexts.append(
                     {
-                        "coord": coord,
+                        "mesh_coord": mesh_coord,
                         "ncrisc_compile_time_args": ncrisc_compile_time_args,
                         "brisc_compile_time_args": brisc_compile_time_args,
                         "brisc_named_compile_time_args": brisc_named_compile_time_args,
@@ -3651,7 +3656,7 @@ class AttentionBlock:
                         "input_cb_descriptor": in_cb_descriptor,
                         "output_cb_descriptor": attention_block_output_cb_descriptor,
                         "cbs_list": cbs_list,
-                        "worker_core": worker_core,
+                        "broadcast_worker_core": broadcast_worker_core,
                         "fabric_node_id": fabric_node_id,
                         "dst_nodes": dst_nodes,
                         # Post-SDPA context
@@ -3821,23 +3826,31 @@ class AttentionBlock:
                 semaphores=ctx["semaphore_list"],
             )
 
-            coord = ctx["coord"]
-            worker_core = ctx["worker_core"]
+            mesh_coord = ctx["mesh_coord"]
+            broadcast_worker_core = ctx["broadcast_worker_core"]
             dst_nodes = ctx["dst_nodes"]
             if not skip_ccl and len(dst_nodes) > 0:
                 for idx, kernel in enumerate(program.kernels):
-                    if kernel.core_ranges.contains(worker_core) and (
+                    if kernel.core_ranges.contains(broadcast_worker_core) and (
                         isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
                         or (
                             isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
                             and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
                         )
                     ):
-                        writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
+                        writer_rt_args_ref = kernel.runtime_args[broadcast_worker_core.x][broadcast_worker_core.y]
                         fabric_args = ttnn.setup_routing_plane_connection(
-                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, worker_core
+                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, broadcast_worker_core
+                        )
+                        print(
+                            f"before extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
+                            writer_rt_args_ref,
                         )
                         writer_rt_args_ref.extend(fabric_args)
+                        print(
+                            f"after extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
+                            writer_rt_args_ref,
+                        )
                         break
 
             if ctx["ccl"]:
@@ -3848,21 +3861,32 @@ class AttentionBlock:
                 ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
                 ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
 
-                ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
-                ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl["sender_ncrisc_common_rt_args"]
-                ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
-                ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl["sender_brisc_common_rt_args"]
-                ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
-                ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = ccl["receiver_ncrisc_common_rt_args"]
+                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
+                sender_ncrisc_kernel_idx = ccl_sender_group.ncrisc_kernel_index
+                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
 
-                program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
-                program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
-                program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
+                ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
+                    ccl_sender_core.x
+                ][ccl_sender_core.y]
+                print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref)
+                ccl_sender_ncrisc_rt_args_ref.extend(ccl["sender_ncrisc_common_rt_args"])
+                print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref)
+                ccl_sender_brisc_rt_args_ref = program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args[
+                    ccl_sender_core.x
+                ][ccl_sender_core.y]
+                print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
+                ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
+                print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
+                ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
+                    gather_core.x
+                ][gather_core.y]
+                print(f"before extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
+                ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
+                print(f"after extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
 
                 fabric_node_id = ccl["fabric_node_id"]
                 neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
 
-                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
                 sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
                     ccl_sender_core.y
                 ]
@@ -3874,7 +3898,9 @@ class AttentionBlock:
                     sender_brisc_kernel_idx,
                     ccl_sender_core,
                 )
+                print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
                 sender_brisc_rt_args_ref.extend(sender_fabric_args)
+                print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
 
                 receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
                 receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
@@ -3888,8 +3914,9 @@ class AttentionBlock:
                     receiver_ncrisc_kernel_idx,
                     gather_core,
                 )
+                print(f"before extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
                 receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
-
+                print(f"after extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================
@@ -3950,6 +3977,7 @@ class AttentionBlock:
                         _extend_runtime_args(
                             program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa_forwarder_ncrisc_rt_args, crs
                         )
+
             """
             if coord == ttnn.MeshCoordinate(0, 0):
                 for group in kernel_result.groups:
@@ -3961,7 +3989,7 @@ class AttentionBlock:
                     for c, args in program.kernels[group.trisc_kernel_index].runtime_args:
                         print(f"TRISC ({c.x},{c.y}): {args}")
             """
-            mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result

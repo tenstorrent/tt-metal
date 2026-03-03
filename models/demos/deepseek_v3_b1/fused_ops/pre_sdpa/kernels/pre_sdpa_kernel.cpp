@@ -94,6 +94,7 @@ uint32_t per_core_rta_arg_idx = 0;
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
     if constexpr (!Core::skip_ccl) {
+        DPRINT << " BCAST ARGS " << per_core_rta_arg_idx << ENDL;
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
             get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
@@ -802,6 +803,7 @@ uint32_t per_core_rta_arg_idx = 0;
     }
 #endif
 
+    DPRINT << " DONE CCL BROADCAST" << ENDL();
     // ========================================================================
     // Input core: RMSNorm + Mcast send
     // ========================================================================
@@ -827,7 +829,7 @@ uint32_t per_core_rta_arg_idx = 0;
         // pop_src = true (input is consumed after mcast)
         mcast(mcast_args);
     }
-
+    DPRINT << " DONE MCAST" << ENDL();
     // ========================================================================
     // Matmul operation
     // ========================================================================
@@ -998,4 +1000,5 @@ uint32_t per_core_rta_arg_idx = 0;
             flash_mla(flash_mla_args);
         }
     }
+    DPRINT << " DONE FLASH MLA" << ENDL();
 }

@@ -331,6 +331,10 @@ void kernel_main() {
                 .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             };
+
+            unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
+            unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_ms, 1);
+
             Worker::Op<ReaderCTArgs> sdpa_worker;
             sdpa_worker(reader_args);
 

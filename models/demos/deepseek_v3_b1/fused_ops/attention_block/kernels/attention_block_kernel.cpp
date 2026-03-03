@@ -117,6 +117,7 @@ void kernel_main() {
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
+    DPRINT << " BCAST ARGS " << per_core_rta_arg_idx << ENDL();
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(0),   // tensor_address0
@@ -356,7 +357,7 @@ void kernel_main() {
     }
 
     // Matmul4 CTArgs
-    using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    /*using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
 
     // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
@@ -445,7 +446,7 @@ void kernel_main() {
         ccl_receiver_args = {
             .sender_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-    }
+    }*/
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -727,7 +728,7 @@ void kernel_main() {
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
         };
     }
-
+    /*
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul5CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
@@ -800,7 +801,7 @@ void kernel_main() {
             .receive_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .fabric_args_start_index = per_core_rta_arg_idx,
         };
-    }
+    }*/
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -1045,7 +1046,7 @@ void kernel_main() {
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
 
     // Matmul4 CTArgs
-    using Matmul4CTArgs =
+    /*using Matmul4CTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul4_out_w_per_core")>;
     deepseek_b1_ops::Matmul::ComputeArgs matmul4_args{
         get_named_compile_time_arg_val("matmul4_in0"),
@@ -1086,7 +1087,7 @@ void kernel_main() {
 
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
     // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
+    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};*/
 
     deepseek_compute_kernel_init();
 #endif
@@ -1181,6 +1182,7 @@ void kernel_main() {
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
         rmsnorm(rmsnorm_args);
     }
+    DPRINT << " DONE RMSNORM" << ENDL();
 
     // pop_src = true (rmsnorm output is consumed after mcast)
     deepseek_b1_ops::Mcast::Op<
@@ -1197,6 +1199,7 @@ void kernel_main() {
         // pop_src = true (input is consumed after mcast)
         mcast(mcast_args);
     }
+    DPRINT << " DONE MCAST" << ENDL();
 
     // ========================================================================
     // Matmul operation
@@ -1386,6 +1389,7 @@ void kernel_main() {
                     deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
                     sdpa_reduce_worker(sdpa_reduce_worker_args);
                 }
+                DPRINT << " DONE SDPA REDUCE WORKER" << ENDL();
                 if constexpr (Core::is_sdpa_forwarder_core) {
                     deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                     sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
@@ -1407,126 +1411,126 @@ void kernel_main() {
             // ========================================================================
             // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
             // ========================================================================
-            {
-                DeviceZoneScopedN("MATMUL4");
-                deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
-                matmul4(matmul4_args);
-            }
+            /* {
+                 DeviceZoneScopedN("MATMUL4");
+                 deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
+                 matmul4(matmul4_args);
+             }
 
-            // ========================================================================
-            // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
-            // Collects [1, 128] * 64 = [1, 8192]
-            // ========================================================================
-            {
-                DeviceZoneScopedN("GATHER2");
-                deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
-                gather2(gather2_args);
-            }
+             // ========================================================================
+             // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
+             // Collects [1, 128] * 64 = [1, 8192]
+             // ========================================================================
+             {
+                 DeviceZoneScopedN("GATHER2");
+                 deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
+                 gather2(gather2_args);
+             }
 
-            // ========================================================================
-            // Mcast3: gather core -> 13x10 mcast3 grid (130 cores)
-            // Broadcasts [1, 8192] to each core in mcast3 grid
-            // Source: gather2_dst_cb (CB 3), Destination: mcast3_dst_cb = matmul5_in0 (CB 4)
-            // Note: 18 inactive grid cores only do semaphore handshake; only matmul5 cores do full CB receive
-            // ========================================================================
-            constexpr bool is_mcast3_grid_core = Core::is_mcast3_receiver_core && !Core::is_gather_receiver_core;
-            deepseek_b1_ops::Mcast::
-                Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
-                    mcast3;
-            mcast3.init(mcast3_args);
-            {
-                DeviceZoneScopedN("MCAST3");
-                mcast3(mcast3_args);
-            }
-            mcast3.teardown();
+             // ========================================================================
+             // Mcast3: gather core -> 13x10 mcast3 grid (130 cores)
+             // Broadcasts [1, 8192] to each core in mcast3 grid
+             // Source: gather2_dst_cb (CB 3), Destination: mcast3_dst_cb = matmul5_in0 (CB 4)
+             // Note: 18 inactive grid cores only do semaphore handshake; only matmul5 cores do full CB receive
+             // ========================================================================
+             constexpr bool is_mcast3_grid_core = Core::is_mcast3_receiver_core && !Core::is_gather_receiver_core;
+             deepseek_b1_ops::Mcast::
+                 Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
+                     mcast3;
+             mcast3.init(mcast3_args);
+             {
+                 DeviceZoneScopedN("MCAST3");
+                 mcast3(mcast3_args);
+             }
+             mcast3.teardown();
 
-            // ========================================================================
-            // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
-            // Input: mcast3_dst_cb (CB 4), Weights: matmul5_in1 (CB 5), Output: matmul5_out (CB 6)
-            // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
-            // ========================================================================
-            {
-                DeviceZoneScopedN("MATMUL5");
-                // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
-                deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
-                matmul5(matmul5_args);
-            }
+             // ========================================================================
+             // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
+             // Input: mcast3_dst_cb (CB 4), Weights: matmul5_in1 (CB 5), Output: matmul5_out (CB 6)
+             // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
+             // ========================================================================
+             {
+                 DeviceZoneScopedN("MATMUL5");
+                 // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
+                 deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
+                 matmul5(matmul5_args);
+             }
 
-            // ========================================================================
-            // Gather3: 112 active matmul5 cores -> gather core (12, 9)
-            // Collects [1, 64] * 112 = [1, 7168]
-            // ========================================================================
-            {
-                DeviceZoneScopedN("GATHER3");
-                deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
-                gather3(gather3_args);
-            }
-            DPRINT << " DONE GATHER3" << ENDL();
+             // ========================================================================
+             // Gather3: 112 active matmul5 cores -> gather core (12, 9)
+             // Collects [1, 64] * 112 = [1, 7168]
+             // ========================================================================
+             {
+                 DeviceZoneScopedN("GATHER3");
+                 deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
+                 gather3(gather3_args);
+             }
+             DPRINT << " DONE GATHER3" << ENDL();
 
-#if defined(COMPILE_FOR_BRISC)
-            // Signal CCL sender that gather3 is complete (gather receiver only)
-            if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
-                constexpr uint32_t gather3_completion_semaphore_id =
-                    get_named_compile_time_arg_val("gather3_completion_semaphore_id");
-                constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
-                constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
-                uint64_t ccl_sender_semaphore_addr =
-                    get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id));
-                noc_semaphore_inc(ccl_sender_semaphore_addr, 1);
-                noc_async_atomic_barrier();
-            }
-#endif
+ #if defined(COMPILE_FOR_BRISC)
+             // Signal CCL sender that gather3 is complete (gather receiver only)
+             if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
+                 constexpr uint32_t gather3_completion_semaphore_id =
+                     get_named_compile_time_arg_val("gather3_completion_semaphore_id");
+                 constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
+                 constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
+                 uint64_t ccl_sender_semaphore_addr =
+                     get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id));
+                 noc_semaphore_inc(ccl_sender_semaphore_addr, 1);
+                 noc_async_atomic_barrier();
+             }
+ #endif
 
-            // ========================================================================
-            // CCL All-Reduce: Exchange [1, 7168] between devices
-            // - CCL Sender (11, 9): Reads gather3 output from gather core, sends via fabric
-            // - CCL Receiver (12, 9): Receives remote data, performs reduction
-            //
-            // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
-            // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
-            // needs to wait for remote data and perform the reduction.
-            // ========================================================================
-#if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_ccl_sender_core) {
-                DeviceZoneScopedN("CCL_SENDER_READ");
+             // ========================================================================
+             // CCL All-Reduce: Exchange [1, 7168] between devices
+             // - CCL Sender (11, 9): Reads gather3 output from gather core, sends via fabric
+             // - CCL Receiver (12, 9): Receives remote data, performs reduction
+             //
+             // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
+             // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
+             // needs to wait for remote data and perform the reduction.
+             // ========================================================================
+ #if defined(COMPILE_FOR_NCRISC)
+             if constexpr (Core::is_ccl_sender_core) {
+                 DeviceZoneScopedN("CCL_SENDER_READ");
 
-                // Wait for gather3 to complete before reading from gather core
-                constexpr uint32_t gather3_completion_semaphore_id =
-                    get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
-                volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
-                noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
-                noc_semaphore_set(gather3_completion_semaphore_addr, 0);
+                 // Wait for gather3 to complete before reading from gather core
+                 constexpr uint32_t gather3_completion_semaphore_id =
+                     get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
+                 volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
+                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
+                 noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
+                 noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
-                deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
-                ccl_sender_reader(ccl_sender_args);
-            }
+                 deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
+                 ccl_sender_reader(ccl_sender_args);
+             }
 
-            if constexpr (Core::is_ccl_receiver_core) {
-                DeviceZoneScopedN("CCL_RECEIVER_WAIT");
+             if constexpr (Core::is_ccl_receiver_core) {
+                 DeviceZoneScopedN("CCL_RECEIVER_WAIT");
 
-                deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
-                ccl_receiver_reader(ccl_receiver_args);
-            }
+                 deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs>
+ ccl_receiver_reader; ccl_receiver_reader(ccl_receiver_args);
+             }
 
-#elif defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_ccl_sender_core) {
-                DeviceZoneScopedN("CCL_SENDER_SEND");
+ #elif defined(COMPILE_FOR_BRISC)
+             if constexpr (Core::is_ccl_sender_core) {
+                 DeviceZoneScopedN("CCL_SENDER_SEND");
 
-                deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-                ccl_sender_writer(ccl_sender_args);
-            }
-            // CCL Receiver BRISC is no-op
+                 deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
+                 ccl_sender_writer(ccl_sender_args);
+             }
+             // CCL Receiver BRISC is no-op
 
-#elif defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_ccl_receiver_core) {
-                DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
+ #elif defined(COMPILE_FOR_TRISC)
+             if constexpr (Core::is_ccl_receiver_core) {
+                 DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
 
-                deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
-                    ccl_receiver_compute;
-                ccl_receiver_compute(ccl_receiver_args);
-            }
-            // CCL Sender TRISC is no-op
-#endif
+                 deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
+                     ccl_receiver_compute;
+                 ccl_receiver_compute(ccl_receiver_args);
+             }
+             // CCL Sender TRISC is no-op
+ #endif*/
     }
 }

@@ -199,10 +199,12 @@ struct SdpaChunkSender {
     }
 
     FORCE_INLINE void send_streaming() const {
+        DPRINT << " SDPA cb_wait_front ms cb=" << cfg.cb_ms << " n=1" << ENDL();
         cb_wait_front(cfg.cb_ms, 1);
         send_ms();
 
         for (uint32_t i = 0; i < num_l_chunks; i++) {
+            DPRINT << " SDPA cb_wait_front l cb=" << cfg.cb_l << " n=" << (i + 1) * tiles_per_l_chunk << ENDL();
             cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
             send_l_chunk(i);
         }
@@ -249,19 +251,25 @@ ALWI void sdpa_tail_streaming(
     // Retest in streaming context since unit test doesn't need to wait for input
     if constexpr (untilize) {
         pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
+        DPRINT << " SDPA tail cb_wait_front l1=" << cb_l1 << " n=" << total_size << ENDL();
         cb_wait_front(cb_l1, total_size);
+        DPRINT << " SDPA tail cb_wait_front l2=" << cb_l2 << " n=" << total_size << ENDL();
         cb_wait_front(cb_l2, total_size);
         cb_reserve_back(cb_l_out, total_size);
+        DPRINT << " SDPA tail reserve back cb_l_out=" << cb_l_out << " n=" << total_size << ENDL();
         ckernel::sdpa_tail_l_block<total_size, 1, untilize, dense, false>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        DPRINT << " DONE " << ENDL();
         cb_push_back(cb_l_out, total_size);
         pack_untilize_uninit(cb_l_out);
     } else {
         bool acquire_regs = !normalize;
         for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+            DPRINT << " SDPA tail chunk cb_wait_front l1=" << cb_l1 << " n=" << (chunk + 1) * block_size << ENDL();
             cb_wait_front(cb_l1, (chunk + 1) * block_size);
+            DPRINT << " SDPA tail chunk cb_wait_front l2=" << cb_l2 << " n=" << (chunk + 1) * block_size << ENDL();
             cb_wait_front(cb_l2, (chunk + 1) * block_size);
             cb_reserve_back(cb_l_out, block_size);
-
+            DPRINT << " SDPA tail chunk reserve back cb_l_out=" << cb_l_out << " n=" << block_size << ENDL();
             uint32_t tile_index = chunk * block_size;
             ckernel::sdpa_tail_l_block<block_size, 1, untilize, dense, false>(
                 cb_l1, cb_l2, cb_l_out, tile_index, 0, acquire_regs);
@@ -282,6 +290,7 @@ ALWI void sdpa_forward_data(
     uint32_t cb_l1,
     uint32_t cb_l_out,
     uint32_t block_size) {
+    DPRINT << " SDPA fwd cb_wait_front prev_ms=" << cb_prev_max_sum << " n=1" << ENDL();
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
@@ -297,6 +306,7 @@ ALWI void sdpa_forward_data(
     cb_push_back(cb_cur_max_sum, 1);
 
     for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+        DPRINT << " SDPA fwd chunk cb_wait_front l1=" << cb_l1 << " n=" << (chunk + 1) * block_size << ENDL();
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
         cb_reserve_back(cb_l_out, block_size);
 
@@ -595,13 +605,6 @@ struct SdpaReduceWorker {
         }
 
         void reader_impl(const ReaderArgs& args) {
-            // Push local input (aliased CBs, no copy needed)
-            cb_reserve_back(CTArgs::cb_local_l, CTArgs::out_tiles);
-            cb_push_back(CTArgs::cb_local_l, CTArgs::out_tiles);
-
-            cb_reserve_back(CTArgs::cb_local_ms, 1);
-            cb_push_back(CTArgs::cb_local_ms, 1);
-
             bool r2_neighbor_r1_valid = true;
             bool r1_neighbor_valid = true;
 
@@ -704,7 +707,9 @@ struct SdpaReduceWorker {
                     scatter_dest_noc_y[i] = scatter_dest_coords[i * 2 + 1];
                 }
 
+                DPRINT << " WAIT FRONT " << CTArgs::cb_l_out << " " << CTArgs::scatter_num_tiles << ENDL();
                 cb_wait_front(CTArgs::cb_l_out, CTArgs::scatter_num_tiles);
+                DPRINT << " DONE " << ENDL();
                 uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
 
                 constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
@@ -740,7 +745,8 @@ struct SdpaReduceWorker {
         void compute_impl() {
             constexpr int vector_mode = VectorMode::RC_custom;
 
-            binary_op_init_common(CTArgs::cb_local_l, CTArgs::cb_local_l, CTArgs::cb_l_out);
+            reconfig_data_format(CTArgs::cb_local_l, CTArgs::cb_local_l);
+            pack_reconfig_data_format(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE, false>();
 
             bool local_valid = true;

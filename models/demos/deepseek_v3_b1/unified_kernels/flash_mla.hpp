@@ -551,8 +551,8 @@ struct FlashMLADecode {
             static_assert(out_chunk_tiles % 2 == 0, "out_chunk_tiles must be even");
 
             const bool do_reduce = args.do_reduce == 1;
-            const bool do_output = args.do_output == 1;
-            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;
+            const bool do_output = args.do_output == 1;                            // set to 0 in fused
+            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;  // set to 1 in fused
 
             constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
@@ -609,9 +609,13 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_interm_out;
                 sdpa_ms_cb = cb_interm_ms;
             } else {
+                // Fused with sdpa reduce worker
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
+            PACK(
+                DPRINT << " FLASH MLA PACK sdpa_output_cb=" << sdpa_output_cb << " sdpa_ms_cb=" << sdpa_ms_cb
+                       << ENDL());
             uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             cb_wait_front(cb_q_in, q_chunk_tiles);
             cb_reserve_back(sdpa_output_cb, vDHt);
@@ -642,6 +646,7 @@ struct FlashMLADecode {
             if (!sdpa_output_is_final) {
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 pack_tile(max_dst_tile_offset, sdpa_ms_cb);
+                DPRINT << " FLASH MLA PACK cb_out_ms=" << sdpa_ms_cb << " n=" << Sq_chunk_t << ENDL();
                 cb_push_back(sdpa_ms_cb, Sq_chunk_t);
             } else {
                 compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
@@ -653,6 +658,7 @@ struct FlashMLADecode {
                 pack_tile(mm2_dst_tile_offset + i + 1, sdpa_output_cb);
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
             }
+            DPRINT << " FLASH MLA PACK cb_out_o=" << sdpa_output_cb << " n=" << out_chunk_tiles << ENDL();
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
             tile_regs_commit();
             tile_regs_release();
@@ -674,6 +680,9 @@ struct FlashMLADecode {
                     if (is_sender_after_reduce) {
                         sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                             cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_o);
+                        PACK(
+                            DPRINT << " FLASH MLA PACK cb_out_ms=" << cb_out_ms << " n=" << out_chunk_tiles
+                                   << " cb_out_o=" << cb_out_o << ENDL());
                     } else {
                         sdpa_tail<exp_approx_mode, true, block_size, num_blocks, scale_fp32, VectorMode::C>(
                             cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_final);
