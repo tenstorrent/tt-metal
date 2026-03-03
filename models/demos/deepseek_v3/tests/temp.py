@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
-# SPDX-License-Identifier: Apache-2.0
-
-
 import os
 
 import pytest
@@ -33,7 +29,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         (True, True),
     ],
 )
-def test_forward_pass(
+def test_new_forward_pass(
     mode,
     seq_len,
     hf_config,
@@ -47,23 +43,20 @@ def test_forward_pass(
 
     batch_size = 1
 
-    # Get state dict from actual model - pass directly to convert_weights
+    # Get state dict from actual model or use synthetic weights
     torch.use_deterministic_algorithms(True)
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
+
+    # IMPORTANT: Initialize bias to zeros to avoid uninitialized memory values
+    # The default model has uninitialized bias which causes non-deterministic behavior
+    if hasattr(reference_model, "e_score_correction_bias"):
+        reference_model.e_score_correction_bias.data = torch.zeros_like(reference_model.e_score_correction_bias.data)
 
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
-        MoEGate,
-        hf_config,
-        (hf_state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate=False,
-        test_name="test_moe_gate",
-        real_weights=False,
+        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=False
     )
-
     # Generate appropriate config using utility function
     model_config = get_model_config(
         MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
@@ -113,12 +106,12 @@ def test_forward_pass(
     # Convert output back to torch
     tt_topk_weights_torch = ttnn.to_torch(
         tt_topk_weights,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0].squeeze(0)
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)[:, :8]
     tt_topk_indices_torch = ttnn.to_torch(
         tt_topk_indices,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0].squeeze(0)
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)[:, :8]
 
     # Cleanup
     ttnn.deallocate(tt_input)
@@ -132,18 +125,17 @@ def test_forward_pass(
 
     reference_topk_weights = torch.sort(reference_topk_weights.to(torch.bfloat16), dim=-1, stable=True)[0]
     tt_topk_weights_torch = torch.sort(tt_topk_weights_torch, dim=-1, stable=True)[0]
+
+    # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
+    # Cast both to int32 for comparison - TT output is uint16, reference may be int64; torch.equal
+    # does not support promoting Short and UInt16
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
+
     passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
 
-    logger.info(f"TopK experts weights PCC: {pcc_message}")
     assert (
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
-    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
-    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
-    assert torch.equal(reference_topk_indices, tt_topk_indices_torch), "TopK experts indices output does not match"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
+    assert torch.equal(reference_topk_indices, tt_topk_indices_torch), f"TopK experts indices output does not match"

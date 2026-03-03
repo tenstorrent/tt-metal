@@ -21,8 +21,8 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     reshaped_input_shape = (batch_size, 16, 16)
     input_shard_shape = (16, 16)
     input_tile = ttnn.Tile(input_shard_shape)
-    output_shape = (batch_size, 1, 16)
-    output_shard_shape = (1, 16)
+    output_shape = (batch_size, 32, 32)
+    output_shard_shape = (32, 32)
     output_tile = ttnn.Tile(output_shard_shape)
 
     logger.info(f"Testing Deepseek Moe Gate with input shape {input_shape}")
@@ -140,11 +140,13 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     output_torch = ttnn.to_torch(ttnn_result)
     output_indices_torch = ttnn.to_torch(ttnn_result_indices)
 
-    output_torch = output_torch[:, 0, :8]
-    output_indices_torch = output_indices_torch[:, 0, :8]
+    output_torch = output_torch[:, :, :, :8]
+    output_indices_torch = output_indices_torch[:, :, :, :8]
 
     sorted_output_indices_torch, i = torch.sort(output_indices_torch, dim=-1)
     sorted_output_torch = torch.gather(output_torch, dim=-1, index=i)
+    sorted_output_indices_torch = sorted_output_indices_torch.reshape(batch_size, 8)
+    sorted_output_torch = sorted_output_torch.reshape(batch_size, 8)
 
     top8_indices, i = torch.sort(top8_indices, dim=-1)
     top8_scores = torch.gather(top8_scores, dim=-1, index=i)
