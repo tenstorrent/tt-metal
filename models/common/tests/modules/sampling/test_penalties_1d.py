@@ -949,7 +949,6 @@ class TestPenalties1DDeviceExtra:
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_reset_output_tokens_no_tokens(self, ttnn_mesh_device, vocab_size):
         """reset_output_tokens(tokens=None) zeros the accum buffers (lines 317-324)."""
-        B = 32
         pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         pen.load_device_buffers()
         _, accum = _make_proper_params_accum(pen)
