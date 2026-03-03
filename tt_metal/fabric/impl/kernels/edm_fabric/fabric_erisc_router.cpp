@@ -554,6 +554,7 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 #endif
 }
 
+bool hung = false;
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -586,6 +587,18 @@ FORCE_INLINE void send_next_data(
         pkt_header->src_ch_id = sender_channel_index;
     }
 
+    size_t count = 0;
+    bool logged = false;
+    auto misc_val_in_packet =
+        *reinterpret_cast<uint32_t*>(src_addr + ((payload_size_bytes >> 1) + (payload_size_bytes >> 2)));
+    auto misc_val_in_packet2 = *reinterpret_cast<uint32_t*>(src_addr + (payload_size_bytes >> 1));
+    auto misc_val_in_packet3 = *reinterpret_cast<uint32_t*>(src_addr + (payload_size_bytes >> 2));
+    if (misc_val_in_packet == 0xfefefefe || misc_val_in_packet2 == 0xfefefefe || misc_val_in_packet3 == 0xfefefefe) {
+        // detected corruption
+        hung = true;
+        WATCHER_RING_BUFFER_PUSH(0xBAD05555);
+        return;
+    }
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
@@ -1608,7 +1621,6 @@ FORCE_INLINE void update_bw_cycles(
         }
     }
 }
-
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1678,6 +1690,9 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+        if (hung) {
+            return true;
+        }
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1794,6 +1809,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
+    if (hung) {
+        return true;
+    }
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -1864,6 +1882,20 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
+
+        auto payload_size_bytes = packet_header->payload_size_bytes;
+        auto misc_val_in_packet = *reinterpret_cast<uint32_t*>(
+            uint32_t(packet_header) + ((payload_size_bytes >> 1) + (payload_size_bytes >> 2)));
+        auto misc_val_in_packet2 = *reinterpret_cast<uint32_t*>(uint32_t(packet_header) + (payload_size_bytes >> 1));
+        auto misc_val_in_packet3 = *reinterpret_cast<uint32_t*>(uint32_t(packet_header) + (payload_size_bytes >> 2));
+        if (misc_val_in_packet == 0xfefefefe || misc_val_in_packet2 == 0xfefefefe ||
+            misc_val_in_packet3 == 0xfefefefe) {
+            // detected corruption
+            hung = true;
+            WATCHER_RING_BUFFER_PUSH(0xBAD06666);
+            WATCHER_RING_BUFFER_PUSH(uint32_t(packet_header));
+            return true;
+        }
         if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }

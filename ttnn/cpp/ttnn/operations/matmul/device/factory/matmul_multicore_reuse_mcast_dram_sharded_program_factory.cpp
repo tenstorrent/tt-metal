@@ -489,7 +489,7 @@ create_program_dram_sharded(
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src0_cb_config);
-    log_debug(
+    log_info(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src0_cb_index,
@@ -503,7 +503,7 @@ create_program_dram_sharded(
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
     tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src1_cb_config);
-    log_debug(
+    log_info(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src1_cb_index,
@@ -518,7 +518,7 @@ create_program_dram_sharded(
             .set_tile_dims(src2_cb_index, in0_tile)
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src2_cb_config);
-    log_debug(
+    log_info(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src2_cb_index,
@@ -550,7 +550,7 @@ create_program_dram_sharded(
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
         tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, interm0_cb_config);
-        log_debug(
+        log_info(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             interm0_cb_index,
@@ -569,7 +569,7 @@ create_program_dram_sharded(
                                .set_tile_dims(interm0_cb_index, output_tile);
     }
     tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_cb_config);
-    log_debug(
+    log_info(
         tt::LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         output_cb_index,
@@ -596,7 +596,7 @@ create_program_dram_sharded(
                 .set_page_size(src3_cb_index, bias_single_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
         tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, cb_src3_config);
-        log_debug(
+        log_info(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,

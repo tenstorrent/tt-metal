@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "experimental/noc.h"
