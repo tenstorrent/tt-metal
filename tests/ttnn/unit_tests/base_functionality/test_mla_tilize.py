@@ -18,10 +18,8 @@ from tests.ttnn.utils_for_testing import assert_equal
     [
         (
             "wo_tilize",
-            [32, 16384],
-            [32, 16384],
-            # [1, 1, 32, 16384],
-            # [1, 1, 32, 16384],
+            [1, 1, 32, 16384],
+            [1, 1, 32, 16384],
         ),
     ],
     ids=["wo_tilize"],
