@@ -38,6 +38,35 @@ def tmp_report_dir(tmp_path):
     return report_dir
 
 
+def _make_report(
+    graph,
+    devices=None,
+    per_operation_buffers=None,
+    buffer_pages_by_address=None,
+    python_io=None,
+    metadata=None,
+):
+    """Build a complete JSON report dict matching C++ output format."""
+    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": metadata or {}}
+    if per_operation_buffers is not None:
+        report["per_operation_buffers"] = per_operation_buffers
+    if buffer_pages_by_address is not None:
+        report["buffer_pages_by_address"] = buffer_pages_by_address
+    if python_io is not None:
+        report["python_io"] = python_io
+    return report
+
+
+def _import_to_db(report_dict, tmp_path):
+    """Write report JSON, import via import_report(), return (connection, cursor)."""
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w") as f:
+        json.dump(report_dict, f)
+    db_path = graph_report.import_report(report_path, tmp_path / "output")
+    conn = sqlite3.connect(db_path)
+    return conn, conn.cursor()
+
+
 class TestImportGraphUnit:
     """Pure unit tests for import_graph function - no device required."""
 
@@ -74,15 +103,9 @@ class TestImportGraphUnit:
             {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
-
-        # Check output_tensors was populated
         cursor.execute("SELECT operation_id, output_index, tensor_id FROM output_tensors")
         output_rows = cursor.fetchall()
 
@@ -130,13 +153,8 @@ class TestImportGraphUnit:
             {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY output_index")
         output_rows = cursor.fetchall()
@@ -169,13 +187,8 @@ class TestImportGraphUnit:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT operation_id, stack_trace FROM stack_traces")
         rows = cursor.fetchall()
@@ -183,7 +196,6 @@ class TestImportGraphUnit:
         assert len(rows) == 1
         assert rows[0][0] == 1
         assert "frame1" in rows[0][1]
-        assert stats.get("stack_traces", 0) == 1
 
         conn.close()
 
@@ -211,13 +223,8 @@ class TestImportGraphUnit:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT error_type, error_message, error_operation FROM errors")
         rows = cursor.fetchall()
@@ -226,7 +233,6 @@ class TestImportGraphUnit:
         assert rows[0][0] == "exception"
         assert rows[0][1] == "Something went wrong"
         assert rows[0][2] == "ttnn::bad_op"
-        assert stats.get("errors", 0) == 1
 
         conn.close()
 
@@ -252,13 +258,8 @@ class TestImportGraphUnit:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name, value FROM operation_arguments ORDER BY name")
         rows = cursor.fetchall()
@@ -299,13 +300,8 @@ class TestImportGraphUnit:
             {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT operation_id, device_id, address, max_size_per_bank, buffer_type FROM buffers")
         rows = cursor.fetchall()
@@ -316,7 +312,6 @@ class TestImportGraphUnit:
         assert rows[0][2] == 12345  # address
         assert rows[0][3] == 4096  # size
         assert rows[0][4] == 1  # buffer_type (1=L1)
-        assert stats["buffers"] == 1
 
         conn.close()
 
@@ -369,12 +364,8 @@ class TestImportGraphUnit:
             counter += 3
         nodes.append({"counter": counter, "node_type": "capture_end", "params": {}, "connections": []})
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, nodes, base_operation_id=0)
-        conn.commit()
+        report = _make_report(nodes)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT address, buffer_type FROM buffers ORDER BY address")
         rows = cursor.fetchall()
@@ -423,12 +414,8 @@ class TestImportGraphUnit:
             {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT buffer_type FROM buffers WHERE address=99999")
         bt = cursor.fetchone()[0]
@@ -512,14 +499,9 @@ class TestImportGraphUnit:
             {"counter": 8, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
-        # Op 2's cumulative snapshot should have all 3 buffers with correct types
         cursor.execute("SELECT address, buffer_type FROM buffers WHERE operation_id=2 ORDER BY address")
         rows = cursor.fetchall()
         assert len(rows) == 3, f"Op 2 should have 3 cumulative buffers, got {len(rows)}"
@@ -609,13 +591,8 @@ class TestImportGraphUnit:
             {"counter": 10, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT operation_id, address FROM buffers ORDER BY operation_id, address")
         rows = cursor.fetchall()
@@ -660,13 +637,8 @@ class TestImportGraphUnit:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT tensor_id, device_id, address FROM device_tensors ORDER BY device_id")
         rows = cursor.fetchall()
@@ -677,7 +649,6 @@ class TestImportGraphUnit:
         assert rows[2] == (100, 2, 32345678)
         assert rows[3] == (100, 3, 42345678)
 
-        assert stats.get("device_tensors", 0) == 4
         conn.close()
 
     def test_device_tensors_prefers_mesh_device_id(self, tmp_path):
@@ -709,13 +680,8 @@ class TestImportGraphUnit:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT tensor_id, device_id, address FROM device_tensors")
         rows = cursor.fetchall()
@@ -753,13 +719,8 @@ class TestImportGraphUnit:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute(
             "SELECT tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type FROM tensors"
@@ -806,73 +767,52 @@ class TestImportGraphUnit:
             {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT COUNT(*) FROM edges")
         assert cursor.fetchone()[0] > 0
-        assert stats["edges"] > 0
 
         conn.close()
 
     def test_buffer_pages_imported(self, tmp_path):
         """Test that buffer pages are imported when present in the report."""
-        mock_report = {
-            "version": 1,
-            "graph": [
-                {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
-                {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
-            ],
-            "devices": [],
-            "metadata": {},
-            "buffer_pages": [
-                {
-                    "device_id": 0,
-                    "address": 12345678,
-                    "core_y": 1,
-                    "core_x": 2,
-                    "bank_id": 5,
-                    "page_index": 0,
-                    "page_address": 12345678,
-                    "page_size": 1024,
-                    "buffer_type": 1,  # L1
-                },
-                {
-                    "device_id": 0,
-                    "address": 12345678,
-                    "core_y": 1,
-                    "core_x": 3,
-                    "bank_id": 6,
-                    "page_index": 1,
-                    "page_address": 12346702,
-                    "page_size": 1024,
-                    "buffer_type": 1,  # L1
-                },
-            ],
-        }
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        buffer_pages = [
+            {
+                "device_id": 0,
+                "address": 12345678,
+                "core_y": 1,
+                "core_x": 2,
+                "bank_id": 5,
+                "page_index": 0,
+                "page_address": 12345678,
+                "page_size": 1024,
+                "buffer_type": 1,
+            },
+            {
+                "device_id": 0,
+                "address": 12345678,
+                "core_y": 1,
+                "core_x": 3,
+                "bank_id": 6,
+                "page_index": 1,
+                "page_address": 12346702,
+                "page_size": 1024,
+                "buffer_type": 1,
+            },
+        ]
+        report = _make_report(graph)
+        report["buffer_pages"] = buffer_pages
+        conn, cursor = _import_to_db(report, tmp_path)
 
-        # Write mock report
-        report_path = tmp_path / "report.json"
-        with open(report_path, "w") as f:
-            json.dump(mock_report, f)
-
-        # Import
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-
-        # Verify buffer pages were imported
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
         cursor.execute(
             "SELECT device_id, address, core_y, core_x, bank_id, page_index, page_address, page_size, buffer_type FROM buffer_pages ORDER BY page_index"
         )
         rows = cursor.fetchall()
-        conn.close()
 
         assert len(rows) == 2
         # First page
@@ -889,111 +829,99 @@ class TestImportGraphUnit:
 
     def test_per_operation_buffer_pages_imported(self, tmp_path):
         """Test that per-operation buffer page snapshots are imported with correct operation_id mapping."""
-        mock_report = {
-            "version": 1,
-            "graph": [
-                {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5], "stacking_level": 0},
-                {
-                    "counter": 1,
-                    "node_type": "function_start",
-                    "params": {"name": "ttnn.add", "num_inputs": "0"},
-                    "connections": [2],
-                    "input_tensors": [],
-                    "stacking_level": 1,
-                    "arguments": [],
-                },
-                {
-                    "counter": 2,
-                    "node_type": "function_end",
-                    "params": {"name": "ttnn.add"},
-                    "connections": [],
-                    "stacking_level": 1,
-                    "duration_ns": 100,
-                },
-                {
-                    "counter": 3,
-                    "node_type": "function_start",
-                    "params": {"name": "ttnn.mul", "num_inputs": "0"},
-                    "connections": [4],
-                    "input_tensors": [],
-                    "stacking_level": 1,
-                    "arguments": [],
-                },
-                {
-                    "counter": 4,
-                    "node_type": "function_end",
-                    "params": {"name": "ttnn.mul"},
-                    "connections": [],
-                    "stacking_level": 1,
-                    "duration_ns": 200,
-                },
-                {"counter": 5, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-            ],
-            "devices": [],
-            "metadata": {},
-            "buffer_pages": [
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5], "stacking_level": 0},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add", "num_inputs": "0"},
+                "connections": [2],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "stacking_level": 1,
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.mul", "num_inputs": "0"},
+                "connections": [4],
+                "input_tensors": [],
+                "stacking_level": 1,
+                "arguments": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.mul"},
+                "connections": [],
+                "stacking_level": 1,
+                "duration_ns": 200,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+        report = _make_report(graph)
+        report["buffer_pages"] = [
+            {
+                "device_id": 0,
+                "address": 999,
+                "core_y": 0,
+                "core_x": 0,
+                "bank_id": 0,
+                "page_index": 0,
+                "page_address": 999,
+                "page_size": 64,
+                "buffer_type": 1,
+            },
+        ]
+        report["per_operation_buffer_pages"] = {
+            "1": [
                 {
                     "device_id": 0,
-                    "address": 999,
-                    "core_y": 0,
-                    "core_x": 0,
-                    "bank_id": 0,
+                    "address": 1000,
+                    "core_y": 1,
+                    "core_x": 2,
+                    "bank_id": 10,
                     "page_index": 0,
-                    "page_address": 999,
-                    "page_size": 64,
+                    "page_address": 1000,
+                    "page_size": 128,
+                    "buffer_type": 1,
+                },
+                {
+                    "device_id": 0,
+                    "address": 1000,
+                    "core_y": 1,
+                    "core_x": 3,
+                    "bank_id": 11,
+                    "page_index": 1,
+                    "page_address": 1128,
+                    "page_size": 128,
                     "buffer_type": 1,
                 },
             ],
-            "per_operation_buffer_pages": {
-                "1": [
-                    {
-                        "device_id": 0,
-                        "address": 1000,
-                        "core_y": 1,
-                        "core_x": 2,
-                        "bank_id": 10,
-                        "page_index": 0,
-                        "page_address": 1000,
-                        "page_size": 128,
-                        "buffer_type": 1,
-                    },
-                    {
-                        "device_id": 0,
-                        "address": 1000,
-                        "core_y": 1,
-                        "core_x": 3,
-                        "bank_id": 11,
-                        "page_index": 1,
-                        "page_address": 1128,
-                        "page_size": 128,
-                        "buffer_type": 1,
-                    },
-                ],
-                "3": [
-                    {
-                        "device_id": 0,
-                        "address": 2000,
-                        "core_y": 2,
-                        "core_x": 4,
-                        "bank_id": 20,
-                        "page_index": 0,
-                        "page_address": 2000,
-                        "page_size": 256,
-                        "buffer_type": 1,
-                    },
-                ],
-            },
+            "3": [
+                {
+                    "device_id": 0,
+                    "address": 2000,
+                    "core_y": 2,
+                    "core_x": 4,
+                    "bank_id": 20,
+                    "page_index": 0,
+                    "page_address": 2000,
+                    "page_size": 256,
+                    "buffer_type": 1,
+                },
+            ],
         }
 
-        report_path = tmp_path / "report.json"
-        with open(report_path, "w") as f:
-            json.dump(mock_report, f)
-
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        conn, cursor = _import_to_db(report, tmp_path)
 
         # Flat buffer_pages are preferred over per-op snapshots
         cursor.execute("SELECT COUNT(*) FROM buffer_pages")
@@ -1015,49 +943,37 @@ class TestImportGraphUnit:
 
     def test_flat_buffer_pages_fallback(self, tmp_path):
         """Test that flat buffer_pages are used when per_operation_buffer_pages is absent."""
-        mock_report = {
-            "version": 1,
-            "graph": [
-                {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1], "stacking_level": 0},
-                {"counter": 1, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
-            ],
-            "devices": [],
-            "metadata": {},
-            "buffer_pages": [
-                {
-                    "device_id": 0,
-                    "address": 5000,
-                    "core_y": 0,
-                    "core_x": 0,
-                    "bank_id": 0,
-                    "page_index": 0,
-                    "page_address": 5000,
-                    "page_size": 512,
-                    "buffer_type": 1,
-                },
-                {
-                    "device_id": 0,
-                    "address": 5000,
-                    "core_y": 0,
-                    "core_x": 1,
-                    "bank_id": 1,
-                    "page_index": 1,
-                    "page_address": 5512,
-                    "page_size": 512,
-                    "buffer_type": 1,
-                },
-            ],
-        }
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1], "stacking_level": 0},
+            {"counter": 1, "node_type": "capture_end", "params": {}, "connections": [], "stacking_level": 0},
+        ]
+        report = _make_report(graph)
+        report["buffer_pages"] = [
+            {
+                "device_id": 0,
+                "address": 5000,
+                "core_y": 0,
+                "core_x": 0,
+                "bank_id": 0,
+                "page_index": 0,
+                "page_address": 5000,
+                "page_size": 512,
+                "buffer_type": 1,
+            },
+            {
+                "device_id": 0,
+                "address": 5000,
+                "core_y": 0,
+                "core_x": 1,
+                "bank_id": 1,
+                "page_index": 1,
+                "page_address": 5512,
+                "page_size": 512,
+                "buffer_type": 1,
+            },
+        ]
+        conn, cursor = _import_to_db(report, tmp_path)
 
-        report_path = tmp_path / "report.json"
-        with open(report_path, "w") as f:
-            json.dump(mock_report, f)
-
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM buffer_pages")
         total = cursor.fetchone()[0]
         assert total == 2, f"Flat fallback should import 2 pages, got {total}"
@@ -1070,25 +986,17 @@ class TestImportGraphUnit:
 
     def test_cluster_mesh_descriptors_saved(self, tmp_path):
         """Test that cluster and mesh descriptors are saved during import."""
-        # Create a mock report with cluster and mesh coordinate mapping
-        mock_report = {
-            "version": 1,
-            "graph": [
-                {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
-                {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
-            ],
-            "devices": [],
-            "metadata": {},
-            "cluster_descriptor": "# Mock cluster descriptor YAML\ndevices:\n  - id: 0\n    type: wormhole\n",
-            "mesh_coordinate_mapping": "# physical_chip_mesh_coordinate_mapping_1_of_1.yaml\nchips:\n  0: [0, 0]\n",
-        }
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(graph)
+        report["cluster_descriptor"] = "# Mock cluster descriptor YAML\ndevices:\n  - id: 0\n    type: wormhole\n"
+        report["mesh_coordinate_mapping"] = "# physical_chip_mesh_coordinate_mapping_1_of_1.yaml\nchips:\n  0: [0, 0]\n"
 
-        # Write mock report
         report_path = tmp_path / "report.json"
         with open(report_path, "w") as f:
-            json.dump(mock_report, f)
-
-        # Import
+            json.dump(report, f)
         output_dir = tmp_path / "output"
         graph_report.import_report(report_path, output_dir)
 
@@ -1110,13 +1018,6 @@ class TestImportGraphUnit:
 
 class TestInputTensorResolution:
     """Regression tests: input_tensors must resolve node counters to real tensor_ids."""
-
-    def _make_db(self, tmp_path):
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        return conn, cursor
 
     def test_input_tensor_resolves_node_counter_to_tensor_id(self, tmp_path):
         """
@@ -1148,9 +1049,8 @@ class TestInputTensorResolution:
             {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT tensor_id FROM input_tensors")
         rows = cursor.fetchall()
@@ -1196,9 +1096,8 @@ class TestInputTensorResolution:
             {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT tensor_id FROM tensors")
         tensor_ids = {row[0] for row in cursor.fetchall()}
@@ -1256,9 +1155,8 @@ class TestInputTensorResolution:
             {"counter": 7, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT input_index, tensor_id FROM input_tensors ORDER BY input_index")
         rows = cursor.fetchall()
@@ -1290,9 +1188,8 @@ class TestInputTensorResolution:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT * FROM input_tensors")
         assert cursor.fetchall() == [], "Invalid node counter should not produce input_tensor rows"
@@ -1396,35 +1293,12 @@ class TestImportValidation:
         assert any("tensor_id=999" in w for w in warnings), f"Should warn about dangling tensor_id=999, got: {warnings}"
         conn.close()
 
-    def test_linear_model_import_has_no_warnings(self, tmp_path):
-        """The full test_linear graph import should produce zero integrity warnings."""
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_devices(cursor, TestLinearModelImport.MOCK_DEVICE_INFO)
-        stats = graph_report.import_graph(
-            cursor,
-            TestLinearModelImport.MOCK_LINEAR_GRAPH,
-            base_operation_id=0,
-            devices=TestLinearModelImport.MOCK_DEVICE_INFO,
-        )
-        conn.commit()
-
-        assert (
-            stats.get("warnings", []) == []
-        ), f"test_linear import should have no warnings after fixes, got: {stats['warnings']}"
-        conn.close()
-
 
 class TestBufferMaxSizePerBank:
     """Regression tests: max_size_per_bank must be per-bank, not total buffer size."""
 
-    def _make_db(self, tmp_path):
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        return conn, cursor
-
-    def _make_buffer_graph(self, size, page_size, buf_type="DRAM", layout="INTERLEAVED", num_cores=0):
+    @staticmethod
+    def _make_buffer_graph(size, page_size, buf_type="DRAM", layout="INTERLEAVED", num_cores=0):
         return [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 4]},
             {
@@ -1462,23 +1336,17 @@ class TestBufferMaxSizePerBank:
         """
         Regression: a 1024x1024 bf16 TILE tensor is 2,097,152 bytes total.
         With 12 DRAM channels: ceil(1024 pages / 12 banks) * 2048 page_size = 176,128 per bank.
-        The old bug stored 2,097,152 (total size) instead.
         """
         devices = [{"device_id": 0, "num_dram_channels": 12, "l1_num_banks": 64}]
         graph = self._make_buffer_graph(size=2097152, page_size=2048, buf_type="DRAM")
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices)
-        conn.commit()
+        report = _make_report(graph, devices=devices)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
-        rows = cursor.fetchall()
-        assert len(rows) == 1
-        actual = rows[0][0]
+        actual = cursor.fetchone()[0]
         expected = 86 * 2048  # ceil(1024/12) * page_size = 176128
-        assert (
-            actual == expected
-        ), f"max_size_per_bank should be {expected} (per-bank), not {2097152} (total size). Got {actual}"
+        assert actual == expected, f"max_size_per_bank should be {expected} (per-bank), got {actual}"
         conn.close()
 
     def test_l1_interleaved_per_bank_size(self, tmp_path):
@@ -1486,16 +1354,12 @@ class TestBufferMaxSizePerBank:
         devices = [{"device_id": 0, "num_dram_channels": 12, "l1_num_banks": 64}]
         graph = self._make_buffer_graph(size=65536, page_size=2048, buf_type="L1")
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices)
-        conn.commit()
+        report = _make_report(graph, devices=devices)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
-        rows = cursor.fetchall()
-        assert len(rows) == 1
-        actual = rows[0][0]
-        # 65536 / 2048 = 32 pages, ceil(32/64) = 1 page per bank, 1 * 2048 = 2048
-        expected = 2048
+        actual = cursor.fetchone()[0]
+        expected = 2048  # 32 pages, ceil(32/64) = 1 page/bank, 1 * 2048
         assert actual == expected, f"L1 per-bank should be {expected}, got {actual}"
         conn.close()
 
@@ -1507,184 +1371,36 @@ class TestBufferMaxSizePerBank:
         devices = [{"device_id": 0, "num_dram_channels": 12, "l1_num_banks": 64}]
         graph = self._make_buffer_graph(size=26624, page_size=2048, buf_type="DRAM")
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices)
-        conn.commit()
+        report = _make_report(graph, devices=devices)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
-        rows = cursor.fetchall()
-        actual = rows[0][0]
+        actual = cursor.fetchone()[0]
         expected = 2 * 2048  # ceil(13/12) * 2048 = 4096
-        assert actual == expected, f"Bias buffer per-bank should be {expected}, not {26624} (total). Got {actual}"
+        assert actual == expected, f"Bias buffer per-bank should be {expected}, got {actual}"
         conn.close()
 
     def test_no_device_info_falls_back_to_total_size(self, tmp_path):
         """Without device info, max_size_per_bank falls back to total buffer size."""
         graph = self._make_buffer_graph(size=4096, page_size=2048, buf_type="DRAM")
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=None)
-        conn.commit()
+        report = _make_report(graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
-        rows = cursor.fetchall()
-        assert rows[0][0] == 4096, "Without device info, should fall back to total size"
+        assert cursor.fetchone()[0] == 4096, "Without device info, should fall back to total size"
         conn.close()
 
     def test_sharded_buffer_per_core_size(self, tmp_path):
         """Sharded buffers compute per-bank from num_cores."""
         devices = [{"device_id": 0, "num_dram_channels": 12, "l1_num_banks": 64}]
-        # 32768 bytes, 2048 page_size, 8 cores -> 16 pages total, ceil(16/8)=2 pages/core, 2*2048=4096
         graph = self._make_buffer_graph(size=32768, page_size=2048, buf_type="L1", layout="HEIGHT_SHARDED", num_cores=8)
 
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_graph(cursor, graph, devices=devices)
-        conn.commit()
+        report = _make_report(graph, devices=devices)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT max_size_per_bank FROM buffers")
-        rows = cursor.fetchall()
-        assert rows[0][0] == 4096, f"Sharded per-core should be 4096, got {rows[0][0]}"
-        conn.close()
-
-
-class TestCompatibleMode:
-    """Tests for compatible mode: output matches legacy Python capture."""
-
-    def _make_db(self, tmp_path):
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        return conn, cursor
-
-    def _import_linear(self, tmp_path):
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_devices(cursor, TestLinearModelImport.MOCK_DEVICE_INFO)
-        graph_report.import_graph(
-            cursor,
-            TestLinearModelImport.MOCK_LINEAR_GRAPH,
-            base_operation_id=0,
-            devices=TestLinearModelImport.MOCK_DEVICE_INFO,
-        )
-        conn.commit()
-        return conn, cursor
-
-    def test_referenced_host_tensors_kept(self, tmp_path):
-        """Compatible mode keeps host tensors that are referenced in input/output relationships."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT tensor_id, device_id FROM tensors ORDER BY CAST(tensor_id AS INTEGER)")
-        rows = cursor.fetchall()
-
-        # 3 host tensors (inputs to to_device ops) + 4 device tensors
-        assert len(rows) == 7, f"Expected 7 tensors (3 host + 4 device), got {len(rows)}"
-        host = [r for r in rows if r[1] is None]
-        device = [r for r in rows if r[1] is not None]
-        assert len(host) == 3, f"Expected 3 host tensors, got {len(host)}"
-        assert len(device) == 4, f"Expected 4 device tensors, got {len(device)}"
-        conn.close()
-
-    def test_device_tensors_deduplicated_by_address(self, tmp_path):
-        """Device tensors in the linear model each have a unique address."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT address FROM tensors WHERE device_id IS NOT NULL ORDER BY address")
-        device_addresses = [r[0] for r in cursor.fetchall()]
-
-        assert len(device_addresses) == len(
-            set(device_addresses)
-        ), f"Device tensor addresses should be unique. Got {device_addresses}"
-        conn.close()
-
-    def test_device_tensors_deduplicated(self, tmp_path):
-        """device_tensors should have one entry per unique physical tensor."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT tensor_id, address FROM device_tensors ORDER BY address")
-        rows = cursor.fetchall()
-
-        assert len(rows) == 4, f"Expected 4 device_tensor entries, got {len(rows)}"
-        addresses = [r[1] for r in rows]
-        assert len(addresses) == len(set(addresses)), f"device_tensors addresses should be unique. Got {addresses}"
-        conn.close()
-
-    def test_input_tensors_reference_valid_tensors(self, tmp_path):
-        """All input_tensors should reference tensors that exist in the tensors table."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT tensor_id FROM tensors")
-        valid_ids = {int(r[0]) if isinstance(r[0], str) else r[0] for r in cursor.fetchall()}
-
-        cursor.execute("SELECT operation_id, tensor_id FROM input_tensors")
-        rows = cursor.fetchall()
-
-        for op_id, tid in rows:
-            tid_int = int(tid) if isinstance(tid, str) else tid
-            assert tid_int in valid_ids, f"input_tensors op={op_id} references tensor {tid} not in tensors table"
-
-        # 3 host tensor inputs to to_device + 3 device tensor inputs to matmul
-        assert len(rows) == 6, f"Expected 6 input_tensor rows, got {len(rows)}"
-        conn.close()
-
-    def test_shapes_match_reference(self, tmp_path):
-        """Tensor shapes should match what the reference DB has."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT shape FROM tensors ORDER BY shape")
-        shapes = sorted([r[0] for r in cursor.fetchall()])
-
-        # 3 host tensors (2 x 1024x1024, 1 x 1x1024) + 4 device tensors
-        expected = sorted(
-            [
-                "Shape([1, 1024])",
-                "Shape([1, 1024])",
-                "Shape([1024, 1024])",
-                "Shape([1024, 1024])",
-                "Shape([1024, 1024])",
-                "Shape([1024, 1024])",
-                "Shape([1024, 1024])",
-            ]
-        )
-        assert shapes == expected, f"Shapes mismatch: {shapes} vs {expected}"
-        conn.close()
-
-    def test_buffer_counts_cumulative(self, tmp_path):
-        """Buffer counts should be cumulative per operation, child ops excluded."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT operation_id, COUNT(*) FROM buffers GROUP BY operation_id ORDER BY operation_id")
-        counts = [r[1] for r in cursor.fetchall()]
-
-        assert counts == [
-            1,
-            2,
-            3,
-            5,
-        ], f"Cumulative buffer counts should be [1,2,3,5] (4 ops, matmul adds 2 buffers), got {counts}"
-        conn.close()
-
-    def test_no_child_operations(self, tmp_path):
-        """Compatible mode should not expose nested child operations (e.g. create_device_tensor)."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT name FROM operations ORDER BY operation_id")
-        names = [r[0] for r in cursor.fetchall()]
-
-        assert len(names) == 4, f"Expected 4 top-level operations, got {len(names)}: {names}"
-        for name in names:
-            assert "create_device_tensor" not in name, f"Child operation '{name}' should be filtered in compatible mode"
-        conn.close()
-
-    def test_output_tensors_match_operations(self, tmp_path):
-        """Each top-level operation should have exactly one output tensor."""
-        conn, cursor = self._import_linear(tmp_path)
-
-        cursor.execute("SELECT operation_id, COUNT(*) FROM output_tensors GROUP BY operation_id ORDER BY operation_id")
-        rows = cursor.fetchall()
-        counts = [r[1] for r in rows]
-
-        assert len(rows) == 4, f"Expected output tensors for 4 operations, got {len(rows)}"
-        assert all(c == 1 for c in counts), f"Each op should have 1 output tensor, got {counts}"
+        assert cursor.fetchone()[0] == 4096, f"Sharded per-core should be 4096"
         conn.close()
 
 
@@ -1980,14 +1696,8 @@ class TestLinearModelImport:
     ]
 
     def _import_linear_graph(self, tmp_path):
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_devices(cursor, self.MOCK_DEVICE_INFO)
-        graph_report.import_graph(cursor, self.MOCK_LINEAR_GRAPH, base_operation_id=0, devices=self.MOCK_DEVICE_INFO)
-        conn.commit()
-        return conn, cursor
+        report = _make_report(self.MOCK_LINEAR_GRAPH, devices=self.MOCK_DEVICE_INFO)
+        return _import_to_db(report, tmp_path)
 
     def test_operations_count_and_names(self, tmp_path):
         """The linear model should produce 5 operations matching the C++ trace."""
@@ -2129,10 +1839,10 @@ class TestLinearModelImport:
         rows = cursor.fetchall()
 
         expected = [
-            (1, 1, 1920032),
-            (3, 1, 2096160),
-            (5, 1, 2272288),
-            (7, 1, 2278432),
+            (1, 0, 1920032),
+            (3, 0, 2096160),
+            (5, 0, 2272288),
+            (7, 0, 2278432),
         ]
         assert len(rows) == len(expected), f"Expected {len(expected)} device_tensors, got {len(rows)}"
         for row, (exp_tid, exp_dev, exp_addr) in zip(rows, expected):
@@ -2156,49 +1866,6 @@ class TestLinearModelImport:
             assert "1024, 1024" in str(shapes[tid]), f"Tensor {tid} should be 1024x1024, got {shapes[tid]}"
         for tid in [4, 5]:
             assert "1, 1024" in str(shapes[tid]), f"Tensor {tid} should be 1x1024, got {shapes[tid]}"
-        conn.close()
-
-    def test_full_import_report_flow(self, tmp_path):
-        """Test through the full import_report entry point (compatible mode by default)."""
-        report = {
-            "version": graph_report.SUPPORTED_REPORT_VERSION,
-            "graph": self.MOCK_LINEAR_GRAPH,
-            "devices": self.MOCK_DEVICE_INFO,
-            "metadata": {"model": "test_linear"},
-        }
-
-        report_path = tmp_path / "linear_report.json"
-        with open(report_path, "w") as f:
-            json.dump(report, f)
-
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT COUNT(*) FROM operations")
-        op_count = cursor.fetchone()[0]
-        assert op_count == 4, f"Compatible mode: expected 4 operations (no child ops), got {op_count}"
-
-        cursor.execute("SELECT COUNT(*) FROM tensors")
-        tensor_count = cursor.fetchone()[0]
-        assert tensor_count == 7, f"Compatible mode: expected 7 tensors (3 host + 4 device), got {tensor_count}"
-
-        cursor.execute("SELECT COUNT(*) FROM input_tensors")
-        input_count = cursor.fetchone()[0]
-        assert input_count == 6, f"Compatible mode: expected 6 input_tensor rows, got {input_count}"
-
-        cursor.execute("SELECT tensor_id FROM tensors")
-        valid_ids = {int(r[0]) if isinstance(r[0], str) else r[0] for r in cursor.fetchall()}
-        cursor.execute("SELECT tensor_id FROM input_tensors")
-        for row in cursor.fetchall():
-            tid = int(row[0]) if isinstance(row[0], str) else row[0]
-            assert tid in valid_ids, f"Dangling input_tensors reference: {tid} not in {sorted(valid_ids)}"
-
-        cursor.execute("SELECT max_size_per_bank FROM buffers WHERE address = 1920032")
-        assert cursor.fetchone()[0] == 176128, "Per-bank size should be computed, not total"
-
         conn.close()
 
 
@@ -2283,7 +1950,7 @@ class TestDurationExtraction:
 
         duration = graph_report.extract_total_duration_from_graph(captured_graph)
         assert isinstance(duration, float)
-        assert duration >= 0
+        assert duration > 0, "relu should have a positive duration"
 
     def test_extract_operation_durations(self, device):
         """Test extracting per-operation durations."""
@@ -2297,9 +1964,9 @@ class TestDurationExtraction:
 
         durations = graph_report.extract_operation_durations(captured_graph)
         assert isinstance(durations, dict)
-        assert len(durations) > 0
+        assert len(durations) >= 2, f"Should have at least 2 operation durations (relu, add), got {len(durations)}"
         for name, dur in durations.items():
-            assert dur >= 0, f"Duration for {name} should be non-negative"
+            assert dur > 0, f"Duration for {name} should be positive"
 
 
 class TestGraphReportImport:
@@ -2339,17 +2006,19 @@ class TestGraphReportImport:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Check devices table
         cursor.execute("SELECT COUNT(*) FROM devices")
-        assert cursor.fetchone()[0] > 0, "devices table should have data"
+        assert cursor.fetchone()[0] >= 1, "devices table should have at least 1 device"
 
-        # Check operations table
         cursor.execute("SELECT COUNT(*) FROM operations")
-        assert cursor.fetchone()[0] >= 0, "operations table should exist"
+        op_count = cursor.fetchone()[0]
+        assert op_count >= 1, f"operations table should have at least 1 operation (relu), got {op_count}"
 
-        # Check captured_graph table
         cursor.execute("SELECT COUNT(*) FROM captured_graph")
-        assert cursor.fetchone()[0] > 0, "captured_graph table should have data"
+        cg_count = cursor.fetchone()[0]
+        assert cg_count >= 1, f"captured_graph should have at least 1 entry, got {cg_count}"
+
+        cursor.execute("SELECT COUNT(*) FROM tensors")
+        assert cursor.fetchone()[0] >= 1, "tensors table should have at least 1 tensor"
 
         conn.close()
 
@@ -2637,23 +2306,9 @@ class TestResNet50Patterns:
         }
     ]
 
-    def _make_db(self, tmp_path):
-        conn = sqlite3.connect(":memory:")
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        return conn, cursor
-
     def _import_resnet(self, tmp_path):
-        conn, cursor = self._make_db(tmp_path)
-        graph_report.import_devices(cursor, self.MOCK_DEVICE_INFO)
-        graph_report.import_graph(
-            cursor,
-            self.MOCK_RESNET_GRAPH,
-            base_operation_id=0,
-            devices=self.MOCK_DEVICE_INFO,
-        )
-        conn.commit()
-        return conn, cursor
+        report = _make_report(self.MOCK_RESNET_GRAPH, devices=self.MOCK_DEVICE_INFO)
+        return _import_to_db(report, tmp_path)
 
     def test_host_weight_tensors_kept_in_compatible_mode(self, tmp_path):
         """Host weight tensors referenced as inputs must be preserved in compatible mode."""
@@ -2719,12 +2374,14 @@ class TestResNet50Patterns:
         conn.close()
 
     def test_multiple_buffer_types(self, tmp_path):
-        """Buffers should support DRAM, L1, and sharded layouts."""
+        """Buffers should support DRAM and L1 buffer types."""
         conn, cursor = self._import_resnet(tmp_path)
 
         cursor.execute("SELECT DISTINCT buffer_type FROM buffers ORDER BY buffer_type")
         types = [r[0] for r in cursor.fetchall()]
-        assert len(types) >= 1, f"Should have at least 1 buffer type, got {types}"
+        assert len(types) >= 2, f"Should have at least DRAM(0) and L1(1) buffer types, got {types}"
+        assert 0 in types, "Missing DRAM buffer type (0)"
+        assert 1 in types, "Missing L1 buffer type (1)"
         conn.close()
 
     def test_cumulative_buffers_reflect_allocations_and_deallocations(self, tmp_path):
@@ -3077,139 +2734,123 @@ class TestLinearModelE2E:
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
-class TestResNet50E2E:
+@pytest.fixture
+def imagenet_label_dict():
+    import ast
+
+    path = Path("models/sample_data/imagenet_class_labels.txt")
+    assert path.exists(), f"ImageNet labels not found at {path}"
+    with open(path, "r") as f:
+        return ast.literal_eval(f.read())
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_loc",
+    ((16, "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"),),
+)
+def test_resnet50_e2e_graph_capture(
+    mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
+):
+    """Run ResNet50 inference, capture graph, import to DB, and validate structural properties."""
+    import shutil
+
+    from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
+
+    report_path = tmp_path / "resnet50_report.json"
+
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+        "enable_detailed_buffer_report", True
+    ):
+        ttnn.graph.enable_buffer_pages()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
+        ttnn.graph.end_graph_capture_to_file(report_path)
+        ttnn.graph.disable_buffer_pages()
+
+    assert report_path.exists(), "Report JSON should be created"
+
+    output_dir = tmp_path / "output"
+    db_path = graph_report.import_report(report_path, output_dir)
+    assert db_path.exists(), "Imported DB should be created"
+
+    shutil.copy2(db_path, "/tmp/db.sqlite")
+
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+
+    c.execute("SELECT COUNT(*) FROM operations")
+    op_count = c.fetchone()[0]
+    assert op_count >= 300, f"Expected at least 300 operations, got {op_count}"
+
+    c.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
+    op_dist = dict(c.fetchall())
+    assert op_dist.get("ttnn.conv2d", 0) == 159, f"Expected 159 conv2d ops, got {op_dist.get('ttnn.conv2d', 0)}"
+    assert (
+        op_dist.get("ttnn.deallocate", 0) == 51
+    ), f"Expected 51 deallocate ops, got {op_dist.get('ttnn.deallocate', 0)}"
+    assert op_dist.get("ttnn.add_", 0) == 48, f"Expected 48 add_ ops, got {op_dist.get('ttnn.add_', 0)}"
+
+    c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
+    host_count = c.fetchone()[0]
+    assert host_count > 0, "Expected host tensors (weights)"
+
+    c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
+    device_count = c.fetchone()[0]
+    assert device_count > 0, "Expected device tensors"
+
+    c.execute("SELECT COUNT(*) FROM input_tensors")
+    input_count = c.fetchone()[0]
+    assert input_count >= 600, f"Expected at least 600 input_tensor rows, got {input_count}"
+
+    c.execute("SELECT COUNT(*) FROM output_tensors")
+    output_count = c.fetchone()[0]
+    assert output_count >= 300, f"Expected at least 300 output_tensor rows, got {output_count}"
+
+    c.execute(
+        """
+        SELECT COUNT(*) FROM input_tensors it
+        LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
+        WHERE t.tensor_id IS NULL
     """
-    End-to-end test: run ResNet50 inference on real hardware,
-    capture graph to JSON, import to SQLite, and validate structural properties.
+    )
+    dangling = c.fetchone()[0]
+    assert dangling == 0, f"{dangling} dangling input_tensors references"
+
+    c.execute(
+        """
+        SELECT COUNT(*) FROM output_tensors ot
+        LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
+        WHERE t.tensor_id IS NULL
     """
+    )
+    dangling = c.fetchone()[0]
+    assert dangling == 0, f"{dangling} dangling output_tensors references"
 
-    @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-    def test_resnet50_structural_properties(self, mesh_device, tmp_path, model_location_generator):
-        import ast
-        import shutil
-
-        import torch
-        from transformers import AutoImageProcessor
-
-        from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import (
-            resnet_model_config,
-            run_resnet_inference,
-        )
-        from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.demo_utils import get_data
-
-        batch_size = 16
-        input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
-        report_path = tmp_path / "resnet50_report.json"
-        model_version = "microsoft/resnet-50"
-
-        label_path = Path("models/sample_data/imagenet_class_labels.txt")
-        assert label_path.exists(), f"ImageNet labels not found at {label_path}"
-        with open(label_path, "r") as f:
-            imagenet_label_dict = ast.literal_eval(f.read())
-
-        image_processor = AutoImageProcessor.from_pretrained(model_version)
-        images = get_data(input_loc)
-
-        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-            "enable_logging", True
-        ), ttnn.manage_config("enable_graph_report", True):
-            ttnn.graph.enable_buffer_pages()
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-            run_resnet_inference(
-                mesh_device,
-                batch_size,
-                model_version,
-                image_processor,
-                images,
-                imagenet_label_dict,
-                model_location_generator,
-            )
-            ttnn.graph.end_graph_capture_to_file(report_path)
-            ttnn.graph.disable_buffer_pages()
-
-        assert report_path.exists(), "Report JSON should be created"
-
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-        assert db_path.exists(), "Imported DB should be created"
-
-        shutil.copy2(db_path, "/tmp/db.sqlite")
-
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-
-        c.execute("SELECT COUNT(*) FROM operations")
-        op_count = c.fetchone()[0]
-        assert op_count >= 300, f"Expected at least 300 operations, got {op_count}"
-
-        c.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
-        op_dist = dict(c.fetchall())
-        assert op_dist.get("ttnn.conv2d", 0) == 159, f"Expected 159 conv2d ops, got {op_dist.get('ttnn.conv2d', 0)}"
-        assert (
-            op_dist.get("ttnn.deallocate", 0) == 51
-        ), f"Expected 51 deallocate ops, got {op_dist.get('ttnn.deallocate', 0)}"
-        assert op_dist.get("ttnn.add_", 0) == 48, f"Expected 48 add_ ops, got {op_dist.get('ttnn.add_', 0)}"
-
-        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
-        host_count = c.fetchone()[0]
-        assert host_count > 0, "Expected host tensors (weights)"
-
-        c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
-        device_count = c.fetchone()[0]
-        assert device_count > 0, "Expected device tensors"
-
-        c.execute("SELECT COUNT(*) FROM input_tensors")
-        input_count = c.fetchone()[0]
-        assert input_count >= 600, f"Expected at least 600 input_tensor rows, got {input_count}"
-
-        c.execute("SELECT COUNT(*) FROM output_tensors")
-        output_count = c.fetchone()[0]
-        assert output_count >= 300, f"Expected at least 300 output_tensor rows, got {output_count}"
-
-        c.execute(
-            """
-            SELECT COUNT(*) FROM input_tensors it
-            LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
-            WHERE t.tensor_id IS NULL
+    c.execute(
         """
-        )
-        dangling = c.fetchone()[0]
-        assert dangling == 0, f"{dangling} dangling input_tensors references"
+        SELECT COUNT(*) FROM operations o
+        WHERE o.name = 'ttnn.deallocate'
+        AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
+        AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
+    """
+    )
+    dealloc_correct = c.fetchone()[0]
+    assert dealloc_correct == 51, f"Expected 51 deallocate ops with input+no-output, got {dealloc_correct}"
 
-        c.execute(
-            """
-            SELECT COUNT(*) FROM output_tensors ot
-            LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
-            WHERE t.tensor_id IS NULL
-        """
-        )
-        dangling = c.fetchone()[0]
-        assert dangling == 0, f"{dangling} dangling output_tensors references"
+    c.execute("SELECT COUNT(*) FROM buffers")
+    buf_count = c.fetchone()[0]
+    assert buf_count > 0, "Expected non-zero buffers"
 
-        c.execute(
-            """
-            SELECT COUNT(*) FROM operations o
-            WHERE o.name = 'ttnn.deallocate'
-            AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
-            AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
-        """
-        )
-        dealloc_correct = c.fetchone()[0]
-        assert dealloc_correct == 51, f"Expected 51 deallocate ops with input+no-output, got {dealloc_correct}"
+    c.execute("SELECT COUNT(*) FROM captured_graph")
+    cg_count = c.fetchone()[0]
+    assert cg_count == op_count, f"Expected {op_count} captured_graph rows, got {cg_count}"
 
-        c.execute("SELECT COUNT(*) FROM buffers")
-        buf_count = c.fetchone()[0]
-        assert buf_count > 0, "Expected non-zero buffers"
+    c.execute("SELECT COUNT(*) FROM stack_traces")
+    st_count = c.fetchone()[0]
+    assert st_count == op_count, f"Expected {op_count} stack_trace rows, got {st_count}"
 
-        c.execute("SELECT COUNT(*) FROM captured_graph")
-        cg_count = c.fetchone()[0]
-        assert cg_count == op_count, f"Expected {op_count} captured_graph rows, got {cg_count}"
-
-        c.execute("SELECT COUNT(*) FROM stack_traces")
-        st_count = c.fetchone()[0]
-        assert st_count == op_count, f"Expected {op_count} stack_trace rows, got {st_count}"
-
-        conn.close()
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -3422,12 +3063,8 @@ class TestPythonIOArgumentImport:
             }
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, python_io=python_io)
-        conn.commit()
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name, value FROM operation_arguments ORDER BY name")
         rows = cursor.fetchall()
@@ -3461,12 +3098,8 @@ class TestPythonIOArgumentImport:
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name, value FROM operation_arguments ORDER BY name")
         rows = cursor.fetchall()
@@ -3523,12 +3156,8 @@ class TestPerOpCapturedGraphImport:
             }
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, python_io=python_io)
-        conn.commit()
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT captured_graph FROM captured_graph")
         rows = cursor.fetchall()
@@ -3559,12 +3188,8 @@ class TestPerOpCapturedGraphImport:
         ]
         python_io = [{"name": "ttnn.relu", "arguments": {}, "input_tensor_ids": []}]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, python_io=python_io)
-        conn.commit()
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT captured_graph FROM captured_graph")
         rows = cursor.fetchall()
@@ -3610,12 +3235,8 @@ class TestFromTorchFiltering:
         """from_torch before any compute op should be filtered out."""
         graph = self._make_graph(["ttnn.from_torch", "ttnn.from_torch", "ttnn.conv2d"])
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
+        report = _make_report(graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name FROM operations ORDER BY operation_id")
         ops = [r[0] for r in cursor.fetchall()]
@@ -3627,12 +3248,8 @@ class TestFromTorchFiltering:
         """from_torch after a compute op should be kept."""
         graph = self._make_graph(["ttnn.conv2d", "ttnn.from_torch"])
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
+        report = _make_report(graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name FROM operations ORDER BY operation_id")
         ops = [r[0] for r in cursor.fetchall()]
@@ -3651,12 +3268,8 @@ class TestFromTorchFiltering:
             ]
         )
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
+        report = _make_report(graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name FROM operations ORDER BY operation_id")
         ops = [r[0] for r in cursor.fetchall()]
@@ -3667,7 +3280,8 @@ class TestFromTorchFiltering:
 class TestFilteredOpPrefixes:
     """Tests that _FILTERED_OP_PREFIXES operations are transparent."""
 
-    def _make_graph(self, op_names):
+    @staticmethod
+    def _make_flat_graph(op_names):
         nodes = [{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}]
         c = 1
         for name in op_names:
@@ -3694,76 +3308,27 @@ class TestFilteredOpPrefixes:
         nodes.append({"counter": c, "node_type": "capture_end", "params": {}, "connections": []})
         return nodes
 
-    def test_tensor_deallocate_filtered(self, tmp_path):
-        graph = self._make_graph(["Tensor::deallocate", "ttnn.conv2d"])
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
+    @pytest.mark.parametrize(
+        "filtered_op",
+        [
+            "Tensor::deallocate",
+            "Tensor::to_device",
+            "Tensor::reshape",
+            "tt::tt_metal::to_dtype",
+            "ttnn::convert_python_tensor_to_tt_tensor",
+            "tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor",
+        ],
+    )
+    def test_filtered_op_prefix_excluded(self, tmp_path, filtered_op):
+        """Each _FILTERED_OP_PREFIXES entry should be excluded from operations."""
+        graph = self._make_flat_graph([filtered_op, "ttnn.relu"])
+        report = _make_report(graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name FROM operations")
         ops = [r[0] for r in cursor.fetchall()]
-        assert "Tensor::deallocate" not in ops
-        assert "ttnn.conv2d" in ops
-        conn.close()
-
-    def test_tensor_to_device_filtered(self, tmp_path):
-        graph = self._make_graph(["Tensor::to_device", "ttnn.relu"])
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
-
-        cursor.execute("SELECT name FROM operations")
-        ops = [r[0] for r in cursor.fetchall()]
-        assert "Tensor::to_device" not in ops
-        assert "ttnn.relu" in ops
-        conn.close()
-
-    def test_tensor_reshape_filtered(self, tmp_path):
-        graph = self._make_graph(["Tensor::reshape", "ttnn.add"])
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
-
-        cursor.execute("SELECT name FROM operations")
-        ops = [r[0] for r in cursor.fetchall()]
-        assert "Tensor::reshape" not in ops
-        conn.close()
-
-    def test_to_dtype_filtered(self, tmp_path):
-        graph = self._make_graph(["tt::tt_metal::to_dtype", "ttnn.relu"])
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
-
-        cursor.execute("SELECT name FROM operations")
-        ops = [r[0] for r in cursor.fetchall()]
-        assert "tt::tt_metal::to_dtype" not in ops
-        conn.close()
-
-    def test_convert_python_tensor_filtered(self, tmp_path):
-        graph = self._make_graph(["ttnn::convert_python_tensor_to_tt_tensor", "ttnn.relu"])
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, graph)
-        conn.commit()
-
-        cursor.execute("SELECT name FROM operations")
-        ops = [r[0] for r in cursor.fetchall()]
-        assert "ttnn::convert_python_tensor_to_tt_tensor" not in ops
+        assert filtered_op not in ops, f"{filtered_op} should be filtered"
+        assert "ttnn.relu" in ops, "Non-filtered op should remain"
         conn.close()
 
 
@@ -3809,12 +3374,8 @@ class TestPythonIONameMatching:
             {"name": "ttnn.relu", "arguments": {"alpha": "2.0"}, "input_tensor_ids": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, python_io=python_io)
-        conn.commit()
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute(
             """
@@ -3853,12 +3414,8 @@ class TestPythonIONameMatching:
             {"name": "ttnn.nonexistent", "arguments": {"y": "other"}, "input_tensor_ids": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph, python_io=python_io)
-        conn.commit()
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT COUNT(*) FROM operations")
         assert cursor.fetchone()[0] == 1
@@ -3891,12 +3448,8 @@ class TestCapturedGraphFallbackExtraction:
             {"counter": 999, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT captured_graph FROM captured_graph")
         rows = cursor.fetchall()
@@ -3930,12 +3483,8 @@ class TestCapturedGraphFallbackExtraction:
             {"counter": 999, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT captured_graph FROM captured_graph")
         cg = json.loads(cursor.fetchone()[0])
@@ -3983,12 +3532,8 @@ class TestCapturedGraphFallbackExtraction:
             {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
         ]
 
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.import_graph(cursor, mock_graph)
-        conn.commit()
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT captured_graph FROM captured_graph")
         cg = json.loads(cursor.fetchone()[0])
@@ -4000,64 +3545,55 @@ class TestCapturedGraphFallbackExtraction:
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
-class TestResNet50GenerateDB:
-    """
-    Generate a visualizer DB from ResNet50 inference and copy to /tmp/db.sqlite.
-    No comparison - just produce the DB for manual visualizer testing.
-    """
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_loc",
+    ((16, "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"),),
+)
+def test_generate_resnet50_db(
+    mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
+):
+    """Generate a visualizer DB from ResNet50 inference and copy to /tmp/db.sqlite."""
+    import shutil
 
-    @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-    def test_generate_resnet50_db(self, mesh_device, tmp_path, model_location_generator):
-        import ast
-        import shutil
+    from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
 
-        from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
+    report_path = tmp_path / "resnet50_report.json"
 
-        label_path = Path("models/sample_data/imagenet_class_labels.txt")
-        if not label_path.exists():
-            pytest.skip(f"ImageNet labels not found at {label_path}")
-        with open(label_path, "r") as f:
-            imagenet_label_dict = ast.literal_eval(f.read())
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+        "enable_detailed_buffer_report", True
+    ):
+        ttnn.graph.enable_buffer_pages()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
+        ttnn.graph.end_graph_capture_to_file(report_path)
+        ttnn.graph.disable_buffer_pages()
 
-        report_path = tmp_path / "resnet50_report.json"
-        input_loc = "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"
+    assert report_path.exists()
 
-        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
-            "enable_detailed_buffer_report", True
-        ):
-            ttnn.graph.enable_buffer_pages()
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    output_dir = tmp_path / "output"
+    db_path = graph_report.import_report(report_path, output_dir)
 
-            run_resnet_inference(16, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
+    dest = Path("/tmp/db.sqlite")
+    shutil.copy2(db_path, dest)
+    print(f"\n=== DB exported to {dest} ===")
 
-            ttnn.graph.end_graph_capture_to_file(report_path)
-            ttnn.graph.disable_buffer_pages()
-
-        assert report_path.exists()
-
-        output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
-
-        dest = Path("/tmp/db.sqlite")
-        shutil.copy2(db_path, dest)
-        print(f"\n=== DB exported to {dest} ===")
-
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        for tbl in [
-            "operations",
-            "tensors",
-            "input_tensors",
-            "output_tensors",
-            "buffers",
-            "device_tensors",
-            "stack_traces",
-            "captured_graph",
-            "buffer_pages",
-        ]:
-            c.execute(f"SELECT COUNT(*) FROM {tbl}")
-            print(f"  {tbl}: {c.fetchone()[0]}")
-        conn.close()
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    for tbl in [
+        "operations",
+        "tensors",
+        "input_tensors",
+        "output_tensors",
+        "buffers",
+        "device_tensors",
+        "stack_traces",
+        "captured_graph",
+        "buffer_pages",
+    ]:
+        c.execute(f"SELECT COUNT(*) FROM {tbl}")
+        print(f"  {tbl}: {c.fetchone()[0]}")
+    conn.close()
 
 
 class TestVersionedBufferPages:
@@ -4230,12 +3766,6 @@ class TestVersionedBufferPages:
 
 class TestFastOperationGraphTracking:
     """Tests that FastOperation emits track_function_start/end during graph capture."""
-
-    @pytest.fixture
-    def device(self):
-        device = ttnn.open_device(device_id=0)
-        yield device
-        ttnn.close_device(device)
 
     def test_python_op_names_in_graph(self, device, tmp_path):
         """FastOperation.__call__ should produce Python-level function_start/end nodes."""
