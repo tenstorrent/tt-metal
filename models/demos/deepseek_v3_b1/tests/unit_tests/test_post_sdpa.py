@@ -24,7 +24,7 @@ The mcast grid (13x10=130 cores) includes 18 inactive cores that receive mcast d
 but skip matmul2 via is_matmul2_core=false (col 12 rows 0-8 + row 9 cols 4-11).
 
 Core Layout:
-- SDPA Workers: (2,8)-(5,8), (2,9)-(5,9) = 8 cores
+- SDPA Workers: FlashMLADecode.output_cores(0, SDPA_INPUT_NUM_CORES)
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
 - TP All-Reduce Receiver = Gather core (12, 9): already has local data after Gather2
 - TP All-Reduce Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
@@ -40,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
 
 
@@ -104,7 +105,7 @@ def compute_forwarder_scratch_size(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -119,6 +120,7 @@ def compute_forwarder_scratch_size(
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
 @pytest.mark.parametrize("ccl_enabled", [True, False], ids=["ccl_on", "ccl_off"])
+@pytest.mark.requires_grid_size((13, 10))
 def test_post_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
@@ -581,7 +583,7 @@ def test_post_sdpa(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -595,6 +597,8 @@ def test_post_sdpa(
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("fuse_residual_add", [False])
+@pytest.mark.parametrize("position_id", [500, 1500, 2500, 3500], ids=["pos500", "pos1500", "pos2500", "pos3500"])
+@pytest.mark.requires_grid_size((13, 10))
 def test_post_sdpa_with_sdpa_phase(
     bh_2d_mesh_device,
     mesh_rows,
@@ -608,6 +612,7 @@ def test_post_sdpa_with_sdpa_phase(
     in1_dtype,
     cluster_axis,
     fuse_residual_add,
+    position_id,
 ):
     """Test post_sdpa fused operation with SDPA reduce-to-all phase enabled"""
 
@@ -648,6 +653,7 @@ def test_post_sdpa_with_sdpa_phase(
     SDPA_L_HEIGHT = 8  # 8 rows in L tensor (matches 8x32 tile)
     SDPA_L_WIDTH = 512 * NUM_SDPA_WORKERS  # 512 per worker = 4096 total
     SDPA_MS_WIDTH = 32 * NUM_SDPA_WORKERS  # 32 per worker = 256 total
+    per_device_chunk_size = 1024
 
     # Per-core dimensions
     n1_per_core = intermediate // num_matmul1_cores  # 8192 / 64 = 128
@@ -673,12 +679,9 @@ def test_post_sdpa_with_sdpa_phase(
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-    # SDPA worker grid: 8 cores at (2,8)-(5,8), (2,9)-(5,9)
+    sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
     sdpa_worker_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(2, 8), ttnn.CoreCoord(5, 8)),  # 4 cores
-            ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),  # 4 cores
-        ]
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
     )
 
     # SDPA forwarder cores
@@ -753,6 +756,8 @@ def test_post_sdpa_with_sdpa_phase(
             ring_m_data,
             num_cores=NUM_SDPA_WORKERS,
             scale_value=1.0,
+            position_id=position_id,
+            per_device_chunk_size=per_device_chunk_size,
         )
         sdpa_l_reduced_per_col[col] = l_reduced  # [8, 4096]
         logger.info(f"SDPA golden for column {col}: L_reduced shape {l_reduced.shape}")
@@ -1083,10 +1088,24 @@ def test_post_sdpa_with_sdpa_phase(
     # SDPA global semaphores - must be created on the SDPA worker grid (like original SDPA op)
     sdpa_semaphore1 = ttnn.create_global_semaphore(submesh, sdpa_worker_grid, 0)
     sdpa_semaphore2 = ttnn.create_global_semaphore(submesh, sdpa_worker_grid, 0)
-    # SDPA global semaphores
-    # sdpa_semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    # sdpa_semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
     sdpa_semaphores = [sdpa_semaphore1, sdpa_semaphore2]
+
+    # ========================================================================
+    # Create position_id tensor mesh for SDPA position validity
+    # HEIGHT_SHARDED int32 [1,1] per SDPA worker core, replicated across mesh
+    # ========================================================================
+    position_data = torch.full((NUM_SDPA_WORKERS, 1), position_id, dtype=torch.int32)
+    pos_shard_spec = ttnn.ShardSpec(sdpa_worker_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR)
+    pos_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, pos_shard_spec)
+    position_id_tensor_mesh = ttnn.from_torch(
+        position_data,
+        device=submesh,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=pos_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    logger.info(f"Created position_id tensor: position_id={position_id}, per_device_chunk_size={per_device_chunk_size}")
 
     # ========================================================================
     # Run fused operation with SDPA
@@ -1116,6 +1135,8 @@ def test_post_sdpa_with_sdpa_phase(
         sdpa_scale_fp32=1.0,
         sdpa_forwarder_cores=sdpa_forwarder_cores,
         sdpa_cluster_axis=0,  # SDPA reduces on axis 0 (rows), TP reduces on axis 1 (cols)
+        sdpa_position_id_tensor_mesh=position_id_tensor_mesh,
+        sdpa_per_device_chunk_size=per_device_chunk_size,
     )
     ttnn.synchronize_device(submesh)
 

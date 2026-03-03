@@ -566,44 +566,6 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
-static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
-    Program& program,
-    const ccl::EriscDatamoverBuilder& edm_builder,
-    const std::string& kernel_path,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id,
-    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
-    edm_builder.dump_to_log();
-
-    const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
-    // Ethernet Kernels
-    const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
-    log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
-    log_trace(tt::LogOp, "CT ARGS:");
-    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
-        log_trace(tt::LogOp, "\t{}", s);
-    }
-
-    auto kernel_config =
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
-    if (opt_level.has_value()) {
-        kernel_config.opt_level = opt_level.value();
-    }
-    auto eth_sender_kernel = tt::tt_metal::CreateKernel(program, kernel_path, eth_core, kernel_config);
-
-    tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
-
-    std::stringstream ss;
-    ss << "EDM ARGS:\n";
-    for (const auto& s : edm_kernel_rt_args) {
-        ss << "\t" << s << "\n";
-    }
-    log_trace(tt::LogOp, "{}", ss.str());
-
-    return eth_sender_kernel;
-}
-
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
     const IDevice* /*device*/,
@@ -611,13 +573,18 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
-    return generate_edm_kernel_impl(
-        program,
-        edm_builder,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
-        eth_core,
-        risc_id,
-        noc_id);
+    edm_builder.dump_to_log();
+    return tt::tt_fabric::generate_erisc_datamover_kernel(tt::tt_fabric::FabricEriscDatamoverKernelConfig{
+        .program = program,
+        .kernel_path = "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+        .eth_core = eth_core,
+        .risc_id = risc_id,
+        .noc_id = noc_id,
+        .compile_time_args = edm_builder.get_compile_time_args((uint32_t)risc_id),
+        .named_compile_time_args = {},
+        .runtime_args = edm_builder.get_runtime_args(),
+        .opt_level = std::nullopt,
+    });
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(

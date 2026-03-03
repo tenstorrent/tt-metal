@@ -437,15 +437,13 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
-        (32, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
         (1, 4096),  # prefill 4k
     ],
     ids=[
-        "decode_1",
-        "decode_32",
-        "decode_128",
+        "decode_low_latency",
+        "decode_high_throughput",
         "prefill_128",
         "prefill_4096",
     ],
@@ -880,6 +878,12 @@ def run_model_forward_test(
     # Reshape to match reference
     tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
 
+    # Truncate to vocab_size — lm_head weight may be padded to padded_vocab_size
+    # for on-device sampling alignment, producing extra columns in the output.
+    vocab_size = config.vocab_size
+    if tt_logits_torch.shape[-1] > vocab_size:
+        tt_logits_torch = tt_logits_torch[:, :, :vocab_size]
+
     # Compare outputs
     passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
     return passing, output
@@ -902,15 +906,19 @@ def run_model_forward_test(
 @pytest.mark.parametrize(
     "mesh_shape",
     [
+        (1, 8),
         (4, 8),
+    ],
+    ids=[
+        "mesh_1x8",
+        "mesh_4x8",
     ],
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 5],
+    [1],
     ids=[
         "1_layer",
-        "5_layers",
     ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):

@@ -525,6 +525,43 @@ TEST_F(TopologySolverTest, ConstraintIndexDataBasic) {
     EXPECT_TRUE(candidates_1.empty());  // Empty means all are valid
 }
 
+TEST_F(TopologySolverTest, ConstraintIndexDataForbiddenWithoutRestrictions) {
+    using namespace tt::tt_fabric::detail;
+
+    // Target with no required constraints + forbidden pairs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // No required constraints; add forbidden pair (1, 10)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_forbidden_constraint(1, 10);
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Target 1 (index 0): restricted empty, forbidden includes global 10 (index 0)
+    EXPECT_TRUE(constraint_data.restricted_global_indices[0].empty());
+    EXPECT_EQ(constraint_data.forbidden_global_indices[0].size(), 1u);
+    EXPECT_EQ(constraint_data.forbidden_global_indices[0][0], 0u);
+
+    // is_valid_mapping: (0, 0) forbidden, (0, 1) valid
+    EXPECT_FALSE(constraint_data.is_valid_mapping(0, 0));  // Target 1 -> Global 10: forbidden
+    EXPECT_TRUE(constraint_data.is_valid_mapping(0, 1));   // Target 1 -> Global 11: valid
+
+    // Target 2 (index 1): no restrictions, no forbidden
+    EXPECT_TRUE(constraint_data.forbidden_global_indices[1].empty());
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 0));
+    EXPECT_TRUE(constraint_data.is_valid_mapping(1, 1));
+}
+
 TEST_F(TopologySolverTest, ConstraintIndexDataTraitConstraints) {
     using namespace tt::tt_fabric::detail;
 
@@ -2856,6 +2893,54 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenContradiction) {
     // Verify the constraint is still valid after the failed attempt
     EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
     EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenWithoutSeeding) {
+    // Test add_forbidden_constraint when target has NO valid_mappings_ entry (no required constraints).
+    // Forbidden pairs are stored in forbidden_pairs_ and applied without seeding.
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    // No add_required_constraint - valid_mappings_ is empty for all targets
+
+    // Add forbidden constraint for target 1 -> global 10 (no valid_mappings_ for target 1)
+    EXPECT_TRUE(constraints.add_forbidden_constraint(1, 10));
+
+    // Verify forbidden_pairs_ was populated
+    const auto& forbidden = constraints.get_forbidden_pairs();
+    EXPECT_EQ(forbidden.size(), 1u);
+    EXPECT_TRUE(forbidden.count({1, 10}) == 1u);
+
+    // Verify is_valid_mapping rejects the forbidden pair
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 11));  // Other mappings still valid
+}
+
+TEST_F(TopologySolverTest, SolveWithForbiddenConstraintsOnlyNoSeeding) {
+    // Solve topology mapping with ONLY forbidden constraints (no required constraints).
+    // Verifies add_forbidden_constraint works without seeding valid_mappings_.
+    using namespace tt::tt_fabric;
+
+    // Target graph: 1 -- 2 (2 nodes, edge between them)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Global graph: 10 -- 11 (2 nodes, same structure)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // No required constraints - only forbidden
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_forbidden_constraint(1, 10);  // Target 1 cannot map to global 10
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Mapping with forbidden-only constraints should succeed";
+    // Target 1 must map to 11 (10 is forbidden), target 2 must map to 10
+    EXPECT_EQ(result.target_to_global.at(1), 11) << "Target 1 should map to 11 (10 is forbidden)";
+    EXPECT_EQ(result.target_to_global.at(2), 10) << "Target 2 should map to 10";
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsForbiddenAfterTrait) {

@@ -127,6 +127,7 @@ target_sources(
         core/config.cpp
         core/core.cpp
         core/device.cpp
+        core/device_operation_detail.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
         core/distributed/distribution_mode.cpp
@@ -434,6 +435,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
 )
 
@@ -484,6 +486,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
 ##################################################
@@ -547,6 +550,7 @@ target_sources(
             api/ttnn/decorators.hpp
             api/ttnn/device.hpp
             api/ttnn/device_operation.hpp
+            api/ttnn/device_operation_detail.hpp
             api/ttnn/distributed/api.hpp
             api/ttnn/distributed/bidirectional_fabric_socket.hpp
             api/ttnn/distributed/create_socket.hpp
