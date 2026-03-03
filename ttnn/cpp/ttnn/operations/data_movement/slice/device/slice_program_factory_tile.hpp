@@ -27,10 +27,7 @@ struct SliceTileProgramFactory {
         cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const SliceParams& args,
-        const SliceInputs& tensor_args,
-        Tensor& output,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+        const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
 }  // namespace ttnn::prim
