@@ -163,4 +163,77 @@ FORCE_INLINE void add_tiles_in1_compressed(uint32_t cb_in0, uint32_t addr_a, uin
     }));
 }
 
+// ---------------------------------------------------------------------------
+// Matmul with compressed in1 (weights)
+//
+// In matmul: in0 (activations) → srcB, in1 (weights) → srcA (swapped!)
+// So compressed weights need reconfig_unpack_srca, not srcb.
+// These APIs use explicit addresses for the compressed weight tiles.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Matmul one A tile with one compressed B tile at explicit addresses.
+ *
+ * Calls _llk_unpack_AB_matmul_ with explicit base addresses and tile sizes.
+ * The caller must:
+ *   1. Call reconfig_unpack_srca() before this for the correct B format
+ *   2. Call mm_init_short() once before the matmul loop
+ *
+ * @param addr_a Base address of A (in0, activations, srcB) in shifted units
+ * @param addr_b Address of compressed B tile (in1, weights, srcA) in shifted units
+ * @param tile_index_a Tile index within A (along K dimension)
+ * @param tile_size_a Page size of A tiles in shifted units
+ * @param tile_size_b Size of compressed B tile in shifted units
+ * @param partial_face_a Whether in1 (srcA/weights) has partial face
+ * @param partial_face_b Whether in0 (srcB/activations) has partial face
+ * @param dst_index Destination register index (output column)
+ */
+/**
+ * @brief Matmul one A tile with one compressed B tile.
+ *
+ * Reads the format from the assignment array, skips bfp0 tiles,
+ * reconfigures srcA unpacker, then does unpack + math.
+ * Returns the compressed tile size in shifted units (0 for bfp0).
+ *
+ * @param assign_ptr Pointer to packed 2-bit assignment array
+ * @param tile_idx Linear tile index in row-major order
+ * @param addr_a Base address of A (in0, activations, srcB) in shifted units
+ * @param addr_b Address of compressed B tile (in1, weights, srcA) in shifted units
+ * @param tile_index_a Tile index within A (along K dimension)
+ * @param tile_size_a Page size of A tiles in shifted units
+ * @param partial_face_a Whether in1 (srcA/weights) has partial face
+ * @param partial_face_b Whether in0 (srcB/activations) has partial face
+ * @param dst_index Destination register index (output column)
+ * @return Tile size in shifted units (for advancing addr_b)
+ */
+FORCE_INLINE uint32_t matmul_tiles_in1_compressed(
+    const volatile uint8_t* assign_ptr,
+    uint32_t tile_idx,
+    uint32_t addr_a,
+    uint32_t addr_b,
+    uint32_t tile_index_a,
+    uint32_t tile_size_a,
+    bool partial_face_a,
+    bool partial_face_b,
+    uint32_t dst_index) {
+    uint32_t fmt = get_tile_format(assign_ptr, tile_idx);
+    uint32_t tile_size_b = TILE_SIZES[fmt] >> cb_addr_shift;
+
+    if (fmt != FMT_BFP0) {
+        reconfig_unpack_srca(fmt);
+        UNPACK((_llk_unpack_AB_matmul_(
+            addr_a,
+            addr_b,
+            tile_index_a,
+            0,  // tile_index_b: addr_b already points to the tile
+            tile_size_a,
+            tile_size_b,
+            partial_face_a,
+            partial_face_b)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(dst_index)));
+    }
+
+    return tile_size_b;
+}
+
 }  // namespace compressed
