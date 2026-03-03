@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,7 @@
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
+#include "debug_helpers.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -61,19 +63,8 @@ namespace {  // Helper functions
 const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor_index) {
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            static const char* const names[] = {
-                " brisc",
-                "ncrisc",
-                "trisc0",
-                "trisc1",
-                "trisc2",
-            };
-            TT_FATAL(
-                processor_index < 5,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
-                processor_index,
-                core_type);
-            return names[processor_index];
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
         case HalProgrammableCoreType::ACTIVE_ETH: {
             static const char* const names[] = {"erisc", "subordinate_erisc"};
@@ -213,6 +204,10 @@ string get_l1_target_str(
 
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
+    TT_FATAL(
+        launch_msg_read_ptr < mbox_data.launch().size(),
+        "No launch message found at read pointer {}. Was TT-Metalium initialized on this system?",
+        launch_msg_read_ptr);
     if (mbox_data.launch()[launch_msg_read_ptr].kernel_config().enables() == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + dev_msgs::launch_msg_buffer_num_entries) %
                               dev_msgs::launch_msg_buffer_num_entries;
@@ -719,6 +714,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (ethernet send with L1 source overflow).";
             break;
+        case dev_msgs::DebugSanitizeCBOutOfBounds:
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (NOC transaction overflows a circular buffer).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -755,54 +754,16 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     }
     std::string error_msg =
         fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status.which()));
-    switch (assert_status.tripped()) {
-        case dev_msgs::DebugAssertTripped: {
-            error_msg += fmt::format("tripped an assert on line {}.", assert_status.line_num());
-            // TODO: Get rid of this once #6098 is implemented.
-            error_msg +=
-                " Note that file name reporting is not yet implemented, and the reported line number for the assert "
-                "may be from a different file.";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC reads flushed barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC non-posted writes sent barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC non-posted atomics flushed barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped: {
-            error_msg +=
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC posted writes sent barrier).";
-            break;
-        }
-        case dev_msgs::DebugAssertRtaOutOfBounds: {
-            error_msg += "accessed unique runtime arg index out of bounds.";
-            break;
-        }
-        case dev_msgs::DebugAssertCrtaOutOfBounds: {
-            error_msg += "accessed common runtime arg index out of bounds.";
-            break;
-        }
-        default:
-            LogRunningKernels();
-            TT_THROW(
-                "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
-                virtual_coord_.str(),
-                assert_status.tripped());
+    std::string assert_msg = get_debug_assert_message(
+        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()), assert_status.line_num());
+    if (assert_msg.empty()) {
+        LogRunningKernels();
+        TT_THROW(
+            "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
+            virtual_coord_.str(),
+            assert_status.tripped());
     }
+    error_msg += assert_msg;
     error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status.which()));
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);

@@ -24,11 +24,6 @@ namespace ttnn::prim {
 
 using namespace experimental::ccl;
 
-RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
-    const RingJointSDPAParams& /*args*/, const RingJointSDPAInputs& /*tensor_args*/) {
-    return RingJointSDPAProgramFactory{};
-}
-
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
@@ -53,9 +48,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
-    TT_FATAL(
-        args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
-        "SDPA coregrid overlaps with AllGather coregrid");
+    const auto strategy = args.all_gather_operation_attributes.core_allocation_strategy;
+    if (strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR) {
+        TT_FATAL(
+            args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
+            "SDPA coregrid overlaps with AllGather coregrid (column-major)");
+    } else {
+        TT_FATAL(
+            args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
+            "SDPA coregrid overlaps with AllGather coregrid (row-major)");
+    }
 
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
@@ -299,7 +301,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
-    const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -333,7 +336,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         topology,
         multi_device_global_semaphore,
         subdevice_id,
-        cluster_axis};
+        cluster_axis,
+        core_allocation_strategy};
     auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         {input_tensor_k, input_tensor_v}, {persistent_output_buffer_k, persistent_output_buffer_v}};
 

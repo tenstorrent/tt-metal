@@ -17,7 +17,7 @@ This implements the MoE routed expert computation:
 """
 
 import math
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
@@ -26,6 +26,10 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor
+
+if TYPE_CHECKING:
+    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 
 # Device roles for ReduceToOneB1
 MESH_LEAF = 0
@@ -162,6 +166,7 @@ def setup_dram_matmul(
     cb_in1_index,
     cb_out_index,
     fp32_dest_acc_en,
+    dst_full_sync_en,
     num_subblocks_k,
 ):
     """
@@ -175,6 +180,7 @@ def setup_dram_matmul(
         cb_in1_index: CB index for weights working buffer
         cb_out_index: CB index for output
         fp32_dest_acc_en: Whether FP32 dest accumulation is enabled
+        dst_full_sync_en: Whether full sync is enabled
         num_subblocks_k: Number of K subblocks
 
     Returns:
@@ -197,8 +203,8 @@ def setup_dram_matmul(
     in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
     in1_block_size_bytes = subblock_k * weights_tile_size
 
-    # CB in1: weights working buffer
-    num_in1_buffers = 3 * num_subblocks_k
+    # CB in1: weights working buffer (triple-buffered)
+    num_in1_buffers = 3
     assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
     in1_CB_tiles = subblock_k * num_in1_buffers
     in1_CB_size = in1_CB_tiles * weights_tile_size
@@ -220,10 +226,16 @@ def setup_dram_matmul(
     cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
 
     # Calculate subblock_w based on fp32_dest_acc_en and per_core_n
-    if fp32_dest_acc_en:
-        max_subblock_w = 8 if per_core_n <= 8 else 4
-    else:
-        max_subblock_w = 16 if per_core_n <= 16 else 8
+    if dst_full_sync_en and fp32_dest_acc_en:
+        max_dest = 8
+    elif dst_full_sync_en and not fp32_dest_acc_en:
+        max_dest = 16
+    elif not dst_full_sync_en and fp32_dest_acc_en:
+        max_dest = 4
+    elif not dst_full_sync_en and not fp32_dest_acc_en:
+        max_dest = 8
+
+    max_subblock_w = min(max_dest, per_core_n)
 
     subblock_w = max_subblock_w
     while subblock_w > 1 and per_core_n % subblock_w != 0:
@@ -425,7 +437,7 @@ def setup_sram_matmul(
     in0_cb,
     in1_cb,
     out_cb,
-    weights_tensor,
+    weights_overlapped: "OverlappedTensor",
     output_tensor,
     k_num_tiles,
     fused_activation=0,
@@ -434,13 +446,13 @@ def setup_sram_matmul(
     Set up parameters for an SRAM matmul operation.
 
     SRAM matmul computes: output = input @ weights with optional fused activation.
-    Weights and output are sharded in L1 (SRAM).
+    Weights are provided as an OverlappedTensor backed by a fused device buffer.
 
     Args:
         in0_cb: Input CB index (receives mcasted input)
         in1_cb: Weights CB index
         out_cb: Output CB index
-        weights_tensor: Weight tensor (WIDTH_SHARDED in L1)
+        weights_overlapped: OverlappedTensor describing the weights sub-tensor
         output_tensor: Output tensor (WIDTH_SHARDED in L1)
         k_num_tiles: K dimension in tiles
         fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
@@ -448,17 +460,12 @@ def setup_sram_matmul(
     Returns:
         Dictionary with matmul parameters and CB descriptors
     """
-    # Get per-core output width in tiles from weights tensor
-    weights_tile = weights_tensor.get_tile()
-    weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
-    weights_shard_width = weights_shard_shape[1]
-    out_w = weights_shard_width // weights_tile.tile_shape[1]
-
-    # Get core grid from weights tensor
-    core_grid = weights_tensor.memory_config().shard_spec.grid
-
-    # CB descriptors
-    weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_tensor)
+    tile = ttnn.Tile(weights_overlapped.tile_shape)
+    shard_width = weights_overlapped.shard_shape[1]
+    out_w = shard_width // tile.tile_shape[1]
+    core_grid = weights_overlapped.core_range_set
+    fused_tensor_device0 = ttnn.get_device_tensors(weights_overlapped.fused_tensor)[0]
+    weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(in1_cb, weights_overlapped, fused_tensor_device0)
     output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
 
     return {
@@ -917,6 +924,12 @@ class MoeRoutedExpert:
         mcast_data_sender_semaphore_id = 0
         mcast_data_receiver_semaphore_id = 1
 
+        gate_proj_fp32_dest_acc_en = 0
+        up_proj_fp32_dest_acc_en = 0
+        mul_fp32_dest_acc_en = 0
+        down_proj_fp32_dest_acc_en = 0
+        dst_full_sync_en = False
+
         # CB indices
         input_cb = 0  # Input tensor (sharded on sender core)
         gate_mm_input_cb = 1  # Mcast destination CB (receives input on all cores) - also used as expert matmul input
@@ -958,6 +971,7 @@ class MoeRoutedExpert:
         reduce_output_cb = 29  # Final reduced output
         reduce_scratch_cb = 30  # Scratch for compute
         reduce_packet_cb = 31  # Scratch for sending packets
+        reduce_packet_header_cb = 32  # Packet header (persistent)
 
         # Determine if reduce_to_one is enabled (4x2 mesh mode)
         enable_reduce_to_one = (
@@ -990,7 +1004,7 @@ class MoeRoutedExpert:
             in0_cb=gate_mm_input_cb,
             in1_cb=gate_mm_weights_cb,
             out_cb=gate_mm_output_cb,
-            weights_tensor=gate_mm_weights_tensor,
+            weights_overlapped=gate_mm_weights_tensor,
             output_tensor=gate_mm_output_tensor,
             k_num_tiles=num_tiles_k,
             fused_activation=MoeRoutedExpert.ACTIVATION_SIGMOID,
@@ -1057,7 +1071,7 @@ class MoeRoutedExpert:
 
         # Index mcast parameters
         index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+        index_mcast_receiver_semaphore_id = 4
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -1069,7 +1083,7 @@ class MoeRoutedExpert:
 
         # Expert scale mcast parameters (different semaphores to avoid race condition with back-to-back mcasts)
         expert_scale_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        expert_scale_mcast_receiver_semaphore_id = 4  # Different from index_mcast
+        expert_scale_mcast_receiver_semaphore_id = 5  # Different from index_mcast
         expert_scale_mcast_num_pages = 1
         expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
@@ -1081,7 +1095,8 @@ class MoeRoutedExpert:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=gate_proj_fp32_dest_acc_en,
+            dst_full_sync_en=dst_full_sync_en,
             num_subblocks_k=4,
         )
         gate_proj_cb_in1_descriptor = gate_proj_params["cb_in1_descriptor"]
@@ -1095,7 +1110,8 @@ class MoeRoutedExpert:
             core_ranges=gate_proj_core_ranges,  # Same cores as gate_proj
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,  # Write to intermediate CB
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=up_proj_fp32_dest_acc_en,
+            dst_full_sync_en=dst_full_sync_en,
             num_subblocks_k=4,
         )
         up_proj_cb_in1_descriptor = up_proj_params["cb_in1_descriptor"]
@@ -1176,7 +1192,8 @@ class MoeRoutedExpert:
             core_ranges=gate_proj_core_ranges,  # Same cores as gate_proj/up_proj
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
-            fp32_dest_acc_en=True,  # Use FP32 accumulation for down_proj
+            fp32_dest_acc_en=down_proj_fp32_dest_acc_en,  # Use FP32 accumulation for down_proj
+            dst_full_sync_en=dst_full_sync_en,
             num_subblocks_k=2,
         )
         down_proj_cb_in1_descriptor = down_proj_params["cb_in1_descriptor"]
@@ -1302,6 +1319,19 @@ class MoeRoutedExpert:
                 "core_to_shard_idx": reduce_core_to_shard_idx,
                 "output_core": reduce_output_core,
             }
+
+        # Create global semaphores for reduce worker→fabric signaling
+        if enable_reduce_to_one:
+            reduce_worker_fabric_sem_cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+            )
+            reduce_worker_fabric_global_sems = [
+                ttnn.create_global_semaphore(mesh_device, reduce_worker_fabric_sem_cores, 0)
+                for _ in range(reduce_params["num_workers_per_column"])
+            ]
+            reduce_worker_fabric_sem_addrs = [
+                ttnn.get_global_semaphore_address(s) for s in reduce_worker_fabric_global_sems
+            ]
 
         # Helper to create NCRISC compile-time args with chip-specific mesh_chip_id
         def create_ncrisc_compile_time_args(mesh_chip_id: int) -> list:
@@ -1507,7 +1537,7 @@ class MoeRoutedExpert:
             ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
             ("gate_proj_tile_r_dim", gate_proj_params["tile_r_dim"]),
             ("gate_proj_fuse_silu", 1),  # Always use SiLU for expert computation
-            ("gate_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for gate_proj
+            ("gate_proj_fp32_dest_acc_en", gate_proj_fp32_dest_acc_en),  # Use FP32 accumulation for gate_proj
             # up_proj matmul compute args (compute cores) - writes to intermediate CB
             ("up_proj_cb_in0", gate_mm_params["in0_cb"]),  # Reuses mcasted input (same as gate_proj)
             ("up_proj_cb_in1", up_proj_cb_in1),
@@ -1517,7 +1547,7 @@ class MoeRoutedExpert:
             ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
             ("up_proj_tile_r_dim", up_proj_params["tile_r_dim"]),
             ("up_proj_fuse_silu", 0),  # No SiLU for up_proj
-            ("up_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for up_proj
+            ("up_proj_fp32_dest_acc_en", up_proj_fp32_dest_acc_en),  # Use FP32 accumulation for up_proj
             ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
             # Mul compute args (up_proj * gate_proj * expert_scale -> fused output)
             ("mul_cb_in0", mul_cb_in0),  # up_proj output aliased as 16x16
@@ -1525,7 +1555,7 @@ class MoeRoutedExpert:
             ("mul_cb_out", mul_cb_out),  # final fused output
             ("mul_num_tiles", mul_num_tiles),
             ("mul_cb_scalar", mul_cb_scalar),  # scalar working buffer for expert scale
-            ("mul_fp32_dest_acc_en", 1),  # Use FP32 accumulation for mul
+            ("mul_fp32_dest_acc_en", mul_fp32_dest_acc_en),  # Use FP32 accumulation for mul
             ("up_proj_per_core_n", up_proj_params["per_core_n"]),  # tiles in mm_out format for cb_wait
             # down_proj matmul compute args (compute cores)
             ("down_proj_cb_in0", down_proj_mcast_dst_cb),  # Mcasted fused output
@@ -1537,7 +1567,7 @@ class MoeRoutedExpert:
             ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
             ("down_proj_tile_r_dim", down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),  # No SiLU for down_proj
-            ("down_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for down_proj
+            ("down_proj_fp32_dest_acc_en", down_proj_fp32_dest_acc_en),  # Use FP32 accumulation for down_proj
             # Testing flag: use hardcoded expert index 0 instead of gate output
             ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
             # Eltwise add compute args (down_proj + fused_add)
@@ -1582,6 +1612,12 @@ class MoeRoutedExpert:
 
         gather_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=gather_noc1_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
+
+        index_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=index_mcast_receiver_semaphore_id,
             core_ranges=full_device_grid,
             initial_value=0,
         )
@@ -1740,6 +1776,7 @@ class MoeRoutedExpert:
             mcast_receiver_semaphore_descriptor,
             gather_noc0_semaphore_descriptor,
             gather_noc1_semaphore_descriptor,
+            index_mcast_receiver_semaphore_descriptor,
             expert_scale_mcast_receiver_semaphore_descriptor,
         ]
 
@@ -1747,7 +1784,7 @@ class MoeRoutedExpert:
         io_tensors = [
             input_tensor,
             mcast_output_tensor,
-            gate_mm_weights_tensor,
+            gate_mm_weights_tensor.fused_tensor,
             gate_mm_output_tensor,
             gate_input_tensor,
             gate_bias_tensor,
@@ -1924,6 +1961,21 @@ class MoeRoutedExpert:
                     )
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
+                    # reduce_packet_header_cb (32): persistent packet header storage
+                    reduce_packet_header_size = 96  # Standard packet header size
+                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
+                        total_size=reduce_packet_header_size,
+                        core_ranges=reduce_all_cores_set,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=reduce_packet_header_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=reduce_packet_header_size,
+                            )
+                        ],
+                    )
+                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
+
                     # Destination L1 address depends on role
                     if device_role == MESH_LEAF:
                         dst_l1_addr = r1_tensor.buffer_address()
@@ -1960,6 +2012,7 @@ class MoeRoutedExpert:
                         ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                         ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                         ("reduce_packet_cb", reduce_packet_cb),
+                        ("reduce_packet_header_cb", reduce_packet_header_cb),
                     ]
                     brisc_ct_args.extend(reduce_brisc_ct_args)
 
@@ -1983,8 +2036,6 @@ class MoeRoutedExpert:
                             break
 
                     # Build per-core BRISC args for reduce worker cores
-                    # Semaphore IDs start at 5 to avoid conflicts with existing semaphores (0-5)
-                    reduce_worker_fabric_sem_base = 5
                     reduce_brisc_per_core_args = []
                     for core in reduce_params["worker_cores_list"]:
                         fabric_core = reduce_params["column_to_fabric_core"][core.x]
@@ -1996,7 +2047,7 @@ class MoeRoutedExpert:
                             fabric_core_phys.x,  # fabric_core_noc_x
                             fabric_core_phys.y,  # fabric_core_noc_y
                             slot_idx,  # my_slot_idx
-                            reduce_worker_fabric_sem_base + slot_idx,  # worker_sem_id
+                            reduce_worker_fabric_sem_addrs[slot_idx],  # worker_sem_addr
                             dst_l1_addr,  # dst_l1_addr
                             dst_sem_addr,  # dst_sem_addr
                             out_tensor.buffer_address(),  # output_base_addr
@@ -2004,12 +2055,9 @@ class MoeRoutedExpert:
                         ]
                         reduce_brisc_per_core_args.append((core, worker_args))
 
-                    # Fabric cores BRISC args: worker semaphore IDs
+                    # Fabric cores BRISC args: worker semaphore addresses
                     for fc in reduce_params["fabric_cores"]:
-                        fabric_args = [
-                            reduce_worker_fabric_sem_base + i for i in range(reduce_params["num_workers_per_column"])
-                        ]
-                        reduce_brisc_per_core_args.append((fc, fabric_args))
+                        reduce_brisc_per_core_args.append((fc, list(reduce_worker_fabric_sem_addrs)))
 
                     device_runtime_args_descriptor = PerCoreRuntimeArgsDescriptor(
                         brisc_args=reduce_brisc_per_core_args,
@@ -2041,7 +2089,7 @@ class MoeRoutedExpert:
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
                         fp32_dest_acc_en=False,
-                        dst_full_sync_en=False,
+                        dst_full_sync_en=dst_full_sync_en,
                     ),
                     unified_compile_time_core_descriptors=device_unified_ct_core_descs,
                     per_core_compile_time_descriptors=device_per_core_ct_descs,
@@ -2051,18 +2099,7 @@ class MoeRoutedExpert:
 
                 kernel_result = chip_unified_kernel.get_kernel_descriptors()
 
-                # Add worker→fabric semaphores if reduce is enabled
-                if enable_reduce_to_one:
-                    fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in reduce_params["fabric_cores"]])
-                    reduce_worker_fabric_sem_base = 5
-                    for worker_idx in range(reduce_params["num_workers_per_column"]):
-                        sem_desc = ttnn.SemaphoreDescriptor(
-                            id=reduce_worker_fabric_sem_base + worker_idx,
-                            core_type=ttnn.CoreType.WORKER,
-                            core_ranges=fabric_core_set,
-                            initial_value=0,
-                        )
-                        device_semaphore_descriptors.append(sem_desc)
+                # Worker→fabric semaphores are global (created before the loop)
 
                 # Create program for this device
                 program = ttnn.ProgramDescriptor(

@@ -232,6 +232,9 @@ def run_test_forward_pass_mla2d(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_mla",
+        real_weights=module_path is not None,
+        layer_id=module_path,
     )
     model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
@@ -316,11 +319,6 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 
 
 @pytest.mark.parametrize(
-    "mode, seq_len, batch_size_per_row, decode_position_ids",
-    TEST_CASES,
-    ids=TEST_IDS,
-)
-@pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -328,6 +326,11 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode, seq_len, batch_size_per_row, decode_position_ids",
+    TEST_CASES,
+    ids=TEST_IDS,
 )
 @pytest.mark.parametrize(
     "module_path",

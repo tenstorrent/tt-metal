@@ -37,18 +37,18 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
-    "mode,num_tokens",
-    [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
-    ],
-)
-@pytest.mark.parametrize(
     "device_params",
     [
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode,num_tokens",
+    [
+        ("decode", 128),
+        ("prefill", _prefill_seq_len),
+    ],
 )
 @pytest.mark.parametrize(
     "topk_fallback",
@@ -85,7 +85,14 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
-        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        MoE,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_moe",
+        real_weights=False,
     )
 
     # Generate appropriate config using utility function
@@ -110,9 +117,11 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass using utility function
+    # TTNN forward pass - collective operations handled inside forward functions
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config)
+
+    # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
+    tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

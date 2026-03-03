@@ -23,8 +23,15 @@ from models.common.llama_models import (
     CompletionPrediction,
 )
 
-from models.common.sampling.generator import format_sampling_params
-from models.tt_transformers.tt.generator import SamplingParams
+from models.common.sampling import SamplingParams, format_sampling_params
+from models.common.warmup import WarmupForwardMixin
+
+
+def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
+    """
+    Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    """
+    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -41,7 +48,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
         return 2 ** (seq_len - 1).bit_length()
 
 
-class Generator:
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -78,14 +85,14 @@ class Generator:
         ]
         self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
         self.prev_page_table = None
-        self.prefill_traces_warmup = False
+        self.prefill_warmup_completed = False
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.enable_split_sampling = True
         self.model.enable_internal_trace = self.enable_split_sampling
 
-    def warmup_prefill_traces(
+    def prefill_warmup(
         self,
         tokens: torch.Tensor,
         page_table=None,
@@ -97,21 +104,28 @@ class Generator:
         tt_out_logits_all_users=None,
     ):
         # Avoids an infinite loop
-        self.prefill_traces_warmup = True
+        self.prefill_warmup_completed = True
+
+        # Llama70b always supports on-device sampling from metal
+        sampling_on_device_enabled = True
+
+        # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
+        sampling_parameters_sweeped = False
 
         self.model.switch_mode("prefill")
-        logger.info("Warming up prefill traces for all supported sequence lengths")
-        supported_seqlens = (
-            self.model.tt_ccl.support_seqlens
-        )  # caching because running prefill can switch mode to decode
-        for supported_length in supported_seqlens:
-            logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
+        logger.info("Warming up prefill for all supported sequence lengths up to max sequence length")
+        warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
+        # caching because running prefill can switch mode to decode
+        for warmup_sequence_length in warmup_sequence_lengths:
+            logger.info(f"Creating warmup tensor for sequence length: {warmup_sequence_length}")
             # Capture trace for both
             for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
                 # For batched prefill this needs to be *32
-                if batch == 32 and supported_length == 4096:
-                    # For batched prefill max batch sequence length is 2048 or lower (128k limit)
-                    logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
+                if batch == 32 and warmup_sequence_length >= 4096:
+                    # For batched prefill max batch sequence length is 2048 or lower (128k limit), so we skip warmup for sequence lengths >= 4096
+                    logger.info(
+                        f"Skipping warm up step on batched prefill for sequence length {warmup_sequence_length}"
+                    )
                     continue
                 if batch == 32:
                     current_batch = page_table.shape[0]
@@ -123,21 +137,37 @@ class Generator:
                         warmup_page_table = page_table
                 else:
                     warmup_page_table = page_table
-                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                warmup_tokens = torch.zeros(batch, warmup_sequence_length, dtype=torch.long)
+                warmup_prompt_lens = torch.tensor([warmup_sequence_length] * batch, dtype=torch.long)
                 warmup_empty_slots = list(range(batch))
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    warmup_page_table,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    enable_trace,
-                    sampling_params,
-                    warmup_empty_slots,
-                    tt_out_logits_all_users,
-                )
+
+                if not sampling_parameters_sweeped:
+                    sampling_params_list = self._create_sampling_params(
+                        can_sample_on_device=sampling_on_device_enabled,
+                        non_greedy_decoding_on_device=sampling_on_device_enabled,
+                        batch_size=batch,
+                    )
+                else:
+                    sampling_params_list = [None]
+
+                for sampling_params in sampling_params_list:
+                    logger.info(
+                        f"Warming up prefill sequence length: {warmup_sequence_length} for batch size: {batch} with sampling params: {sampling_params}"
+                    )
+                    self.prefill_forward_text(
+                        warmup_tokens,
+                        warmup_page_table,
+                        kv_cache,
+                        warmup_prompt_lens,
+                        enable_trace,
+                        sampling_params,
+                        warmup_empty_slots,
+                        tt_out_logits_all_users,
+                    )
+                sampling_parameters_sweeped = True
+
         # trace_id_prefill dict check
-        logger.info("Prefill traces warmup completed")
+        logger.info("Prefill warmup completed")
 
     def prefill_forward_text(
         self,
@@ -157,8 +187,8 @@ class Generator:
             x == 0 for x in start_pos
         ), f"Prefix caching is not supported for llama3_70b_galaxy, got start_pos: {start_pos}"
 
-        if self.prefill_traces_warmup is False:
-            self.warmup_prefill_traces(
+        if self.prefill_warmup_completed is False:
+            self.prefill_warmup(
                 tokens,
                 page_table,
                 kv_cache,
@@ -176,7 +206,7 @@ class Generator:
 
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_toks = torch.zeros(batch, 1, 1)
+        output_toks = torch.zeros(batch)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
@@ -281,7 +311,7 @@ class Generator:
                 if use_batched_prefill:
                     # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
                     tt_tok_tensor = torch.stack(tt_tok, dim=0)
-                    output_toks = tt_tok_tensor[empty_slots].reshape(batch, 1, 1)
+                    output_toks = tt_tok_tensor[empty_slots].reshape(batch)
                 else:
                     output_toks[id] = tt_tok
 
@@ -297,6 +327,7 @@ class Generator:
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+        prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
@@ -361,11 +392,16 @@ class Generator:
             if isinstance(tt_sampled, list):
                 tt_sampled = tt_sampled[0]
 
-            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0])
+            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-            output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
+            output_toks = sampled_tensor[empty_slots]
+
+            if tt_log_probs is not None:
+                tt_lp = tt_log_probs
+                log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
+                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -376,6 +412,8 @@ class Generator:
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        if prefill_log_probs is not None:
+            return output_toks, prefill_log_probs
         return output_toks
 
     def prefill_forward_single_user_text(
@@ -501,7 +539,7 @@ class Generator:
 
         return tt_out_trace
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -855,11 +893,11 @@ class Generator:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)
-        self.warmup_prefill_traces(
+        self.prefill_warmup(
             tokens=None,
             page_table=page_table,
             kv_cache=kv_cache,
