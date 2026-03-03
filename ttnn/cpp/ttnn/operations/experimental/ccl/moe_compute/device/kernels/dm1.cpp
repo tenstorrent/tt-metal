@@ -205,8 +205,12 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
-        const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
+        const uint32_t tokens_per_height_shard_chunk = active_tokens / height_shard_dim;
+        const uint32_t tokens_per_height_shard_rem = active_tokens % height_shard_dim;
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
+
+        uint32_t dest_height_shard_start = 0;
+        uint32_t shard_row_start = 0;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Set state for the data writes
@@ -256,9 +260,6 @@ void kernel_main() {
                 }
             }
 
-            const uint32_t dest_height_shard_start = (chunk * tile_height) / max_tokens_per_height_shard;
-            const uint32_t shard_row_start = (chunk * tile_height) % max_tokens_per_height_shard;
-
             uint32_t width_tiles_to_send = output_width_tiles_core;  // 18 or 19
             uint32_t width_tiles_sent = 0;
 
@@ -302,9 +303,16 @@ void kernel_main() {
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
-                    if (++shard_row == max_tokens_per_height_shard) {
+                    if (++shard_row == (dest_height_shard < tokens_per_height_shard_rem)
+                            ? tokens_per_height_shard_chunk + 1
+                            : tokens_per_height_shard_chunk) {
                         ++dest_height_shard;
                         shard_row = 0;
+
+                        if (width_tiles_to_send == width_transfer_tiles) {
+                            ++dest_height_shard_start;
+                            shard_row_start = 0;
+                        }
                     }
                 }
                 width_tiles_sent += width_transfer_tiles;
