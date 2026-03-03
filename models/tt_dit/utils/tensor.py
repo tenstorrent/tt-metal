@@ -224,6 +224,45 @@ def _invert_placements(placements: Sequence[int | None], *, output_rank: int) ->
     return tuple(out)
 
 
+def pad_single(
+    x: ttnn.Tensor,
+    /,
+    *,
+    dim: int,
+    front: int = 0,
+    back: int = 0,
+    value: float = 0.0,
+) -> ttnn.Tensor:
+    """Pad a tensor along a single dimension, working around the `ttnn.pad` dimension restriction."""
+    shape = list(x.shape)
+    rank = len(shape)
+
+    if dim < 0:
+        dim += rank
+
+    if dim < 0 or dim >= rank:
+        msg = f"padding dimension {dim} is out of bounds for tensor with rank {rank}"
+        raise ValueError(msg)
+
+    # From ttnn: "ttnn::pad only supports padding on the lowest 3 dimensions for tensors with rank > 4."
+    # With the way we count, the last three dimensions are supported.
+    if rank <= 4 or dim >= rank - 3:
+        padding = [(0, 0)] * rank
+        padding[dim] = (front, back)
+        return ttnn.pad(x, padding, value=value)
+
+    # The reshapes should be fast, since they preserve the last two dimensions.
+
+    before = math.prod(shape[:dim])
+    x = ttnn.reshape(x, [before, -1, *shape[-2:]])  # reshape to 4d
+
+    v = math.prod(shape[dim + 1 : -2])
+    x = ttnn.pad(x, [(0, 0), (front * v, back * v), (0, 0), (0, 0)], value=value)
+
+    shape[dim] += front + back
+    return ttnn.reshape(x, shape)
+
+
 def upsample(
     x: ttnn.Tensor,
     /,
