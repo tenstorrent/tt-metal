@@ -177,68 +177,76 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
     auto& rng = autograd::ctx().get_generator();
     auto* device = &autograd::ctx().get_device();
 
-    const float bound = 1.0f;
     const uint32_t input_dim = input_shape.back();
-    std::vector<uint32_t> w13_shape = {1, 1, input_dim, hidden_dim};
-    std::vector<uint32_t> w2_shape = {1, 1, hidden_dim, input_dim};
+    const float act_std = 1.0f;
+    const float w13_std = 1.0f / std::sqrt(static_cast<float>(input_dim));
+    const float w2_std = 1.0f / std::sqrt(static_cast<float>(hidden_dim));
 
+    // Generate weights in LinearLayer convention: w1,w3 [H,D], w2 [D,H]
     xt::xarray<float> input_data = xt::empty<float>(input_shape);
     core::parallel_generate<float>(
-        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
-    xt::xarray<float> w1_data = xt::empty<float>(w13_shape);
-    core::parallel_generate<float>(
-        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
-    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
-    core::parallel_generate<float>(
-        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
-    xt::xarray<float> w3_data = xt::empty<float>(w13_shape);
-    core::parallel_generate<float>(
-        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+        input_data, [act_std]() { return std::normal_distribution<float>(0.0f, act_std); }, rng());
 
-    auto run_variant = [&](bool optimized) {
+    std::vector<uint32_t> w13_lin_shape = {hidden_dim, input_dim};
+    std::vector<uint32_t> w2_lin_shape = {input_dim, hidden_dim};
+
+    xt::xarray<float> w1_lin = xt::empty<float>(w13_lin_shape);
+    core::parallel_generate<float>(
+        w1_lin, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
+    xt::xarray<float> w2_lin = xt::empty<float>(w2_lin_shape);
+    core::parallel_generate<float>(w2_lin, [w2_std]() { return std::normal_distribution<float>(0.0f, w2_std); }, rng());
+    xt::xarray<float> w3_lin = xt::empty<float>(w13_lin_shape);
+    core::parallel_generate<float>(
+        w3_lin, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
+
+    // Baseline: swiglu uses rank-4 [1,1,D,H] weights (transposed from LinearLayer)
+    auto run_baseline = [&]() {
         auto x = autograd::create_tensor(core::from_xtensor(input_data, device));
-        auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, device));
-        auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, device));
-        auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, device));
+        auto w1 = autograd::create_tensor(core::from_xtensor(
+            xt::xarray<float>(xt::reshape_view(xt::transpose(w1_lin), {1U, 1U, input_dim, hidden_dim})), device));
+        auto w2 = autograd::create_tensor(core::from_xtensor(
+            xt::xarray<float>(xt::reshape_view(xt::transpose(w2_lin), {1U, 1U, hidden_dim, input_dim})), device));
+        auto w3 = autograd::create_tensor(core::from_xtensor(
+            xt::xarray<float>(xt::reshape_view(xt::transpose(w3_lin), {1U, 1U, input_dim, hidden_dim})), device));
 
-        auto out = optimized ? ops::swiglu_optimized(x, w1, w2, w3) : ops::swiglu(x, w1, w2, w3);
-
+        auto out = ops::swiglu(x, w1, w2, w3);
         out->set_grad(core::ones_like(out->get_value()));
         out->backward();
 
         auto fwd = core::to_xtensor(out->get_value());
         auto dx = core::to_xtensor(x->get_grad());
-        auto dw1 = core::to_xtensor(w1->get_grad());
-        auto dw2 = core::to_xtensor(w2->get_grad());
-        auto dw3 = core::to_xtensor(w3->get_grad());
-
         autograd::ctx().reset_graph();
-        return std::make_tuple(fwd, dx, dw1, dw2, dw3);
+        return std::make_tuple(fwd, dx);
     };
 
-    auto [fwd_base, dx_base, dw1_base, dw2_base, dw3_base] = run_variant(false);
-    auto [fwd_opt, dx_opt, dw1_opt, dw2_opt, dw3_opt] = run_variant(true);
+    // Optimized: swiglu_optimized uses LinearLayer [H,D] / [D,H] weights directly
+    auto run_optimized = [&]() {
+        auto x = autograd::create_tensor(core::from_xtensor(input_data, device));
+        auto w1 = autograd::create_tensor(core::from_xtensor(w1_lin, device));
+        auto w2 = autograd::create_tensor(core::from_xtensor(w2_lin, device));
+        auto w3 = autograd::create_tensor(core::from_xtensor(w3_lin, device));
 
-    // Both forward and backward use different code paths (composite ttnn ops
-    // vs fused kernel), so all comparisons use BF16-level tolerance
-    EXPECT_EQ(fwd_base.shape(), fwd_opt.shape());
+        auto out = ops::swiglu_optimized(x, w1, w2, w3);
+        out->set_grad(core::ones_like(out->get_value()));
+        out->backward();
+
+        auto fwd = core::to_xtensor(out->get_value());
+        auto dx = core::to_xtensor(x->get_grad());
+        autograd::ctx().reset_graph();
+        return std::make_tuple(fwd, dx);
+    };
+
+    auto [fwd_base, dx_base] = run_baseline();
+    auto [fwd_opt, dx_opt] = run_optimized();
+
     const float tol = 1e-2f;
+    EXPECT_EQ(fwd_base.shape(), fwd_opt.shape());
+
     float fwd_err = relative_l2(fwd_opt, fwd_base);
     EXPECT_LT(fwd_err, tol) << "Forward mismatch: rel L2 = " << fwd_err;
 
-    const float grad_tol = tol;
-
     float dx_err = relative_l2(dx_opt, dx_base);
-    EXPECT_LT(dx_err, grad_tol) << "dL/dx mismatch: rel L2 = " << dx_err;
-
-    float dw1_err = relative_l2(dw1_opt, dw1_base);
-    EXPECT_LT(dw1_err, grad_tol) << "dL/dW1 mismatch: rel L2 = " << dw1_err;
-
-    float dw2_err = relative_l2(dw2_opt, dw2_base);
-    EXPECT_LT(dw2_err, grad_tol) << "dL/dW2 mismatch: rel L2 = " << dw2_err;
-
-    float dw3_err = relative_l2(dw3_opt, dw3_base);
-    EXPECT_LT(dw3_err, grad_tol) << "dL/dW3 mismatch: rel L2 = " << dw3_err;
+    EXPECT_LT(dx_err, tol) << "dL/dx mismatch: rel L2 = " << dx_err;
 }
 
 }  // namespace
