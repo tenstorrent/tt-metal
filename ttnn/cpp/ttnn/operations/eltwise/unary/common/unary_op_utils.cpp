@@ -641,7 +641,6 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3fb8aa3bu);", idst)};
         case UnaryOpType::ABS: return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
         case UnaryOpType::ABS_INT32: return {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
-        case UnaryOpType::LGAMMA: return {"lgamma_tile_init();", fmt::format("lgamma_tile({});", idst)};
         case UnaryOpType::SIGN: return {"sign_tile_init();", fmt::format("sign_tile({});", idst)};
         case UnaryOpType::SQUARE:
             TT_FATAL(
@@ -763,6 +762,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::LGAMMA:
         case UnaryOpType::MISH:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
@@ -978,6 +978,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::LGAMMA: return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {

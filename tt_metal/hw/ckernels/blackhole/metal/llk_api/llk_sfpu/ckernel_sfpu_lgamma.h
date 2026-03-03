@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,8 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_lgamma_part_positive() {
+inline void calculate_lgamma_stirling() {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
-    constexpr float M_PI = 3.14159265358979323846f;
 
     // Minimal coefficients for 0-3 ULP
     constexpr float r0 = 0.0833333333f;   // 1/12
@@ -42,14 +41,59 @@ inline void calculate_lgamma_part_positive() {
         res = res + correction;
 
         // adjustment for inputs < 0.5 are done in composite.
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, 0));
+        }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-void lgamma_init() {
+void lgamma_stirling_init() {
+    // log_init<false, false, is_fp32_dest_acc_en>();
     _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_lgamma_adjusted(
+    const uint dst_index_in0,  // lgamma_stirling result
+    const uint dst_index_in1,  // sin (x * M_PI) with integer adjustments
+    const uint dst_index_in2,  // input x
+    const uint dst_index_out) {
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr float ln_pi = 1.1447298858f;
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat res_stirling = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat log_sin_pi_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat in = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
+
+        sfpi::vFloat z = 1.1447298858f;
+
+        // ln(pi) - log|sin(pi*x)|
+        sfpi::vFloat reflection_adj = z - log_sin_pi_x;
+
+        sfpi::vFloat result = res_stirling;
+
+        // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_stirling.
+        v_if(in < 0.5f) { result = reflection_adj - res_stirling; }
+        v_endif;
+
+        // adjustment for inputs < 0.5 are done in composite.
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+void lgamma_adjusted_init() {
+    log_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
 }  // namespace sfpu

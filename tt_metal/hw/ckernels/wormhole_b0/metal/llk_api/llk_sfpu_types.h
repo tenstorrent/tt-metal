@@ -152,9 +152,6 @@ enum class SfpuType {
     unary_min_uint32,
     addcdiv,
     lerp,
-<<<<<<< HEAD
     xielu,
-=======
     lgamma,
->>>>>>> 4a4fbfba44e (#33755: Lgamma improved)
 };

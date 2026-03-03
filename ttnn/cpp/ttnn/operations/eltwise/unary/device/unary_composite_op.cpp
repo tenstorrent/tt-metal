@@ -117,18 +117,20 @@ Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_m
     // res = ttnn::add(res, correction);
 
     // lgamma_partial(x): for x >= 0.5 returns lgamma(x); for x < 0.5 returns lgamma(1-x) (Stirling + 1/12, -1/360).
-    Tensor res_positive = ttnn::lgamma_partial(x, output_mem_config);
+    // Tensor res_positive = ttnn::lgamma_partial(x, output_mem_config);
 
-    // Reflection term for x < 0.5: ln(pi) - log|sin(pi*x)|. Zero sin(pi*x) at integers handled via where.
-    Tensor sin_pi_x = ttnn::sin(ttnn::multiply(x, (float)M_PI));
-    Tensor is_integer = ttnn::eq(x, ttnn::floor(x));
-    sin_pi_x = ttnn::where(is_integer, 0.0f, sin_pi_x);
-    Tensor log_abs_sin = ttnn::log(ttnn::abs(sin_pi_x));
-    Tensor reflection_adj = ttnn::rsub_sfpu(log_abs_sin, 1.1447298858f);  // ln(pi) - log|sin(pi*x)|
+    // // Reflection term for x < 0.5: ln(pi) - log|sin(pi*x)|. Zero sin(pi*x) at integers handled via where.
+    // Tensor sin_pi_x = ttnn::sin(ttnn::multiply(x, (float)M_PI));
+    // Tensor is_integer = ttnn::eq(x, ttnn::floor(x));
+    // sin_pi_x = ttnn::where(is_integer, 0.0f, sin_pi_x);
+    // Tensor log_abs_sin = ttnn::log(ttnn::abs(sin_pi_x));
+    // Tensor reflection_adj = ttnn::rsub_sfpu(log_abs_sin, 1.1447298858f);  // ln(pi) - log|sin(pi*x)|
 
-    // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_positive.
-    return ttnn::where(
-        ttnn::lt(x, 0.5f), ttnn::subtract(reflection_adj, res_positive), res_positive, output_mem_config);
+    // // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_positive.
+    // return ttnn::where(
+    //     ttnn::lt(x, 0.5f), ttnn::subtract(reflection_adj, res_positive), res_positive, output_mem_config);
+
+    return ttnn::operations::unary::ExecuteUnary<unary::UnaryOpType::LGAMMA>::invoke(x, output_mem_config);
 }
 
 // FP32 implementation of lgamma. This is yet to be optimized.
@@ -273,7 +275,7 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
 
 Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     if (x.dtype() == DataType::FLOAT32) {
-        return _lgamma_fp32(x, output_mem_config);
+        return _lgamma(x, output_mem_config);
     } else {
         return _lgamma_fast(x, output_mem_config);
     }
