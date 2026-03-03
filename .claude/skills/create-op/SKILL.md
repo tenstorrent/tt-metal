@@ -245,26 +245,26 @@ In automated mode, proceed directly.
 
 **Goal**: Implement kernels incrementally with test verification.
 
-**Stages are pre-registered** by the architect in Phase 2. Read `.tdd_state.json` to discover them.
+Launch a single `ttnn-kernel-writer-tdd` agent. This agent owns the full TDD loop — it iterates through all stages internally, retaining context across stages.
 
-### 4.1 Verify Pipeline State
+```
+Task: ttnn-kernel-writer-tdd
+  Prompt: |
+    Implement all TDD stages for {op_name}.
+    Operation path: {op_path}
 
-```bash
-python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path {op_path}
+    Follow the TDD loop exactly: implement stage → test → fix → advance → commit → next stage.
+    Do NOT skip stages. Do NOT implement ahead.
 ```
 
-Confirm stages are registered. If `.tdd_state.json` is missing or has no stages, Phase 2 failed — go back and fix it.
+Do NOT:
+- Loop over stages yourself
+- Spawn multiple kernel-writer agents
+- Call tdd_orchestrator.py yourself
 
-### 4.2 Stage Loop
+The agent handles all of this. It returns a structured report with per-stage results, upstream fixes, and design deviations.
 
-Follow the `/tdd-kernels` Stage Loop Protocol. For each registered stage:
-
-1. Invoke `ttnn-kernel-writer` with a stage-scoped prompt
-2. Run `test` via the TDD orchestrator
-3. On pass: `advance` + commit
-4. On fail: `parse-failure`, retry with context or rollback
-
-Continue until all stages pass or a stage fails permanently.
+**If the agent reports `HUMAN REVIEW REQUIRED`**: A stage exhausted its retry budget. Relay the failure report path to the user.
 
 ---
 
@@ -321,8 +321,8 @@ When a helper uses `NoWaitNoPop`, it does NOT pop the input CB. The caller MUST 
 |-------|------|---------|
 | `ttnn-operation-analyzer` | Opus | Deep analysis of existing operations |
 | `ttnn-operation-architect` | Opus | Design new operation (architecture + kernel implementation) |
-| `ttnn-generic-op-builder` | Opus | Python infrastructure + stub kernels |
-| `ttnn-kernel-writer` | Opus | Implement kernels following design |
+| `ttnn-generic-op-builder` | Sonnet | Python infrastructure + stub kernels |
+| `ttnn-kernel-writer-tdd` | Opus | Implement all TDD stages in one session (owns full loop) |
 | `ttnn-riscv-debugger` | Sonnet | Debug kernel issues (hangs, wrong output) |
 
 ### Dependency Graph
@@ -333,14 +333,13 @@ analyzer(s) ──► architect ──► op_design.md + .tdd_state.json
                     generic_op_builder ──► stubs + Python + tests
                                       │
                                       ▼
-                    kernel_writer (invoked per TDD stage)
+                    kernel_writer_tdd (single agent, all stages)
 ```
 
 ### When to use the debugger
 
 Invoke `ttnn-riscv-debugger` when:
-- A TDD stage fails with `hang_cb_deadlock` or `watcher_assert` classification
-- Retries with kernel-writer don't resolve the issue
-- The failure suggests a CB synchronization or semaphore bug
+- The kernel-writer-tdd agent reports `HUMAN REVIEW REQUIRED` after exhausting retry budget
+- The failure suggests a CB synchronization or semaphore bug that the kernel writer couldn't resolve
 
 Provide: symptom description, test command, paths to kernels and analysis files.
