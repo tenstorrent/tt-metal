@@ -181,17 +181,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: "N300-viommu"
-          - platform: "in-service-dedicated-merge-gate" # run t3k tests on CIv1 for now in order to have dedicated machine
-          - platform: "p150b-viommu"
-            runner-suffix: "priority"
+        platform: [
+          "N300-viommu",
+          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "p150b-viommu-prio",
+        ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      runner-suffix: ${{ matrix.runner-suffix || 'stable' }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
 
@@ -206,17 +205,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: "N300-viommu"
-          - platform: "in-service-dedicated-merge-gate" # run t3k tests on CIv1 for now in order to have dedicated machine
-          - platform: "p150b-viommu"
-            runner-suffix: "priority"
+        platform: [
+          "N300-viommu",
+          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "p150b-viommu-prio",
+        ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      runner-suffix: ${{ matrix.runner-suffix || 'stable' }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
 
@@ -255,17 +253,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: "N150-viommu"
-          - platform: "p150b-viommu"
-            runner-suffix: "priority"
+        platform: [
+          "N150-viommu",
+          "p150b-viommu-prio",
+        ]
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
-      runner-suffix: ${{ matrix.runner-suffix || 'stable' }}
       product: tt-metalium
 
   ttnn-basic-tests:
@@ -279,17 +276,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: "N150-viommu"
-          - platform: "p150b-viommu"
-            runner-suffix: "priority"
+        platform: [
+          "N150-viommu",
+          "p150b-viommu-prio",
+        ]
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
-      runner-suffix: ${{ matrix.runner-suffix || 'stable' }}
       product: tt-nn
 
   ttnn-merge-gate-tests:

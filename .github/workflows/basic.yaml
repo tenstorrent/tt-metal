@@ -12,10 +12,6 @@ on:
       runner:
         required: true
         type: string
-      runner-suffix:
-        required: false
-        type: string
-        default: "stable"
       per-test-timeout:
         required: false
         type: string
@@ -31,7 +27,7 @@ on:
 jobs:
   metalium-basic:
     timeout-minutes: 45
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-{1}', inputs.runner, inputs.runner-suffix) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
