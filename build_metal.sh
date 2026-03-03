@@ -297,7 +297,7 @@ cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
-cmake_args+=("-DENABLE_MOBILENET_LIBTORCH=$build_mobilenet_libtorch")
+cmake_args+=("-DBUILD_MOBILENET_LIBTORCH=$build_mobilenet_libtorch")
 
 
 if [ "$cxx_compiler_path" != "" ]; then

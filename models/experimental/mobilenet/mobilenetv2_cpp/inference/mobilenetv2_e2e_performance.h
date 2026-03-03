@@ -6,6 +6,8 @@
 #define MOBILENETV2_CPP_INFERENCE_MOBILENETV2_E2E_PERFOMANCE
 
 #include <memory>
+#include <optional>
+#include <vector>
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/events.hpp"
