@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from abc import abstractmethod
 from pathlib import Path
 
@@ -21,10 +20,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
-)
-
-fabric_config = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
 )
 
 
@@ -54,10 +49,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelPrefillConfig:
         return {
-            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": MoE.prefill_model_config(hf_config, mesh_device),
+            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device, fabric_config),
+            "moe": MoE.prefill_model_config(hf_config, mesh_device, fabric_config),
         }
 
     @classmethod
@@ -66,10 +62,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelDecodeConfig:
         return {
-            "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": MoE.decode_model_config(hf_config, mesh_device),
+            "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device, fabric_config),
+            "moe": MoE.decode_model_config(hf_config, mesh_device, fabric_config),
         }
 
     @classmethod
@@ -182,7 +179,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Single reduce_scatter on combined output using MoE's config for consistency
             ccl_moe = cfg["moe"]["ccl"]
 
-            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+            if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING:
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,
