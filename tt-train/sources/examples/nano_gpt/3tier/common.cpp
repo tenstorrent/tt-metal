@@ -11,6 +11,7 @@
 #include "models/gpt2.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "utils/config_path.hpp"
+#include "utils/data_path.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -32,7 +33,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
-    config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
+    config.data_path = training_config["data_path"].as<std::string>("shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);
@@ -95,11 +96,13 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     std::variant<std::string, YAML::Node> text_or_tokens;
 
     try {
+        // Resolve data path (can be relative to data root or absolute)
+        auto resolved_data_path = ttml::utils::resolve_data_path(config.data_path);
         // check file extension:
         if (config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(config.data_path);
+            text_or_tokens = read_file_to_str(resolved_data_path.string());
         } else {
-            auto yaml_data = YAML::LoadFile(config.data_path);
+            auto yaml_data = YAML::LoadFile(resolved_data_path.string());
             yaml_data["sequence_length"] = sequence_length;
             text_or_tokens = yaml_data;
         }
