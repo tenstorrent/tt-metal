@@ -36,9 +36,9 @@ _DTYPE_TO_STR = {
 }
 _STR_TO_DTYPE = {v: k for k, v in _DTYPE_TO_STR.items()}
 
-# MoE gate bias: HEIGHT_SHARDED on sender core (10, 9), tile [16, 16]
-_MOE_SENDER_CORE = ttnn.CoreCoord(10, 9)
-_MOE_SENDER_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_MOE_SENDER_CORE, _MOE_SENDER_CORE)])
+# MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
+# Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
+MOE_SENDER_GRID_SIZE = (13, 10)
 _GATE_BIAS_TILE = ttnn.Tile([16, 16])
 
 # Fusion group name per field (for grouping by fused_tensor)
@@ -210,13 +210,16 @@ def create_gate_bias_tensor(raw_tensor: torch.Tensor, device) -> ttnn.Tensor:
     """Build gate_bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core, replicated across mesh.
 
     raw_tensor: shape (256,) from state dict (model.layers.{i}.mlp.gate.e_score_correction_bias).
-    Returns ttnn.Tensor with layout expected by MoE op: (16, 16) on sender core (10, 9), tile 16x16.
+    Returns ttnn.Tensor with layout expected by MoE op: (16, 16) on sender core, tile 16x16.
+    Sender core uses MOE_SENDER_GRID_SIZE so layout is consistent across slow/fast dispatch.
     """
+    sender_core = ttnn.CoreCoord(MOE_SENDER_GRID_SIZE[0] - 1, MOE_SENDER_GRID_SIZE[1] - 1)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
     gate_bias_reshaped = raw_tensor.reshape(16, 16).T.contiguous().to(torch.bfloat16)
     gate_bias_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(_MOE_SENDER_CORE_GRID, (16, 16), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(sender_core_grid, (16, 16), ttnn.ShardOrientation.ROW_MAJOR),
     )
     return ttnn.from_torch(
         gate_bias_reshaped,
