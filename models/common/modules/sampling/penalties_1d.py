@@ -71,8 +71,7 @@ class Penalties1DConfig:
     vocab_size: int  # Required. Caller pre-pads to be divisible by num_devices.
     mesh_device: Optional[ttnn.MeshDevice] = None  # None → GetDefaultDevice()
     max_batch_size: int = 32
-    # todo)) sharding should be configurable! --> the defaults currently do not work in existing code
-    sub_core_grids: Any = None  # From args.sub_core_grids
+    sub_core_grids: Any = None  # From args.sub_core_grids; passed to ttnn ops via op_kwargs
 
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
     # Sharded vocab buffers: [max_batch_size, vocab_size], int32, TILE, sharded across devices
