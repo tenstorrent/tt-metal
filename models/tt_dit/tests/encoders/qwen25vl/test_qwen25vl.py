@@ -280,6 +280,7 @@ def test_qwen25vl_encoder_pair(
         formatted_prompts,
         num_images_per_prompt=num_images_per_prompt,
         sequence_length=sequence_length + start_idx,
+        enable_tracing=True,
     )
     tt_embeds = tt_embeds[:, start_idx:]
     tt_mask = tt_mask[:, start_idx:]

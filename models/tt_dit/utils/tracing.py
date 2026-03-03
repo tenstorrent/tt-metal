@@ -7,6 +7,8 @@ from __future__ import annotations
 from types import NoneType
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 import ttnn
 
 if TYPE_CHECKING:
@@ -14,17 +16,38 @@ if TYPE_CHECKING:
 
 
 class Tracer:
-    """Wrapper for capturing and executing a trace of a given function."""
+    """Wrapper for capturing and executing a trace of a given function.
 
-    def __init__(self, function: Callable[..., Any], /, *, device: ttnn.MeshDevice) -> None:
+    All inputs and outputs of the traced function must be ``ttnn.Tensor`` instances or plain
+    Python scalars (``int``, ``float``, ``str``, ``bool``, ``None``), optionally nested in
+    tuples, lists, or dicts.
+    """
+
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        /,
+        *,
+        device: ttnn.MeshDevice,
+        num_prep_runs: int = 2,
+        clone_prep_inputs: bool = True,
+    ) -> None:
         """Initialize the tracer.
+
+        If the function modifies its input tensors in place, set ``clone_prep_inputs`` to ``True``
+        so that preparation runs operate on cloned inputs, leaving the originals intact for trace
+        capture.
 
         Args:
             function: Function to be traced.
             device: Device on which to capture and execute the trace.
+            num_prep_runs: Number of times to run the function before capturing the trace.
+            clone_prep_inputs: Whether to clone tensor inputs before the preparation runs.
         """
         self._function = function
         self._device = device
+        self._num_prep_runs = num_prep_runs
+        self._clone_prep_inputs = clone_prep_inputs
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
@@ -39,18 +62,27 @@ class Tracer:
     ) -> Any:
         """Capture or execute trace.
 
-        On the first call, runs the wrapped function twice, once to compile, and once to capture the
-        trace. On subsequent calls, executes the captured trace.
+        On the first call, runs the wrapped function multiple times to capture the trace. On
+        subsequent calls, executes the captured trace. On the first call, inputs are used to
+        initialize the trace inputs. On subsequent calls, they are used to update the trace inputs.
+        Only `ttnn.Tensor` inputs can be changed. Aside from omitting positional inputs to reuse
+        previous values, a value of `None` can be passed to reuse the previous value for tensor
+        inputs as well.
+
+        Host tensor inputs will automatically be moved to the tracer device for the trace capture
+        and execution.
+
+        Executing a trace overwrites any device memory that was used during trace capture. In
+        particular, any device tensors that are allocated after the trace was captured may be
+        overwritten when the trace is executed, even if they are not inputs or outputs of the trace.
+        Host tensors will not be overwritten. Input tensors are copied before trace execution, so
+        they can safely be allocated on device if their content is not needed after trace execution.
 
         Args:
             tracer_cq_id: Command queue id.
             tracer_blocking_execution: Whether `ttnn.execute_trace` should block.
-            *args: Positional inputs to pass to the wrapped function. On the first call, these are
-                   used to initialize the trace inputs. On subsequent calls, these are used to
-                   update the trace inputs. Only tensor inputs can be changed.
-            **kwargs: Named inputs to pass to the wrapped function. On the first call, these are
-                      used to initialize the trace inputs. On subsequent calls, these are optional
-                      and used to update the trace inputs. Only tensor inputs can be changed.
+            *args: Positional inputs to pass to the wrapped function.
+            **kwargs: Named inputs to pass to the wrapped function. Optional on subsequent calls.
 
         Returns:
             The outputs of the wrapped function.
@@ -60,15 +92,29 @@ class Tracer:
             Any exception raised by the wrapped function during first invocation.
         """
         if self._trace_id is None:
+            if self._function is None:
+                msg = "tracer can not be reused after the trace was released"
+                raise RuntimeError(msg)
+
             args = _tree_map(_verify_value, args, path_label="args")
             kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
-            self._args = _tree_map(self._move_to_device_if_tensor, args, path_label="args")
-            self._kwargs = _tree_map(self._move_to_device_if_tensor, kwargs, path_label="kwargs")
+            self._args = _tree_map(self._tensor_to_device, args, path_label="args")
+            self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
-            # compile
-            self._function(*self._args, **self._kwargs)
+            if self._clone_prep_inputs and self._num_prep_runs > 0:
+                prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
+                prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
+            else:
+                prep_args = self._args
+                prep_kwargs = self._kwargs
+
+            for _ in range(self._num_prep_runs):
+                self._function(*prep_args, **prep_kwargs)
+
+            del prep_args, prep_kwargs
 
             # capture trace
+            logger.debug("capturing trace...")
             trace_id = ttnn.begin_trace_capture(self._device, cq_id=tracer_cq_id)
             try:
                 try:
@@ -81,24 +127,43 @@ class Tracer:
                 ttnn.release_trace(self._device, trace_id)
                 raise
 
+            # Allow resources referenced by the function to be freed, which might be used to offload
+            # weights.
+            self._function = None
+
             self._trace_id = trace_id
             self._outputs = outputs
         else:
+            if len(args) > len(self._args):
+                msg = f"expected at most {len(self._args)} positional args, got {len(args)}"
+                raise TypeError(msg)
+
+            # Pad with None to allow omitting trailing positional args.
+            args = args + (None,) * (len(self._args) - len(args))
             _tree_map(self._update_input, self._args, args, path_label="args")
 
+            # kwargs can be omitted entirely to reuse all previous values, but individual
+            # entries must be explicitly set to None to preserve them (unlike positional args,
+            # _tree_map requires dicts to have matching keys).
             for name, new in kwargs.items():
                 if name not in self._kwargs:
                     msg = f"input '{name}' was not in the initial inputs"
                     raise KeyError(msg)
-                prev = self._kwargs[name]
 
-                _tree_map(self._update_input, prev, new, path_label=f'kwargs["{name}"]')
+                # None means reuse the previous value entirely.
+                if new is not None:
+                    _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
 
             ttnn.execute_trace(self._device, self._trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
 
         return self._outputs
 
-    def release(self) -> None:
+    @property
+    def trace_captured(self) -> bool:
+        """Whether a trace has been captured and is ready for execution."""
+        return self._trace_id is not None
+
+    def release_trace(self) -> None:
         """Release the captured trace and clear inputs and outputs."""
         trace_id = self._trace_id
 
@@ -109,7 +174,7 @@ class Tracer:
             self._outputs = None
             ttnn.release_trace(self._device, trace_id)
 
-    def _move_to_device_if_tensor(self, value: Any, *, path_label: str) -> Any:
+    def _tensor_to_device(self, value: Any, *, path_label: str) -> Any:
         if not isinstance(value, ttnn.Tensor):
             return value
 
@@ -122,6 +187,9 @@ class Tracer:
         raise ValueError(msg)
 
     def _update_input(self, prev: Any, new: Any, *, path_label: str) -> None:
+        if new is None and isinstance(prev, ttnn.Tensor):
+            return
+
         if type(new) is not type(prev):
             msg = f"input '{path_label}' type {type(new)} does not match the initial type {type(prev)}"
             raise TypeError(msg)
@@ -137,7 +205,9 @@ class Tracer:
                 if new.device() != prev.device():
                     msg = f"input '{path_label}' tensor device does not match the initial device"
                     raise ValueError(msg)
-                ttnn.copy(new, prev)
+
+                if new.buffer_address() != prev.buffer_address():
+                    ttnn.copy(new, prev)
 
         elif new != prev:
             msg = f"input '{path_label}' does not match the initial value"
@@ -152,7 +222,12 @@ def _verify_value(value: Any, *, path_label: str) -> Any:
     return value
 
 
-def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
+def _clone_tensor(value: Any, *, path_label: str) -> Any:  # noqa: ARG001
+    """Clone a tensor, passing through non-tensor values unchanged."""
+    return ttnn.clone(value) if isinstance(value, ttnn.Tensor) else value
+
+
+def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
     Recursively traverses nested structures (tuples, lists, dicts) and applies
@@ -166,19 +241,20 @@ def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
         path_label: String representing the current traversal path (used for error messages).
 
     Returns:
-        A new nested structure with the same shape as the inputs, where each
-        leaf has been transformed by applying f to the corresponding leaves
-        from all input structures.
+        A new nested structure with the same shape as the inputs, where each leaf has been
+        transformed by applying f to the corresponding leaves from all input structures.
 
     Raises:
-        ValueError: If the input structures don't have matching types at
-            corresponding positions, or if dicts have different keys.
+        TypeError: If the input structures don't have matching types at corresponding positions.
+        ValueError: If tuples/lists have different lengths or dicts have different keys.
     """
-    tx = type(x)
+    if not isinstance(x, (tuple, list, dict)):
+        return f(x, *xs, path_label=path_label)
+
     for y in xs:
-        if type(y) is not tx:
-            msg = f"types of '{path_label}' should be the same: {tx} != {type(y)}"
-            raise ValueError(msg)
+        if not isinstance(y, type(x)):
+            msg = f"types of '{path_label}' should be the same: {type(x)} != {type(y)}"
+            raise TypeError(msg)
 
     if isinstance(x, tuple):
         for y in xs:
@@ -205,4 +281,4 @@ def _tree_map(f: Callable, x: Any, /, *xs: Any, path_label: str) -> Any:
                 raise ValueError(msg)
         return {key: _tree_map(f, *(d[key] for d in (x, *xs)), path_label=f'{path_label}["{key}"]') for key in x}
 
-    return f(x, *xs, path_label=path_label)
+    raise AssertionError  # unreachable

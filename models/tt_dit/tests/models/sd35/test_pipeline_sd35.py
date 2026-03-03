@@ -111,6 +111,8 @@ def test_sd35_pipeline(
                     num_inference_steps=num_inference_steps,
                     seed=i,
                     traced=traced,
+                    vae_traced=False,
+                    encoder_traced=False,
                     profiler=benchmark_profiler,
                     profiler_iteration=0,
                 )
@@ -152,6 +154,8 @@ def test_sd35_pipeline(
                 num_inference_steps=num_inference_steps,
                 seed=0,
                 traced=traced,
+                vae_traced=False,
+                encoder_traced=False,
             )
 
             output_filename = f"sd35_new_{image_w}_{image_h}_{i:02}"

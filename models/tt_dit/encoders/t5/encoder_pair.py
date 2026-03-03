@@ -15,6 +15,7 @@ import ttnn
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
+from ...utils.tracing import Tracer
 from .model_t5 import T5Config, T5Encoder
 
 if TYPE_CHECKING:
@@ -52,6 +53,11 @@ class T5TokenizerEncoderPair:
         self._use_attention_mask = use_attention_mask
 
         self._encoder = self._load_encoder(checkpoint, use_torch=use_torch) if enabled else None
+        self._tracer = (
+            None
+            if use_torch or not enabled
+            else Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
+        )
 
     def load_torch_model(self, checkpoint: str) -> T5EncoderModel:
         return T5EncoderModel.from_pretrained(checkpoint)
@@ -93,12 +99,15 @@ class T5TokenizerEncoderPair:
 
         return model
 
-    def encode(self, prompts: Iterable[str], *, num_images_per_prompt: int) -> torch.Tensor:
+    def encode(
+        self, prompts: Iterable[str], *, num_images_per_prompt: int, enable_tracing: bool = False
+    ) -> torch.Tensor:
         return _get_t5_prompt_embeds(
             prompts=prompts,
             num_images_per_prompt=num_images_per_prompt,
             tokenizer=self._tokenizer,
             text_encoder=self._encoder,
+            tracer=self._tracer if enable_tracing else None,
             sequence_length=self._sequence_length,
             empty_sequence_length=self._empty_sequence_length,
             embedding_dim=self._embedding_dim,
@@ -113,6 +122,7 @@ def _get_t5_prompt_embeds(
     *,
     prompts: Iterable[str],
     text_encoder: T5Encoder | T5EncoderModel | None,
+    tracer: Tracer | None = None,
     tokenizer: PreTrainedTokenizerBase,
     sequence_length: int,
     empty_sequence_length: int,
@@ -169,7 +179,7 @@ def _get_t5_prompt_embeds(
             if attention_mask is not None
             else None
         )
-        tt_hidden_states = text_encoder(prompt=tt_tokens, attention_mask=tt_attention_mask)
+        tt_hidden_states = (tracer or text_encoder.forward)(prompt=tt_tokens, attention_mask=tt_attention_mask)
         tt_prompt_embeds = tt_hidden_states[-1]
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])

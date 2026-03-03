@@ -50,11 +50,13 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
         ccl_manager=ccl_manager,
     )
 
+    logger.info("running TT model...")
+    tt_embeds, tt_mask = tt_encoder.encode(
+        prompts, num_images_per_prompt=2, sequence_length=sequence_length, enable_tracing=True
+    )
+
     logger.info("running Torch model...")
     torch_embeds, torch_mask = torch_encoder.encode(prompts, num_images_per_prompt=2, sequence_length=sequence_length)
-
-    logger.info("running TT model...")
-    tt_embeds, tt_mask = tt_encoder.encode(prompts, num_images_per_prompt=2, sequence_length=sequence_length)
 
     assert torch_mask.equal(tt_mask)
 

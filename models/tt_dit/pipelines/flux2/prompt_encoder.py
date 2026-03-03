@@ -16,6 +16,7 @@ from ...encoders.mistral3.model_mistral3 import Mistral3Encoder
 from ...encoders.transformer import RopeConfig
 from ...layers.module import Module
 from ...utils import cache, tensor
+from ...utils.tracing import Tracer
 from .system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_T2I
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ class PromptEncoder:
 
         if use_torch_encoder:
             self._encoder = _load_torch_encoder(checkpoint_name)
+            self._tracer = None
             return
 
         self._encoder = Mistral3Encoder(
@@ -65,6 +67,7 @@ class PromptEncoder:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
+        self._tracer = Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
 
         def get_torch_state_dict() -> dict[str, torch.Tensor]:
             return Mistral3Encoder.convert_state(_load_torch_encoder(checkpoint_name).state_dict())
@@ -80,7 +83,12 @@ class PromptEncoder:
         )
 
     def encode(
-        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int
+        self,
+        prompts: Sequence[str],
+        *,
+        num_images_per_prompt: int,
+        sequence_length: int,
+        enable_tracing: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _get_prompt_embeds(
             prompts,
@@ -88,7 +96,7 @@ class PromptEncoder:
             sequence_length=sequence_length,
             output_from_layers=[10, 20, 30],
             tokenizer=self._tokenizer,
-            encoder=self._encoder,
+            encoder=self._tracer if enable_tracing and self._tracer is not None else self._encoder,
             device=self._device,
         )
 
@@ -112,7 +120,7 @@ def _load_torch_encoder(checkpoint_name: str) -> transformers.Mistral3ForConditi
 def _get_prompt_embeds(
     prompts: Sequence[str],
     *,
-    encoder: Module | torch.nn.Module,
+    encoder: Module | Tracer | torch.nn.Module,
     tokenizer: PreTrainedTokenizerBase,
     sequence_length: int,
     num_images_per_prompt: int,
@@ -143,13 +151,13 @@ def _get_prompt_embeds(
     if untruncated_tokens.shape[-1] >= tokens.shape[-1] and not torch.equal(tokens, untruncated_tokens):
         logger.warning("input text was truncated")
 
-    if isinstance(encoder, Module):
+    if isinstance(encoder, (Module, Tracer)):
         assert device is not None
 
         tt_tokens = tensor.from_torch(tokens, device=device, dtype=ttnn.uint32)
         tt_mask = tensor.from_torch(mask, device=device)
 
-        tt_hidden_states = encoder.forward(
+        tt_hidden_states = encoder(
             tt_tokens,
             mask=tt_mask,
             skip_final_linear=True,

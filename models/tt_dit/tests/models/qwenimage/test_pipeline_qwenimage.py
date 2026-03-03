@@ -133,6 +133,8 @@ def test_qwenimage_pipeline(
             cfg_scale=4.0,
             seed=seed,
             traced=traced,
+            vae_traced=False,
+            encoder_traced=False,
         )
 
         output_filename = f"{filename_prefix}_{number}.png"

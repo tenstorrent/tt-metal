@@ -137,6 +137,8 @@ def test_motif_pipeline(
                 cfg_scale=5.0,
                 seed=seed,
                 traced=traced,
+                vae_traced=False,
+                encoder_traced=False,
                 profiler=benchmark_profiler,
                 profiler_iteration=0,
             )

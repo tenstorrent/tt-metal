@@ -34,6 +34,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import typed_tensor_2dshard
+from ...utils.tracing import Tracer
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -261,14 +262,18 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self.transformer.set_unload_set(self.transformer_2)
             self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
 
+        self.register_to_config(boundary_ratio=boundary_ratio)
+        self.register_to_config(expand_timesteps=expand_timesteps)
+
+        self._transformer_tracer = None
+        self._transformer_2_tracer = None
+        self._vae_tracer = None
+
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
         self._prepare_transformer1()
         self._prepare_text_encoder()
         self._prepare_vae()
-
-        self.register_to_config(boundary_ratio=boundary_ratio)
-        self.register_to_config(expand_timesteps=expand_timesteps)
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal if getattr(self, "vae", None) else 4
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
@@ -390,8 +395,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
+        if self._transformer_tracer is None:
+            self._transformer_tracer = Tracer(
+                self.transformer.inner_step, device=self.mesh_device, num_prep_runs=1, clone_prep_inputs=False
+            )
 
     def _prepare_transformer2(self):
+        if self._transformer_2_tracer is None:
+            self._transformer_2_tracer = Tracer(
+                self.transformer_2.inner_step, device=self.mesh_device, num_prep_runs=1, clone_prep_inputs=False
+            )
         cache.load_model(
             self.transformer_2,
             model_name=os.path.basename(self.checkpoint_name),
@@ -410,6 +423,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
         )
+        if self._vae_tracer is None:
+            self._vae_tracer = Tracer(
+                self.tt_vae.forward, device=self.mesh_device, num_prep_runs=1, clone_prep_inputs=False
+            )
 
     def _get_t5_prompt_embeds(
         self,
@@ -688,6 +705,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
         traced: bool = False,
+        vae_traced: bool | None = None,
+        encoder_traced: bool | None = None,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
@@ -759,6 +778,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 the first element is a list with the generated images and the second element is a list of `bool`s
                 indicating whether the corresponding generated image contains "not-safe-for-work" (nsfw) content.
         """
+        vae_traced = vae_traced if vae_traced is not None else traced
+        encoder_traced = encoder_traced if encoder_traced is not None else traced
 
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
@@ -864,19 +885,32 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     continue
 
                 self._current_timestep = t
+                previous_model_name = current_model_name
 
                 if boundary_timestep is None or t >= boundary_timestep:
                     self._prepare_transformer1()
+                    if self._transformer_2_tracer is not None:
+                        self._transformer_2_tracer.release_trace()
+                        self._transformer_2_tracer = None
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
+                    forward = self._transformer_tracer if traced else self.transformer.inner_step
                     current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
                     # low-noise stage in wan2.2
                     self._prepare_transformer2()
+                    if self._transformer_tracer is not None:
+                        self._transformer_tracer.release_trace()
+                        self._transformer_tracer = None
                     current_model = self.transformer_2
+                    forward = self._transformer_2_tracer if traced else self.transformer_2.inner_step
                     current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
+
+                assert forward is not None
+                model_changed = current_model_name != previous_model_name
+                reuse_tensors = i > 0 and traced and not model_changed
 
                 if permuted_latent is None:
                     # First iteration, preprocess spatial input and prepare rope features
@@ -885,7 +919,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     if cond_latents is not None:
                         cond_latents, _ = current_model.preprocess_spatial_input_host(cond_latents)
 
-                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.get_rope_features(latents)
+                    # Allocate on host when traced since device tensors may be overwritten by trace execution.
+                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.get_rope_features(latents, on_host=traced)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,
                         "rope_sin_1HND": rope_sin_1HND,
@@ -893,6 +928,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     }
 
                 # Cache text conditioning
+                # Allocate on host since device tensors may be overwritten by trace execution.
                 if prompt_embeds_map[current_model_name] is None:
                     prompt_embeds_map[current_model_name] = current_model.prepare_text_conditioning(prompt_embeds)
                 if self.do_classifier_free_guidance and negative_prompt_embeds_map[current_model_name] is None:
@@ -919,7 +955,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 )
                 temb_11BD, timestep_proj_1BTD = current_model.prepare_timestep_conditioning(timestep)
 
-                permuted_noise_pred_tt = current_model.inner_step(
+                permuted_noise_pred_tt = forward(
                     spatial_1BNI=permuted_model_input_tt,
                     prompt_1BLP=prompt_embeds_map[current_model_name],
                     N=patchified_seqlen,
@@ -929,13 +965,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 )
 
                 if self.do_classifier_free_guidance:
-                    permuted_noise_uncond_tt = current_model.inner_step(
-                        spatial_1BNI=permuted_model_input_tt,
+                    permuted_noise_uncond_tt = forward(
+                        spatial_1BNI=None if traced else permuted_model_input_tt,
                         prompt_1BLP=negative_prompt_embeds_map[current_model_name],
                         N=patchified_seqlen,
-                        temb_11BD=temb_11BD,
-                        timestep_proj_1BTD=timestep_proj_1BTD,
-                        **rope_args,
+                        temb_11BD=None if traced else temb_11BD,
+                        timestep_proj_1BTD=None if traced else timestep_proj_1BTD,
+                        **({} if traced else rope_args),
                     )
                     # On-device CFG with high precision fp32 lerp: uncond + scale * (cond - uncond)
                     permuted_noise_pred_tt = ttnn.lerp(
@@ -1001,7 +1037,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
             with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 self._prepare_vae()
-                tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+                vae_decode = self._vae_tracer if vae_traced else self.tt_vae.forward
+                tt_video_BCTHW, new_logical_h = vae_decode(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
