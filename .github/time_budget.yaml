@@ -127,10 +127,10 @@ models:
     wh_n300: 600
     wh_n300_civ2: 400
     wh_n300_perf: 200
-    bh_p150: 250
-    bh_p150_perf: 800
-    bh_llmbox: 1200
-    bh_deskbox: 800
-    bh_loudbox: 1200
-    bh_p300: 800
-    bh_quietbox_2: 1200
+    bh_p150: 100
+    bh_p150_perf: 100
+    bh_llmbox: 250
+    bh_deskbox: 250
+    bh_loudbox: 250
+    bh_p300: 250
+    bh_quietbox_2: 250
