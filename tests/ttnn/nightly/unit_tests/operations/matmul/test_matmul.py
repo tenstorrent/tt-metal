@@ -110,7 +110,11 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
 @pytest.mark.parametrize("core_grid", [ttnn.CoreGrid(y=8, x=5)])
 @pytest.mark.parametrize(
     "M, K, N, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, has_gelu",
-    ((1024, 1280, 5120, 4, 1, 8, 4, 32, True),),
+    [
+        (1024, 1280, 5120, 4, 1, 8, 4, 32, True),
+        (256, 1280, 5120, 4, 1, 8, 1, 32, False),
+        (1024, 640, 2560, 4, 1, 8, 4, 16, False),
+    ],
 )
 def test_sdxl_matmul(
     device,

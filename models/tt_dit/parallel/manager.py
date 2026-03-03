@@ -126,6 +126,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -169,6 +170,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -373,3 +375,27 @@ class CCLManager:
             "num_workers_per_link": 2,
             "num_buffers_per_channel": 2,
         }
+
+    # TODO: Merge with utils.tensor.to_torch
+    def device_to_host(
+        self, tensor: ttnn.Tensor, mesh_dims: list[int], use_persistent_buffer: bool = True
+    ) -> torch.Tensor:
+        """Move a ttnn device tensor to a torch host tensor.
+        Args:
+            tensor: The ttnn tensor to move to host
+            mesh_dims: The dimension to gather per mesh axis. use None to skip gathering for that mesh axis. e.g [None,2] will gather along the second dimension for the mesh axis 1.
+            use_persistent_buffer: Whether to use a persistent buffer for the all gather operation.
+        Returns:
+            The torch host tensor
+        """
+        device_tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)  # Workaround for bug in Row Major layout
+        for mesh_axis, mesh_dim in enumerate(mesh_dims):
+            if mesh_dim is not None:
+                device_tensor = self.all_gather(
+                    device_tensor,
+                    dim=mesh_dim,
+                    mesh_axis=mesh_axis,
+                    use_hyperparams=True,
+                    use_persistent_buffer=use_persistent_buffer,
+                )
+        return ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0])

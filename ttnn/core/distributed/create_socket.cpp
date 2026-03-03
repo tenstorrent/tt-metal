@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
 #include "ttnn/distributed/fabric_socket.hpp"

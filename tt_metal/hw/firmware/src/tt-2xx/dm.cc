@@ -6,6 +6,7 @@
 // #include "risc_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
 #include "internal/dataflow_buffer_init.h"
@@ -37,6 +38,9 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+
+// temporary for things to build
+thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
@@ -113,8 +117,7 @@ void device_setup() {
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
@@ -133,7 +136,28 @@ inline void run_triscs(uint32_t enables) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
-        // subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E1_MATH0))) {
+        subordinate_sync->neo1_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E2_MATH0))) {
+        subordinate_sync->neo2_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E3_MATH0))) {
+        subordinate_sync->neo3_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc3 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -151,8 +175,7 @@ inline void wait_subordinates() {
            subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE)
-        ;
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("NTD");
 }
 
@@ -160,8 +183,7 @@ inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_S
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
@@ -189,7 +211,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-        // trigger_sync_register_init();
+        trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
@@ -320,7 +342,7 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                // trigger_sync_register_init();
+                trigger_sync_register_init();
 
                 if constexpr (ASSERT_ENABLED) {
                     if (noc_mode == DM_DYNAMIC_NOC) {

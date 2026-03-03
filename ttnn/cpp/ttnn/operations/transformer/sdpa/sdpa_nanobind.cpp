@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -310,6 +311,9 @@ void bind_sdpa(nb::module_& mod) {
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
+            use_column_major_ccl (bool, optional): If True, allocate CCL worker cores in column-major order.
+                This places CCL workers in a column (useful when reserving the last column for CCL).
+                If False (default), uses row-major allocation. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -346,7 +350,10 @@ void bind_sdpa(nb::module_& mod) {
                const MeshDevice& mesh_device,
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               CoreCoord ccl_core_grid_offset) {
+               CoreCoord ccl_core_grid_offset,
+               bool use_column_major_ccl) {
+                auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                                                     : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
                 auto outputs = self(
                     input_tensor_q,
                     input_tensor_k,
@@ -368,7 +375,8 @@ void bind_sdpa(nb::module_& mod) {
                     subdevice_id,
                     ccl_core_grid_offset,
                     scale,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    strategy);
                 return outputs;
             },
             nb::arg("input_tensor_q").noconvert(),
@@ -392,7 +400,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
-            nb::arg("ccl_core_grid_offset")});
+            nb::arg("ccl_core_grid_offset"),
+            nb::arg("use_column_major_ccl") = false});
 
     const auto* mla_doc =
         R"doc(
@@ -424,6 +433,7 @@ void bind_sdpa(nb::module_& mod) {
         mod,
         ttnn::transformer::flash_mla_prefill,
         mla_doc,
+        // Overload: head_dim_v as uint32_t (original MLA)
         ttnn::nanobind_overload_t{
             [](const MLAOperationType& self,
                const ttnn::Tensor& input_tensor_q,
@@ -456,45 +466,10 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
-
-    const auto* mla_doc_embedding_space =
-        R"doc(
-        Causal MLA attention variant with V in embedding space.
-        The input tensor v in embedding space is obtained by matrix multiplying the latent kv tensor to the embedding space.
-        This is useful when the head dim in embedding space is smaller than the last dim of the latent kv tensor, as it can reduce amount of compute in large sequence length scenarios.
-        This is a kernel optimization, and not something inherently in nature of MLA.
-        This is based on the following formulas:
-        - attention = softmax(QK^T)V
-        - K = kv_latent * W_k
-        - V = kv_latent * W_v
-        - attention = softmax(QK^T)V = softmax(Q(kv_latent * W_k)^T) * (kv_latent * W_v)
-        - we can precompute kv_latent * W_k and use it to compute attention (in Deepseek, last dim of latent kv tensor is 512, while head dim in embedding space is 128).
-
-        Args:
-            input_tensor_q (ttnn.Tensor): the input tensor.                                                                                             [b x nqh  x s x dh]
-            input_tensor_k (ttnn.Tensor): the latent kv matrix. Num heads is 1 as we only have one latent kv tensor for all heads.                      [b x 1    x s x dh]
-            input_tensor_v (ttnn.Tensor): the input tensor v in embedding space. Num heads is nqh as we have one input tensor v for each head.          [b x nqh  x s x dv]
-
-        Keyword args:
-            attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
-            is_causal (bool): Defaults to `true`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            program_config (SDPAProgramConfig, optional): Defaults to `None`.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dv].
-
-        )doc";
-
-    using MLAOperationTypeVEmbeddingSpace = decltype(ttnn::transformer::flash_mla_prefill);
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::transformer::flash_mla_prefill,
-        mla_doc_embedding_space,
+            nb::arg("compute_kernel_config") = nb::none()},
+        // Overload: input_tensor_v as Tensor (V in embedding space)
         ttnn::nanobind_overload_t{
-            [](const MLAOperationTypeVEmbeddingSpace& self,
+            [](const MLAOperationType& self,
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,

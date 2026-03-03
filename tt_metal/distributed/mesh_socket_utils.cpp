@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -68,8 +69,12 @@ void validate_fabric_config_for_sockets(
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
-                                           // physical device
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt_fabric::FabricConfig::DISABLED,  // Fabric can be disabled as long as socket endpoints are on the same
+                                            // physical device
+
     };
 
     bool fabric_config_supported = supported_fabrics.contains(fabric_config);

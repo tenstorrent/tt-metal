@@ -47,12 +47,12 @@ For vLLM runs, you'll need to install [Tenstorrent's vLLM fork](https://github.c
 
 vLLM offline run command:
 ```
-VLLM_RPC_TIMEOUT=100000 TT_LLAMA_TEXT_VER=llama3_70b_galaxy python examples/offline_inference_tt.py  --model meta-llama/Llama-3.3-70B-Instruct --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --greedy_sampling --num_repeat_prompts 2 --num_scheduler_steps 30 --async_engine --measure_perf
+VLLM_RPC_TIMEOUT=100000 TT_LLAMA_TEXT_VER=llama3_70b_galaxy python examples/offline_inference_tt.py  --model meta-llama/Llama-3.3-70B-Instruct --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --greedy_sampling --num_repeat_prompts 2 --async_engine
 ```
 
 vLLM server run command:
 ```
-TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --num_scheduler_steps 30
+TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}'
 ```
 
 To send requests to vLLM the server, you will need [TT-Inference-Server](https://github.com/tenstorrent/tt-inference-server/tree/dev).

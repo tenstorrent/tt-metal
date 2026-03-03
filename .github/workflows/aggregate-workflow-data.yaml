@@ -51,7 +51,7 @@ jobs:
             [
               ".github/workflows/all-post-commit-workflows.yaml",
               ".github/workflows/blackhole-post-commit.yaml",
-              ".github/workflows/blackhole-nightly-tests.yaml",
+              ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
