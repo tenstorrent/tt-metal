@@ -11,7 +11,7 @@ inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) 
 
 // this algorithm matches the current implementation in MoE compute
 template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
-void token_work_split_simple(
+[[maybe_unused]] void token_work_split_simple(
     const uint32_t token_parallel_core_id,
     volatile tt_l1_ptr uint32_t* dense_token_counts_ptr,
     uint32_t* token_split_counts,
@@ -34,9 +34,8 @@ void token_work_split_simple(
     }
 }
 
-// this algorithm more efficiently splits work, switch to it eventually
 template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
-[[maybe_unused]] void token_work_split_even(
+void token_work_split_even(
     const uint32_t token_parallel_core_id,
     volatile tt_l1_ptr uint32_t* dense_token_counts_ptr,
     uint32_t* token_split_counts,
@@ -45,6 +44,7 @@ template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
         token_split_offsets[e] = 0;
         for (uint32_t c = 0; c < NumTokenParallelCores; ++c) {
             uint32_t count = dense_token_counts_ptr[e] / NumTokenParallelCores;
+
             if (c < dense_token_counts_ptr[e] % NumTokenParallelCores) {
                 ++count;
             }
@@ -135,7 +135,7 @@ void kernel_main() {
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
     uint32_t token_split_offsets[num_local_experts];
     uint32_t token_split_counts[num_local_experts];
-    detail::token_work_split_simple<num_local_experts, num_token_parallel_cores>(
+    detail::token_work_split_even<num_local_experts, num_token_parallel_cores>(
         token_parallel_core_id, token_counts_l1_ptr, token_split_counts, token_split_offsets);
 
     // read dense token maps

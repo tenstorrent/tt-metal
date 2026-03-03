@@ -140,7 +140,7 @@ def gen_dense_input_contribs(
 
     dense_input_contribs_tensor = torch.zeros([experts, batch * seq, hidden_size]).bfloat16()
     token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts_simple(
+    block_counts = _active_token_core_split_counts_even(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
     assert len(block_counts) == experts
@@ -203,7 +203,7 @@ def gen_output_ref(
     output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
 
     token_parallel_block_size = batch // token_parallel_core_dim
-    block_counts = _active_token_core_split_counts_simple(
+    block_counts = _active_token_core_split_counts_even(
         token_parallel_block_size, active_token_counts, token_parallel_core_dim
     )
 
@@ -649,7 +649,7 @@ def _run_test(
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
-@pytest.mark.parametrize("batch", [512])
+@pytest.mark.parametrize("batch", [512, 128])
 @pytest.mark.parametrize("experts", [32])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -660,7 +660,7 @@ def _run_test(
 @pytest.mark.parametrize("data_parallel_core_dim", [4])
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
-@pytest.mark.parametrize("num_test_iters", [3])
+@pytest.mark.parametrize("num_test_iters", [50])
 @pytest.mark.parametrize("num_inner_iters", [1])
 def test_decode(
     mesh_device,
