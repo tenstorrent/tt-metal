@@ -1208,7 +1208,7 @@ class TTNNExperts(TTNNModule):
 
             # Update seq_len to include padding
             seq_len = num_tokens // batch_size_per_device
-
+        x = ttnn.typecast(x, ttnn.bfloat16)
         # 1. Prepare tensors for all-to-all dispatch (convert to ROW_MAJOR)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
