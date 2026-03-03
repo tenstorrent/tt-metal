@@ -893,7 +893,10 @@ def fix_memory_config_recursive(obj, fixed_count_ref):
     if isinstance(obj, dict):
         # Check if this dict is a memory_config with shard_spec
         if "shard_spec" in obj and isinstance(obj["shard_spec"], str):
-            if obj["shard_spec"].startswith("ShardSpec{"):
+            if obj["shard_spec"] == "None":
+                obj["shard_spec"] = None
+                fixed_count_ref[0] += 1
+            elif obj["shard_spec"].startswith("ShardSpec{"):
                 parsed = parse_shard_spec_string(obj["shard_spec"])
                 if isinstance(parsed, dict):
                     obj["shard_spec"] = parsed

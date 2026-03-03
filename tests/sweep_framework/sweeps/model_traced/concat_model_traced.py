@@ -15,8 +15,13 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-# Import V2 master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+# Import V2 master config loader and standalone helpers for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import (
+    MasterConfigLoader,
+    dict_to_memory_config,
+    parse_dtype,
+    parse_layout,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
@@ -96,6 +101,7 @@ def run(
 
     # Handle memory_config - prefer output_memory_config, fallback to memory_config
     mem_config = output_memory_config if output_memory_config is not None else memory_config
+    mem_config = dict_to_memory_config(mem_config)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -111,24 +117,17 @@ def run(
     ttnn_tensors = []
 
     for i, tensor_spec in enumerate(arg0):
-        # Extract tensor spec
-        shape = tensor_spec.get("shape")
-        dtype_str = tensor_spec.get("dtype", "ttnn.bfloat16")
+        # Extract tensor spec - prefer original_shape/original_dtype from traced data
+        shape = tensor_spec.get("original_shape", tensor_spec.get("shape"))
+        dtype_str = tensor_spec.get("original_dtype", tensor_spec.get("dtype", "ttnn.bfloat16"))
         layout_str = tensor_spec.get("layout", "ttnn.TILE_LAYOUT")
         tensor_placement = tensor_spec.get("tensor_placement", None)
         # Use per-tensor memory_config if available, otherwise fall back to output mem_config
         tensor_mem_config = tensor_spec.get("memory_config", mem_config)
+        tensor_mem_config = dict_to_memory_config(tensor_mem_config)
 
-        # Convert strings to actual ttnn objects if needed
-        if isinstance(dtype_str, str):
-            dtype = eval(dtype_str) if "ttnn." in dtype_str else ttnn.bfloat16
-        else:
-            dtype = dtype_str
-
-        if isinstance(layout_str, str):
-            layout = eval(layout_str) if "ttnn." in layout_str else ttnn.TILE_LAYOUT
-        else:
-            layout = layout_str
+        dtype = parse_dtype(dtype_str)
+        layout = parse_layout(layout_str)
 
         # Generate torch tensor
         torch_tensor = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(
@@ -167,9 +166,6 @@ def run(
     torch_output_tensor = torch.cat(torch_tensors, dim=dim_value)
 
     start_time = start_measuring_time()
-    # print(f"ttnn_tensors: {ttnn_tensors}")
-    # print(f"dim_value: {dim_value}")
-    # print(f"mem_config: {mem_config}")
     output_tensor = ttnn.concat(ttnn_tensors, dim=dim_value, memory_config=mem_config)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

@@ -118,7 +118,7 @@ def run(
         torch_output_tensor = torch.add(torch_input_tensor_a, scalar_value)
         is_scalar_add = True
     else:
-        # Tensor-tensor add: generate second tensor with global shape
+        # Tensor-tensor add: generate second tensor
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)

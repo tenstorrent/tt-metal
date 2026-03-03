@@ -12,8 +12,15 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-# Import V2 master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+# Import V2 master config loader and helpers for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import (
+    MasterConfigLoader,
+    dict_to_memory_config,
+    dict_to_core_grid,
+    dict_to_compute_kernel_config,
+    dict_to_program_config,
+    parse_dtype,
+)
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
@@ -107,11 +114,33 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Convert traced dict params to proper ttnn objects
+    memory_config = dict_to_memory_config(memory_config)
+    core_grid = dict_to_core_grid(core_grid)
+    compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
+    if isinstance(dtype, (dict, str)):
+        dtype = parse_dtype(dtype.get("repr", "") if isinstance(dtype, dict) else dtype)
+    if isinstance(program_config, dict):
+        program_config = dict_to_program_config(program_config, input_b_memory_config, input_a_memory_config)
+
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
-    output_memory_config = kwargs.get("output_memory_config", None)
+    output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
+
+    # When program_config can't be reconstructed (incomplete traced data), the
+    # shard_spec in memory_config/output_memory_config was computed by the
+    # original program_config and is invalid without it. Also, DRAM-sharded
+    # input B requires a matching DRAMSharded program_config. Clear all
+    # sharded configs so ttnn.linear auto-determines compatible settings.
+    if program_config is None:
+        if memory_config is not None and "SHARDED" in str(memory_config):
+            memory_config = None
+        if output_memory_config is not None and "SHARDED" in str(output_memory_config):
+            output_memory_config = None
+        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -169,17 +198,25 @@ def run(
     # Use matmul for multi-dimensional tensors (like traced 4D configs)
     # Use linear for 2D tensors (like sample tests)
     if len(torch_a.shape) > 2:
-        # Multi-dimensional tensors: use matmul semantics
-        # input[..., m, k] @ weight[..., k, n] -> result[..., m, n]
         torch_output_tensor = torch.matmul(torch_a, torch_weight)
         if torch_bias is not None:
             torch_output_tensor = torch_output_tensor + torch_bias
     else:
-        # 2D tensors: use linear (transpose weight to match torch.linear expectations)
         torch_weight_for_linear = torch_weight
         if len(torch_weight.shape) >= 2:
             torch_weight_for_linear = torch_weight.transpose(-1, -2)
         torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight_for_linear, torch_bias)
+
+    # Apply activation to golden reference to match ttnn.linear behavior
+    if activation is not None:
+        act = str(activation).lower()
+        if "silu" in act or "swish" in act:
+            torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+        elif "gelu" in act:
+            approx = "tanh" if "approx" in act else "none"
+            torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate=approx)
+        elif "relu" in act:
+            torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
