@@ -160,8 +160,9 @@ class TestSampling1DDevice:
         tokens_host = to_torch_auto_compose(tokens_tt)
 
         expected_argmax = logits_host.float().argmax(dim=-1)
-        tokens_flat = tokens_host.flatten()[:B]
-        expected_flat = expected_argmax.flatten()[:B]
+        # .long(): ttnn.argmax → uint32, torch.argmax → int64; normalize before compare
+        tokens_flat = tokens_host.flatten()[:B].long()
+        expected_flat = expected_argmax.flatten()[:B].long()
 
         assert torch.equal(
             tokens_flat, expected_flat
@@ -667,9 +668,9 @@ def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
     tokens_tt, _ = sampler.decode_forward(logits_tt)
-    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B]
-
-    expected = logits_host.float().argmax(dim=-1).flatten()[:B]
+    # .long(): ttnn.argmax → uint32, torch.argmax → int64; normalize before compare
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+    expected = logits_host.float().argmax(dim=-1).flatten()[:B].long()
 
     assert torch.equal(
         tokens_host, expected
