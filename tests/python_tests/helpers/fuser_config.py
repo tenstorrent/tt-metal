@@ -49,7 +49,6 @@ class FuserConfig:
                 operation.src_a.data_format,
                 operation.output.data_format,
                 self.global_config.dest_acc,
-                None,  # No src_b in fuser operations yet
             ):
                 raise ValueError(
                     f"Dest Accumulation must be enabled for {operation.src_a.data_format} input and {operation.output.data_format} output"
