@@ -20,6 +20,7 @@ from models.tt_dit.encoders.clip.model_clip import CLIPConfig, CLIPEncoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.tracing import Tracer
 
 
 def get_hf_config(model_name: str) -> HF_CLIPConfig:
@@ -172,10 +173,16 @@ def test_clip_encoder(
         eos_token_id=eos_token_id,
     )
     tt_clip.load_torch_state_dict(hf_model.state_dict())
+    tracer = Tracer(tt_clip.forward, device=encoder_submesh, num_prep_runs=1, clone_prep_inputs=False)
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt)
+    tt_sequence_output, tt_normalized_output = tracer(tt_prompt, skip_pooling=True)
+    tt_projected_output = tt_clip.pooled_output(
+        prompt_tokenized=tt_prompt,
+        normalized_final_state=tt_normalized_output,
+    )
+
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 

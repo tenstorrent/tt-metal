@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import diffusers
@@ -18,7 +17,6 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 
 import ttnn
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ...encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
 from ...models.transformers.transformer_qwenimage import QwenImageTransformer
@@ -33,28 +31,15 @@ from ...parallel.config import (
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
-    pass
-
     from PIL import Image
+
+    from models.perf.benchmarking_utils import BenchmarkProfiler
 
 PROMPT_TEMPLATE = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"  # noqa: E501
 PROMPT_DROP_IDX = 34
-
-
-@dataclass
-class PipelineTrace:
-    tid: int
-    spatial_input: ttnn.Tensor
-    prompt_input: ttnn.Tensor
-    timestep_input: ttnn.Tensor
-    sigma_difference_input: ttnn.Tensor
-    latents_output: ttnn.Tensor
-    spatial_rope_cos: ttnn.Tensor
-    spatial_rope_sin: ttnn.Tensor
-    prompt_rope_cos: ttnn.Tensor
-    prompt_rope_sin: ttnn.Tensor
 
 
 class QwenImagePipeline:
@@ -160,24 +145,27 @@ class QwenImagePipeline:
         self._pos_embed = torch_transformer.pos_embed
 
         # Initialize the transformers. Loading logic comes after.
-        self.transformers = []
-        for i, submesh_device in enumerate(self._submesh_devices):
-            self.transformers.append(
-                QwenImageTransformer(
-                    patch_size=torch_transformer.config.patch_size,
-                    in_channels=torch_transformer.config.in_channels,
-                    num_layers=torch_transformer.config.num_layers,
-                    attention_head_dim=torch_transformer.config.attention_head_dim,
-                    num_attention_heads=torch_transformer.config.num_attention_heads,
-                    joint_attention_dim=torch_transformer.config.joint_attention_dim,
-                    out_channels=torch_transformer.config.out_channels,
-                    device=submesh_device,
-                    ccl_manager=self._ccl_managers[i],
-                    parallel_config=self._parallel_config,
-                    padding_config=self._padding_config,
-                    is_fsdp=self._is_fsdp,
-                )
+        self.transformers = [
+            QwenImageTransformer(
+                patch_size=torch_transformer.config.patch_size,
+                in_channels=torch_transformer.config.in_channels,
+                num_layers=torch_transformer.config.num_layers,
+                attention_head_dim=torch_transformer.config.attention_head_dim,
+                num_attention_heads=torch_transformer.config.num_attention_heads,
+                joint_attention_dim=torch_transformer.config.joint_attention_dim,
+                out_channels=torch_transformer.config.out_channels,
+                device=submesh_device,
+                ccl_manager=self._ccl_managers[i],
+                parallel_config=self._parallel_config,
+                padding_config=self._padding_config,
+                is_fsdp=self._is_fsdp,
             )
+            for i, submesh_device in enumerate(self._submesh_devices)
+        ]
+        self._step_inner_tracers = [
+            Tracer(self._step_inner, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            for device in self._submesh_devices
+        ]
         self._transformers_loaded = False
 
         # initialize text encoder. This will load the weights
@@ -213,6 +201,7 @@ class QwenImagePipeline:
 
         if use_torch_vae_decoder:
             self._vae_decoder = None
+            self._vae_decoder_tracer = None
         else:
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape, synchronize=True):
                 logger.info("creating TT-NN VAE decoder...")
@@ -226,15 +215,13 @@ class QwenImagePipeline:
                     parallel_config=self._wan_vae_parallel_config,
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
+                self._vae_decoder_tracer = Tracer(
+                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=1, clone_prep_inputs=False
+                )
 
             # Load VAE weights based on configuration
             if not dynamic_load_vae:
                 self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
-
-        self._traces = None
-
-        logger.info("warming up for tracing...")
-        self.run_single_prompt(prompt="", num_inference_steps=1, seed=0, traced=False)
 
     def _load_transformers(self, idx) -> None:
         """Load transformer weights to device. Called lazily for device encoder path."""
@@ -498,6 +485,7 @@ class QwenImagePipeline:
                         cfg_enabled=cfg_enabled,
                         profiler=profiler,
                         profiler_iteration=profiler_iteration,
+                        traced=traced,
                     )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
@@ -535,119 +523,66 @@ class QwenImagePipeline:
             prompt_rope_cos = prompt_rope.real.repeat_interleave(2, dim=-1)
             prompt_rope_sin = prompt_rope.imag.repeat_interleave(2, dim=-1)
 
-            tt_prompt_embeds_device_list = []
             tt_prompt_embeds_list = []
             tt_latents_step_list = []
             tt_spatial_rope_cos_list = []
             tt_spatial_rope_sin_list = []
             tt_prompt_rope_cos_list = []
             tt_prompt_rope_sin_list = []
+
             for i, submesh_device in enumerate(self._submesh_devices):
-                tt_prompt_embeds_device = tensor.from_torch(
-                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
-                    device=submesh_device,
-                    on_host=traced,
+                tt_prompt_embeds_list.append(
+                    tensor.from_torch(
+                        prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
+                        device=submesh_device,
+                    )
                 )
-                tt_prompt_embeds = tensor.from_torch(
-                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
-                    device=submesh_device,
-                    on_host=True,
+                tt_latents_step_list.append(
+                    tensor.from_torch(latents, device=submesh_device, mesh_axes=[None, sp_axis, None])
                 )
-
-                tt_initial_latents = tensor.from_torch(
-                    latents, device=submesh_device, on_host=traced, mesh_axes=[None, sp_axis, None]
+                tt_spatial_rope_cos_list.append(
+                    tensor.from_torch(spatial_rope_cos, device=submesh_device, mesh_axes=[sp_axis, None])
                 )
-
-                tt_spatial_rope_cos = tensor.from_torch(
-                    spatial_rope_cos, device=submesh_device, on_host=traced, mesh_axes=[sp_axis, None]
+                tt_spatial_rope_sin_list.append(
+                    tensor.from_torch(spatial_rope_sin, device=submesh_device, mesh_axes=[sp_axis, None])
                 )
-                tt_spatial_rope_sin = tensor.from_torch(
-                    spatial_rope_sin, device=submesh_device, on_host=traced, mesh_axes=[sp_axis, None]
-                )
-                tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=submesh_device, on_host=traced)
-                tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=submesh_device, on_host=traced)
-
-                if traced:
-                    if self._traces is None:
-                        tt_initial_latents = tt_initial_latents.to(submesh_device)
-                        tt_prompt_embeds_device = tt_prompt_embeds_device.to(submesh_device)
-                        tt_spatial_rope_cos = tt_spatial_rope_cos.to(submesh_device)
-                        tt_spatial_rope_sin = tt_spatial_rope_sin.to(submesh_device)
-                        tt_prompt_rope_cos = tt_prompt_rope_cos.to(submesh_device)
-                        tt_prompt_rope_sin = tt_prompt_rope_sin.to(submesh_device)
-                    else:
-                        ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds_device, self._traces[i].prompt_input)
-                        ttnn.copy_host_to_device_tensor(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
-                        ttnn.copy_host_to_device_tensor(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_rope_cos, self._traces[i].prompt_rope_cos)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_rope_sin, self._traces[i].prompt_rope_sin)
-
-                        tt_initial_latents = self._traces[i].spatial_input
-                        tt_prompt_embeds_device = self._traces[i].prompt_input
-                        tt_spatial_rope_cos = self._traces[i].spatial_rope_cos
-                        tt_spatial_rope_sin = self._traces[i].spatial_rope_sin
-                        tt_prompt_rope_cos = self._traces[i].prompt_rope_cos
-                        tt_prompt_rope_sin = self._traces[i].prompt_rope_sin
-
-                tt_prompt_embeds_device_list.append(tt_prompt_embeds_device)
-                tt_prompt_embeds_list.append(tt_prompt_embeds)
-                tt_latents_step_list.append(tt_initial_latents)
-                tt_spatial_rope_cos_list.append(tt_spatial_rope_cos)
-                tt_spatial_rope_sin_list.append(tt_spatial_rope_sin)
-                tt_prompt_rope_cos_list.append(tt_prompt_rope_cos)
-                tt_prompt_rope_sin_list.append(tt_prompt_rope_sin)
+                tt_prompt_rope_cos_list.append(tensor.from_torch(prompt_rope_cos, device=submesh_device))
+                tt_prompt_rope_sin_list.append(tensor.from_torch(prompt_rope_sin, device=submesh_device))
 
             logger.info("denoising...")
 
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
-                        sigma_difference = sigmas[i + 1] - sigmas[i]
-
-                        tt_timestep_list = []
-                        tt_sigma_difference_list = []
-                        for submesh_nr, submesh_device in enumerate(self._submesh_devices):
-                            tt_timestep = ttnn.full(
+                        tt_timestep_list = [
+                            ttnn.full(
                                 [1, 1],
                                 fill_value=t,
                                 layout=ttnn.TILE_LAYOUT,
                                 dtype=ttnn.float32,
-                                device=submesh_device if not traced else None,
+                                device=submesh_device,
                             )
-                            tt_timestep_list.append(tt_timestep)
+                            for submesh_device in self._submesh_devices
+                        ]
 
-                            tt_sigma_difference = ttnn.full(
-                                [1, 1],
-                                fill_value=sigma_difference,
-                                layout=ttnn.TILE_LAYOUT,
-                                dtype=ttnn.bfloat16,
-                                device=submesh_device if not traced else None,
-                            )
-                            tt_sigma_difference_list.append(tt_sigma_difference)
-
-                            # TODO: move out of the loop
-                            ttnn.copy_host_to_device_tensor(
-                                tt_prompt_embeds_list[submesh_nr],
-                                tt_prompt_embeds_device_list[submesh_nr],
-                            )
+                        reuse_tensors = i > 0 and traced
 
                         tt_latents_step_list = self._step(
+                            sigma_difference=sigmas[i + 1] - sigmas[i],
                             timestep=tt_timestep_list,
-                            latents=tt_latents_step_list,
-                            cfg_enabled=cfg_enabled,
-                            prompt_embeds=tt_prompt_embeds_device_list,
-                            cfg_scale=cfg_scale,
-                            sigma_difference=tt_sigma_difference_list,
-                            spatial_rope_cos=tt_spatial_rope_cos_list,
-                            spatial_rope_sin=tt_spatial_rope_sin_list,
-                            prompt_rope_cos=tt_prompt_rope_cos_list,
-                            prompt_rope_sin=tt_prompt_rope_sin_list,
+                            latents=None if reuse_tensors else tt_latents_step_list,
+                            prompt_embeds=None if reuse_tensors else tt_prompt_embeds_list,
+                            spatial_rope_cos=None if reuse_tensors else tt_spatial_rope_cos_list,
+                            spatial_rope_sin=None if reuse_tensors else tt_spatial_rope_sin_list,
+                            prompt_rope_cos=None if reuse_tensors else tt_prompt_rope_cos_list,
+                            prompt_rope_sin=None if reuse_tensors else tt_prompt_rope_sin_list,
                             spatial_sequence_length=spatial_sequence_length,
                             prompt_sequence_length=prompt_sequence_length,
-                            traced=traced,
+                            cfg_scale=cfg_scale,
+                            cfg_enabled=cfg_enabled,
                             profiler=profiler,
                             profiler_iteration=profiler_iteration,
+                            traced=traced,
                         )
 
             logger.info("decoding image...")
@@ -682,7 +617,8 @@ class QwenImagePipeline:
 
                     with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
                         tt_latents, logical_h = self._vae_decoder.prepare_input(torch_latents)
-                        tt_decoded_output, logical_h = self._vae_decoder.forward(tt_latents, logical_h)
+                        vae_decode = self._vae_decoder_tracer if traced else self._vae_decoder.forward
+                        tt_decoded_output, logical_h = vae_decode(tt_latents, logical_h)
                         decoded_output = self._vae_decoder.postprocess_output(tt_decoded_output, logical_h)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
@@ -696,22 +632,23 @@ class QwenImagePipeline:
         self,
         *,
         cfg_enabled: bool,
-        latent: ttnn.Tensor,
-        prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        submesh_index: int,
-        spatial_rope_cos: ttnn.Tensor,
-        spatial_rope_sin: ttnn.Tensor,
-        prompt_rope_cos: ttnn.Tensor,
-        prompt_rope_sin: ttnn.Tensor,
+        latent: ttnn.Tensor,
+        prompt: ttnn.Tensor | None,
+        spatial_rope_cos: ttnn.Tensor | None,
+        spatial_rope_sin: ttnn.Tensor | None,
+        prompt_rope_cos: ttnn.Tensor | None,
+        prompt_rope_sin: ttnn.Tensor | None,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
+        submesh_id: int,
     ) -> ttnn.Tensor:
-        if cfg_enabled and self._parallel_config.cfg_parallel.factor == 1:
-            latent = ttnn.concat([latent, latent])
+        latent_input = (
+            ttnn.concat([latent, latent]) if cfg_enabled and self._parallel_config.cfg_parallel.factor == 1 else latent
+        )
 
-        return self.transformers[submesh_index].forward(
-            spatial=latent,
+        noise_pred = self.transformers[submesh_id].forward(
+            spatial=latent_input,
             prompt=prompt,
             timestep=timestep,
             spatial_rope=(spatial_rope_cos, spatial_rope_sin),
@@ -720,113 +657,53 @@ class QwenImagePipeline:
             prompt_sequence_length=prompt_sequence_length,
         )
 
+        # Make latents an output, because inputs are copied to the trace region before executing a
+        # trace and might be overwritten during execution.
+        return latent, noise_pred
+
     def _step(
         self,
         *,
-        cfg_enabled: bool,
-        cfg_scale: float,
-        latents: list[ttnn.Tensor],  # device tensor
-        timestep: list[ttnn.Tensor],  # host tensor
-        prompt_embeds: list[ttnn.Tensor],  # device tensor
-        sigma_difference: list[ttnn.Tensor],  # device tensor
-        spatial_rope_cos: list[ttnn.Tensor],
-        spatial_rope_sin: list[ttnn.Tensor],
-        prompt_rope_cos: list[ttnn.Tensor],
-        prompt_rope_sin: list[ttnn.Tensor],
+        sigma_difference: float,
+        timestep: list[ttnn.Tensor],
+        latents: list[ttnn.Tensor],
+        prompt_embeds: list[ttnn.Tensor] | None,
+        spatial_rope_cos: list[ttnn.Tensor] | None,
+        spatial_rope_sin: list[ttnn.Tensor] | None,
+        prompt_rope_cos: list[ttnn.Tensor] | None,
+        prompt_rope_sin: list[ttnn.Tensor] | None,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
-        traced: bool,
+        cfg_enabled: bool,
+        cfg_scale: float,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
+        traced: bool,
     ) -> list[ttnn.Tensor]:
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
 
-        if traced and self._traces is None:
-            self._traces = []
-            for submesh_id, submesh_device in enumerate(self._submesh_devices):
-                timestep_device = timestep[submesh_id].to(submesh_device)
-                sigma_difference_device = sigma_difference[submesh_id].to(submesh_device)
-
-                # Warmup run before trace capture
-                pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    timestep=timestep_device,
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-
-                trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-                pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    timestep=timestep_device,
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-                ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-
-                for device in self._submesh_devices:
-                    ttnn.synchronize_device(device)
-
-                self._traces.append(
-                    PipelineTrace(
-                        spatial_input=latents[submesh_id],
-                        prompt_input=prompt_embeds[submesh_id],
-                        timestep_input=timestep_device,
-                        spatial_rope_cos=spatial_rope_cos[submesh_id],
-                        spatial_rope_sin=spatial_rope_sin[submesh_id],
-                        prompt_rope_cos=prompt_rope_cos[submesh_id],
-                        prompt_rope_sin=prompt_rope_sin[submesh_id],
-                        latents_output=pred,
-                        sigma_difference_input=sigma_difference_device,
-                        tid=trace_id,
-                    )
-                )
-
+        latents_out = []
         noise_pred_list = []
-        if traced:
-            for submesh_id, submesh_device in enumerate(self._submesh_devices):
-                ttnn.copy_host_to_device_tensor(timestep[submesh_id], self._traces[submesh_id].timestep_input)
-                ttnn.copy_host_to_device_tensor(
-                    sigma_difference[submesh_id], self._traces[submesh_id].sigma_difference_input
-                )
-                ttnn.execute_trace(submesh_device, self._traces[submesh_id].tid, cq_id=0, blocking=False)
-                noise_pred_list.append(self._traces[submesh_id].latents_output)
 
-            # TODO: If we don't do this, we get noise when tracing is enabled. But why, since sigma
-            # difference is only used outside of tracing region?
-            sigma_difference_device = [trace.sigma_difference_input for trace in self._traces]
-        else:
-            for submesh_id in range(len(self._submesh_devices)):
-                noise_pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    timestep=timestep[submesh_id],
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-                noise_pred_list.append(noise_pred)
+        for submesh_id in range(len(self._submesh_devices)):
+            inner = self._step_inner_tracers[submesh_id] if traced else self._step_inner
 
-            sigma_difference_device = sigma_difference
+            latent, noise_pred = inner(
+                cfg_enabled=cfg_enabled,
+                timestep=timestep[submesh_id],
+                latent=latents[submesh_id] if latents is not None else None,
+                prompt=prompt_embeds[submesh_id] if prompt_embeds is not None else None,
+                spatial_rope_cos=spatial_rope_cos[submesh_id] if spatial_rope_cos is not None else None,
+                spatial_rope_sin=spatial_rope_sin[submesh_id] if spatial_rope_sin is not None else None,
+                prompt_rope_cos=prompt_rope_cos[submesh_id] if prompt_rope_cos is not None else None,
+                prompt_rope_sin=prompt_rope_sin[submesh_id] if prompt_rope_sin is not None else None,
+                spatial_sequence_length=spatial_sequence_length,
+                prompt_sequence_length=prompt_sequence_length,
+                submesh_id=submesh_id,
+            )
+
+            latents_out.append(latent)
+            noise_pred_list.append(noise_pred)
 
         # CFG combine
         # NOTE: With cfg_parallel.factor > 1, the .cpu(blocking=True) call is the sync point
@@ -866,10 +743,10 @@ class QwenImagePipeline:
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device[submesh_id])
-            ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
+            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
+            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
 
-        return latents
+        return latents_out
 
     def _encode_prompts(
         self,
@@ -880,6 +757,7 @@ class QwenImagePipeline:
         cfg_enabled: bool,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
+        traced: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert len(prompts) == len(negative_prompts), "prompts and negative_prompts must have the same length"
 
@@ -895,6 +773,7 @@ class QwenImagePipeline:
             prompts,
             num_images_per_prompt=num_images_per_prompt,
             sequence_length=512 + PROMPT_DROP_IDX,
+            enable_tracing=traced,
         )
 
         embeds[torch.logical_not(mask)] = 0.0
@@ -911,7 +790,7 @@ def _schedule(
     *,
     step_count: int,
     spatial_sequence_length: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[list[float], list[float]]:
     scheduler.set_timesteps(
         sigmas=np.linspace(1.0, 1 / step_count, step_count),
         mu=_calculate_shift(
@@ -923,13 +802,7 @@ def _schedule(
         ),
     )
 
-    timesteps = scheduler.timesteps
-    sigmas = scheduler.sigmas
-
-    assert isinstance(timesteps, torch.Tensor)
-    assert isinstance(sigmas, torch.Tensor)
-
-    return timesteps, sigmas
+    return scheduler.timesteps.tolist(), scheduler.sigmas.tolist()
 
 
 def _calculate_shift(

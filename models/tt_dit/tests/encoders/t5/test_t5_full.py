@@ -20,6 +20,7 @@ from models.tt_dit.encoders.t5.model_t5 import T5Config, T5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.tracing import Tracer
 
 
 @pytest.mark.parametrize(
@@ -121,10 +122,11 @@ def test_t5_encoder(
 
     tt_encoder = T5Encoder(config, encoder_submesh, ccl_manager, parallel_config)
     tt_encoder.load_torch_state_dict(hf_model.state_dict())
+    tracer = Tracer(tt_encoder.forward, device=encoder_submesh, num_prep_runs=1, clone_prep_inputs=False)
 
     # time TT model inference only
     tt_start_time = time.time()
-    tt_output = tt_encoder(tt_prompt)
+    tt_output = tracer(tt_prompt)
 
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time

@@ -20,6 +20,7 @@ from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
+from ....utils.tracing import Tracer
 
 
 def get_padded_size(numerator, denominator):
@@ -786,6 +787,7 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         nonlinearity=config["nonlinearity"],
         output_nonlinearity=config["output_nonlinearity"],
     )
+    tracer = Tracer(tt_model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
 
     # Create input tensor (latent representation)
     torch_input = torch.randn(N, C, T, H, W)
@@ -832,7 +834,7 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
 
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtDecoder forward")
-    tt_output = tt_model(tt_input)
+    tt_output = tracer(tt_input)
     logger.info("End TtDecoder forward")
     tt_output = ttnn.unsqueeze(tt_output, 2)
 

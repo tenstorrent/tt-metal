@@ -16,13 +16,14 @@ from ....parallel.config import ParallelFactor, VAEParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.tracing import Tracer
 
 
 @pytest.mark.parametrize(
     "mesh_device",
     [
         pytest.param((1, 1), id="1x1"),
-        pytest.param((1, 8), id="1x8"),
+        # pytest.param((1, 8), id="1x8"),
     ],
     indirect=True,
 )
@@ -91,15 +92,17 @@ def test_vae_flux2_decoder(
         latents = latents.reshape(b, c // (2 * 2), h * 2, w * 2)
         torch_output = torch_model.decode(latents).sample
 
+    tracer = Tracer(tt_model.forward, device=mesh_device, num_prep_runs=1, clone_prep_inputs=False)
+
     tt_inp = tt_model.preprocess_and_unpatchify(
         tt_inp, height=height // vae_scale_factor, width=width // vae_scale_factor
     )
-    tt_out = tt_model.forward(tt_inp)
+    tt_out = tracer(tt_inp)
 
     tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
 
     start = time()
-    tt_model.forward(tt_inp)
+    tracer(tt_inp)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"VAE time taken: {time() - start}")

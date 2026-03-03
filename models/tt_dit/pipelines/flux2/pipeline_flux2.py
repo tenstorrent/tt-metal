@@ -159,7 +159,10 @@ class Flux2Pipeline:
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
 
-        self._step_inner_tracers = [Tracer(self._step_inner, device=device) for device in self._submesh_devices]
+        self._step_inner_tracers = [
+            Tracer(self._step_inner, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            for device in self._submesh_devices
+        ]
 
         self._pos_embed = torch_transformer.pos_embed
 
@@ -190,8 +193,12 @@ class Flux2Pipeline:
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
                 self._vae_decoder.load_torch_state_dict(self._torch_vae.state_dict())
+                self._vae_decoder_tracer = Tracer(
+                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=1, clone_prep_inputs=False
+                )
             else:
                 self._vae_decoder = None
+                self._vae_decoder_tracer = None
 
             if self.encoder_device is not None:
                 ttnn.synchronize_device(self.encoder_device)
@@ -303,7 +310,10 @@ class Flux2Pipeline:
             with timer.time_section("total_encoding") if timer else nullcontext():
                 with self.encoder_reshape(self.encoder_device):
                     prompt_embeds, _mask = self._prompt_encoder.encode(
-                        prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=512
+                        prompts,
+                        num_images_per_prompt=num_images_per_prompt,
+                        sequence_length=512,
+                        enable_tracing=traced,
                     )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
@@ -450,7 +460,8 @@ class Flux2Pipeline:
                             height=self._height // self._vae_scale_factor,
                             width=self._width // self._vae_scale_factor,
                         )
-                        tt_decoded_output = self._vae_decoder.forward(tt_latents)
+                        vae_decode = self._vae_decoder_tracer if traced else self._vae_decoder.forward
+                        tt_decoded_output = vae_decode(tt_latents)
                         decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(
                             0, 3, 1, 2
                         )

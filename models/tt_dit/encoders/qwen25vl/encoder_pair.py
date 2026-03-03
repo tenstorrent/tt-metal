@@ -16,6 +16,7 @@ from ...encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -48,6 +49,11 @@ class Qwen25VlTokenizerEncoderPair:
         else:
             self._tokenizer = Qwen2Tokenizer.from_pretrained(checkpoint)
         self._encoder = self._load_encoder(checkpoint, encoder_subfolder, use_torch=use_torch)
+        self._tracer = (
+            None
+            if use_torch
+            else Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
+        )
 
     def _load_encoder(
         self, checkpoint: str, subfolder: str | None, *, use_torch: bool
@@ -134,12 +140,13 @@ class Qwen25VlTokenizerEncoderPair:
         ttnn.synchronize_device(self._device)
 
     def encode(
-        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int
+        self, prompts: Sequence[str], *, num_images_per_prompt: int, sequence_length: int, enable_tracing: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return _get_qwen_prompt_embeds(
             prompts=prompts,
             num_images_per_prompt=num_images_per_prompt,
             tokenizer=self._tokenizer,
+            tracer=self._tracer if enable_tracing else None,
             text_encoder=self._encoder,
             sequence_length=sequence_length,
             mesh_device=self._device,
@@ -149,7 +156,9 @@ class Qwen25VlTokenizerEncoderPair:
 # adapted from https://github.com/huggingface/diffusers/blob/v0.35.2/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L188
 def _get_qwen_prompt_embeds(
     prompts: Sequence[str],
+    *,
     text_encoder: Qwen25VlTextEncoder | Qwen2_5_VLForConditionalGeneration,
+    tracer: Tracer | None = None,
     tokenizer: PreTrainedTokenizerBase,
     mesh_device: ttnn.MeshDevice | None,
     sequence_length: int,
@@ -185,7 +194,7 @@ def _get_qwen_prompt_embeds(
         tt_cos = tensor.from_torch(cos, device=mesh_device)
         tt_sin = tensor.from_torch(sin, device=mesh_device)
 
-        tt_hidden_states = text_encoder.forward(
+        tt_hidden_states = (tracer or text_encoder.forward)(
             tt_tokens, attention_mask=tt_attention_mask, pos_embeds=(tt_cos, tt_sin)
         )
         tt_prompt_embeds = tt_hidden_states[-1]

@@ -15,6 +15,7 @@ from ....models.vae import vae_sd35
 from ....parallel.config import ParallelFactor, VAEParallelConfig, vae_all_gather
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.tracing import Tracer
 from .test_performance_sd35 import get_expected_metrics
 
 
@@ -633,6 +634,7 @@ def test_sd35_vae_vae_decoder(
         ccl_manager=ccl_manager,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
+    tracer = Tracer(tt_model.forward, device=submesh_device, num_prep_runs=1, clone_prep_inputs=False)
 
     torch_input = torch.randn(batch, in_channels, height, width)
 
@@ -646,7 +648,7 @@ def test_sd35_vae_vae_decoder(
     with torch.no_grad():
         torch_output = torch_model(torch_input)
 
-    tt_out = tt_model(tt_input_tensor)
+    tt_out = tracer(tt_input_tensor)
     ttnn.synchronize_device(submesh_device)
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.99_000)
@@ -654,7 +656,7 @@ def test_sd35_vae_vae_decoder(
     if dit_unit_test:
         benchmark_profiler = BenchmarkProfiler()
         with benchmark_profiler("vae_decoding", iteration=0):
-            tt_out = tt_model(tt_input_tensor)
+            tt_out = tracer(tt_input_tensor)
         ttnn.synchronize_device(submesh_device)
         vae_decoding_time = benchmark_profiler.get_duration("vae_decoding", 0)
         logger.info(f"VAE Time taken: {vae_decoding_time}")

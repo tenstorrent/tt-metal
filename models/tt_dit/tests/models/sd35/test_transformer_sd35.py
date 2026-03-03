@@ -269,17 +269,14 @@ def test_sd35_transformer2d_model(
     if load_cache:
         start = time.time()
 
-        try:
-            cache.load_model(
-                tt_model,
-                model_name="stable-diffusion-3.5-large",
-                subfolder="transformer",
-                parallel_config=parallel_config,
-                mesh_shape=tuple(mesh_device.shape),
-            )
-        except cache.MissingCacheError as err:
-            msg = "Cache path does not exist. Run test_sd35_transformer_model_caching first with the desired parallel config."
-            raise RuntimeError(msg) from err
+        cache.load_model(
+            tt_model,
+            model_name="stable-diffusion-3.5-large",
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            get_torch_state_dict=torch_model.state_dict,
+        )
 
         end = time.time()
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
