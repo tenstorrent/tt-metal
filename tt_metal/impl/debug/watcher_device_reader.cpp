@@ -204,6 +204,10 @@ string get_l1_target_str(
 
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
+    TT_FATAL(
+        launch_msg_read_ptr < mbox_data.launch().size(),
+        "No launch message found at read pointer {}. Was TT-Metalium initialized on this system?",
+        launch_msg_read_ptr);
     if (mbox_data.launch()[launch_msg_read_ptr].kernel_config().enables() == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + dev_msgs::launch_msg_buffer_num_entries) %
                               dev_msgs::launch_msg_buffer_num_entries;

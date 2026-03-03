@@ -135,6 +135,15 @@ struct Softplus {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Xielu {
+    static Tensor invoke(
+        const Tensor& input,
+        float alpha_p = 0.8f,
+        float alpha_n = 0.8f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Prelu {
     static Tensor invoke(
         const Tensor& input,
@@ -506,6 +515,7 @@ constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operati
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto clamp_tss = ttnn::register_operation<"ttnn::clamp_tss", ttnn::operations::unary::Clamp>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
+constexpr auto xielu = ttnn::register_operation<"ttnn::xielu", ttnn::operations::unary::Xielu>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
