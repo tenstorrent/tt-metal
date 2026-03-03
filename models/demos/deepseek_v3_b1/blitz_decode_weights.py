@@ -324,7 +324,7 @@ class KVB12_PROJ_SingleDeviceOverlapSpec:
         kv_dim, n_heads = self.kv_b2_proj_shape
         n_cores = self.kv_b2_core_range_set.num_cores()
         head_dim = n_heads // n_cores
-        t = self.tile_h
+        t = 32
 
         k_tiles = kv_dim // t
         n_tiles = head_dim // t
@@ -761,6 +761,7 @@ class BlitzDecodeWeights:
                             dtype=ttnn.bfloat8_b,
                             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                             tp_dim=(None, 0),
+                            logical_tensor_shape=cfg.kv_b2_proj_shape,
                         ),
                     ),
                 ],
@@ -880,6 +881,7 @@ class BlitzDecodeWeights:
                             dtype=ttnn.bfloat4_b,
                             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                             tp_dim=(0, 1),
+                            logical_tensor_shape=cfg.gate_proj_shape,
                         ),
                     ),
                 ],
@@ -892,6 +894,7 @@ class BlitzDecodeWeights:
                             dtype=ttnn.bfloat4_b,
                             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                             tp_dim=(0, 1),
+                            logical_tensor_shape=cfg.up_proj_shape,
                         ),
                     ),
                 ],
