@@ -14,14 +14,9 @@ import torchvision.transforms as tv
 from PIL import Image as PIL_Image
 from torch import Tensor
 from torchvision.transforms import functional as F
-from transformers import AutoConfig, AutoModelForVision2Seq
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.tt_transformers.tests.multimodal.test_llama_cross_attention_transformer_vision import (
-    CrossAttentionTransformerVisionModel,
-)
-from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
@@ -525,25 +520,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         return_intermediate = "3,7,15,23,30"
         return_intermediate = [int(l) for l in return_intermediate.split(",")]
 
-        model_repo_name = "meta-llama/Llama-3.2-90B-Vision-Instruct"
-        # config contains parameters for the whole multimodal network the subset of vision branch is chosen instead
-        self.config = AutoConfig.from_pretrained(model_repo_name)
-        self.config.vision_config._attn_implementation = "sdpa"
-        self.reference_model = CrossAttentionTransformerVisionModel(self.config)
-        add_prefix = lambda d, prefix: {f"{prefix}{k}": v for k, v in d.items()}
-        partial_state_dict = add_prefix(
-            load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.vision_model."),
-            "vision_model.",
-        )
-
-        multimodal_proj_weights = add_prefix(
-            load_partial_weights(AutoModelForVision2Seq, model_repo_name, "model.multi_modal_projector."),
-            "multi_modal_projector.",
-        )
-
-        partial_state_dict.update(multimodal_proj_weights)
-        self.reference_model.load_state_dict(partial_state_dict)
-
         self.vision_model = TtLlamaCrossAttentionTransformerVision(
             mesh_device,
             self.tt_ccl,
@@ -625,7 +601,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         else:
             # TT vision_model
             vision_tokens = self.vision_model(stacked_images, aspect_ratios, max_actual_num_chunks)
-
             chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = ttnn.reshape(
