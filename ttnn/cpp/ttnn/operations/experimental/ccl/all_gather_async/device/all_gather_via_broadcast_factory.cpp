@@ -49,6 +49,24 @@ AllGatherViaBroadcastFactory::cached_mesh_workload_t AllGatherViaBroadcastFactor
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
+CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
+    CoreRangeSet worker_cores;
+    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
+    for (const auto& cr : desired_core_range) {
+        auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
+        for (const auto& core : cores) {
+            worker_cores = worker_cores.merge(CoreRangeSet(CoreRange(core, core)));
+            if (worker_cores.num_cores() == num_workers) {
+                break;
+            }
+        }
+        if (worker_cores.num_cores() == num_workers) {
+            break;
+        }
+    }
+    return worker_cores;
+}
+
 AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::create_at(
     const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
@@ -82,15 +100,12 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
         ring_size, ring_index, operation_attributes.topology, true);
     // Get worker cores, assuming 1 worker per link
-    auto* mesh_device = input_tensor.device();
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] = ::ttnn::ccl::choose_worker_cores(
-        operation_attributes.num_links,
-        num_workers_per_link,
-        mesh_device,
-        operation_attributes.sub_device_id,
-        CoreCoord(0, 0),
-        std::nullopt);
+
+    TT_ASSERT(operation_attributes.sub_device_id.has_value(), "function currently does not support subdevices");
+    auto sender_worker_core_range =
+        get_cores_close_to_erisc(operation_attributes.num_links * num_workers_per_link, true);
+    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
     const uint32_t MAX_PACKET_SIZE_BYTES = std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes());
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
@@ -168,6 +183,7 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
                                 // semaphore
+    auto* mesh_device = input_tensor.device();
     CoreCoord barrier_core;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
