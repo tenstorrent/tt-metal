@@ -390,6 +390,15 @@ ALWI void binary_op(
                 // Post-operation callback (e.g., rsqrt, recip)
                 post_op(dst_idx);
 
+                // Per-tile input_b pop — decoupled from input_a's policy.
+                // For NONE broadcast, pop B after each tile regardless of A's streaming mode.
+                // COL broadcast pops once per row (see end of ht loop), not per tile.
+                if constexpr (!is_square && pops_per_tile(input_b_policy)) {
+                    if constexpr (bcast_dim == BroadcastDim::NONE) {
+                        cb_pop_front(icb_b, onetile);
+                    }
+                }
+
                 // Per-tile streaming: commit, wait, pack, release — complete handshake per tile
                 if constexpr (waits_per_tile(input_a_policy)) {
                     tile_regs_commit();
@@ -407,12 +416,6 @@ ALWI void binary_op(
 
                     if constexpr (pops_per_tile(input_a_policy)) {
                         cb_pop_front(icb_a, onetile);
-                    }
-                    // Note: input_b pop for NONE broadcast only. COL broadcast pops once per row (see end of ht loop).
-                    if constexpr (!is_square && pops_per_tile(input_b_policy)) {
-                        if constexpr (bcast_dim == BroadcastDim::NONE) {
-                            cb_pop_front(icb_b, onetile);
-                        }
                     }
 
                     tile_regs_release();
