@@ -111,7 +111,6 @@ OPS_CSV_HEADER = [
     "PM REQ O BW",
     "PM FPU UTIL (%)",
     "NOC UTIL (%)",
-    "MULTICAST NOC UTIL (%)",
     "DRAM BW UTIL (%)",
     "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
@@ -540,6 +539,8 @@ def _enrich_ops_from_perf_csv(
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
 
         enriched_ops = []
+        missing_device_data_count = 0
+        _max_missing_warnings = 5  # Log first N per device to avoid flooding / blocking report generation
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -559,10 +560,23 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # Host op has no device perf row (e.g. model op count exceeds profiler limit or DRAM capacity).
+                # Add op without device data so report generation can continue; downstream handles missing _device_perf_row.
+                missing_device_data_count += 1
+                if missing_device_data_count <= _max_missing_warnings:
+                    logger.warning(
+                        "Device data missing: Op {} not present in {} for device {} (trace_id={}); "
+                        "op will appear in report without device metrics.",
+                        op_id,
+                        PROFILER_CPP_DEVICE_PERF_REPORT,
+                        device_id,
+                        host_trace_id,
+                    )
+                enriched_op = copy.deepcopy(host_op)
+                enriched_op["_device_perf_row"] = None
+                enriched_ops.append(enriched_op)
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -586,6 +600,15 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        if missing_device_data_count > _max_missing_warnings:
+            logger.warning(
+                "Device data missing: {} more ops (total {}) without device metrics for device {}; "
+                "report will include them without device data.",
+                missing_device_data_count - _max_missing_warnings,
+                missing_device_data_count,
+                device_id,
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
@@ -882,20 +905,19 @@ def append_device_data(
         npe_stats = analyzeNoCTraces(logFolder)
         if npe_stats is not None:
             ops_found = 0
-            for op in chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()):
-                global_call_count = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
-                metal_trace_id = op.get("metal_trace_id", None)
-                metal_trace_replay_session_id = op.get("metal_trace_replay_session_id", None)
-                op_npe_stats = npe_stats.getDatapointByID(
-                    global_call_count, metal_trace_id, metal_trace_replay_session_id
-                )
-                if op_npe_stats is not None:
-                    ops_found += 1
-                    op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
-                    op["MULTICAST NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_mcast_write_link_util, 1)
-                    op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-                    op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
-                    op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
+            for device_id in host_ops_by_device:
+                for op in host_ops_by_device[device_id]:
+                    metal_trace_id = op.get("metal_trace_id", None)
+                    metal_trace_replay_session_id = op.get("metal_trace_replay_session_id", None)
+                    op_npe_stats = npe_stats.getDatapointByID(
+                        op["global_call_count"], metal_trace_id, metal_trace_replay_session_id
+                    )
+                    if op_npe_stats is not None:
+                        ops_found += 1
+                        op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                        op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                        op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
+                        op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return host_ops_by_device, trace_ops_by_augmented_id
@@ -1282,8 +1304,6 @@ def generate_reports(
 
                 if "NOC UTIL (%)" in active_op_record:
                     csv_row["NOC UTIL (%)"] = active_op_record.get("NOC UTIL (%)")
-                if "MULTICAST NOC UTIL (%)" in active_op_record:
-                    csv_row["MULTICAST NOC UTIL (%)"] = active_op_record.get("MULTICAST NOC UTIL (%)")
                 if "DRAM BW UTIL (%)" in active_op_record:
                     csv_row["DRAM BW UTIL (%)"] = active_op_record.get("DRAM BW UTIL (%)")
                 if "ETH BW UTIL (%)" in active_op_record:
