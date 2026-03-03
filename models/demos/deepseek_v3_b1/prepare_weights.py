@@ -37,9 +37,9 @@ _DTYPE_TO_STR = {
 }
 _STR_TO_DTYPE = {v: k for k, v in _DTYPE_TO_STR.items()}
 
-# MoE gate bias: HEIGHT_SHARDED on sender core (10, 9), tile [16, 16]
-_MOE_SENDER_CORE = ttnn.CoreCoord(10, 9)
-_MOE_SENDER_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_MOE_SENDER_CORE, _MOE_SENDER_CORE)])
+# MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
+# Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
+MOE_SENDER_GRID_SIZE = (13, 10)
 _GATE_BIAS_TILE = ttnn.Tile([16, 16])
 
 # Fusion group name per field (for grouping by fused_tensor)
@@ -207,6 +207,34 @@ def _key(layer_idx: int, suffix: str) -> str:
     return f"model.layers.{layer_idx}.{suffix}"
 
 
+def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
+    """Build gate_bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core, replicated across mesh.
+
+    raw_tensor: shape (256,) from state dict (model.layers.{i}.mlp.gate.e_score_correction_bias).
+    Returns ttnn.Tensor with layout expected by MoE op: (16, 16) on sender core, tile 16x16.
+    Sender core uses MOE_SENDER_GRID_SIZE so cache layout is consistent across slow/fast dispatch.
+    When move_to_device is False (default), tensor is not placed (device=None) for cache generation.
+    When move_to_device is True, tensor is placed on device so is_sharded() is true for runtime use.
+    """
+    sender_core = ttnn.CoreCoord(MOE_SENDER_GRID_SIZE[0] - 1, MOE_SENDER_GRID_SIZE[1] - 1)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+    gate_bias_reshaped = raw_tensor.reshape(16, 16).T.contiguous().to(torch.bfloat16)
+    gate_bias_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sender_core_grid, (16, 16), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.from_torch(
+        gate_bias_reshaped,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device if move_to_device else None,
+        memory_config=gate_bias_mem_config,
+        tile=_GATE_BIAS_TILE,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
 def _split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Split HF kv_b_proj (out_features, in_features) into kv_b1 and kv_b2.
 
@@ -342,46 +370,6 @@ _GATE_BIAS_INDICES_SHAPE = (16, 16)
 _GATE_NUM_INDICES = 256
 
 
-def create_gate_bias_tensor(
-    raw: torch.Tensor,
-    device: Any,
-    sender_core_grid: ttnn.CoreRangeSet,
-    *,
-    mesh_mapper: Any = None,
-) -> ttnn.Tensor:
-    """Build gate bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core.
-
-    Args:
-        raw: Shape (256,) from state dict mlp.gate.e_score_correction_bias.
-        device: ttnn device or mesh device.
-        sender_core_grid: Single-core range set for the sender core.
-        mesh_mapper: Optional mesh mapper for multi-device.
-
-    Returns:
-        ttnn.Tensor with shape (16, 16), HEIGHT_SHARDED on sender_core_grid, tile 16x16, bfloat16.
-    """
-    assert raw.shape == (_GATE_NUM_INDICES,), f"gate bias raw must be ({_GATE_NUM_INDICES},), got {raw.shape}"
-    # (256,) -> (1, 8, 32) -> (16, 16) then transpose to match op layout
-    reshaped = raw.reshape(1, 8, 32).reshape(_GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1])
-    transposed = torch.transpose(reshaped, 0, 1).contiguous().to(torch.bfloat16)
-    shard_spec = ttnn.ShardSpec(
-        sender_core_grid,
-        _GATE_BIAS_INDICES_SHAPE,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
-    return ttnn.from_torch(
-        transposed,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        tile=ttnn.Tile([16, 16]),
-        **kwargs,
-    )
-
-
 def create_gate_indices_tensor(
     device: Any,
     sender_core_grid: ttnn.CoreRangeSet,
@@ -448,8 +436,7 @@ def prepare_attention_weights(
         gate_bias_tt = create_gate_bias_tensor(
             state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")],
             bdw._device,
-            _MOE_SENDER_CORE_GRID,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(bdw._device),
+            move_to_device=move_to_device,
         )
         logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
