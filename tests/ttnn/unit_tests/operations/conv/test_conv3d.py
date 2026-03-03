@@ -60,7 +60,16 @@ def create_conv3d_config(
 
 
 def setup_conv3d_test(
-    input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device, dilation=(1, 1, 1), dtype=ttnn.DataType.BFLOAT16,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
+    device,
+    dilation=(1, 1, 1),
+    dtype=ttnn.DataType.BFLOAT16,
 ):
     """Common setup for Conv3D tests, preparing inputs and ground truth."""
     torch.manual_seed(42)
@@ -116,8 +125,16 @@ def run_conv3d_test(
     dtype=ttnn.DataType.BFLOAT16,
 ):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device, dilation=dilation, dtype=dtype
-
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        groups,
+        padding,
+        padding_mode,
+        device,
+        dilation=dilation,
+        dtype=dtype,
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
@@ -135,7 +152,9 @@ def run_conv3d_test(
     )
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype)
+    config = create_conv3d_config(
+        compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
+    )
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
@@ -451,6 +470,7 @@ def test_conv3d_float32(device):
         out_channels=64,
         kernel_size=(3, 3, 3),
         stride=(1, 1, 1),
+        groups=1,
         padding=(0, 1, 1),
         padding_mode="zeros",
         grid_size=grid_size,
