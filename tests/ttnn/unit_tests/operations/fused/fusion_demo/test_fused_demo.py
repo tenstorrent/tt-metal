@@ -237,48 +237,24 @@ def _clear_all_caches(device):
         shutil.rmtree(kernels_dir)
 
 
-def _time_cold_warm(cold_fn, device, warm_fn=None):
-    """Clear all caches, run cold_fn() once, then run warm_fn() once.
-
-    If warm_fn is None, cold_fn is used for both.
-    Returns (cold_ms, warm_ms).
-    """
-    if warm_fn is None:
-        warm_fn = cold_fn
+def _time_cold(fn, device):
+    """Clear all caches, run fn() once, return cold_ms."""
     sync = lambda: ttnn.synchronize_device(device)
     _clear_all_caches(device)
     sync()
     t0 = time.perf_counter()
-    cold_fn()
+    fn()
     sync()
-    cold = 1000 * (time.perf_counter() - t0)
-
-    sync()
-    t0 = time.perf_counter()
-    warm_fn()
-    sync()
-    warm = 1000 * (time.perf_counter() - t0)
-    return cold, warm
+    return 1000 * (time.perf_counter() - t0)
 
 
-def _time_fused(build_fn, device):
-    """Build + time cold/warm for a fused op.
-
-    build_fn: callable returning a FusedOp (e.g. ``lambda: Sequential(...).build(device)``)
-    Returns (fused_op, cold_ms, warm_ms).
-    """
-    fused = [None]
-
-    def build_and_launch():
-        fused[0] = build_fn()
-        fused[0].launch()
-
-    cold, warm = _time_cold_warm(build_and_launch, device, warm_fn=lambda: fused[0].launch())
-    return fused[0], cold, warm
+def _time_cold_fused(build_fn, device):
+    """Clear all caches, build + launch a fused op from cold. Returns cold_ms."""
+    return _time_cold(lambda: build_fn().launch(), device)
 
 
-def _time_steady_state(fn, device, num_warmup=5, num_measure=100):
-    """Measure steady-state e2e time per iteration.
+def _time_e2e(fn, device, num_warmup=5, num_measure=100):
+    """Measure steady-state E2E time per iteration (ms).
 
     Runs num_warmup iterations (discarded), then num_measure iterations
     timed as a batch, returning total_ms / num_measure.
@@ -286,18 +262,15 @@ def _time_steady_state(fn, device, num_warmup=5, num_measure=100):
     """
     sync = lambda: ttnn.synchronize_device(device)
 
-    # Warmup
     for _ in range(num_warmup):
         fn()
     sync()
 
-    # Measure
     t0 = time.perf_counter()
     for _ in range(num_measure):
         fn()
     sync()
-    total_ms = 1000 * (time.perf_counter() - t0)
-    return total_ms / num_measure
+    return 1000 * (time.perf_counter() - t0) / num_measure
 
 
 # =============================================================================
@@ -384,12 +357,12 @@ class TestPerfDemos:
         )
 
         if perf_mode == "device_fw":
-            fused = Sequential(r1, m, r2).build(device)
+            fused = Sequential(r1, m, r2).build()
             fused.launch()
             ttnn.synchronize_device(device)
             print(f"\n  Linear Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            _, cold, _ = _time_fused(lambda: Sequential(r1, m, r2).build(device), device)
+            cold = _time_cold_fused(lambda: Sequential(r1, m, r2).build(), device)
 
             fused_result = ttnn.to_torch(r2.output_tensors[0])
 
@@ -411,8 +384,8 @@ class TestPerfDemos:
             print(f"\n  Linear Chain Fused (H={H}): cold={cold:.2f}ms PCC={pcc:.6f}")
             assert passing, f"PCC: {pcc}"
         elif perf_mode == "e2e":
-            fused = Sequential(r1, m, r2).build(device)
-            e2e = _time_steady_state(fused.launch, device)
+            fused = Sequential(r1, m, r2).build()
+            e2e = _time_e2e(fused.launch, device)
 
             fused_result = ttnn.to_torch(r2.output_tensors[0])
 
@@ -455,10 +428,10 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print(f"\n  Linear Chain Unfused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            cold, _ = _time_cold_warm(unfused, device)
+            cold = _time_cold(unfused, device)
             print(f"\n  Linear Chain Unfused (H={H}): cold={cold:.2f}ms")
         elif perf_mode == "e2e":
-            e2e = _time_steady_state(unfused, device)
+            e2e = _time_e2e(unfused, device)
             print(f"\n  Linear Chain Unfused (H={H}): e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
@@ -538,12 +511,12 @@ class TestPerfDemos:
         )
 
         if perf_mode == "device_fw":
-            fused = Sequential(r, ln).build(device)
+            fused = Sequential(r, ln).build()
             fused.launch()
             ttnn.synchronize_device(device)
             print(f"\n  Sharded Chain Fused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            _, cold, _ = _time_fused(lambda: Sequential(r, ln).build(device), device)
+            cold = _time_cold_fused(lambda: Sequential(r, ln).build(), device)
 
             fused_result = ttnn.to_torch(ln.output_tensors[0])
 
@@ -571,8 +544,8 @@ class TestPerfDemos:
             print(f"\n  Sharded Chain Fused (H={H}): cold={cold:.2f}ms PCC={pcc:.6f}")
             assert passing, f"PCC: {pcc}"
         elif perf_mode == "e2e":
-            fused = Sequential(r, ln).build(device)
-            e2e = _time_steady_state(fused.launch, device)
+            fused = Sequential(r, ln).build()
+            e2e = _time_e2e(fused.launch, device)
 
             fused_result = ttnn.to_torch(ln.output_tensors[0])
 
@@ -628,10 +601,10 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print(f"\n  Sharded Chain Unfused (H={H}): device_fw run")
         elif perf_mode == "cold_start":
-            cold, _ = _time_cold_warm(unfused, device)
+            cold = _time_cold(unfused, device)
             print(f"\n  Sharded Chain Unfused (H={H}): cold={cold:.2f}ms")
         elif perf_mode == "e2e":
-            e2e = _time_steady_state(unfused, device)
+            e2e = _time_e2e(unfused, device)
             print(f"\n  Sharded Chain Unfused (H={H}): e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
@@ -771,12 +744,12 @@ class TestPerfDemos:
         )
 
         if perf_mode == "device_fw":
-            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
+            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build()
             fused.launch()
             ttnn.synchronize_device(device)
             print("\n  Parallel Chains Fused: device_fw run")
         elif perf_mode == "cold_start":
-            _, cold, _ = _time_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device), device)
+            cold = _time_cold_fused(lambda: Parallel(Sequential(la, ma), Sequential(rb, mb)).build(), device)
 
             result_a = ttnn.to_torch(ma.output_tensors[0])
             result_b = ttnn.to_torch(mb.output_tensors[0])
@@ -794,8 +767,8 @@ class TestPerfDemos:
             assert p_a, f"Chain A PCC: {pcc_a}"
             assert p_b, f"Chain B PCC: {pcc_b}"
         elif perf_mode == "e2e":
-            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build(device)
-            e2e = _time_steady_state(fused.launch, device)
+            fused = Parallel(Sequential(la, ma), Sequential(rb, mb)).build()
+            e2e = _time_e2e(fused.launch, device)
 
             result_a = ttnn.to_torch(ma.output_tensors[0])
             result_b = ttnn.to_torch(mb.output_tensors[0])
@@ -915,10 +888,10 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Parallel Chains Unfused: device_fw run")
         elif perf_mode == "cold_start":
-            cold, _ = _time_cold_warm(unfused, device)
+            cold = _time_cold(unfused, device)
             print(f"\n  Parallel Chains Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
-            e2e = _time_steady_state(unfused, device)
+            e2e = _time_e2e(unfused, device)
             print(f"\n  Parallel Chains Unfused: e2e={e2e:.3f}ms")
 
     # =================================================================
@@ -1167,7 +1140,7 @@ class TestPerfDemos:
                 Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
                 Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
             ),
-        ).build(device)
+        ).build()
 
     @pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
     def test_sharded_tree_ln_slice_matmul_slice_ln_fused(self, device, perf_mode):
@@ -1204,7 +1177,7 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Sharded Tree Fused: device_fw run")
         elif perf_mode == "cold_start":
-            _, cold, _ = _time_fused(lambda: self._sharded_tree_build_fused(device, ops), device)
+            cold = _time_cold_fused(lambda: self._sharded_tree_build_fused(device, ops), device)
 
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1281,7 +1254,7 @@ class TestPerfDemos:
             assert p_rl, f"Right-left PCC: {pcc_rl}"
         elif perf_mode == "e2e":
             fused = self._sharded_tree_build_fused(device, ops)
-            e2e = _time_steady_state(fused.launch, device)
+            e2e = _time_e2e(fused.launch, device)
 
             # Unfused reference for PCC — sharded intermediates on (0,0)-based grids.
             stem_ln_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -1487,10 +1460,10 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Sharded Tree Unfused: device_fw run")
         elif perf_mode == "cold_start":
-            cold, _ = _time_cold_warm(unfused, device)
+            cold = _time_cold(unfused, device)
             print(f"\n  Sharded Tree Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
-            e2e = _time_steady_state(unfused, device)
+            e2e = _time_e2e(unfused, device)
             print(f"\n  Sharded Tree Unfused: e2e={e2e:.3f}ms")
 
     # -----------------------------------------------------------------
@@ -1618,7 +1591,7 @@ class TestPerfDemos:
                     Sequential(sl_left, rms1, rms2),
                     Sequential(sl_right, ln_right),
                 ),
-            ).build(device)
+            ).build()
 
         def _pcc_check():
             # Unfused reference for PCC — sharded on (0,0)-based grids
@@ -1684,12 +1657,12 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Asymmetric Branches Fused: device_fw run")
         elif perf_mode == "cold_start":
-            _, cold, _ = _time_fused(build, device)
+            cold = _time_cold_fused(build, device)
             pcc_l, pcc_r = _pcc_check()
             print(f"\n  Asymmetric Branches Fused: cold={cold:.2f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
         elif perf_mode == "e2e":
             fused = build()
-            e2e = _time_steady_state(fused.launch, device)
+            e2e = _time_e2e(fused.launch, device)
             pcc_l, pcc_r = _pcc_check()
             print(f"\n  Asymmetric Branches Fused: e2e={e2e:.3f}ms PCC: left={pcc_l:.4f} right={pcc_r:.4f}")
 
@@ -1788,10 +1761,10 @@ class TestPerfDemos:
             ttnn.synchronize_device(device)
             print("\n  Asymmetric Branches Unfused: device_fw run")
         elif perf_mode == "cold_start":
-            cold, _ = _time_cold_warm(unfused, device)
+            cold = _time_cold(unfused, device)
             print(f"\n  Asymmetric Branches Unfused: cold={cold:.2f}ms")
         elif perf_mode == "e2e":
-            e2e = _time_steady_state(unfused, device)
+            e2e = _time_e2e(unfused, device)
             print(f"\n  Asymmetric Branches Unfused: e2e={e2e:.3f}ms")
 
 
@@ -1805,8 +1778,7 @@ class TestPerfDemos:
 # -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("perf_mode", ["cold_start", "e2e", "device_fw"])
-def test_global_circular_buffer_fused(device, perf_mode):
+def test_global_circular_buffer_fused(device):
     from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
     GLOBALCB_SENDER_WRITER_SOURCE = """\
@@ -1983,13 +1955,7 @@ void kernel_main() {
     ob = _build_identity_op(tib, tt_output_b, sender_range, num_tiles)
     con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
-    fused = [None]
-
-    def build_and_launch():
-        fused[0] = Parallel(Sequential(oa, ob), con).build(device)
-        fused[0].launch()
-
-    cold, warm = _time_cold_warm(build_and_launch, device, warm_fn=lambda: fused[0].launch())
+    cold = _time_cold_fused(lambda: Parallel(Sequential(oa, ob), con).build(), device)
 
     result_recv = ttnn.to_torch(tt_output_recv)
     result_b = ttnn.to_torch(tt_output_b)
@@ -1997,7 +1963,7 @@ void kernel_main() {
     passing_recv, pcc_recv = comp_pcc(torch_input_a, result_recv, pcc=0.999)
     passing_b, pcc_b = comp_pcc(torch_input_b, result_b, pcc=0.999)
 
-    print(f"\n  GlobalCB Fused: cold={cold:.2f}ms  warm={warm:.2f}ms  PCC: recv={pcc_recv:.4f} phase1={pcc_b:.4f}")
+    print(f"\n  GlobalCB Fused: cold={cold:.2f}ms  PCC: recv={pcc_recv:.4f} phase1={pcc_b:.4f}")
     assert passing_recv, f"Receiver PCC: {pcc_recv}"
     assert passing_b, f"Phase 1 PCC: {pcc_b}"
 
@@ -2091,7 +2057,7 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
     stem, op_a, op_b, t_in, t_out_a, t_out_b = _non_contiguous_grid_setup(device)
 
     def build():
-        return Sequential(stem, Parallel(op_a, op_b)).build(device)
+        return Sequential(stem, Parallel(op_a, op_b)).build()
 
     if perf_mode == "device_fw":
         fused = build()
@@ -2099,7 +2065,7 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
         ttnn.synchronize_device(device)
         print("\n  Non-Contiguous Grid Fused: device_fw run")
     elif perf_mode == "cold_start":
-        _, cold, _ = _time_fused(build, device)
+        cold = _time_cold_fused(build, device)
 
         ref = ttnn.to_torch(t_in)
         p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
@@ -2110,7 +2076,7 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
         assert p_b, f"Branch B PCC: {pcc_b}"
     elif perf_mode == "e2e":
         fused = build()
-        e2e = _time_steady_state(fused.launch, device)
+        e2e = _time_e2e(fused.launch, device)
 
         ref = ttnn.to_torch(t_in)
         p_a, pcc_a = comp_pcc(ref, ttnn.to_torch(t_out_a), pcc=0.999)
@@ -2168,7 +2134,7 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
     ops = _barrier_bench_setup(device, num_phases, num_cores)
 
     def build_fused():
-        return Sequential(*ops).build(device)
+        return Sequential(*ops).build()
 
     if perf_mode == "device_fw":
         fused = build_fused()
@@ -2178,17 +2144,17 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
         return
 
     if perf_mode == "cold_start":
-        _, cold, _ = _time_fused(build_fused, device)
+        cold = _time_cold_fused(build_fused, device)
         print(f"\n  Barrier bench: {num_phases} phases, {num_cores} cores cold={cold:.2f}ms")
         return
 
     # perf_mode == "e2e"
     # -- Fused timing --
     fused = build_fused()
-    fused_e2e = _time_steady_state(fused.launch, device)
+    fused_e2e = _time_e2e(fused.launch, device)
 
     # -- Unfused timing: launch each phase as a separate 1-op fused kernel --
-    unfused_ops = [Sequential(op).build(device) for op in ops]
+    unfused_ops = [Sequential(op).build() for op in ops]
     for uf in unfused_ops:
         uf.launch()
     ttnn.synchronize_device(device)
@@ -2197,12 +2163,12 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
         for uf in unfused_ops:
             uf.launch()
 
-    unfused_e2e = _time_steady_state(launch_unfused, device)
+    unfused_e2e = _time_e2e(launch_unfused, device)
 
     # -- 1-phase baseline for per-barrier calculation --
     ops_1 = _barrier_bench_setup(device, 1, num_cores)
-    fused_1 = Sequential(*ops_1).build(device)
-    baseline_e2e = _time_steady_state(fused_1.launch, device)
+    fused_1 = Sequential(*ops_1).build()
+    baseline_e2e = _time_e2e(fused_1.launch, device)
 
     # Convert to microseconds
     fused_us = fused_e2e * 1000
