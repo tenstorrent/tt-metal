@@ -15,10 +15,10 @@ on:
       enabled-skus:
         required: true
         type: string
-      extra-tag:
+      weights-cache-mode:
         required: false
         type: string
-        default: "pipeline-perf"
+        default: "local-disk"
       model:
         required: false
         type: string
@@ -90,10 +90,10 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        # If extra-tag is pipeline-yyz2-lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
-        # If extra-tag is pipeline-functional, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
-        # If extra-tag is pipeline-perf, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
-        - "${{ inputs.extra-tag != 'pipeline-yyz2-lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
+        # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
+        # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
+        # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
+        - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -121,14 +121,14 @@ jobs:
         with:
           runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: Download Llama model weights from LFC
-        if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'llama') }}
+        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Download Flux.1-dev model weights from LFC
-        if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
         timeout-minutes: 15
         run: |
           set -e
