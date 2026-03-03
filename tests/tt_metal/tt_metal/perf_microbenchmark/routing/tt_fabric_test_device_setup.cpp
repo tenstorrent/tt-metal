@@ -879,7 +879,8 @@ void TestDevice::create_sender_kernels() {
             num_local_sync_cores,                                /* num local sync cores */
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
-            num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
+            num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+            false                                                /* enable l1 data cache */
         };
 
         // Runtime args with connection type information
@@ -998,7 +999,8 @@ void TestDevice::create_receiver_kernels() {
             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
             (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
             has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */
-            num_muxes_to_terminate                                 /* NUM_MUXES_TO_TERMINATE */
+            num_muxes_to_terminate,                                /* NUM_MUXES_TO_TERMINATE */
+            false                                                  /* enable l1 data cache */
         };
 
         // Runtime args: memory map args + credit connection args + traffic-to-connection mapping
@@ -1307,7 +1309,7 @@ void TestDevice::create_latency_sender_kernel(
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {
-        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
+        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u, false /* enable l1 dcache */};
 
     // Runtime args
     // Calculate send and receive buffer addresses after timestamp storage
@@ -1406,7 +1408,7 @@ void TestDevice::create_latency_responder_kernel(
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {
-        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
+        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u, false /* enable l1 data cache*/};
 
     // Runtime args
     // Calculate responder's receive buffer and sender's receive buffer addresses

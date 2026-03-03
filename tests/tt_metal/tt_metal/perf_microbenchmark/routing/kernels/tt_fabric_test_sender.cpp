@@ -17,6 +17,7 @@ constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(5);
 constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+constexpr bool enable_l1_dcache = get_compile_time_arg_val(9);
 
 using SenderKernelConfigType =
     SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
@@ -31,6 +32,8 @@ static_assert(
     NUM_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
+    set_l1_data_cache<enable_l1_dcache>();
+
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;  // Initialize local args index
 
@@ -81,6 +84,7 @@ void kernel_main() {
         const uint32_t num_packets = traffic_config->metadata.num_packets;
         const uint32_t num_warmup = conn->num_buffers_per_channel;
 
+        // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
         // Phase 1: Warmup — send actual headers to fill all buffer slots
         const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
         for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
@@ -107,7 +111,7 @@ void kernel_main() {
                 }
 
                 // Send one packet — accumulators passed by ref, stays in registers
-                bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE>(
+                bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE, false>(
                     wait_accum, advance_accum, noc_accum, loop_accum, prev_t);
 
                 if (!sent) {
@@ -175,4 +179,8 @@ void kernel_main() {
     write_test_status(sender_config->get_result_buffer_address(), TT_FABRIC_STATUS_PASS);
 
     noc_async_full_barrier();
+    
+    if constexpr (enable_l1_dcache){
+        set_l1_data_cache<false>();
+    }
 }

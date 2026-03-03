@@ -15,6 +15,7 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(3);
 constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(4);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(5);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(6);
+constexpr bool enable_l1_dcache = get_compile_time_arg_val(7);
 
 using ReceiverKernelConfigType = ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC>;
 
@@ -28,6 +29,8 @@ static_assert(
     NUM_CREDIT_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_CREDIT_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
+    set_l1_data_cache<enable_l1_dcache>();
+
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;
 
@@ -105,4 +108,8 @@ void kernel_main() {
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
 
     noc_async_full_barrier();
+
+    if constexpr (enable_l1_dcache){
+        set_l1_data_cache<false>();
+    }
 }

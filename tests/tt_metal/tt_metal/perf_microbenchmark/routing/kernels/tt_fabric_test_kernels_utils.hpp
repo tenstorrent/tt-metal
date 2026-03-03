@@ -612,17 +612,17 @@ struct FabricConnectionArray {
     // Unified send operations (dispatch hidden from callers)
 
     // Wait for connection to have space
-    template <bool BENCHMARK_MODE = false>
+    template <bool BENCHMARK_MODE = false, bool enable_l1_dcache = true>
     FORCE_INLINE void wait_for_empty_write_slot(void* conn_ptr, uint8_t idx) {
         if constexpr (BENCHMARK_MODE) {
             // Fast path: no runtime check, direct cast
-            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot();
+            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot<enable_l1_dcache>();
         } else {
             // Normal path: runtime dispatch using cached is_mux array
             if (is_mux[idx]) {
-                static_cast<MuxConnectionType*>(conn_ptr)->wait_for_empty_write_slot();
+                static_cast<MuxConnectionType*>(conn_ptr)->wait_for_empty_write_slot<enable_l1_dcache>();
             } else {
-                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot();
+                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot<enable_l1_dcache>();
             }
         }
     }
@@ -1032,7 +1032,7 @@ struct SenderKernelTrafficConfig {
     // In BENCHMARK_MODE, accumulators and prev_t are passed by reference to avoid L1 traffic.
     // All timestamps are local variables (registers), deltas accumulated directly.
     // STATEFUL_NOC: when true, uses pre-configured NOC cmd buf state for credit updates.
-    template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
+    template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false, bool enable_l1_dcache = true>
     FORCE_INLINE bool send_one_packet(
         uint32_t& wait_accum, uint32_t& advance_accum, uint32_t& noc_accum, uint32_t& loop_accum, uint32_t& prev_t) {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
@@ -1047,7 +1047,7 @@ struct SenderKernelTrafficConfig {
             // uint32_t t0 = get_timestamp_32b();
             // loop_accum += (t0 - prev_t);
 
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE, enable_l1_dcache>(connection_ptr_, connection_idx_);
             // uint32_t t1 = get_timestamp_32b();
             // wait_accum += (t1 - t0);
 
@@ -1066,7 +1066,7 @@ struct SenderKernelTrafficConfig {
                 // noc_accum += (prev_t - t2);
             }
         } else {
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE, enable_l1_dcache>(connection_ptr_, connection_idx_);
 
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
