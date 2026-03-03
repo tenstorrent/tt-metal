@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <algorithm>
 #include <set>
+#include <vector>
+#include <cctype>
+#include <fmt/core.h>
+#include <fmt/ranges.h>
 
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -15,6 +20,7 @@
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
@@ -117,4 +123,89 @@ inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, 
     }
 }
 
+// Metadata for identifying and logging processor info in the watcher (Tensix and Ethernet)
+struct EnableSymbolsInfo {
+    std::string main_processor;
+    std::vector<std::string> processor_names;  // All RISC processors
+    std::vector<std::string> symbols;  // Labels per log line. Quasar: (DM:, NEO:) or (E:), BH/WH: (B, N, T) or (E)
+    std::string enable_legend;         // Legend in the watcher log header for enable/disable flags
+};
+
+// This function gets enable/disable flags for watcher header/legend in the log file
+inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_type) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+    EnableSymbolsInfo info;
+    info.main_processor = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 0, false);
+
+    std::vector<std::string> legend_parts;
+
+    // Create the enable flags for BH/WH (e.g. B/b=BRISC)
+    auto add_legacy_entry = [&](const std::string& sym, const std::string& name) {
+        std::string lo = sym;
+        std::transform(lo.begin(), lo.end(), lo.begin(), [](unsigned char c) { return std::tolower(c); });
+        info.symbols.push_back(sym);
+        legend_parts.push_back(fmt::format("{}/{}={}", sym, lo, name));
+    };
+
+    if (core_type == HalProgrammableCoreType::TENSIX) {
+        for (uint32_t cls = 0; cls < hal.get_processor_classes_count(core_type); cls++) {
+            auto type = static_cast<HalProcessorClassType>(cls);
+            uint32_t base = hal.get_processor_index(core_type, type, 0);
+            uint32_t count = hal.get_processor_types_count(core_type, cls);
+
+            // Log all processor names
+            for (uint32_t i = 0; i < count; ++i) {
+                auto name = hal.get_processor_class_name(core_type, base + i, false);
+                info.processor_names.push_back(name);
+                // On WH/BH: For BRISC and NCRISC, create enable flags
+                if (!is_quasar && type != HalProcessorClassType::COMPUTE) {
+                    add_legacy_entry(std::string{name[0]}, name);
+                }
+            }
+
+            // On Quasar, enable flags are displayed using a bitmask in hex
+            if (is_quasar) {
+                // DM: one symbol per processor
+                if (type == HalProcessorClassType::DM) {
+                    info.symbols.push_back("DM:");
+                    legend_parts.push_back(fmt::format("DM:[hex]=DataMovement(0-{})", count - 1));
+                } else {
+                    uint32_t ct_idx = hal.get_programmable_core_type_index(core_type);
+                    // Neo0, Neo1, Neo2, Neo3
+                    uint32_t num_clusters = count / hal.get_processor_class_num_fw_binaries(ct_idx, cls);
+                    info.symbols.push_back("NEO:");
+                    legend_parts.push_back(fmt::format("NEO:[hex]=ComputeClusters(NeoCluster0-{})", num_clusters - 1));
+                }
+            }  // On WH/BH Compute: collapse all TRISCs to one symbol, strip trailing digit (TRISC0 -> TRISC)
+            else if (type == HalProcessorClassType::COMPUTE) {
+                auto name = hal.get_processor_class_name(core_type, base, false);
+                if (!name.empty() && std::isdigit(static_cast<unsigned char>(name.back()))) {
+                    name.pop_back();
+                }
+                add_legacy_entry(std::string{name[0]}, name);
+            }
+        }
+    } else {
+        // ACTIVE_ETH/IDLE_ETH: collect names (arch-independent), then symbols (arch-specific)
+        uint32_t num = hal.get_num_risc_processors(core_type);
+        for (uint32_t i = 0; i < num; ++i) {
+            info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
+        }
+        if (is_quasar) {
+            info.symbols.push_back("E:");
+            legend_parts.push_back(fmt::format("E:[hex]=Ethernet(0-{})", num - 1));
+        } else {
+            for (uint32_t i = 0; i < num; ++i) {
+                std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+                add_legacy_entry(std::string{abbrev[0]}, info.processor_names[i]);
+            }
+        }
+    }
+    info.enable_legend = fmt::format("{}", fmt::join(legend_parts, " "));
+    if (!is_quasar) {
+        info.enable_legend = "UPPER=enabled, lower=disabled: " + info.enable_legend;
+    }
+    return info;
+}
 }  // namespace tt::tt_metal
