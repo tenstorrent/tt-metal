@@ -116,7 +116,7 @@ We register four device-side kernels:
 - **`coordinator_kernel`**: Only on `{0,0}`, it performs DRAM reads and multicasts.
 - **`inbound_kernel`**: On `{1,0}, {2,0}, {3,0}`, it listens for an incoming tile and acknowledges it with DPRINT.
 - **`outbound_kernel`**: (USER EXERCISE) Also on the receivers, the user can optionally writes data out to a Compute baby-RISCV core or re-broadcast to other Tensix cores.
-- **`void_compute_kernel`**: (USER EXERCISE) The user can optionaly write a compute phase to perform some math or transformation on the tile.
+- **`void_compute_kernel`**: (USER EXERCISE) The user can optionally write a compute phase to perform some math or transformation on the tile.
 
 For example, creating the coordinator (sender) kernel:
 
@@ -168,7 +168,7 @@ Upon launch, the kernel extracts **runtime arguments** passed from the host, whi
 - **Semaphores**: `sender_addr, receiver_addr` → Control when receivers are ready.
 - **DRAM source tile**: `dram_bank_id, src0_dram` → Specifies which DRAM bank and address hold the tile.
 - **Tile size**: `single_tile_size` → The total size (in bytes) of a single **32×32** tile.
-- **Destinations**: `num_dests` → Used as our sender semaphore's atomic counter, which is reached via enumeration per each receiver core's response (eg. tile aknowledgement).
+- **Destinations**: `num_dests` → Used as our sender semaphore's atomic counter, which is reached via enumeration per each receiver core's response (eg. tile acknowledgement).
 
 These arguments are extracted as follows:
 ```cpp
@@ -218,7 +218,7 @@ SliceRange sr = SliceRange{
 };
 ```
 
-It's quite customizeable.  In this example, we have the following:
+It's quite customizable.  In this example, we have the following:
 - `.h0 = 0` and `.h1 = 32` → sets the tile **height range** (ie. num of rows)
 - `.hs = 8` → strides every 8th row
 - `.w0 = 0` and `.w1 = 32` → sets the tile **width range** (ie. num of columns)
@@ -301,7 +301,7 @@ To actually multicast the tile, we call this asynchronous function:
 noc_async_write_multicast(tile_l1_addr, identity_tile_global_multicast_addr, single_tile_size, num_dests);
 ```
 
-The tile write is non-blocking, meaning control immediately returns to our coordinator kernel while the hardware handles the tile multicast in the background. It's far more efficient than individually unicast-copying the same tile three times. Perfect for our super fast parallism needs!
+The tile write is non-blocking, meaning control immediately returns to our coordinator kernel while the hardware handles the tile multicast in the background. It's far more efficient than individually unicast-copying the same tile three times. Perfect for our super fast parallelism needs!
 
 >  *For the curious*: Under the hood, `noc_async_write_multicast` schedules a write transaction into the NoC router with a special multicast bit set in the header. METALIUM configures everything for you, so you don’t have to worry about packet routing or other data movement intricacies. Check out `dataflow_api.h` and specifically `noc_parameters.h` for more details.
 
@@ -336,7 +336,7 @@ The inbound kernel is responsible for receiving a 32×32 tile multicast from the
 
 ### **4.1 Parsing Runtime Arguments**
 
-Runtime arguments are much fewer here since we are simply aknowledging the tile, not performing anything on it. Upon launch, inbound_kernel extracts runtime arguments passed from the host, which define:
+Runtime arguments are much fewer here since we are simply acknowledging the tile, not performing anything on it. Upon launch, inbound_kernel extracts runtime arguments passed from the host, which define:
 
 - **Sender core coordinates**: `start_x, start_y` → The logical location of the coordinator core.
 

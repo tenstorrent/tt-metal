@@ -111,7 +111,7 @@ Tensor distribute_tensor(
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
 // `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
-// and the `shard_layout` will be applied subsequently. `buffer` may be re-used to create tensors directly, taking
+// and the `shard_layout` will be applied subsequently. `buffer` may be reused to create tensors directly, taking
 // `buffer_pin` as the RAII to retain reference count to the object.
 template <typename T>
 Tensor create_distributed_tensor(

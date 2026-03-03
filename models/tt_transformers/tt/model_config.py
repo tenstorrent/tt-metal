@@ -597,7 +597,7 @@ class ModelArgs:
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             # ============================================================================
-            # Parameter intialization
+            # Parameter initialization
             # ============================================================================
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (

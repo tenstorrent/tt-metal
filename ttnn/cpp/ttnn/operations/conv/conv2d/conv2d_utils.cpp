@@ -1323,7 +1323,7 @@ Tensor fold_input_tensor_if_required(
     std::array<uint32_t, 4>& padding_n4,
     bool& mm_conv,
     Conv2dConfig& conv_config) {
-    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would still be true as weights
     // also need to be folded.
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_tensor.memory_config(),

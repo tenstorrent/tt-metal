@@ -20,7 +20,7 @@ namespace reduce_op_utils {
 std::map<std::string, std::string> get_defines(
     tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<std::string, std::string> defines;
-    // TOOD(AP): need a sync with Reduce::Max from HLK headers
+    // TODO(AP): need a sync with Reduce::Max from HLK headers
     bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     std::string reduce_dim_str;
     switch (reduce_dim) {
@@ -95,7 +95,7 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
-    // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
+    // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto tilized_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config());

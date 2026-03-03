@@ -45,7 +45,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
  * Algorithm based on log1p_fp32 from operations.py:
  * 1. Handle special cases (x < -1, x == -1, infinity, NaN)
  * 2. For |x| < 0.3: Use 9-term polynomial series to avoid catastrophic cancellation
- * 3. For |x| >= 0.3: Use standard ln(1+x) computation (re-uses blackhole's calculate_log_f32_body logic)
+ * 3. For |x| >= 0.3: Use standard ln(1+x) computation (reuses blackhole's calculate_log_f32_body logic)
  *
  * The threshold of 0.3 and 9 terms work well enough to provide good accuracy
  * across the entire domain.

@@ -16,7 +16,7 @@ void kernel_main() {
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
-    // buffers. (Whis is most of the cases)
+    // buffers. (This is most of the cases)
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
     // Create address generators for the input buffers. This is much faster

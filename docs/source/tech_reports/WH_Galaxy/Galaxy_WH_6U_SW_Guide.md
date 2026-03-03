@@ -27,7 +27,7 @@ When performing systems tests developers should use the following test suite:
 `dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh`
 
 The following tests are short in runtime and loop over all chips to test for basic component functionality:
-- `./build/test/tt_metal/tt_fabric/test_system_health` - This test prints Ethernet connnections, link statuses, and performs sanity checks on the system.
+- `./build/test/tt_metal/tt_fabric/test_system_health` - This test prints Ethernet connections, link statuses, and performs sanity checks on the system.
   The following expected output will appear upon completion of a successful Ethernet connection test:
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Ethernet_Link_Status_Test.png)
@@ -71,6 +71,6 @@ The following Ethernet bandwidth tests loop over all active Ethernet links and p
 ## Internal Tenstorrent Members
 
 > [!WARNING]
-> For internal Tentorrent memebers only!
+> For internal Tentorrent members only!
 
-For users with internal Tenstorrent access see this document for futher information regarding 6U Galaxy installation and troubleshooting: [TG/6U Metal Infra Galaxy Notes and FAQ](https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1074659406/External+TG+6U+Metal+infra+Galaxy+notes+FAQ).
+For users with internal Tenstorrent access see this document for further information regarding 6U Galaxy installation and troubleshooting: [TG/6U Metal Infra Galaxy Notes and FAQ](https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1074659406/External+TG+6U+Metal+infra+Galaxy+notes+FAQ).

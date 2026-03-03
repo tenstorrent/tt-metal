@@ -78,7 +78,7 @@ Tensor BcastOperation::invoke(
         }
     }
 
-    // Bcast only works with tile layout, so we need to tilize the input tensors if neccessary
+    // Bcast only works with tile layout, so we need to tilize the input tensors if necessary
     auto padded_shape_a = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_a.padded_shape());
     auto padded_shape_b = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_b.padded_shape());
     Tensor formatted_a = ttnn::tilize_with_val_padding(
