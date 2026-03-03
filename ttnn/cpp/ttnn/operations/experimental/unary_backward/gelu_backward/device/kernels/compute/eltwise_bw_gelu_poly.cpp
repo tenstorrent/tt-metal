@@ -34,22 +34,22 @@ void kernel_main() {
         cb_wait_front(cb_grad_out, per_core_block_size);
         cb_wait_front(cb_input, per_core_block_size);
 
+        // Per-tile canonical pattern: acquire → compute → commit → wait → pack → release
+        // Multi-tile batching in dest is not possible here because gelu_derivative_tile
+        // uses additional dest registers as scratch during polynomial evaluation.
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             tile_regs_acquire();
+
+            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
+            copy_tile(cb_input, i, 1);       // dest[1] = input
+            gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
+            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
+
+            tile_regs_commit();
             tile_regs_wait();
-
-            copy_tile(cb_grad_out, i, 0);  // grad => tile 0
-            copy_tile(cb_input, i, 1);     // x => tile 1
-
-            // Compute GELU'(x) using polynomial approximation
-            gelu_derivative_tile<false>(1);  // tile[1] = GELU'(x)
-
-            // Multiply: grad_in = grad_out * GELU'(x)
-            mul_binary_tile(0, 1, 0);  // tile[0] = tile[0] * tile[1]
 
             pack_tile(0, cb_grad_in);
 
-            tile_regs_commit();
             tile_regs_release();
         }
 
