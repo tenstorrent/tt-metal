@@ -14,6 +14,7 @@ Demos showcasing different fusion capabilities:
 5. Sharded heterogeneous tree (LN → Slice → Matmul → Slice → LN) with block-sharded L1 intermediates
 6. Asymmetric parallel branches: 2-op RMS chain hidden behind matmul, common stem (2×8 → 1×8+1×8)
 7. Non-contiguous core grid: identity chain with branching on scattered cores (unicast barrier)
+8. Barrier overhead benchmark: N identity ops (1 tile each) measuring pure barrier mechanism cost
 
 Each demo is split into separate fused and unfused tests, each with cold + warm timing.
 Cold = all caches cleared (JIT disk + in-memory + program + fusion build),
@@ -115,6 +116,13 @@ void kernel_main() {
 }
 """
 
+# No-op kernels: empty kernel_main(), used for pure barrier overhead measurement.
+NOOP_READER_SOURCE = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
+NOOP_COMPUTE_SOURCE = (
+    '#include "api/compute/compute_kernel_api.h"\n' '#include "api/compute/common.h"\n' "void kernel_main() {}\n"
+)
+NOOP_WRITER_SOURCE = '#include "api/dataflow/dataflow_api.h"\nvoid kernel_main() {}\n'
+
 
 def _get_core_coords(core_ranges):
     coords = []
@@ -190,6 +198,25 @@ def _build_identity_op(input_tensor, output_tensor, core_ranges, num_tiles):
         output_tensors=[output_tensor],
         name="identity",
     )
+
+
+def _build_noop_op(core_ranges, dummy_tensor):
+    """Build a no-op OpDescriptor: 3 empty kernels, no CBs.
+
+    All three RISCs enter kernel_main() and immediately return.
+    A dummy tensor is passed through to satisfy the generic_op non-empty
+    tensor assertion — the kernels never touch it.
+    """
+    coords = _get_core_coords(core_ranges)
+    # Dummy RT arg (unused) — RuntimeArgsView requires ≥1 arg per core to register the entry.
+    dummy = [(c, [0]) for c in coords]
+    reader = _make_kernel_desc(NOOP_READER_SOURCE, core_ranges, ttnn.ReaderConfigDescriptor(), [], dummy)
+    compute = _make_kernel_desc(NOOP_COMPUTE_SOURCE, core_ranges, ttnn.ComputeConfigDescriptor(), [], dummy)
+    writer = _make_kernel_desc(NOOP_WRITER_SOURCE, core_ranges, ttnn.WriterConfigDescriptor(), [], dummy)
+    desc = ttnn.ProgramDescriptor()
+    desc.cbs = []
+    desc.kernels = [reader, compute, writer]
+    return OpDescriptor(descriptor=desc, input_tensors=[dummy_tensor], output_tensors=[dummy_tensor], name="noop")
 
 
 def _clear_all_caches(device):
@@ -1955,3 +1982,90 @@ void kernel_main() {
             print(f"\n  Demo 7 Fused: cold={cold:.2f}ms  e2e={e2e:.3f}ms  PCC: A={pcc_a:.4f} B={pcc_b:.4f}")
             assert p_a, f"Branch A PCC: {pcc_a}"
             assert p_b, f"Branch B PCC: {pcc_b}"
+
+    # -----------------------------------------------------------------
+    # Demo 8: Barrier Overhead Benchmark
+    #
+    # Chain N no-op phases via Sequential.  Each phase has 3 empty
+    # kernel_main() functions (reader, compute, writer) — zero kernel
+    # work, zero CBs, zero data.  The ONLY thing measured is the
+    # barrier synchronization mechanism itself.
+    #
+    # Core grid configs:
+    #   1  core  → (0,0) only — local::sync only (no group::sync)
+    #   8  cores → 1×8 row   — local + group (1 segment, 8 cores)
+    #   16 cores → 2×8 rect  — local + group (1 segment, 16 cores)
+    #   64 cores → 8×8 rect  — local + group (1 segment, 64 cores)
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _core_ranges_for(num_cores):
+        grid = {1: (0, 0), 8: (7, 0), 16: (7, 1), 64: (7, 7)}
+        if num_cores not in grid:
+            raise ValueError(f"Unsupported num_cores={num_cores}")
+        ex, ey = grid[num_cores]
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ex, ey))})
+
+    def _barrier_bench_setup(self, device, num_phases, num_cores):
+        """Create N no-op ops for pure barrier benchmarking."""
+        core_ranges = self._core_ranges_for(num_cores)
+        dummy = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return [_build_noop_op(core_ranges, dummy) for _ in range(num_phases)]
+
+    @pytest.mark.parametrize("single_run_only", [True, False])
+    @pytest.mark.parametrize("num_cores", [1, 8, 16, 64])
+    @pytest.mark.parametrize("num_phases", [2, 3, 4, 5, 6])
+    def test_barrier_overhead(self, device, num_phases, num_cores, single_run_only):
+        """Measure pure barrier mechanism cost by chaining no-op phases."""
+        from models.experimental.ops.descriptors.fusion import Sequential
+
+        ops = self._barrier_bench_setup(device, num_phases, num_cores)
+
+        def build_fused():
+            return Sequential(*ops).build(device)
+
+        if single_run_only:
+            fused = build_fused()
+            fused.launch()
+            ttnn.synchronize_device(device)
+            print(f"\n  Barrier bench: {num_phases} phases, {num_cores} cores (single run for Tracy)")
+            return
+
+        # -- Fused timing --
+        fused = build_fused()
+        fused_e2e = _time_steady_state(fused.launch, device)
+
+        # -- Unfused timing: launch each phase as a separate 1-op fused kernel --
+        unfused_ops = [Sequential(op).build(device) for op in ops]
+        for uf in unfused_ops:
+            uf.launch()
+        ttnn.synchronize_device(device)
+
+        def launch_unfused():
+            for uf in unfused_ops:
+                uf.launch()
+
+        unfused_e2e = _time_steady_state(launch_unfused, device)
+
+        # -- 1-phase baseline for per-barrier calculation --
+        ops_1 = self._barrier_bench_setup(device, 1, num_cores)
+        fused_1 = Sequential(*ops_1).build(device)
+        baseline_e2e = _time_steady_state(fused_1.launch, device)
+
+        # Convert to microseconds
+        fused_us = fused_e2e * 1000
+        unfused_us = unfused_e2e * 1000
+        baseline_us = baseline_e2e * 1000
+        per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
+
+        print(
+            f"\n  Barrier Overhead ({num_cores} cores, {num_phases} phases): "
+            f"fused={fused_us:.1f}us  unfused={unfused_us:.1f}us  "
+            f"baseline(1-phase)={baseline_us:.1f}us  per_barrier={per_barrier_us:.1f}us"
+        )
