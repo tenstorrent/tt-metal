@@ -55,6 +55,7 @@ class SweepsConfig:
     run_contents: str | None = None
     arch_name: str | None = None
     main_proc_verbose: bool = False
+    trace_params: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -79,6 +80,7 @@ def create_config_from_args(args) -> SweepsConfig:
         keep_invalid=args.keep_invalid,
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
+        trace_params=args.trace_params,
     )
 
     # Validate and set ARCH_NAME
@@ -271,6 +273,15 @@ def device_context(test_module, output_queue):
 
 
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
+    # Enable operation tracing if --trace-params is set
+    if config.trace_params:
+        try:
+            import ttnn.operation_tracer
+
+            ttnn.operation_tracer._ENABLE_TRACE = True
+        except Exception as e:
+            logger.warning(f"Could not enable operation tracing: {e}")
+
     test_module = importlib.import_module("sweeps." + test_module_name)
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
@@ -1009,6 +1020,13 @@ if __name__ == "__main__":
         action="store_true",
         required=False,
         help="Run tests in parent process (disables hang detection). Required for Tracy profiling and debugging. Prints test exceptions to stdout.",
+    )
+
+    parser.add_argument(
+        "--trace-params",
+        action="store_true",
+        required=False,
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
     args = parser.parse_args(sys.argv[1:])
