@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 
 import torch
@@ -33,10 +32,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
-
-fabric_config = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-)
 
 
 class MoE(SharedStateAddOn, AbstractModule):
@@ -145,6 +140,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
         mode: str,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
@@ -182,6 +178,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
+                "fabric_config": fabric_config,
                 "num_experts_per_device": num_experts_per_device,
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
@@ -230,6 +227,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
+                "fabric_config": fabric_config,
                 "num_experts_per_device": num_experts_per_device,
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
@@ -262,15 +260,23 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def decode_model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
+        topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, fabric_config, "decode", topk_fallback=topk_fallback)
 
     @classmethod
     def prefill_model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
+        topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
@@ -521,7 +527,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             ccl = cfg["ccl"]
             tp_size = cfg["mesh_device"].shape[1]
 
-            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+            if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING:
                 output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     output,
                     dim=0,
