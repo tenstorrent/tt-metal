@@ -210,7 +210,7 @@ inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const std::
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, l1_tile_idx * C_DIM_FACES + C_DIM_FACES * tile_shape.face_r_dim * FULL_CT_DIM + 1);
     }
     if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
-    { // TODO pgardner: I dont think ill need this for float32 dest
+    { // TODO pgardner: I don't think I'll need this for float32 dest
         TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)

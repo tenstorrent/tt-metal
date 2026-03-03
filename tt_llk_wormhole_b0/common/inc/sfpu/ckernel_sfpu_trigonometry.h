@@ -20,7 +20,7 @@ template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat _sfpu_sine_maclaurin_series_(sfpi::vFloat val)
 {
     // Good for [-pi:pi]
-    // Mclauren series = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
+    // Maclaurin series = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
     sfpi::vFloat tmp = val;
     // x
     sfpi::vFloat output = tmp;
@@ -51,7 +51,7 @@ template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat _sfpu_cosine_maclaurin_series_(sfpi::vFloat val)
 {
     // Good for [-pi:pi]
-    // Mclauren series = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
+    // Maclaurin series = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
     // 1
     sfpi::vFloat output = 1.0f;
     // x^2/2!

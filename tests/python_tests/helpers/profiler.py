@@ -174,7 +174,7 @@ class ProfilerData:
 
 
 def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
-    # dont aggregate marker column
+    # don't aggregate marker column
     timings = perf_data.columns.drop("marker")
     result = perf_data.groupby("marker", as_index=False)[timings].agg(["mean", "std"])
 

@@ -46,7 +46,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // where the aim is to balance the number of tiles processed between the two dest banks to minimize the perf hit
 // depending on the number of remaining tiles, algorithm will decide how many tiles to process
 // if remaining_tiles > 2 * dest_size, there will be at least two more dest banks to process so the algorithm is free to process as much tiles as possible
-// if remaining_tiles > dest_size, there will be at least one more dest bank to process so the algorithm will aim to split the remaining tiles eavenly
+// if remaining_tiles > dest_size, there will be at least one more dest bank to process so the algorithm will aim to split the remaining tiles evenly
 // "even_remainder" is calculated by taking half the tiles and rounding it up to be even as all dest banks except the last only use unit_dim 2
 // for all valid inputs ([5, 8] and [9, 16], depending on the dest_size) the number of tiles processed in the last two dest banks will be within 2 of each other
 // and number of tiles left in the last dest bank will be at least 2
