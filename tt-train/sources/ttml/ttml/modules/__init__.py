@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python modules package for ttml.
+"""Python modules package for ttml."""
 
 # C++ bindings from _ttml.modules
-from .._ttml.modules import InferenceMode, LinearLayer, ModuleBase, RunMode
+from _ttml.modules import InferenceMode, LinearLayer, ModuleBase, RunMode
 
 # Python implementations
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList

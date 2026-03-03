@@ -12,11 +12,10 @@ submodules that depend on them.
 # Import C++ types first (needed by Python submodules)
 # Note: _ttml is a top-level module, not a subpackage of ttml
 import _ttml
-
-from .. import _ttml
+import sys
 
 # --- C++ enums and classes from _ttml.models ---
-from .._ttml.models import (
+from _ttml.models import (
     BaseTransformer,
     KvCache,
     KvCacheConfig,
