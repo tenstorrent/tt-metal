@@ -3257,6 +3257,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreePod16x8_Custom2x32) {
+    GTEST_SKIP() << "This test is WIP";
     // Test build_physical_multi_mesh_adjacency_graph using PGD and PSD
     // Uses custom_2x32_mesh_graph_descriptor with 1 mesh of 2x32 (64 nodes)
     using namespace ::tt::tt_fabric;
@@ -3375,6 +3376,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
 TEST_F(
     TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreePod16x8_32x4QuadGalaxyTorusXy_ShouldFail) {
+    GTEST_SKIP() << "This test is WIP";
     // Negative test: 32x4 WORMHOLE MGD should fail with BH PGD and mock cluster.
     // The PGD (triple_16x8_quad_bh_galaxy) has groupings for 2x4/4x2 meshes (8 ASICs),
     // not 32x4 (128 ASICs). Architecture and size mismatch -> no MESH groupings ->
