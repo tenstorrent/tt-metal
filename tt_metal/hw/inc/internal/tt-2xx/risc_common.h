@@ -161,46 +161,150 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 
 #if defined(ARCH_QUASAR)
-// Quasar L2 Cache Management
-// DM cores have an L2 cache between the core and TL1 (node memory).
-// Writes to cacheable addresses (< MEM_L1_SIZE) go through L2.
-// Flush is required for data to be visible to other agents (host, other cores).
+// =============================================================================
+// Quasar DM Core Cache Management
+// =============================================================================
 //
-// Cache line size: 64 bytes
-// Flush registers:
-//   FLUSH64 (0x04010200): Takes raw byte address
-//   FLUSH32 (0x04010240): Takes (address >> 4)
+// Cache hierarchy (per DM core):
+//   L1 D$ : 4KB write-back, 64B lines, private per core
+//   L1 I$ : instruction cache, private per core
+//   L2    : 128KB write-back, 64B lines, inclusive, shared by 8 DM cores
+//   TL1   : Tensix L1 (node memory), visible to host and other cores
 //
-// Note: L2 invalidation is NOT supported per HW.
+// Data path: Core -> L1 D$ -> L2 -> TL1
+//
+// Key points:
+//   - Writes go through L1 D$ and L2 before reaching TL1
+//   - Flush is required for data to be visible to other agents
+//   - L1 D$ is inclusive of L2 (flushing L1 writes back to L2, not TL1)
+//
+// References:
+//   - SiFive X280 Core Manual, sections 3.4.2, 6.1.1, 6.1.2 (CFLUSH.D.L1, CDISCARD.D.L1)
+//   - Chipyard rocket-chip (basis for Quasar DM cores)
+//   - overlay/software/metal_lib/freedom-metal/src/cache.c (reference implementation)
+//
+// =============================================================================
 
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 
-// Flush a single cache line from L2 to TL1 (node memory).
-// Includes fence instructions for proper memory ordering.
+// -----------------------------------------------------------------------------
+// L1 Data Cache Operations
+// -----------------------------------------------------------------------------
+// Uses custom RISC-V instructions from SiFive/rocket-chip.
+// Instruction encoding: I-type with opcode=0x73, funct3=0, rd=x0
+//   CFLUSH.D.L1:   simm12 = -0x40 (0xFC0), flushes line to L2 + invalidates
+//   CDISCARD.D.L1: simm12 = -0x3E (0xFC2), invalidates line without writeback
+// If rs1=x0, operates on entire 4KB L1 D$.
+
+// Flush L1 D$ line (or entire cache if addr=0) to L2.
+// Writes back dirty data to L2 and invalidates the line.
+inline __attribute__((always_inline)) void flush_l1_dcache(uintptr_t addr) {
+    if (addr) {
+        // .insn i opcode, funct3, rd, rs1, simm12
+        __asm__ __volatile__(".insn i 0x73, 0, x0, %0, -0x40" :: "r"(addr) : "memory");
+    } else {
+        // rs1=x0: flush entire L1 D$ (encoded as .word for x0 case)
+        __asm__ __volatile__(".word 0xfc000073" ::: "memory");
+    }
+    __asm__ __volatile__("fence" ::: "memory");
+}
+
+// Invalidate L1 D$ line (or entire cache if addr=0) without writeback.
+// Discards dirty data - use only when data is known to be stale.
+inline __attribute__((always_inline)) void invalidate_l1_dcache(uintptr_t addr) {
+    if (addr) {
+        __asm__ __volatile__(".insn i 0x73, 0, x0, %0, -0x3E" :: "r"(addr) : "memory");
+    } else {
+        // rs1=x0: invalidate entire L1 D$
+        __asm__ __volatile__(".word 0xfc200073" ::: "memory");
+    }
+    __asm__ __volatile__("fence" ::: "memory");
+}
+
+// -----------------------------------------------------------------------------
+// L1 Instruction Cache Operations
+// -----------------------------------------------------------------------------
+
+// Invalidate entire L1 I$ using FENCE.I instruction.
+// Required after modifying instruction memory before jumping to new code.
+inline __attribute__((always_inline)) void invalidate_l1_icache() {
+    __asm__ __volatile__("fence.i" ::: "memory");
+}
+
+// -----------------------------------------------------------------------------
+// L2 Cache Operations
+// -----------------------------------------------------------------------------
+// L2 is controlled via memory-mapped registers in the cache controller.
+// See overlay_addresses.h for register definitions and geometry.
+
+// Flush a single 64B cache line from L2 to TL1 (node memory).
 inline __attribute__((always_inline)) void flush_l2_cache_line(uint32_t addr) {
-    asm volatile("fence" ::: "memory");
+    __asm__ __volatile__("fence" ::: "memory");
     volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
     *flush_reg = (uint64_t)addr;
-    asm volatile("fence" ::: "memory");
+    __asm__ __volatile__("fence" ::: "memory");
 }
 
 // Flush a range of addresses from L2 to TL1.
 // Flushes all cache lines covering [start_addr, start_addr + size).
 inline __attribute__((always_inline)) void flush_l2_cache_range(uint32_t start_addr, uint32_t size) {
-    constexpr uint32_t CACHE_LINE_SIZE = 64;
-    constexpr uint32_t CACHE_LINE_MASK = ~(CACHE_LINE_SIZE - 1);
+    constexpr uint32_t LINE_MASK = ~(L2_CACHE_LINE_SIZE - 1);
 
-    asm volatile("fence" ::: "memory");
+    __asm__ __volatile__("fence" ::: "memory");
 
     volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
-    uint32_t aligned_start = start_addr & CACHE_LINE_MASK;
+    uint32_t aligned_start = start_addr & LINE_MASK;
     uint32_t end_addr = start_addr + size;
 
-    for (uint32_t addr = aligned_start; addr < end_addr; addr += CACHE_LINE_SIZE) {
+    for (uint32_t addr = aligned_start; addr < end_addr; addr += L2_CACHE_LINE_SIZE) {
         *flush_reg = (uint64_t)addr;
     }
 
-    asm volatile("fence" ::: "memory");
+    __asm__ __volatile__("fence" ::: "memory");
+}
+
+// Flush entire L2 cache (128KB) to TL1.
+// Iterates FLUSH64 over all possible cache line addresses.
+inline void flush_l2_cache_full() {
+    __asm__ __volatile__("fence" ::: "memory");
+
+    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
+    for (uint32_t addr = 0; addr < L2_CACHE_SIZE; addr += L2_CACHE_LINE_SIZE) {
+        *flush_reg = (uint64_t)addr;
+    }
+
+    __asm__ __volatile__("fence" ::: "memory");
+}
+
+// Coordinated L2 invalidation across all 8 DM cores.
+// Each core signals ready by writing its bit, then polls until HW clears register.
+// Call from all 8 cores, or write other cores' bits if only one core is active.
+inline void invalidate_l2_cache(uint32_t hartid) {
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_FULL_INVALIDATE_ADDR;
+    *inv_reg = (uint64_t)(1 << hartid);
+    while (*inv_reg != 0);  // Wait for HW to complete and clear
+}
+
+// -----------------------------------------------------------------------------
+// Combined Cache Operations
+// -----------------------------------------------------------------------------
+
+// Invalidate entire L1 cache (D$ + I$) on this core.
+// Provided for API compatibility with previous architectures.
+inline void invalidate_l1_cache() {
+    invalidate_l1_dcache(0);
+    invalidate_l1_icache();
+}
+
+// Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
+// Must be called from all 8 DM cores for proper synchronization.
+// After return, all caches are cold and will fetch fresh data from TL1.
+inline void invalidate_cache_all(uint32_t hartid) {
+    // 1. Coordinate L2 wipe across all cores
+    invalidate_l2_cache(hartid);
+
+    // 2. Invalidate local L1 (D$ + I$)
+    invalidate_l1_cache();
 }
 
 #endif  // ARCH_QUASAR
