@@ -501,6 +501,12 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 
 
 class SeedManager:
+    """Manage host RNG state and writing per-user seeds to device.
+
+    `reset_seed` updates host RNGs only. `get_new_values` advances RNGs and
+    writes to device. `write_device_seed_values` writes explicit seeds only.
+    """
+
     def __init__(self, tt_sampling, max_batch_size=32):
         self.max_batch_size = max_batch_size
         self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
@@ -519,6 +525,22 @@ class SeedManager:
             self.rngs[user].seed(seeds[i])
             self.seeds[user] = seeds[i]
 
+    def write_device_seed_values(self, seed_values):
+        if len(seed_values) != self.max_batch_size:
+            raise ValueError(f"Expected {self.max_batch_size} seed values, got {len(seed_values)}")
+        try:
+            wrapped = [int(seed) & 0xFFFFFFFF for seed in seed_values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("seed_values must contain integer-like values") from exc
+
+        seed_tt = ttnn.from_torch(
+            torch.tensor(wrapped, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._seed_mapper,
+        )
+        ttnn.copy_host_to_device_tensor(seed_tt, self.tt_sampling.seeds_tt_tensor)
+
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         if empty_slots is None:
             empty_slots = range(self.max_batch_size)
@@ -528,8 +550,5 @@ class SeedManager:
         if replicate_seeds:
             assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
             new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
-        # send new seeds to sampling module
-        new_seed_tt = ttnn.from_torch(
-            torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
-        )
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        # Send seeds to sampling module.
+        self.write_device_seed_values(new_seeds)
