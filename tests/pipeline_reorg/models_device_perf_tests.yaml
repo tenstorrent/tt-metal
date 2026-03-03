@@ -21,8 +21,8 @@
     wh_n150:
       timeout: 10
       tier: 1
-    wh_llmbox_perf:
-      timeout: 30
-      tier: 2
+    bh_p150_perf:
+      timeout: 10
+      tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
