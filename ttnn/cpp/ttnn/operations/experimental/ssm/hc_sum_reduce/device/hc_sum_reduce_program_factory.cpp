@@ -50,7 +50,8 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);
 
-    const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
+    const tt::DataFormat intermediary_format =
+        (input_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_size = 2;
