@@ -11,73 +11,49 @@
 namespace tt::tt_metal {
 
 TEST(MetaliumEnv, Physical) {
-    auto descriptor = std::make_shared<MetaliumEnvDescriptor>();
-    auto metallium_object = MetaliumEnv();
-    metallium_object.initialize(descriptor);
-    EXPECT_TRUE(metallium_object.is_initialized());
+    auto env = MetaliumEnv();
+    EXPECT_TRUE(env.is_initialized());
 }
 
 TEST(MetaliumEnv, Mock) {
-    // Multiple mocks can be created without a hang
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
-    auto descriptor = std::make_shared<MetaliumEnvDescriptor>(mock_path);
-    auto metallium_object_1 = MetaliumEnv();
-    metallium_object_1.initialize(descriptor);
-    auto metallium_object_2 = MetaliumEnv();
-    metallium_object_2.initialize(descriptor);
-    EXPECT_TRUE(metallium_object_1.is_initialized());
-    EXPECT_TRUE(metallium_object_2.is_initialized());
-    EXPECT_EQ(metallium_object_1.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
-    EXPECT_EQ(metallium_object_2.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
+    auto env_1 = MetaliumEnv(MetaliumEnvDescriptor(mock_path));
+    auto env_2 = MetaliumEnv(MetaliumEnvDescriptor(mock_path));
+    EXPECT_TRUE(env_1.is_initialized());
+    EXPECT_TRUE(env_2.is_initialized());
+    EXPECT_EQ(env_1.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(env_2.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetaliumEnv, OnePhysicalMultipleMock) {
-    // Check a physical can be created alongside multiple mocks without a hang
-    auto descriptor = std::make_shared<MetaliumEnvDescriptor>();
+    auto env_physical = MetaliumEnv();
 
     auto mock_path_1 = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value();
-    auto mock_descriptor_1 = std::make_shared<MetaliumEnvDescriptor>(mock_path_1);
+    auto env_mock_1 = MetaliumEnv(MetaliumEnvDescriptor(mock_path_1));
 
     auto mock_path_2 = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2).value();
-    auto mock_descriptor_2 = std::make_shared<MetaliumEnvDescriptor>(mock_path_2);
+    auto env_mock_2 = MetaliumEnv(MetaliumEnvDescriptor(mock_path_2));
 
-    auto metallium_object_1 = MetaliumEnv();
-    metallium_object_1.initialize(descriptor);
-    auto metallium_object_2 = MetaliumEnv();
-    metallium_object_2.initialize(mock_descriptor_1);
-    auto metallium_object_3 = MetaliumEnv();
-    metallium_object_3.initialize(mock_descriptor_2);
-    EXPECT_TRUE(metallium_object_1.is_initialized());
-    EXPECT_TRUE(metallium_object_2.is_initialized());
-    EXPECT_TRUE(metallium_object_3.is_initialized());
+    EXPECT_TRUE(env_physical.is_initialized());
+    EXPECT_TRUE(env_mock_1.is_initialized());
+    EXPECT_TRUE(env_mock_2.is_initialized());
 
-    EXPECT_EQ(metallium_object_2.get_cluster().arch(), tt::ARCH::BLACKHOLE);
-    EXPECT_EQ(metallium_object_3.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(env_mock_1.get_cluster().arch(), tt::ARCH::BLACKHOLE);
+    EXPECT_EQ(env_mock_2.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetaliumEnv, Destroy) {
-    auto descriptor = std::make_shared<MetaliumEnvDescriptor>();
-    auto metallium_object = MetaliumEnv();
-    metallium_object.initialize(descriptor);
-    metallium_object.destroy();
-    EXPECT_FALSE(metallium_object.is_initialized());
+    auto env = MetaliumEnv();
+    env.destroy();
+    EXPECT_FALSE(env.is_initialized());
 }
 
 TEST(MetaliumEnv, DestroyMultiple) {
-    auto descriptor = std::make_shared<MetaliumEnvDescriptor>();
-    auto metallium_object = MetaliumEnv();
-    metallium_object.initialize(descriptor);
-    metallium_object.destroy();
-    metallium_object.destroy();
-    metallium_object.destroy();
-    EXPECT_FALSE(metallium_object.is_initialized());
-}
-
-TEST(MetaliumEnv, InitMultipleTimesThrows) {
-    auto descriptor = std::make_shared<MetaliumEnvDescriptor>();
-    auto metallium_object = MetaliumEnv();
-    metallium_object.initialize(descriptor);
-    EXPECT_THROW(metallium_object.initialize(descriptor), std::runtime_error);
+    auto env = MetaliumEnv();
+    env.destroy();
+    env.destroy();
+    env.destroy();
+    EXPECT_FALSE(env.is_initialized());
 }
 
 }  // namespace tt::tt_metal

@@ -4,19 +4,19 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include "impl/context/context_descriptor.hpp"
+#include "impl/context/context_id.hpp"
 
 namespace tt::tt_metal {
 
 class MetaliumEnv {
 public:
-    MetaliumEnv();
-    ~MetaliumEnv();
-
-    // Init a MetaliumEnv according to a descriptor. Note: Only one MetaliumEnv representing a physical cluster
+    // Construct and fully initialize a MetaliumEnv. Only one instance representing a physical cluster
     // is allowed due to UMD limitations.
-    void initialize(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor);
+    explicit MetaliumEnv(MetaliumEnvDescriptor descriptor = {});
+    ~MetaliumEnv();
 
     // Destroy the object. This function may only be called when the object is no longer needed.
     void destroy();
@@ -27,18 +27,26 @@ public:
 
     bool is_initialized() const;
 
-    // Get the descriptor that was used to initialize the MetaliumEnv
-    const std::shared_ptr<MetaliumEnvDescriptor>& get_descriptor() const;
+    const MetaliumEnvDescriptor& get_descriptor() const;
 
 private:
-    // Create the base objects according to the descriptor
-    void initialize_base_objects(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor);
+    friend class MetalContext;
+
+    // Ownership tracking: ensures at most one MetalContext is bound to this env at a time.
+    void acquire(ContextId context_id);
+    void release(ContextId context_id);
+    bool is_acquired() const;
+
+    void initialize_base_objects();
 
     // Verify the firmware version and enable the appropriate features
     void verify_fw_capabilities();
 
+    static constexpr ContextId NO_OWNER = -1;
+
     bool initialized_ = false;
-    std::shared_ptr<MetaliumEnvDescriptor> descriptor_ = nullptr;
+    std::atomic<ContextId> owning_context_id_{NO_OWNER};
+    MetaliumEnvDescriptor descriptor_;
 
     // Below objects are listed in the order of dependency
     std::unique_ptr<llrt::RunTimeOptions> rtoptions_ = nullptr;

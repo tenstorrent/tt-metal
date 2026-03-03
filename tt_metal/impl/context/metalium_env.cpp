@@ -13,16 +13,11 @@
 
 namespace tt::tt_metal {
 
-MetaliumEnv::MetaliumEnv() = default;
+MetaliumEnv::MetaliumEnv(MetaliumEnvDescriptor descriptor) : initialized_(true), descriptor_(std::move(descriptor)) {
+    this->initialize_base_objects();
+}
 
 MetaliumEnv::~MetaliumEnv() { this->destroy(); }
-
-void MetaliumEnv::initialize(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor) {
-    TT_FATAL(!initialized_, "MetaliumEnv already initialized");
-    this->initialize_base_objects(descriptor);
-    initialized_ = true;
-    descriptor_ = descriptor;
-}
 
 void MetaliumEnv::destroy() {
     if (!initialized_) {
@@ -31,7 +26,6 @@ void MetaliumEnv::destroy() {
     cluster_.reset();
     hal_.reset();
     rtoptions_.reset();
-    descriptor_.reset();
     initialized_ = false;
 }
 
@@ -52,16 +46,33 @@ tt::Cluster& MetaliumEnv::get_cluster() const {
 
 bool MetaliumEnv::is_initialized() const { return initialized_; }
 
-const std::shared_ptr<MetaliumEnvDescriptor>& MetaliumEnv::get_descriptor() const {
-    TT_FATAL(descriptor_ != nullptr, "MetaliumEnv not initialized");
-    return descriptor_;
+void MetaliumEnv::acquire(ContextId context_id) {
+    ContextId expected = NO_OWNER;
+    TT_FATAL(
+        owning_context_id_.compare_exchange_strong(expected, context_id, std::memory_order_acq_rel),
+        "MetaliumEnv is already in use by MetalContext (context_id={}). Cannot acquire for context_id={}.",
+        expected,
+        context_id);
 }
 
-void MetaliumEnv::initialize_base_objects(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor) {
+void MetaliumEnv::release(ContextId context_id) {
+    ContextId expected = context_id;
+    TT_FATAL(
+        owning_context_id_.compare_exchange_strong(expected, NO_OWNER, std::memory_order_acq_rel),
+        "MetaliumEnv release mismatch: expected context_id={}, actual context_id={}.",
+        context_id,
+        expected);
+}
+
+bool MetaliumEnv::is_acquired() const { return owning_context_id_.load(std::memory_order_acquire) != NO_OWNER; }
+
+const MetaliumEnvDescriptor& MetaliumEnv::get_descriptor() const { return descriptor_; }
+
+void MetaliumEnv::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
-    if (descriptor->is_mock_device()) {
-        this->rtoptions_->set_mock_cluster_desc(std::string(descriptor->mock_cluster_desc_path()));
+    if (descriptor_.is_mock_device()) {
+        this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
     }
 
     const bool is_base_routing_fw_enabled =
