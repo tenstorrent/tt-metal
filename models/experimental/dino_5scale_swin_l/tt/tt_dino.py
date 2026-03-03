@@ -13,7 +13,7 @@ Usage:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import torch
 import ttnn
@@ -212,6 +212,109 @@ class TtDINO:
         self.reg_branches_head = [
             TtRegBranch(decoder_params["reg_branches"][i], device) for i in range(decoder_num_layers)
         ]
+
+        # Cache for sine PE on device: key (H, W) -> ttnn.Tensor [1, H*W, 256]
+        self._pe_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
+        self._dram_cfg = ttnn.DRAM_MEMORY_CONFIG
+
+    def _get_pe_tt(self, H: int, W: int) -> ttnn.Tensor:
+        """Return sine positional encoding [1, H*W, 256] on device (cached)."""
+        key = (H, W)
+        if key not in self._pe_cache:
+            pos_embed = sine_positional_encoding(
+                H,
+                W,
+                num_feats=self.embed_dims // 2,
+                temperature=self.pe_temperature,
+            )
+            pos_flat = pos_embed.flatten(2).permute(0, 2, 1)  # [1, H*W, 256]
+            self._pe_cache[key] = ttnn.from_torch(
+                pos_flat.to(torch.bfloat16),
+                device=self.device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=self._dram_cfg,
+            )
+        return self._pe_cache[key]
+
+    def pre_transformer_tt(
+        self,
+        mlvl_feats_tt: List[ttnn.Tensor],
+    ) -> Dict[str, Any]:
+        """
+        Flatten and positional encoding on device; concat on host (ttnn.concat
+        requires TILE; spatial dims are not always tile-aligned).
+
+        Args:
+            mlvl_feats_tt: list of 5 NCHW ttnn tensors from neck [B, 256, H_i, W_i]
+
+        Returns same keys as pre_transformer, with feat_flatten and feat_pos as
+        ttnn tensors, and spatial_shapes/level_start_index/valid_ratios as torch.
+        """
+        logger.info("Pre-transformer (TT): flatten + PE on device...")
+        sh0 = tuple(mlvl_feats_tt[0].shape)
+        B, C = int(sh0[0]), int(sh0[1])
+        feat_flat_list_tt: List[ttnn.Tensor] = []
+        pos_torch_list: List[torch.Tensor] = []
+        spatial_shapes_list: List[List[int]] = []
+
+        for lvl, feat_tt in enumerate(mlvl_feats_tt):
+            sh = tuple(feat_tt.shape)
+            H, W = int(sh[2]), int(sh[3])
+            spatial_shapes_list.append([H, W])
+
+            # Flatten on device: (B, C, H, W) -> (B, H*W, C)
+            feat_tt = ttnn.to_layout(feat_tt, ttnn.ROW_MAJOR_LAYOUT)
+            feat_tt = ttnn.permute(feat_tt, (0, 2, 3, 1))
+            feat_flat_tt = ttnn.reshape(feat_tt, (B, H * W, C))
+            feat_flat_list_tt.append(feat_flat_tt)
+
+            # PE on device: cached [1, H*W, 256] + level_embed; then to host and expand to B
+            pos_tt = self._get_pe_tt(int(H), int(W))
+            level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
+            pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
+            pos_torch = ttnn.to_torch(ttnn.from_device(pos_tt)).float()
+            ttnn.deallocate(pos_tt)
+            pos_torch = pos_torch.repeat(B, 1, 1)  # [1, H*W, 256] -> [B, H*W, 256]
+            pos_torch_list.append(pos_torch)
+
+        # Concat on host (ttnn.concat requires TILE; H*W often not tile-aligned)
+        feat_torch_list = [ttnn.to_torch(ttnn.from_device(t)) for t in feat_flat_list_tt]
+        for t in feat_flat_list_tt:
+            ttnn.deallocate(t)
+
+        feat_flatten = torch.cat(feat_torch_list, dim=1)
+        feat_pos = torch.cat(pos_torch_list, dim=1)
+        spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+        level_start_index = torch.cat(
+            [
+                spatial_shapes.new_zeros((1,)),
+                spatial_shapes.prod(1).cumsum(0)[:-1],
+            ]
+        )
+        valid_ratios = feat_flatten.new_ones(B, len(mlvl_feats_tt), 2)
+
+        feat_flatten_tt = ttnn.from_torch(
+            feat_flatten.to(torch.bfloat16),
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        feat_pos_tt = ttnn.from_torch(
+            feat_pos.to(torch.bfloat16),
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        logger.info(
+            f"Pre-transformer (TT): feat_flatten {tuple(feat_flatten.shape)}, "
+            f"spatial_shapes {spatial_shapes.tolist()}"
+        )
+        return {
+            "feat_flatten": feat_flatten_tt,
+            "feat_pos": feat_pos_tt,
+            "spatial_shapes": spatial_shapes,
+            "level_start_index": level_start_index,
+            "valid_ratios": valid_ratios,
+        }
 
     def pre_transformer(
         self,
@@ -521,7 +624,7 @@ class TtDINO:
         image_tt = ttnn.from_torch(
             image,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -531,7 +634,10 @@ class TtDINO:
 
         backbone_feats_torch = None
         if return_intermediates:
-            backbone_feats_torch = [ttnn.to_torch(ttnn.from_device(bf)).float() for bf in backbone_feats_tt]
+            # Backbone returns NHWC [B,H,W,C]; reference uses NCHW [B,C,H,W]. Permute for PCC.
+            backbone_feats_torch = [
+                ttnn.to_torch(ttnn.from_device(bf)).float().permute(0, 3, 1, 2) for bf in backbone_feats_tt
+            ]
 
         # --- Neck ---
         logger.info("Neck: ChannelMapper...")
@@ -539,27 +645,19 @@ class TtDINO:
         ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Neck: {len(neck_feats_tt)} output levels")
 
-        neck_feats_torch = []
-        for i, nf in enumerate(neck_feats_tt):
-            nf_torch = ttnn.to_torch(ttnn.from_device(nf)).float()
-            neck_feats_torch.append(nf_torch)
-            ttnn.deallocate(nf)
+        neck_feats_torch = None
+        if return_intermediates:
+            neck_feats_torch = [ttnn.to_torch(ttnn.from_device(nf)).float() for nf in neck_feats_tt]
         for bf in backbone_feats_tt:
             ttnn.deallocate(bf)
 
-        # --- Pre-transformer → Encoder → Pre-decoder → Decoder → Heads ---
-        pre_trans = self.pre_transformer(neck_feats_torch)
+        # --- Pre-transformer (TT-optimized: flatten + PE on device) → Encoder → ... ---
+        pre_trans = self.pre_transformer_tt(neck_feats_tt)
+        for nf in neck_feats_tt:
+            ttnn.deallocate(nf)
 
-        feat_tt = ttnn.from_torch(
-            pre_trans["feat_flatten"].to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        feat_pos_tt = ttnn.from_torch(
-            pre_trans["feat_pos"].to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        feat_tt = pre_trans["feat_flatten"]
+        feat_pos_tt = pre_trans["feat_pos"]
 
         logger.info("Running encoder...")
         memory_tt = self.encoder(
