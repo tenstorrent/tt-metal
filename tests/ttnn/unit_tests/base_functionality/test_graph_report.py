@@ -3787,3 +3787,162 @@ class TestFastOperationGraphTracking:
             if n.get("node_type") == "function_start" and "name" in n.get("params", {})
         ]
         assert "ttnn.add" in fn_names, f"Expected 'ttnn.add' in function_start names, got: {fn_names}"
+
+    def test_python_io_records_tensor_ids(self, device, tmp_path):
+        """FastOperation should record input_tensor_ids and output_tensor_ids in python_io."""
+        report_path = str(tmp_path / "report.json")
+
+        with ttnn.manage_config("enable_fast_runtime_mode", True):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            a = ttnn.ones([1, 32], layout=ttnn.TILE_LAYOUT, device=device)
+            b = ttnn.add(a, a)
+            ttnn.graph.end_graph_capture_to_file(report_path)
+
+        with open(report_path) as f:
+            report = json.load(f)
+
+        py_io = report.get("python_io", [])
+        names = [r["name"] for r in py_io]
+        assert "ttnn.ones" in names, f"Expected ttnn.ones in python_io, got {names}"
+        assert "ttnn.add" in names, f"Expected ttnn.add in python_io, got {names}"
+
+        add_record = next(r for r in py_io if r["name"] == "ttnn.add")
+        assert len(add_record.get("input_tensor_ids", [])) > 0, "ttnn.add should have input_tensor_ids"
+        assert len(add_record.get("output_tensor_ids", [])) > 0, "ttnn.add should have output_tensor_ids"
+
+    def test_tensor_connectivity_across_operations(self, device, tmp_path):
+        """Output tensor ID of op A should appear as input tensor ID of op B."""
+        report_path = tmp_path / "report.json"
+
+        with ttnn.manage_config("enable_fast_runtime_mode", True):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            a = ttnn.ones([1, 32], layout=ttnn.TILE_LAYOUT, device=device)
+            b = ttnn.add(a, a)
+            ttnn.graph.end_graph_capture_to_file(report_path)
+
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+
+        c.execute(
+            """SELECT COUNT(DISTINCT ot.tensor_id)
+               FROM output_tensors ot
+               INNER JOIN input_tensors it ON ot.tensor_id = it.tensor_id"""
+        )
+        connected = c.fetchone()[0]
+        assert connected >= 1, f"Expected at least 1 connected tensor ID, got {connected}"
+        conn.close()
+
+
+class TestPyIdToCppTensorReconciliation:
+    """Tests that Python-assigned output tensor IDs get proper tensor entries
+    even when they don't appear in any C++ graph tensor node."""
+
+    def test_missing_pyid_created_from_cpp_tensor_node(self, tmp_path):
+        """When python_io output_tensor_ids references an ID not in the graph,
+        the import should create a tensor entry by cloning from the function_end
+        node's connected C++ tensor."""
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [2, 5],
+                "arguments": [],
+                "input_tensors": [3],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ReluOp"},
+                "connections": [4],
+                "arguments": [],
+                "input_tensors": [3],
+                "stacking_level": 1,
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "100",
+                    "shape": "[1,32]",
+                    "dtype": "BFLOAT16",
+                    "layout": "TILE",
+                    "memory_config": "",
+                    "device_id": 0,
+                    "address": 1000,
+                },
+                "connections": [2],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ReluOp"},
+                "connections": [6],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 1,
+            },
+            {
+                "counter": 5,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [6],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 6,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "200",
+                    "shape": "[1,32]",
+                    "dtype": "BFLOAT16",
+                    "layout": "TILE",
+                    "memory_config": "",
+                    "device_id": 0,
+                    "address": 2000,
+                },
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 7,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {"name": "ttnn.relu", "arguments": {}, "input_tensor_ids": [100], "output_tensor_ids": [999]},
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+
+        c.execute("SELECT tensor_id FROM output_tensors")
+        out_ids = {r[0] for r in c.fetchall()}
+        assert 999 in out_ids, f"Python-assigned output ID 999 should be in output_tensors, got {out_ids}"
+
+        c.execute("SELECT tensor_id FROM tensors WHERE tensor_id = 999")
+        row = c.fetchone()
+        assert row is not None, "Reconciliation should create a tensor entry for Python-assigned ID 999"
+        conn.close()
