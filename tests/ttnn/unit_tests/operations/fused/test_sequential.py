@@ -7484,3 +7484,119 @@ class TestNestedParallelStress:
         passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
         assert passing_a, f"Branch A (LN) PCC: {pcc_a}"
         assert passing_b, f"Branch B (RMS) PCC: {pcc_b}"
+
+    def test_doc_example_matmul_slice_ln_rms_tree(self, device):
+        """Doc-example integration: matmul → Parallel(slice→Parallel(matmul, LN), slice→RMS).
+
+        Tree (8 cores, single row):
+            op1: matmul [1,1,256,256]×[1,1,256,256] → [1,1,256,256]   on (0,0)-(7,0)
+            ├─ op2: slice left half → [1,1,256,128]                    on (0,0)-(3,0)
+            │  ├─ op4: matmul [1,1,256,128]×[1,1,128,128]             on (0,0)-(1,0)
+            │  └─ op5: layer_norm [1,1,256,128]                        on (2,0)-(3,0)
+            └─ op3: slice right half → [1,1,256,128]                   on (4,0)-(7,0)
+               └─ op6: rms_norm [1,1,256,128]                          on (4,0)-(7,0)
+        """
+        import models.experimental.ops.descriptors as descriptors
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+        torch.manual_seed(42)
+
+        # ── Common compute config (fp32 for fusion consistency) ──
+        compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+
+        # ── Core grids (single row) ──
+        full_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        left_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+        left_top = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        left_bot = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+
+        def tt(t):
+            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+
+        # ── Torch tensors ──
+        torch_a = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)  # op1 input A
+        torch_b1 = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)  # op1 weights B
+        torch_b4 = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)  # op4 weights B
+        torch_ln_w = torch.ones(1, 1, 1, 128, dtype=torch.bfloat16)  # LN weight
+        torch_ln_bias = torch.zeros(1, 1, 1, 128, dtype=torch.bfloat16)  # LN bias
+        torch_rms_w = torch.ones(1, 1, 1, 128, dtype=torch.bfloat16)  # RMS weight
+
+        tt_a = tt(torch_a)
+        tt_b1 = tt(torch_b1)
+        tt_b4 = tt(torch_b4)
+        tt_ln_w = tt(torch_ln_w)
+        tt_ln_bias = tt(torch_ln_bias)
+        tt_rms_w = tt(torch_rms_w)
+
+        # ── op1: matmul [1,1,256,256]×[1,1,256,256] on 8 cores ──
+        op1 = descriptors.matmul(tt_a, tt_b1, core_range_set=full_cores, compute_kernel_config=compute_cfg)
+
+        # ── op2: slice left half → [1,1,256,128] on 4 cores ──
+        op2 = descriptors.slice_op(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, 256, 128], core_range_set=left_cores)
+
+        # ── op3: slice right half → [1,1,256,128] on 4 cores ──
+        op3 = descriptors.slice_op(op1.output_tensors[0], [0, 0, 0, 128], [1, 1, 256, 256], core_range_set=right_cores)
+
+        # ── op4: matmul [1,1,256,128]×[1,1,128,128] on 2 cores ──
+        op4 = descriptors.matmul(
+            op2.output_tensors[0], tt_b4, core_range_set=left_top, compute_kernel_config=compute_cfg
+        )
+
+        # ── op5: layer_norm [1,1,256,128] on 2 cores ──
+        op5 = descriptors.layer_norm(
+            op2.output_tensors[0],
+            core_range_set=left_bot,
+            weight=tt_ln_w,
+            bias=tt_ln_bias,
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+        )
+
+        # ── op6: rms_norm [1,1,256,128] on 4 cores ──
+        op6 = descriptors.rms_norm(
+            op3.output_tensors[0],
+            core_range_set=right_cores,
+            weight=tt_rms_w,
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+        )
+
+        # ── Build and launch ──
+        fused = Sequential(
+            op1,
+            Parallel(
+                Sequential(op2, Parallel(op4, op5)),
+                Sequential(op3, op6),
+            ),
+        ).build(device)
+
+        fused.launch()
+        ttnn.synchronize_device(device)
+
+        # ── Torch golden (float32) ──
+        g1 = torch.matmul(torch_a.float(), torch_b1.float())
+        g_left = g1[:, :, :, :128]  # slice left half
+        g_right = g1[:, :, :, 128:]  # slice right half
+
+        golden_op4 = torch.matmul(g_left, torch_b4.float())
+        golden_op5 = torch_layer_norm(g_left, torch_ln_w.float(), torch_ln_bias.float())
+        golden_op6 = torch_rms_norm(g_right, torch_rms_w.float())
+
+        # ── Read leaf outputs and verify PCC ──
+        result_op4 = ttnn.to_torch(op4.output_tensors[0])
+        result_op5 = ttnn.to_torch(op5.output_tensors[0])
+        result_op6 = ttnn.to_torch(op6.output_tensors[0])
+
+        passing_4, pcc_4 = comp_pcc(golden_op4, result_op4, pcc=0.97)
+        passing_5, pcc_5 = comp_pcc(golden_op5, result_op5, pcc=0.97)
+        passing_6, pcc_6 = comp_pcc(golden_op6, result_op6, pcc=0.97)
+        assert passing_4, f"op4 (matmul) PCC: {pcc_4}"
+        assert passing_5, f"op5 (layer_norm) PCC: {pcc_5}"
+        assert passing_6, f"op6 (rms_norm) PCC: {pcc_6}"
