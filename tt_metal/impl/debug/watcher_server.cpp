@@ -19,8 +19,10 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <fmt/core.h>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include "core_coord.hpp"
 #include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -118,7 +120,8 @@ void WatcherServer::Impl::attach_devices() {
         for (ChipId device_id : all_devices) {
             device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
             log_info(LogLLRuntime, "Watcher attached device {}", device_id);
-            fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
+            fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
+            fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
 
         // Since dma library is not thread-safe, disable it when watcher runs.
@@ -274,7 +277,15 @@ void WatcherServer::Impl::create_log_file() {
 
     fprintf(f, "At %.3lfs starting\n", get_elapsed_secs());
     fprintf(f, "Legend:\n");
-    fprintf(f, "\tComma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
+
+    // Get processor info from shared helper
+    auto tensix_info = get_enable_symbols_info(HalProgrammableCoreType::TENSIX);
+
+    fprintf(
+        f,
+        "\tComma separated list specifies waypoint for %s\n",
+        fmt::format("{}", fmt::join(tensix_info.processor_names, ", ")).c_str());
+    fprintf(f, "\t%s is main processor, others are subordinates\n", tensix_info.main_processor.c_str());
     fprintf(f, "\tI=initialization sequence\n");
     fprintf(f, "\tW=wait (top of spin loop)\n");
     fprintf(f, "\tR=run (entering kernel)\n");
@@ -286,10 +297,12 @@ void WatcherServer::Impl::create_log_file() {
     fprintf(f, "\t\tNWD is \"noc write done\"\n");
     fprintf(
         f,
-        "\trmsg(brisc host run message): D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
-        "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg(subordinate run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
-    fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
+        "\trmsg(%s host run message): D/H device/host dispatch; NOC ID; I/G/D init/go/done; | separator; "
+        "enable flags %s\n",
+        tensix_info.main_processor.c_str(),
+        tensix_info.enable_legend.c_str());
+    fprintf(f, "\tsmsg(subordinate run message): I/G/D for subordinate processors\n");
+    fprintf(f, "\tk_ids: kernel IDs per processor (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
 

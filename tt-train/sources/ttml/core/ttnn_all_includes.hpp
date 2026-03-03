@@ -19,6 +19,7 @@
 #include <ttnn/device.hpp>                                                                                 // NOLINT
 #include <ttnn/distributed/api.hpp>                                                                        // NOLINT
 #include <ttnn/distributed/create_socket.hpp>                                                              // NOLINT
+#include <ttnn/distributed/distributed_configs.hpp>                                                        // NOLINT
 #include <ttnn/distributed/distributed_tensor.hpp>                                                         // NOLINT
 #include <ttnn/distributed/isocket.hpp>                                                                    // NOLINT
 #include <ttnn/distributed/types.hpp>                                                                      // NOLINT

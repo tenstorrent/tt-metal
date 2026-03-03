@@ -72,6 +72,11 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                 \
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1)
 
+// For ops with exactly two extra uint parameters AND DST_ACCUM_MODE as template param
+#define SFPU_UNARY_TWO_PARAM_KERNEL_WITH_DST_ACCUM(FN, MODE, APPROXIMATE, DST_ACCUM, DST_IDX, PARAM0, PARAM1) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                        \
+        ckernel::sfpu::FN<APPROXIMATE, DST_ACCUM>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1)
+
 // For ops with exactly three extra uint parameters (and no custom init callback)
 #define SFPU_UNARY_THREE_PARAM_KERNEL_FN(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1, PARAM2) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                           \
