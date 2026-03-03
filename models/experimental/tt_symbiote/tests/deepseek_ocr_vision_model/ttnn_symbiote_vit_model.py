@@ -7,6 +7,7 @@ import math
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from typing import Optional
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
 
 ########## CLIP Vision Embeddings ############
@@ -459,17 +460,10 @@ class TTNNNoTPAttention(TTNNModule):
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        if isinstance(x, torch.Tensor):
-            x = ttnn.from_torch(
-                x,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if isinstance(x, TorchTTNNTensor):
+            x = x.to_ttnn
+            x = ttnn.to_device(x, device=self.device)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         bsz, seqlen, _ = x.shape
 
@@ -683,16 +677,10 @@ class TTNNNoTPFeedForward(TTNNModule):
         Returns:
             TTNN tensor (batch_size, seq_len, dim)
         """
-        if isinstance(x, torch.Tensor):
-            x = ttnn.from_torch(
-                x,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if isinstance(x, TorchTTNNTensor):
+            x = x.to_ttnn
+            x = ttnn.to_device(x, device=self.device)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         # FC1
         output = ttnn.linear(
@@ -854,6 +842,11 @@ class TTNNNoTPTransformerBlock(TTNNModule):
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
+        if isinstance(x, TorchTTNNTensor):
+            x = x.to_ttnn
+            x = ttnn.to_device(x, device=self.device)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
         if isinstance(x, torch.Tensor):
             x = ttnn.from_torch(
                 x,
@@ -974,16 +967,10 @@ class TTNNNoTPTransformer(TTNNModule):
         Returns:
             TTNN tensor (batch_size, seq_len, hidden_size)
         """
-        if isinstance(hidden_states, torch.Tensor):
-            hidden_states = ttnn.from_torch(
-                hidden_states,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-
-        if hidden_states.layout != ttnn.TILE_LAYOUT:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if isinstance(hidden_states, TorchTTNNTensor):
+            hidden_states = hidden_states.to_ttnn
+            hidden_states = ttnn.to_device(hidden_states, device=self.device)
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         for layer in self.layers:
             hidden_states = layer.forward(hidden_states)
