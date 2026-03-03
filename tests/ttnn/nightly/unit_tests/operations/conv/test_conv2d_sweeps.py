@@ -15,7 +15,6 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_ttforge_sweep import (
 
 from models.common.utility_functions import (
     is_wormhole_b0,
-    skip_with_watcher,
 )
 
 import pytest
@@ -42,7 +41,6 @@ def test_ttnn_pytorch_sweep(device, input_spec):
 
 @pytest.mark.parametrize("input_spec", parameters_ttnn_forge["ttforge_sweep_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37096")
 def test_tt_forge_sweep(device, input_spec):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
