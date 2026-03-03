@@ -26,7 +26,8 @@ Tests both constituents of get_tt_kv_b12_proj_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
   - kv_b1_proj (HEIGHT_SHARDED, BFP8)
-  - kv_b2_proj (HEIGHT_SHARDED, BFP8)
+  - kv_b2_proj (WIDTH_SHARDED, BFP8) — extracted in original shape
+    since shuffle_kv_b2 preserves per-tile data and linear tile order
 
 Tests both constituents of get_tt_moe_shared_expert_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
@@ -445,8 +446,9 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         kv_b1_proj (8192, 512) as bfloat8_b
           HEIGHT_SHARDED on 64 cores (8x8 Qnope grid), shard (128, 512)
 
-        kv_b2_proj (512, 8192) pre-transposed to (8192, 512) as bfloat8_b
-          HEIGHT_SHARDED on 64 cores, shard (128, 512)
+        kv_b2_proj (512, 8192) as bfloat8_b
+          Extracted as WIDTH_SHARDED on 64 cores, shard (512, 128)
+          (byte-identical to the HEIGHT_SHARDED (128, 512) shard after shuffle)
 
     For multi-device (4x2 mesh), mla_tp=2 across mesh columns:
     both tensors are TP-sharded on the 8192 (heads) dim.
@@ -485,14 +487,19 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
     kv_b1_result = ttnn.to_torch(kv_b1_out, mesh_composer=composer)
     ttnn.deallocate(kv_b1_out)
 
-    # -- Extract kv_b2 (HEIGHT_SHARDED, BFP8) while fused buffer is alive -----
+    # -- Extract kv_b2 (WIDTH_SHARDED, BFP8) while fused buffer is alive -----
+    # The shuffle_kv_b2 rearrangement preserves per-tile element data and
+    # linear tile order, so each core's (128, 512) HEIGHT_SHARDED shard is
+    # byte-identical to the original (512, 128) WIDTH_SHARDED shard.
+    # Extracting as WIDTH_SHARDED lets us compare directly against the
+    # unshuffled reference without calling shuffle_kv_b2.
     logger.info("Extracting kv_b2_proj from fused buffer ...")
     kv_b2_out = _create_output_device_tensor(
-        *cfg.kv_b1_proj_shape,
+        *cfg.kv_b2_proj_shape,
         kv_b2.core_range_set,
         submesh,
         dtype=kv_b2.dtype,
-        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         mesh_mapper=replicate,
     )
     kv_b2_out = CopyToOutput.op(kv_b2.fused_tensor, kv_b2_out, byte_offset=kv_b2.byte_offset)
@@ -521,19 +528,19 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
         logger.info(f"Building kv_b2_proj round-trip reference (TP={tp_idx}) ...")
         b2_slice = kv_b2_raw[:, tp_idx * per_device_b2_w : (tp_idx + 1) * per_device_b2_w]
-        b2_physical = cfg.shuffle_kv_b2(b2_slice)
         ref = _get_roundtrip_reference(
-            b2_physical,
+            b2_slice,
             kv_b2.core_range_set,
             single_device,
             dtype=kv_b2.dtype,
-            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
         kv_b2_tp_refs.append(ref)
 
     ttnn.close_mesh_device(single_device)
 
     kv_b1_h = kv_b1.tensor_shape[0]
+    kv_b2_h = cfg.kv_b2_proj_shape[0]
 
     logger.info("Verifying per-device results ...")
     for device_idx in range(num_devices):
@@ -544,7 +551,7 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
             b1_slice, kv_b1_tp_refs[tp_group]
         ), f"kv_b1_proj mismatch on device {device_idx} (TP={tp_group})"
 
-        b2_slice = kv_b2_result[device_idx * kv_b1_h : (device_idx + 1) * kv_b1_h]
+        b2_slice = kv_b2_result[device_idx * kv_b2_h : (device_idx + 1) * kv_b2_h]
         assert torch.equal(
             b2_slice, kv_b2_tp_refs[tp_group]
         ), f"kv_b2_proj mismatch on device {device_idx} (TP={tp_group})"
