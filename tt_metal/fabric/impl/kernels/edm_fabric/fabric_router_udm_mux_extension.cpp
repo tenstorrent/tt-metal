@@ -386,6 +386,9 @@ void kernel_main() {
     size_t worker_connection_handshake_l1_base = connection_handshake_l1_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
 
+    // forces L1 address assignment
+    worker_connection_handshake_address = worker_connection_handshake_l1_base;
+
     for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_WORKER>(
             &worker_channels[i],
