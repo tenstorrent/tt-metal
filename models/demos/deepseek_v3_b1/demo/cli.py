@@ -22,8 +22,8 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     WeightProvider,
     create_fabric_router_config,
     create_pipeline_configuration_from_num_procs,
-    token_page_size_bytes,
 )
+from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,

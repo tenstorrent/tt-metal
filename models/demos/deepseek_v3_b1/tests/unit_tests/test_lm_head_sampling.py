@@ -26,8 +26,8 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_single_galaxy_pipeline_configuration,
     create_single_pod_pipeline_configuration,
-    token_page_size_bytes,
 )
+from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
