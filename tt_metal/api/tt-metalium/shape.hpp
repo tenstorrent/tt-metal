@@ -75,6 +75,16 @@ std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl:
 
 }  // namespace tt::tt_metal
 
+// Forward declarations of json trait templates (avoids pulling in reflection.hpp)
+namespace ttsl::json {
+template <typename T>
+struct to_json_t;
+template <typename T>
+struct from_json_t;
+}  // namespace ttsl::json
+
+#include <nlohmann/json_fwd.hpp>
+
 template <>
 struct ttsl::json::to_json_t<tt::tt_metal::Shape> {
     nlohmann::json operator()(const tt::tt_metal::Shape& shape) const;

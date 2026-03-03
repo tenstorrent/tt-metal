@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,14 +11,16 @@ namespace ttml::metal::ops::swiglu_fw::device {
 
 struct SwiGLUForwardProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle swiglu_fw_reader_kernel_id;
-        tt::tt_metal::KernelHandle swiglu_fw_writer_kernel_id;
+        tt::tt_metal::KernelHandle x_reader_y_writer_kernel_id;  // RISCV_1: X reader + Y writer
+        tt::tt_metal::KernelHandle weight_sender_kernel_id;      // RISCV_0: Weight sender
+        tt::tt_metal::KernelHandle weight_receiver_kernel_id;    // RISCV_0: Weight receiver
         tt::tt_metal::KernelHandle swiglu_fw_kernel_group_1_id;
         tt::tt_metal::KernelHandle swiglu_fw_kernel_group_2_id;
         tt::tt_metal::CoreRangeSet core_group_1;
         tt::tt_metal::CoreRangeSet core_group_2;
         uint32_t num_cores{};
-        uint32_t num_cores_y{};
+        uint32_t num_cores_x{};
+        bool use_multicast{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
