@@ -56,13 +56,9 @@ CB_BETA_TILED = 30
 CB_NORMED = 31
 
 
-def _pack_bf16_to_uint32(value: float) -> int:
-    """Pack a float as two identical bf16 values into a uint32 (generate_reduce_scaler format)."""
-    # Convert to float32 bytes, take upper 2 bytes as bf16
-    float32_bits = struct.unpack("I", struct.pack("f", value))[0]
-    bf16_bits = float32_bits >> 16  # truncate to bf16
-    # Pack as bf16 << 16 | bf16
-    return (bf16_bits << 16) | bf16_bits
+def _float_to_uint32_bits(value: float) -> int:
+    """Reinterpret float32 as uint32 bits for kernel __builtin_bit_cast."""
+    return struct.unpack("I", struct.pack("f", value))[0]
 
 
 def create_program_descriptor(
@@ -327,8 +323,8 @@ def create_program_descriptor(
     #   [5] start_stick_id  - first stick id for this core (0 for single core)
     #   [6] scaler_value    - 1/W as packed bf16 uint32
     #   [7] eps_value       - epsilon as packed bf16 uint32
-    scaler_value = _pack_bf16_to_uint32(1.0 / W)
-    eps_value = _pack_bf16_to_uint32(epsilon)
+    scaler_value = _float_to_uint32_bits(1.0 / W)
+    eps_value = _float_to_uint32_bits(epsilon)
 
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
