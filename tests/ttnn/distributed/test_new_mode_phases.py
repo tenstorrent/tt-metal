@@ -4,9 +4,7 @@
 
 """Integration tests for new mode Phase 1 and Phase 2 MPI commands."""
 
-import os
 import yaml
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
 from click.testing import CliRunner
@@ -218,7 +216,6 @@ class TestNewModePhase1Phase2:
 
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
-        hosts = ["node1", "node2"]  # Phase 1: 2 hosts
 
         # Use ORIGINAL_CWD/tt-run-generated for output (as new_mode_flow does)
         from ttnn.distributed.ttrun import ORIGINAL_CWD
@@ -286,6 +283,9 @@ class TestNewModePhase1Phase2:
                         "test",
                     ],
                 )
+        # Verify CLI invocation succeeded
+        assert result.exit_code == 0
+        assert result.exception is None
 
         # Phase 1 should have been called
         assert call_count >= 1
@@ -408,7 +408,6 @@ class TestNewModePhase1Phase2:
 
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
-        hosts = ["node1", "node2"]  # Phase 1: 2 hosts
 
         # Use ORIGINAL_CWD/tt-run-generated for output
         output_dir = ORIGINAL_CWD / "tt-run-generated"
@@ -471,7 +470,7 @@ class TestNewModePhase1Phase2:
 
         with patch.object(subprocess, "run", side_effect=mock_run):
             with patch("time.sleep"):
-                result = runner.invoke(
+                runner.invoke(
                     main,
                     [
                         "--mesh-graph-descriptor",

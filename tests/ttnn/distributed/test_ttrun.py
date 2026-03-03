@@ -3,15 +3,12 @@
 
 """Unit tests for ttrun command-line utility."""
 
-import os
-import tempfile
 import yaml
 import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
-from pydantic import ValidationError
 
 from ttnn.distributed.ttrun import (
     main,
@@ -19,9 +16,6 @@ from ttnn.distributed.ttrun import (
     resolve_path,
     get_rank_environment,
     build_mpi_command,
-    RankBinding,
-    TTRunConfig,
-    ORIGINAL_CWD,
     get_mpi_launcher,
     RankfileSyntax,
     build_rankfile_args,
@@ -30,7 +24,6 @@ from ttnn.distributed.ttrun import (
     get_generate_rank_bindings_output_paths,
     build_generate_rank_bindings_mpi_cmd,
     run_phase1_generate_rank_bindings,
-    new_mode_flow,
     find_generate_rank_bindings_executable,
     rankfile_needs_oversubscribe,
 )
