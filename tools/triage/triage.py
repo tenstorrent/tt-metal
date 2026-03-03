@@ -726,11 +726,42 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             exit(1)
 
 
+def _patch_risc_debug(context: Context) -> None:
+    """
+    Blackhole and Wormhole HW bug: HALT → READ/WRITE → CONTINUE breaks cores.
+    This patches both risc_debug and debug_hardware instances so that
+    cont() is a no-op and ensure_halted() only halts, never continues.
+
+    More info at tt-exalens:#908
+    """
+    for device in context.devices.values():
+        if not device.is_blackhole() and not device.is_wormhole():
+            continue
+
+        from ttexalens.hardware.baby_risc_debug import BabyRiscDebugHardware
+
+        original_hw_cont = BabyRiscDebugHardware.cont
+        original_hw_continue_without_debug = BabyRiscDebugHardware.continue_without_debug
+
+        BabyRiscDebugHardware.cont = (
+            lambda self: original_hw_cont(self) if self.risc_info.noc_block.device.is_quasar() else None
+        )
+        BabyRiscDebugHardware.continue_without_debug = (
+            lambda self: original_hw_continue_without_debug(self)
+            if self.risc_info.noc_block.device.is_quasar()
+            else None
+        )
+
+
 def _init_ttexalens(args: ScriptArguments) -> Context:
     """Initialize the ttexalens context."""
     if args["--remote-exalens"]:
-        return init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
-    return init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+        context = init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
+    else:
+        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+
+    _patch_risc_debug(context)
+    return context
 
 
 def run_script(
