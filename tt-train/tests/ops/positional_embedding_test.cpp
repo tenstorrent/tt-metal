@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"
 
@@ -22,6 +23,7 @@ protected:
 };
 
 TEST_F(PositionalEmbeddingTest, NonTrainableEmbedding) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();

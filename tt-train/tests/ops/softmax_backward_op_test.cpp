@@ -14,6 +14,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
@@ -175,6 +176,7 @@ class SoftmaxBackwardOpTypedTest : public SoftmaxBackwardOpTest, public ::testin
     } while (0)
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("1-tile last-dim");
     constexpr SoftmaxBackwardCase test_case{
         .name = "1tile_last_dim",
@@ -192,6 +194,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("sub-core-grid rectangular");
     // Rectangular sub-grid: 2x2 cores starting at (0,0). Requires device with at least 2x2 compute grid.
     const tt::tt_metal::CoreRange sub_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(1, 1));
@@ -212,6 +215,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_NonRectangular) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("sub-core-grid non-rectangular");
     // Non-rectangular (L-shaped) sub-grid
     std::vector<tt::tt_metal::CoreRange> ranges = {
@@ -235,6 +239,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_NonRectangular) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("long-row shape");
     constexpr std::array<SoftmaxBackwardCase, 2> cases = {{
         {"long_rows_streaming_300_tiles", 1, 5, 32, 300 * 32, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
@@ -247,6 +252,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_ManyShortRows) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("many-short-rows shape");
     constexpr SoftmaxBackwardCase test_case{
         .name = "many_short_rows_non_streaming_5_tiles",
@@ -268,6 +274,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_ManyShortRows) {
 // Type C - first face is full, second face must be padded
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_NonStreaming) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("padded non-streaming shape");
     constexpr std::array<SoftmaxBackwardCase, 3> cases = {{
         {"padded_non_streaming_type_a", 1, 1, 128, 14 * 32 + 2, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
@@ -281,6 +288,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_NonStreaming)
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_Streaming) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("padded streaming shape");
     constexpr std::array<SoftmaxBackwardCase, 3> cases = {{
         {"padded_streaming_type_a", 1, 5, 32, 300 * 32 + 3, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
@@ -294,6 +302,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_Streaming) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_WidthBoundaryStreamingSwitch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("boundary shape");
     constexpr std::array<SoftmaxBackwardCase, 5> cases = {{
         {"boundary_63_tiles", 1, 2, 32, 63 * 32, -1, 1e-2F, 1e-2F, -10.0F, 10.0F},
@@ -311,6 +320,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_WidthBoundaryStreamin
 // 16384 rows by 64 tiles each
 // Test takes around 105 seconds on BH
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_llama8b) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("llama shape");
     constexpr std::array<SoftmaxBackwardCase, 1> cases = {{
         {"llama8b_b1", 8, 32, 2048, 2048, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},

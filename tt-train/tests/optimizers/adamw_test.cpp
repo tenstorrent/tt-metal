@@ -29,6 +29,7 @@ protected:
 };
 
 TEST_F(AdamWFullTest, AdamWTest) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml::ops;
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();

@@ -10,6 +10,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/layernorm_bw/layernorm_bw.hpp"
 
@@ -190,21 +191,26 @@ static void CompareKernelVsXArray(
 // ============================================================================
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_OneTile) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsXArray(1, 13, 1, 20);
 }
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_TwoIncompleteTiles) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsXArray(1, 32, 1, 33);
 }
 
 TEST_F(LayerNormBackwardOpTest, NIGHTLY_MetalLayerNormBw_LargeFeatures_NoL1Fit) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsXArray(3, 273, 1, 8462);
 }
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_DoesNotFitInL1_WtNotDivisibleBy4) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsXArray(3, 100, 1, 8191, 10);
 }
 
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_OneTilePerRow) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsXArray(1, 19, 1, 213, 10);
 }

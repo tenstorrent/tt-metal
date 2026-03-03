@@ -22,6 +22,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
@@ -590,6 +591,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 128U,
@@ -603,6 +605,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_SingleHead) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 128U,
@@ -620,6 +623,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SingleHead) {
 // =============================================================================
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_Small) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Simple causal mask test with small shapes
     SDPATestConfig config{
         .batch_size = 1U,
@@ -634,6 +638,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_Small) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleHead) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 128U,
@@ -647,6 +652,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleHead) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Single tile test (32 seq len = 1 tile row) - everything on one core, simplest case
     SDPATestConfig config{
         .batch_size = 1U,
@@ -661,6 +667,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
     SDPATestConfig config{
@@ -676,6 +683,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Grouped Query Attention with different query and KV heads
     // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
     SDPATestConfig config{
@@ -691,6 +699,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 128U,
@@ -704,6 +713,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -721,6 +731,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -742,6 +753,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 // =============================================================================
 
 TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     std::mt19937 gen(42);
@@ -807,6 +819,7 @@ TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
 }
 
 TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t B = 1U, S = 128U, d = 64U;

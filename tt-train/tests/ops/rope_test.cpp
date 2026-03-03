@@ -403,6 +403,7 @@ TEST_F(RoPETest, GeneratedParamsOk) {
 }
 
 TEST_F(RoPETest, ForwardTest) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Head dim must be a multiple of TILE_WIDTH
     // Head dim must be <= 256
 
@@ -467,6 +468,7 @@ TEST_F(RoPETest, ForwardTest) {
 }
 
 TEST_F(RoPETest, BackwardTest) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Head dim must be a multiple of TILE_WIDTH
     // Head dim must be <= 256
     // Input query tensor

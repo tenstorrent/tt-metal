@@ -58,6 +58,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 }
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -402,11 +403,13 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 // ============================================================================
 
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsComposite({1U, 1U, 2U, 32U});
 }
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 1024 (32 * 32), fits in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 1024U});
 
@@ -416,24 +419,28 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 except for gamma
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_L1ExceptGamma) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 8192 (1 << 13), fits in L1 except gamma parameter
     CompareKernelVsComposite({1U, 1U, 1U, 8192U});
 }
 
 // Test aligned dimensions (C % 32 == 0) that don't fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_DoesNotFitInL1) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 16384 (1 << 14), does not fit in L1 cache
     CompareKernelVsComposite({1U, 1U, 1U, 16384U});
 }
 
 // Test aligned dimensions (C % 32 == 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_VeryLargeC) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 1048576 (1 << 20), very large C dimension (1M elements)
     CompareKernelVsComposite({1U, 1U, 1U, 1048576U});
 }
 
 // Test unaligned dimensions (C % 32 != 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 1023 (32 * 31 + 31), requires masking, fits in L1
     CompareKernelVsComposite({1U, 1U, 1U, 1023U});
 
@@ -443,12 +450,14 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_FitsInL1) {
 
 // Test unaligned dimensions (C % 32 != 0) that don't fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_DoesNotFitInL1) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 16383 (1 << 14 - 1), requires masking, does not fit in L1
     CompareKernelVsComposite({1U, 1U, 1U, 16383U});
 }
 
 // Test unaligned dimensions (C % 32 != 0) with very large C
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // C = 1048575 (1 << 20 - 1), very large C with masking
     CompareKernelVsComposite({1U, 1U, 1U, 1048575U});
 
@@ -458,29 +467,34 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Unaligned_VeryLargeC) {
 
 // Test block_size = 1 (C is odd)
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize1_OddC) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsComposite({1U, 1U, 1U, 33U});   // C = 33 (odd)
     CompareKernelVsComposite({1U, 1U, 1U, 127U});  // C = 127 (odd)
 }
 
 // Test block_size = 2 (C is even)
 TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsComposite({1U, 1U, 1U, 34U});   // C = 34 (even)
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
 // Test training-like shapes with NanoLlama dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
     CompareKernelVsComposite({64U, 1U, 256U, 384U});
 }
 
 // Test training-like shapes with LLaMA 7B dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     CompareKernelVsComposite({1U, 1U, 512U, 4096U});
 }
 
 // Test small batch and sequence dimensions (non-1 values)
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -491,6 +505,7 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
 
 // Test different masking patterns with larger batches
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";

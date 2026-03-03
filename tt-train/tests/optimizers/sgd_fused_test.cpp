@@ -12,6 +12,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/sgd.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
@@ -197,6 +198,7 @@ static std::string CaseName(const ::testing::TestParamInfo<ParityCase>& info) {
 }
 
 TEST_P(SGDFusedParityTest, UpdateParity) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     const auto& pc = GetParam();
     // Run 2 steps if momentum is enabled, 1 step otherwise
     const uint32_t steps = (pc.momentum != 0.0f) ? 2 : 1;

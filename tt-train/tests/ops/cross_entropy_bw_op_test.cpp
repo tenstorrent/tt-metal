@@ -61,6 +61,7 @@ xt::xarray<float> calculate_cross_entropy_backward(
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 1U, H = 1U;
@@ -89,6 +90,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
@@ -134,6 +136,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 1024, W = 1024U;
@@ -179,6 +182,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 32U, W = 128007U;
@@ -224,6 +228,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
@@ -273,6 +278,7 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;

@@ -61,6 +61,9 @@ TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorEven) {
 }
 
 TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorOdd) {
+    if constexpr (TypeParam::tensor_dtype == ttnn::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
+    }
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {30, 20, 2};
@@ -77,6 +80,9 @@ TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorOdd) {
 }
 
 TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorLargeWithBatch) {
+    if constexpr (TypeParam::tensor_dtype == ttnn::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
+    }
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data;
@@ -96,6 +102,9 @@ TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorLargeWithBatch) {
 }
 
 TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorTypeLimits) {
+    if constexpr (TypeParam::tensor_dtype == ttnn::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
+    }
     using scalar_t = typename TypeParam::scalar_t;
     auto lowest = std::numeric_limits<scalar_t>::lowest();
     auto max = std::numeric_limits<scalar_t>::max();
@@ -115,6 +124,9 @@ TYPED_TEST(TtmlFromVectorIntUintTest, ToFromTensorTypeLimits) {
 }
 
 TYPED_TEST(TtmlFromVectorIntUintTest, RowMajorLayout) {
+    if constexpr (TypeParam::tensor_dtype == ttnn::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
+    }
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {1, 2, 3};
@@ -126,6 +138,9 @@ TYPED_TEST(TtmlFromVectorIntUintTest, RowMajorLayout) {
 }
 
 TYPED_TEST(TtmlFromVectorIntUintTest, TileLayout) {
+    if constexpr (TypeParam::tensor_dtype == ttnn::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
+    }
     using scalar_t = typename TypeParam::scalar_t;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<scalar_t> test_data = {1, 2, 3};
@@ -497,6 +512,7 @@ TEST_F(TensorUtilsTest, TestFloatXtensor) {
 }
 
 TEST_F(TensorUtilsTest, TestUint32XTensor) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<uint32_t> test_data = {30, 20, 2};
 

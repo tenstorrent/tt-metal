@@ -31,6 +31,7 @@ protected:
 };
 
 TEST_F(ReduceOpTest, TestMeanDim0) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
@@ -59,6 +60,7 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
 }
 
 TEST_F(ReduceOpTest, TestSumDim0) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -86,6 +88,7 @@ TEST_F(ReduceOpTest, TestSumDim0) {
 }
 
 TEST_F(ReduceOpTest, TestMeanDim3) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -112,6 +115,7 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
 }
 
 TEST_F(ReduceOpTest, TestSumDim3) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -139,6 +143,7 @@ TEST_F(ReduceOpTest, TestSumDim3) {
 }
 
 TEST_F(ReduceOpTest, TestMeanLargeDim3) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({1024 * 1024});
     auto& rng = ttml::autograd::ctx().get_generator();

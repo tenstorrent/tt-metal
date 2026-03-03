@@ -26,6 +26,7 @@ protected:
 };
 
 TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -68,6 +69,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
 }
 
 TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttnn;
     using namespace ttml;
 
@@ -89,6 +91,7 @@ TEST_F(EmbeddingOpTest, EmbeddingNumEmbeddingsEmbeddingDimNotDivisibleBy32) {
 }
 
 TEST_F(EmbeddingOpTest, EmbeddingSentenceDimNotDivisibleBy32) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttnn;
     using namespace ttml;
 

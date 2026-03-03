@@ -16,6 +16,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
@@ -53,6 +54,7 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 1, H = 1;
@@ -76,6 +78,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 1, H = 2;
@@ -100,6 +103,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 2U, C = 1U, H = 91U, W = 157U;
@@ -139,6 +143,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 1017U, W = 1018U;
@@ -178,6 +183,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 1U, W = 65536U;
@@ -217,6 +223,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
 }
 
 TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";

@@ -26,6 +26,7 @@ protected:
 };
 
 TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     uint32_t batch_size = 6;
@@ -77,6 +78,7 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
 }
 
 TEST_F(LayerNormOpTest, CompositeLayerNormOp_backward) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml;
 
     uint32_t batch_size = 1;

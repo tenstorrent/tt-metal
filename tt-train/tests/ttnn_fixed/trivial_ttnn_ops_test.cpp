@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -69,6 +70,7 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 1U;
@@ -90,6 +92,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 1U;
@@ -116,6 +119,7 @@ TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 1U;
@@ -142,6 +146,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSumOverBatch_0) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 10U;
@@ -167,6 +172,7 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_0) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestDivide) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t batch_size = 2U;
     const size_t features = 64U;
@@ -198,6 +204,7 @@ TEST_F(TrivialTnnFixedTest, TestDivide) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &ttml::autograd::ctx().get_device();
 
     const size_t batch_size = 2U;
@@ -258,6 +265,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingZeroTemperatureNoMask) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Test sampling with positive temperature, no mask, and xarray of shape {1, 1, 32, 64}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 64};
     xt::xarray<float> a = xt::random::rand<float>(shape);
@@ -275,6 +283,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
     xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
     xt::xarray<float> a = xt::random::rand<float>(shape);

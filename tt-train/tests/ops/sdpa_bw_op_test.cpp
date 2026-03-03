@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
@@ -663,6 +664,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 // ========== Test Cases ==========
 
 TEST_F(SDPABackwardTest, SmallBatch) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -679,6 +681,7 @@ TEST_F(SDPABackwardTest, SmallBatch) {
 
 TEST_F(SDPABackwardTest, NanoGPTConfig) {
     // Match nano_gpt training config
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,
@@ -694,6 +697,7 @@ TEST_F(SDPABackwardTest, NanoGPTConfig) {
 }
 
 TEST_F(SDPABackwardTest, LargerSequence) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -710,6 +714,7 @@ TEST_F(SDPABackwardTest, LargerSequence) {
 
 TEST_F(SDPABackwardTest, GroupedQueryAttention) {
     // Test GQA: more query heads than kv heads
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -729,6 +734,7 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
     // num_heads: 32, num_groups: 4, embedding_dim: 2048, max_sequence_length: 2048
     // head_dim = 2048 / 32 = 64
     // heads_per_group = 32 / 4 = 8
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 1U,
         .sequence_length = 256U,  // Using smaller seq for faster test (full is 2048)
@@ -746,6 +752,7 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
 TEST_F(SDPABackwardTest, CausalMask_MHA) {
     // Test causal mask with Multi-Head Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -764,6 +771,7 @@ TEST_F(SDPABackwardTest, CausalMask_MHA) {
 TEST_F(SDPABackwardTest, CausalMask_GQA) {
     // Test causal mask with Grouped Query Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 256U,
@@ -781,6 +789,7 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
 
 TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
     // Test causal mask with larger sequence length
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     SDPABackwardTestConfig config{
         .batch_size = 1U,
         .sequence_length = 512U,

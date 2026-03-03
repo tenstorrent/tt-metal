@@ -31,6 +31,7 @@ size_t compute_tensor_size(const ttnn::Tensor& tensor) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
+    SKIP_FOR_LLK_ASSERTS("Different values for memory usage with and without LLK asserts.");
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
@@ -104,6 +105,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
+    SKIP_FOR_LLK_ASSERTS("Different values for memory usage with and without LLK asserts.");
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
@@ -188,6 +190,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
 }
 
 TEST_F(MemoryUtilsTest, L1Usage) {
+    SKIP_FOR_LLK_ASSERTS("Different values for memory usage with and without LLK asserts.");
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
@@ -287,6 +290,7 @@ TEST_F(MemoryUtilsTest, L1Usage) {
 }
 
 TEST_F(MemoryUtilsTest, SnapshotFeature) {
+    SKIP_FOR_LLK_ASSERTS("Different values for memory usage with and without LLK asserts.");
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages

@@ -20,10 +20,10 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "serialization/serialization.hpp"
-
 namespace {
 // Concept for trivially copyable types
 template <typename T>
@@ -494,11 +494,14 @@ std::ostream& operator<<(std::ostream& os, const TensorTestCase& test_case) {
 class FlatBufferFileSerializationTest : public FlatBufferFileTest, public ::testing::WithParamInterface<TestParam> {};
 
 TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
-    // get_device() will automatically open the device if it's not already open
-    auto* device = &ttml::autograd::ctx().get_device();
-
     const TestParam& param = GetParam();
     const TensorTestCase& test_case = param;
+
+    if (test_case.dtype == tt::tt_metal::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert for are_packers_configured_correctly.");
+    }
+    // get_device() will automatically open the device if it's not already open
+    auto* device = &ttml::autograd::ctx().get_device();
 
     // Skip FLOAT32 ROW_MAJOR tests (both DEVICE and HOST) - they fail with typecast errors
     if (test_case.dtype == tt::tt_metal::DataType::FLOAT32 && test_case.layout == tt::tt_metal::Layout::ROW_MAJOR) {

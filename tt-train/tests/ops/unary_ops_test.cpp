@@ -77,6 +77,7 @@ protected:
 };
 
 TEST_F(UnaryOpsTest, GlobalMean) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
     auto shape = ttnn::Shape({2, 1, 1, 4});
@@ -99,6 +100,7 @@ TEST_F(UnaryOpsTest, GlobalMean) {
 }
 
 TEST_F(UnaryOpsTest, LogSoftmax) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
     auto tensor = core::from_vector(test_data, ttnn::Shape({2, 1, 1, 4}), device);
@@ -122,6 +124,7 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
 }
 
 TEST_F(UnaryOpsTest, Silu) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto N = 4;
     auto C = 1;
     auto H = 20;

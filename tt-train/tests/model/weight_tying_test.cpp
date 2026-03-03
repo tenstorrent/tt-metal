@@ -75,6 +75,7 @@ protected:
 };
 
 TEST_F(WeightTyingTest, ModelFC) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     auto model = ModelFC();
     auto params = model.parameters();
     assert(params.size() == 3U);

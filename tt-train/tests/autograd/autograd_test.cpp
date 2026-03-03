@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/device.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
@@ -30,6 +31,7 @@ protected:
 };
 
 TEST_F(AutogradTest, TestSum) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
@@ -59,6 +61,7 @@ TEST_F(AutogradTest, TestSum) {
 }
 
 TEST_F(AutogradTest, TestMul) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
@@ -84,6 +87,7 @@ TEST_F(AutogradTest, TestMul) {
 }
 
 TEST_F(AutogradTest, BroadCastBatchTest) {
+    SKIP_FOR_LLK_ASSERTS("Hits LLK assert for math fidelity larger than LoFi only works with Eltwise multiply.");
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
