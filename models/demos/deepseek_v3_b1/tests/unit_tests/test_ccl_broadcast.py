@@ -17,14 +17,11 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-def create_fabric_router_config(max_payload_size):
-    """Helper to create FabricRouterConfig with custom max payload size."""
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration_idx):
@@ -103,59 +100,25 @@ def test_ccl_broadcast(
     # Create submesh
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
-    # Set up sub-device
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    # Set up sharded memory config
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        input_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-    output_mem_config = input_mem_config
-
-    # Create sender tensor (the data to broadcast)
-    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-
-    # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere
-    device_tensors = []
-    for row in range(mesh_rows):
-        if row == sender_row:
-            device_tensors.append(sender_tensor)
-        else:
-            device_tensors.append(torch.zeros_like(sender_tensor))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    bcast_core = (0, 0)
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=1,
     )
-
-    # Create output tensor
-    output_tensor = ttnn.from_torch(
-        torch.zeros(output_shape, dtype=torch.bfloat16),
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=output_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # semaphores
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-
-    semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    ttnn.synchronize_device(submesh)
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
 
     # Compute expected output using golden function
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
@@ -168,7 +131,7 @@ def test_ccl_broadcast(
         input_tensor_mesh=input_tensor_mesh,
         output_tensor=output_tensor,
         sender_coord=sender_coord,
-        semaphores=semaphore,
+        semaphores=semaphores,
     )
     assert (
         bcast_config.chunk_size_bytes,
@@ -184,7 +147,7 @@ def test_ccl_broadcast(
         input_tensor_mesh,
         output_tensor,
         sender_coord,
-        semaphores=semaphore,
+        semaphores=semaphores,
     )
     ttnn.synchronize_device(submesh)
 
@@ -196,7 +159,7 @@ def test_ccl_broadcast(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            semaphores=semaphore,
+            semaphores=semaphores,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -209,7 +172,7 @@ def test_ccl_broadcast(
             input_tensor_mesh,
             output_tensor,
             sender_coord,
-            semaphores=semaphore,
+            semaphores=semaphores,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -298,41 +261,25 @@ def test_ccl_broadcast_loop(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-
-    sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-    device_tensors = []
-    for row in range(mesh_rows):
-        device_tensors.append(sender_tensor if row == sender_row else torch.zeros_like(sender_tensor))
-
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        torch.cat(device_tensors, dim=0),
-        device=submesh,
+    bcast_core = (0, 0)
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
     )
-    output_tensor = ttnn.from_torch(
-        torch.zeros(output_shape, dtype=torch.bfloat16),
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(num_links)]
-    ttnn.synchronize_device(submesh)
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
 
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
@@ -403,46 +350,30 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-
-    output_tensor = ttnn.from_torch(
-        torch.zeros(output_shape, dtype=torch.bfloat16),
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(num_links)]
-    ttnn.synchronize_device(submesh)
-
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     slice_size = output_shape[0]
+    bcast_core = (0, 0)
 
     for host_iter in range(num_host_iters):
         sender_tensor = _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, host_iter)
-        device_tensors = []
-        for row in range(mesh_rows):
-            device_tensors.append(sender_tensor if row == sender_row else torch.zeros_like(sender_tensor))
-
-        mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-        input_tensor_mesh = ttnn.from_torch(
-            torch.cat(device_tensors, dim=0),
-            device=submesh,
+        iter_inputs = build_broadcast_test_inputs(
+            mesh_device=submesh,
+            mesh_rows=mesh_rows,
+            mesh_cols=mesh_cols,
+            sender_row=sender_row,
+            sender_col=sender_col,
+            output_shape=output_shape,
+            input_shard_shape=input_shard_shape,
+            tensor_mem_layout=tensor_mem_layout,
             layout=layout,
-            tile=ttnn.Tile((1, 32)),
-            dtype=input_dtype,
-            memory_config=input_mem_config,
-            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+            input_dtype=input_dtype,
+            bcast_core=bcast_core,
+            num_links=num_links,
+            input_tensor_torch=sender_tensor,
         )
+        input_tensor_mesh = iter_inputs.input_tensor_mesh
+        output_tensor = iter_inputs.output_tensor_mesh
+        semaphores = iter_inputs.semaphores
 
         ttnn_result = DeepseekMinimalBroadcast.op(
             input_tensor_mesh,
