@@ -14,7 +14,7 @@ from models.common.tensor_utils import get_padded_hidden_dim, pad_to_shape
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import Gate as ReferenceMoEGate2
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import linear as referenceLinear
-from models.demos.deepseek_v3_d_p.tt.moe_gate_prefill import MoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe_gate_prefill2d import MoEGatePrefill
 from tests.ttnn.utils_for_testing import comp_pcc
 
 random.seed(42)
@@ -80,18 +80,16 @@ def get_or_create_1x4_mesh(device_params=None):
             ttnn.set_fabric_config(fabric_cfg)
 
         # Open the full system mesh (e.g., 8x4) and carve a 1x4 column
-        parent_mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(8, 4))
-        submesh = parent_mesh.create_submesh(
-            mesh_shape=ttnn.MeshShape(1, 4), coordinate=ttnn.MeshCoordinate(0, 0)  # first column
-        )
-        return submesh, parent_mesh
+        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(8, 4))
+
+        return mesh
 
     elif cluster_type == ttnn.cluster.ClusterType.P150_X4:
         # QuietBox: open 1x4 directly; still set fabric config if requested
         if fabric_cfg != ttnn.FabricConfig.DISABLED:
             ttnn.set_fabric_config(fabric_cfg)
-        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4))
-        return mesh, None
+        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(2, 2))
+        return mesh
 
     else:
         raise ValueError(f"Unsupported cluster type, expected P150_X4 or BLACKHOLE_GALAXY, but got {cluster_type}")
@@ -108,11 +106,10 @@ def calculate_average_recall(predicted_experts, reference_experts):
     return recall / predicted_experts.shape[0]
 
 
-def get_input_mem_config(config, padded_dim):
+def get_input_mem_config(config, padded_dim, mesh_shape):
     shard_height = (config.max_seq_len + config.num_cores - 1) // config.num_cores
     shard_height = ((shard_height + 31) // 32) * 32
-    shard_width = (padded_dim + config.num_devices - 1) // config.num_devices
-
+    shard_width = (padded_dim + mesh_shape[0] - 1) // mesh_shape[0]
     sharded_mem_config = ttnn.create_sharded_memory_config(
         shape=(shard_height, shard_width),
         core_grid=config.core_grid,
@@ -124,16 +121,16 @@ def get_input_mem_config(config, padded_dim):
 
 
 @pytest.mark.parametrize("seq_len", [4096])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_forward_pass(
     seq_len,
     device_params,
 ):
-    submesh, parent_mesh = get_or_create_1x4_mesh(device_params)
+    mesh2d = get_or_create_1x4_mesh(device_params)
 
     config = MoEGateConfig()
     reference_model = ReferenceMoEGate2(config)
-    tt_model = MoEGatePrefill(config, seq_len, submesh, submesh)
+    tt_model = MoEGatePrefill(config, seq_len, mesh2d)
 
     torch_input = torch.randn(seq_len, config.dim, dtype=torch.bfloat16)
 
@@ -149,38 +146,46 @@ def test_forward_pass(
     reference_logits = referenceLinear(torch_input, reference_model.weight)
 
     # Compute tile-aligned padded dim for the sharded axis
-    num_devices = submesh.get_num_devices()
-    padded_dim = get_padded_hidden_dim(config.dim, num_devices, tile_size=32)
+    num_devices_in_column = mesh2d.shape[0]
+    padded_dim = get_padded_hidden_dim(config.dim, num_devices_in_column, tile_size=32)
     torch_input_padded = pad_to_shape(torch_input, (seq_len, padded_dim), pad_value=0.0)
     torch_weight_padded = pad_to_shape(torch_weight, (padded_dim, torch_weight.shape[1]), pad_value=0.0)
 
-    sharded_mem_config = get_input_mem_config(config, padded_dim)
+    sharded_mem_config = get_input_mem_config(config, padded_dim, mesh2d.shape)
 
     tt_model.weight = ttnn.from_torch(
         torch_weight_padded,
-        device=submesh,
+        device=mesh2d,
         dtype=ttnn.bfloat4_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh2d,
+            dims=(None, None),  # None for replication across dim 0, 1 for sharding across dim 1
+            mesh_shape=mesh2d.shape,
+        ),  # Shard across dim 1
     )
+
     tt_model.bias = ttnn.from_torch(
         torch_bias.repeat(seq_len).view(seq_len, -1),
-        device=submesh,
+        device=mesh2d,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-    breakpoint()
+    # For input - shared across mesh_dim 0, sharded across mesh_dim 1
     tt_input = ttnn.from_torch(
         torch_input_padded,
-        device=submesh,
+        device=mesh2d,
         dtype=ttnn.bfloat16,
         memory_config=sharded_mem_config,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=-1),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh2d,
+            dims=(None, 1),  # None for replication across dim 0, 1 for sharding across dim 1
+            mesh_shape=mesh2d.shape,
+        ),  # Shard across dim 1
     )
-
     tt_topk_weights, tt_topk_indices, tt_logits = tt_model(tt_input)
     per_device_topk_weight = ttnn.get_device_tensors(tt_topk_weights)
     per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
