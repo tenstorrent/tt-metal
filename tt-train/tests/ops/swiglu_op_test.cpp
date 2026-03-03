@@ -435,6 +435,28 @@ TEST_F(SwiGLUOpTest, SwiGLUGrad_Large_4x1x64x256) {
     CompareSwiGLUGradKernel({4, 1, 64, 256});
 }
 
+// Non-tile-aligned widths (H not multiple of 32)
+TEST_F(SwiGLUOpTest, SwiGLUGrad_NonAligned_1x1x32x48) {
+    CompareSwiGLUGradKernel({1, 1, 32, 48});
+}
+
+TEST_F(SwiGLUOpTest, SwiGLUGrad_NonAligned_2x1x32x96) {
+    CompareSwiGLUGradKernel({2, 1, 32, 96});
+}
+
+TEST_F(SwiGLUOpTest, SwiGLUGrad_NonAligned_1x1x64x160) {
+    CompareSwiGLUGradKernel({1, 1, 64, 160});
+}
+
+// Non-tile-aligned heights (S not multiple of 32)
+TEST_F(SwiGLUOpTest, SwiGLUGrad_NonAlignedH_1x1x48x64) {
+    CompareSwiGLUGradKernel({1, 1, 48, 64});
+}
+
+TEST_F(SwiGLUOpTest, SwiGLUGrad_NonAlignedH_4x1x96x128) {
+    CompareSwiGLUGradKernel({4, 1, 96, 128});
+}
+
 TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLUGrad_VeryLarge_1x1x1024x1024) {
     CompareSwiGLUGradKernel({1, 1, 1024, 1024});
 }
