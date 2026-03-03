@@ -191,7 +191,7 @@ ALWI void add_tiles_bcast_rows(
           EltwiseBinaryType::ELWADD,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
@@ -204,7 +204,7 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
           EltwiseBinaryType::ELWADD,
           BroadcastType::COL,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
 }
@@ -217,7 +217,7 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
           EltwiseBinaryType::ELWADD,
           BroadcastType::SCALAR,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
