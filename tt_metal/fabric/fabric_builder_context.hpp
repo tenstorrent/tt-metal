@@ -186,6 +186,14 @@ public:
      * - fabric_tensix_config is enabled (MUX, UDM, etc.): Mux/relay intermediaries exist
      *   → Use L1 addresses for handshake (worker→mux, mux→router, relay→worker, router→relay)
      * 
+     * from fabric_types.hpp:
+     *
+     * enum class FabricTensixConfig : uint32_t {
+     *    DISABLED = 0,  // not using tensix extension
+     *    MUX = 1,       // using mux kernel as tensix extension
+     *    UDM = 2,       // in udm (unified datamovement) mode, we build both mux and relay kernels as tensix extension
+     * };
+     *
      * @param fabric_tensix_config The tensix configuration mode
      * @return true if direct worker-to-router pairing (use overlay), false if mux/relay involved (use L1)
      */
