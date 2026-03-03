@@ -162,7 +162,8 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t num_programs,
     CoreCoord worker_grid_size,
     uint32_t /*seed*/,
-    const std::unordered_set<CoreCoord>& active_eth_cores) {
+    const std::unordered_set<CoreCoord>& active_eth_cores,
+    uint32_t device_id) {
     uint32_t MAX_LOOP = 100;
     uint32_t max_eth_cores = 3;
 
@@ -236,7 +237,8 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             NUM_SEMS,
             num_brisc_unique_rtargs,
             num_brisc_common_rtargs,
-            page_size};
+            page_size,
+            device_id};
 
         // ========== Set configs for NCRISC ==========
         if (i == 0) {
@@ -260,7 +262,8 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             NUM_SEMS,
             num_ncrisc_unique_rtargs,
             num_ncrisc_common_rtargs,
-            page_size};
+            page_size,
+            device_id};
 
         // ========== Set configs for TRISC ==========
         if (i == 0) {
@@ -284,7 +287,8 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             NUM_SEMS,
             num_trisc_unique_rtargs,
             num_trisc_common_rtargs,
-            page_size};
+            page_size,
+            device_id};
 
         if (i == 0) {
             ERISC_OUTER_LOOP = MAX_LOOP;
@@ -310,7 +314,8 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             NUM_SEMS,
             num_erisc_unique_rtargs,
             num_erisc_common_rt_args,
-            page_size};
+            page_size,
+            device_id};
 
         // Create Kernels
         bool at_least_one_kernel = false;

@@ -213,11 +213,12 @@ void MetalContext::initialize(
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster);
     // Initialize debug servers. Attaching individual devices done below
-    rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
-    if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
-        rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
-        dprint_server_ = std::make_unique<DPrintServer>(rtoptions());
+    rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
+    rtoptions_.resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
+    if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        TT_FATAL(!rtoptions_.get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
+        rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
+        dprint_server_ = std::make_unique<DPrintServer>(rtoptions_);
     }
     watcher_server_ =
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
