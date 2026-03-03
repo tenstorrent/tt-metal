@@ -6,7 +6,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/core_local_mem.h"
 #include "experimental/endpoints.h"
-#if defined(COMPILE_FOR_ERISC)
+#include "internal/firmware_common.h"
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
 
@@ -19,6 +20,7 @@ void kernel_main() {
     std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
 
     std::uint32_t buffer_src_addr = get_arg_val<uint32_t>(1);
+    DPRINT << HEX() << buffer_src_addr << ENDL();
     std::uint32_t src_noc_x = get_arg_val<uint32_t>(2);
     std::uint32_t src_noc_y = get_arg_val<uint32_t>(3);
 
@@ -37,31 +39,16 @@ void kernel_main() {
     std::uint32_t mcast_dst_end_x = get_arg_val<uint32_t>(14);
     std::uint32_t mcast_dst_end_y = get_arg_val<uint32_t>(15);
 
-#if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
     // Dispatcher Kernel is able to finish.
     // Device Close () requires fast dispatch kernels to finish.
-#if defined(COMPILE_FOR_ERISC)
-    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
+    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
+    go_message_in->signal = RUN_MSG_DONE;
 #else
-    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-#endif
-    uint64_t dispatch_addr = NOC_XY_ADDR(
-        NOC_X(mailboxes->go_messages[mailboxes->go_message_index].master_x),
-        NOC_Y(mailboxes->go_messages[mailboxes->go_message_index].master_y),
-        DISPATCH_MESSAGE_ADDR +
-            NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_messages[mailboxes->go_message_index].dispatch_message_offset);
-    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
-        noc_index,
-        NCRISC_AT_CMD_BUF,
-        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
-        dispatch_addr,
-        0xF,  // byte-enable
-        NOC_UNICAST_WRITE_VC,
-        false,  // mcast
-        true    // posted
-    );
+    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
+    notify_dispatch_core_done(dispatch_addr, noc_index);
 #endif
 
     if (l1_overflow_addr) {
@@ -71,7 +58,7 @@ void kernel_main() {
 
     if (eth_src_overflow_addr || eth_dest_overflow_addr) {
         // Destructive if not caught properly
-#if defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         internal_::eth_send_packet(0, eth_src_overflow_addr, eth_dest_overflow_addr, 4);
 #endif
     }

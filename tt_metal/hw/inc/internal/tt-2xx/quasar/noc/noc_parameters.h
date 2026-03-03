@@ -454,7 +454,7 @@
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
-#define NOC_LOCAL_ADDR(addr) (addr)
+#define NOC_LOCAL_ADDR(addr) ((addr) & 0x1000000FFFFFFFFF)
 
 // TODO review these alignment restrictions
 // Alignment restrictions

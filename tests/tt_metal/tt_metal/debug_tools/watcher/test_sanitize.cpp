@@ -38,6 +38,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -97,12 +98,17 @@ void RunTestOnCore(
     CoreCoord& core,
     bool is_eth_core,
     watcher_features_t feature,
-    bool use_ncrisc = false) {
+    bool use_ncrisc = false,
+    bool is_idle_eth_core = false) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // It's not simple to check the watcher server status from the finish loop for slow dispatch, so just run these
     // tests in FD.
-    if (fixture->IsSlowDispatch()) {
+    if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
         GTEST_SKIP();
     }
+
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
 
     // Set up program
     distributed::MeshWorkload workload;
@@ -167,26 +173,30 @@ void RunTestOnCore(
     KernelHandle dram_copy_kernel;
     int noc = 0;
     if (is_eth_core) {
-        std::map<std::string, std::string> dram_copy_kernel_defines = {
-            {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
-        };
-        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines};
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
+        if (is_idle_eth_core) {
+            config.eth_mode = Eth::IDLE;
+        }
         eth_test_common::set_arch_specific_eth_config(config);
         noc = static_cast<int>(config.noc);
-        dram_copy_kernel = tt_metal::CreateKernel(
-            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
+        dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
     } else {
-        std::map<std::string, std::string> dram_copy_kernel_defines = {
-            {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
-        };
-        tt_metal::DataMovementConfig config{
-            .processor =
-                (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
-            .defines = dram_copy_kernel_defines};
-        dram_copy_kernel = tt_metal::CreateKernel(
-            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
-        noc = static_cast<int>(config.noc);
+        if (is_quasar) {
+            // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
+            // others exit early. This lets us verify assert works on each DM individually
+            dram_copy_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                kernel,
+                core,
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+        } else {
+            tt_metal::DataMovementConfig config{
+                .processor =
+                    (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default};
+            dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
+            noc = static_cast<int>(config.noc);
+        }
     }
 
     // Write to the input buffer
@@ -294,9 +304,10 @@ void RunTestOnCore(
     std::string expected;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    std::string risc_name = (is_eth_core) ? "erisc" : "BRISC";
+    std::string risc_name = (is_eth_core) ? is_idle_eth_core ? "ierisc" : "erisc"
+                                          : hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 0, false);
     if (use_ncrisc) {
-        risc_name = "NCRISC";
+        risc_name = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 1, false);
     }
     switch (feature) {
         case SanitizeNOCAddress:
@@ -305,7 +316,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                (is_eth_core) ? is_idle_eth_core ? "idleth" : "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -519,16 +530,13 @@ void RunTestIEth(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
     auto* device = mesh_device->get_devices()[0];
-    if (fixture->IsSlowDispatch()) {
-        GTEST_SKIP();
-    }
     // Run on the first ethernet core (if there are any).
     if (device->get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
-    RunTestOnCore(fixture, mesh_device, core, true, feature);
+    RunTestOnCore(fixture, mesh_device, core, true, feature, false, true);
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
