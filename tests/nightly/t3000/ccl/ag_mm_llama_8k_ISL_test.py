@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# AG+MM fused op tests for Llama 70B 8K ISL - Attn Out layer
-# M=8192, K=1024, N=2048 (WO projection after SDPA)
+# AG+MM fused op tests for Llama 70B 8K ISL - MLP W2 (prefill)
+# M=8192, K=3584, N=2048 (W2 down projection after AG)
 
 import pytest
 from dataclasses import dataclass
@@ -37,20 +37,20 @@ class TestConfig:
     "test_config",
     [
         pytest.param(
-            TestConfig(M=8192, K=1024, N=2048, mm_core_grid=ttnn.CoreCoord(4, 8)),
-            id="attn_out_4x8",
+            TestConfig(M=8192, K=3584, N=2048, mm_core_grid=ttnn.CoreCoord(4, 8)),
+            id="w2_4x8",
         ),
         pytest.param(
-            TestConfig(M=8192, K=1024, N=2048, mm_core_grid=ttnn.CoreCoord(8, 4)),
-            id="attn_out_8x4",
+            TestConfig(M=8192, K=3584, N=2048, mm_core_grid=ttnn.CoreCoord(8, 4)),
+            id="w2_8x4",
         ),
         pytest.param(
-            TestConfig(M=8192, K=1024, N=2048, mm_core_grid=ttnn.CoreCoord(7, 8)),
-            id="attn_out_7x8",
+            TestConfig(M=8192, K=3584, N=2048, mm_core_grid=ttnn.CoreCoord(7, 8)),
+            id="w2_7x8",
         ),
         pytest.param(
-            TestConfig(M=8192, K=1024, N=2048, mm_core_grid=ttnn.CoreCoord(8, 8)),
-            id="attn_out_8x8",
+            TestConfig(M=8192, K=3584, N=2048, mm_core_grid=ttnn.CoreCoord(8, 8)),
+            id="w2_8x8",
         ),
     ],
 )
@@ -75,7 +75,7 @@ class TestConfig:
     indirect=["device_params"],
     ids=["fabric_ring"],
 )
-def test_ag_mm_llama_8k_attn_out(
+def test_ag_mm_llama_8k_w2(
     mesh_device,
     test_config,
     num_links,
