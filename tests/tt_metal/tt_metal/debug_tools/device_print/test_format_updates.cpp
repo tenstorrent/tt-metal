@@ -4,17 +4,14 @@
 
 #include "debug_tools_fixture.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "hostdevcommon/device_print_structures.h"
 
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace ll_api;
 using namespace std::string_view_literals;
 
-struct DevicePrintStringInfo {
-    std::uint32_t format_string_ptr;
-    std::uint32_t file;
-    std::uint32_t line;
-};
+using DevicePrintStringInfo = device_print_detail::structures::DevicePrintStringInfo32;
 
 class DevicePrintFormatUpdatesFixture : public DevicePrintFixture {
 public:
