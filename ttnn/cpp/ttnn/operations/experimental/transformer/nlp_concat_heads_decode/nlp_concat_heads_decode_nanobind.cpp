@@ -21,7 +21,7 @@ void bind_nlp_concat_heads_decode(nb::module_& mod) {
         mod,
         ttnn::experimental::nlp_concat_heads_decode,
         R"doc(
-            Shuffles [S=1, B=32, 32(num_heads), head_dim] tensor into tensor with shape [S=1, 1, B=32, num_heads * head_dim]. num_heads should be specified and be less than 32; the op will assume the input padded num_heads to 32 and will unpad it. The output is default width sharded by num heads.
+            Shuffles [S=1, B, num_heads_padded, head_dim] tensor into tensor with shape [S=1, 1, B, num_heads * head_dim]. num_heads should be specified; input padded heads dimension must be >= num_heads and a multiple of 32. The output is default width sharded by num heads.
         )doc",
         ttnn::nanobind_overload_t{
             [](const OperationType& self,

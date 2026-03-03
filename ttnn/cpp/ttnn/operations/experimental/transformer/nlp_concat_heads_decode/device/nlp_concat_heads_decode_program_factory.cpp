@@ -99,8 +99,11 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
     uint32_t q_start_addr = q_base_addr;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
+        uint32_t tile_row_index = i / TILE_HEIGHT;
+        uint32_t row_in_tile = i % TILE_HEIGHT;
+        uint32_t offset_in_tile = row_in_tile < 16 ? row_in_tile * sub_tile_line_bytes
+                                                   : ((row_in_tile - 16) * sub_tile_line_bytes) + (512 * element_size);
+        uint32_t in_tile_offset_by_batch = tile_row_index * head_size + offset_in_tile;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -143,10 +146,18 @@ void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
     uint32_t q_base_addr = input_tensor.buffer()->address();
     uint32_t q_start_addr = q_base_addr;
 
+    const uint32_t head_dim = input_tensor.padded_shape()[3];
+    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    const uint32_t head_size =
+        head_tiles * tt::tile_size(tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
+    const uint32_t sub_tile_line_bytes = shared_variables.sub_tile_line_bytes;
+    const uint32_t element_size = shared_variables.element_size;
     for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
-        uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * shared_variables.sub_tile_line_bytes
-                   : ((i - 16) * shared_variables.sub_tile_line_bytes) + (512 * shared_variables.element_size);
+        uint32_t tile_row_index = i / TILE_HEIGHT;
+        uint32_t row_in_tile = i % TILE_HEIGHT;
+        uint32_t offset_in_tile = row_in_tile < 16 ? row_in_tile * sub_tile_line_bytes
+                                                   : ((row_in_tile - 16) * sub_tile_line_bytes) + (512 * element_size);
+        uint32_t in_tile_offset_by_batch = tile_row_index * head_size + offset_in_tile;
         const auto& core = shared_variables.cores[i];
         auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
         runtime_args[0] = in_tile_offset_by_batch;
