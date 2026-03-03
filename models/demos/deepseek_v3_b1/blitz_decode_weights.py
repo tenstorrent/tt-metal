@@ -616,6 +616,9 @@ class OverlappedTensor:
     byte_offset: int = 0
     total_size: int = 0
 
+    def get_tile(self) -> ttnn.Tile:
+        return ttnn.Tile(self.tile_shape)
+
 
 class BlitzDecodeWeights:
     """Fuses weight tensors to share the same L1 base address per core.

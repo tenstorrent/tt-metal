@@ -20,13 +20,13 @@ import math
 from typing import TYPE_CHECKING, Optional
 
 import ttnn
+from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor
 
 if TYPE_CHECKING:
     from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
