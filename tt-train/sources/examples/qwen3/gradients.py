@@ -36,7 +36,6 @@ Usage:
 
 import argparse
 import math
-import os
 import time
 
 import numpy as np
@@ -50,10 +49,6 @@ from generate import create_causal_mask_tensor
 from utils.tensor_utils import (
     create_input_tensor_from_torch as create_input_tensor,
     create_input_tensor_dp,
-)
-from model_qwen3_distributed import (
-    DistributedQwen3ForCausalLM,
-    load_weights_from_hf_distributed,
 )
 from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.memory import MemoryUsageTracker, finalize_memory

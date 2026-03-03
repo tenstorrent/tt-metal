@@ -13,7 +13,6 @@ Architecture: HuggingFace Transformers Qwen3 design with:
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import torch
 from tqdm import tqdm
@@ -21,7 +20,6 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
-from utils.kv_cache import KVCache  # noqa: F401 — re-exported for callers
 from utils.checkpoint import (  # noqa: F401 — re-exported for callers
     CheckpointFunction,
     checkpoint,

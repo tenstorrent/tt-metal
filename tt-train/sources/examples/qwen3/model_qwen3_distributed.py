@@ -62,10 +62,10 @@ from model_qwen3 import (
     Qwen3Config,
     Qwen3RMSNorm,
     ConcatLastDim,
-    KVCache,
     linear,
     create_qwen3_config_from_hf,
 )
+from utils.kv_cache import KVCache
 from utils.memory import memory_snapshot
 from utils.context_managers import empty_init, is_empty_init
 from utils.checkpoint import (  # noqa: F401 — re-exported for callers
@@ -86,14 +86,12 @@ from utils.tensor_utils import (
     make_weight as _make_weight,
     make_ones as _make_ones,
     make_zeros as _make_zeros,
-)
-from utils.dist_helpers import (
-    _make_sharded_weight,
-    _make_sharded_zeros,
-    _make_replicated,
-    _make_replicated_ones,
-    _make_replicated_zeros,
-    _make_replicated_weight,
+    make_sharded_weight,
+    make_sharded_zeros,
+    make_dist_replicated,
+    make_replicated_ones,
+    make_replicated_zeros,
+    make_replicated_weight,
 )
 from utils.distributed_ops import (
     AllGatherFwdScatterBwd,
@@ -127,11 +125,11 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.shard_dim = shard_dim
 
         self.weight = Parameter(
-            _make_sharded_weight((1, 1, out_features, in_features), 2, shard_dim)
+            make_sharded_weight((1, 1, out_features, in_features), 2, shard_dim)
         )
         if has_bias:
             self.col_bias = Parameter(
-                _make_sharded_zeros((1, 1, 1, out_features), 3, shard_dim)
+                make_sharded_zeros((1, 1, 1, out_features), 3, shard_dim)
             )
         else:
             self.col_bias = None
@@ -171,10 +169,10 @@ class RowParallelLinear(AbstractModuleBase):
         self.shard_dim = shard_dim
 
         self.weight = Parameter(
-            _make_sharded_weight((1, 1, out_features, in_features), 3, shard_dim)
+            make_sharded_weight((1, 1, out_features, in_features), 3, shard_dim)
         )
         if has_bias:
-            self.row_bias = Parameter(_make_replicated_zeros((1, 1, 1, out_features)))
+            self.row_bias = Parameter(make_replicated_zeros((1, 1, 1, out_features)))
         else:
             self.row_bias = None
 
@@ -396,7 +394,7 @@ class DistributedQwen3Model(AbstractModuleBase):
         vocab_tiled = ((config.vocab_size + 31) // 32) * 32
         if tied_embed_weight is None:
             self.embed_tokens = Parameter(
-                _make_sharded_weight(
+                make_sharded_weight(
                     (1, 1, vocab_tiled, config.hidden_size), 3, shard_dim
                 )
             )

@@ -6,8 +6,6 @@
 
 import time
 
-import ttml
-
 from model_qwen3 import (
     Qwen3ForCausalLM,
     create_qwen3_config_from_hf,
@@ -17,7 +15,6 @@ from model_qwen3_distributed import (
     DistributedQwen3ForCausalLM,
     load_weights_from_hf_distributed,
 )
-from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.context_managers import empty_init
 
 

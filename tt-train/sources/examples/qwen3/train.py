@@ -82,13 +82,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-import ttnn
 import ttml
 
-from model_qwen3_distributed import (
-    DistributedQwen3ForCausalLM,
-    load_weights_from_hf_distributed,
-)
 from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory

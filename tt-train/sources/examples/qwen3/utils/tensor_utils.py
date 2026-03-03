@@ -131,6 +131,57 @@ def make_dist_sharded_zeros(shape, shard_dim_tensor, shard_dim_mesh):
     )
 
 
+def make_sharded_weight(shape, shard_dim_tensor, shard_dim_mesh=None, std=0.02):
+    """Create a sharded bfloat16 parameter tensor."""
+    if is_empty_init():
+        per_device = list(shape)
+        per_device[shard_dim_tensor] //= get_tp_size(shard_dim_mesh)
+        return make_empty_on_device(per_device)
+    device = get_device()
+    data = (torch.randn(shape) * std).float().numpy()
+    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
+        device, shard_dim_tensor, shard_dim_mesh
+    )
+    return ttml.autograd.Tensor.from_numpy(
+        data, ttnn.Layout.TILE, ttnn.bfloat16, mapper
+    )
+
+
+def make_sharded_zeros(shape, shard_dim_tensor, shard_dim_mesh=None):
+    """Create a sharded zero bfloat16 tensor."""
+    if is_empty_init():
+        per_device = list(shape)
+        per_device[shard_dim_tensor] //= get_tp_size(shard_dim_mesh)
+        return make_empty_on_device(per_device)
+    device = get_device()
+    data = np.zeros(shape, dtype=np.float32)
+    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
+        device, shard_dim_tensor, shard_dim_mesh
+    )
+    return ttml.autograd.Tensor.from_numpy(
+        data, ttnn.Layout.TILE, ttnn.bfloat16, mapper
+    )
+
+
+def make_replicated_ones(shape):
+    if is_empty_init():
+        return make_empty_on_device(shape)
+    return make_dist_replicated(np.ones(shape, dtype=np.float32))
+
+
+def make_replicated_zeros(shape):
+    if is_empty_init():
+        return make_empty_on_device(shape)
+    return make_dist_replicated(np.zeros(shape, dtype=np.float32))
+
+
+def make_replicated_weight(shape, std=0.02):
+    if is_empty_init():
+        return make_empty_on_device(shape)
+    data = (torch.randn(shape) * std).float().numpy()
+    return make_dist_replicated(data)
+
+
 def gather_mesh_to_cpu(
     ttnn_val, device, distributed, dp_size, tp_size, per_device_batch
 ):

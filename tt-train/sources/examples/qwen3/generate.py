@@ -42,7 +42,6 @@ Usage:
 """
 
 import argparse
-import os
 import time
 
 import numpy as np
@@ -50,14 +49,12 @@ import torch
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 
-import ttnn
 import ttml
 
 from utils.kv_cache import (
     KVCache,
     _to_device_tiled,
     _causal_mask,
-    _decode_mask,
     _step_attn_mask,
 )
 from utils.memory import MemoryUsageTracker, finalize_memory
