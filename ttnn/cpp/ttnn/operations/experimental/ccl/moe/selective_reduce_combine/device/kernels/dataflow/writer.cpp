@@ -269,6 +269,9 @@ void kernel_main() {
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
+
         close_direction_connections<
             Num_Directions,
             fabric_mux_num_buffers_per_channel,

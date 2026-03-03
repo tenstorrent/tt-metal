@@ -438,34 +438,11 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("compute_output_width_shard_dim", [4])
-@pytest.mark.parametrize(
-    "combine_worker_core_coords",
-    [
-        (
-            ttnn.CoreCoord(5, 0),  # TODO: (GR) check if x-y should be interleaved
-            ttnn.CoreCoord(5, 1),
-            ttnn.CoreCoord(5, 2),
-            ttnn.CoreCoord(5, 3),
-            ttnn.CoreCoord(5, 4),
-            ttnn.CoreCoord(5, 5),
-            ttnn.CoreCoord(5, 6),
-            ttnn.CoreCoord(5, 7),
-            ttnn.CoreCoord(6, 0),
-            ttnn.CoreCoord(6, 1),
-            ttnn.CoreCoord(6, 2),
-            ttnn.CoreCoord(6, 3),
-            ttnn.CoreCoord(6, 4),
-            ttnn.CoreCoord(6, 5),
-            ttnn.CoreCoord(6, 6),
-            ttnn.CoreCoord(6, 7),
-        )
-    ],
-)
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [False])
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [20])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -494,7 +471,6 @@ def test_optimized_moe_decode_block(
     scheme,
     compute_output_height_shard_dim,
     compute_output_width_shard_dim,
-    combine_worker_core_coords,
     combine_mux_core_range,
     combine_token_parallel_core_dim,
     combine_data_parallel_core_dim,
@@ -525,7 +501,6 @@ def test_optimized_moe_decode_block(
     worker_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    combine_worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(coord, coord) for coord in combine_worker_core_coords])
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in combine_mux_core_range])])
 
     compute_tilize_drain_core = ttnn.CoreCoord(6, 9)
@@ -897,24 +872,14 @@ def test_optimized_moe_decode_block(
 
         # create persistent output tensor for combine
         # runtime since it needs to be a zeroed out tensor
-        # allacote before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
-        # TODO: (GR) some issue with hangs using moreh_full on multiple iters
-        # tt_preallocated_combine_output = ttnn.moreh_full(
-        #     shape=[select_experts_k, tokens_per_device, hidden_size],
-        #     fill_value=0,
-        #     device=mesh_device,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-
-        tt_preallocated_combine_output = ttnn.from_torch(
-            torch.zeros([select_experts_k, tokens_per_device, hidden_size], dtype=torch.bfloat16),
+        # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
+        tt_preallocated_combine_output = ttnn.moreh_full(
+            shape=[select_experts_k, tokens_per_device, hidden_size],
+            fill_value=0,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         logger.info("CCCCC")
@@ -1011,7 +976,7 @@ def test_optimized_moe_decode_block(
             num_links=4,
             token_parallel_core_dim=combine_token_parallel_core_dim,
             data_parallel_core_dim=combine_data_parallel_core_dim,
-            worker_cores=list(ttnn.corerange_to_cores(combine_worker_cores)),
+            worker_cores=ttnn.get_moe_combine_cores(mesh_device),
             mux_core_range_set=combine_mux_cores,
             output_tensor=tt_preallocated_combine_output,
             optional_cross_device_semaphore=combine_global_semaphore,
