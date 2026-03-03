@@ -354,14 +354,18 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
 tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // When a mask is present, its dtype and memory_config influence the compiled program:
-    //   - mask dtype → mask_cb_data_format → CB c_in4/c_in5 format (compile-time)
-    //   - mask memory_config → TensorAccessorArgs (IsDram flag, compile-time arg)
-    //   - mask padded_shape → num_tiles_causal_mask (compile-time arg, causal mask only)
+    //   - mask dtype        → mask_cb_data_format → CB c_in4/c_in5 data format (compile-time)
+    //   - mask memory_config → TensorAccessorArgs IsDram flag (compile-time arg)
+    //
+    // mask padded_shape is NOT included, even though num_tiles_causal_mask (compile-time arg,
+    // is_causal_mask=True only) is derived from it. It is provably redundant: scale_mask_softmax
+    // enforces mask.padded_shape()[-1] == input.padded_shape()[-1] and mask.padded_shape()[-2]
+    // is always tile_height (32) at the device op level (either already 32 or padded to 32 by
+    // tilize_with_val_padding). Therefore:
+    //   num_tiles_causal_mask = input.padded_shape()[-1] * 32 / (32*32) = Wt_of_input
+    // which is fully determined by input.logical_shape()[-1] already present in the hash.
     const auto mask_dtype = tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID;
     const auto mask_memory_config = tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : MemoryConfig{};
-    // mask padded_shape is only a compile-time kernel arg when is_causal_mask=True
-    const auto mask_padded_shape =
-        (tensor_args.mask.has_value() && attributes.is_causal_mask) ? tensor_args.mask->padded_shape() : ttnn::Shape{};
     return operation::hash_operation<SoftmaxDeviceOperation>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.softmax_type,
@@ -379,8 +383,7 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
         tensor_args.input_tensor.memory_config(),
         tensor_args.input_tensor.layout(),
         mask_dtype,
-        mask_memory_config,
-        mask_padded_shape);
+        mask_memory_config);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>

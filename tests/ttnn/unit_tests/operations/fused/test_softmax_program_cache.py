@@ -13,30 +13,28 @@ SoftmaxDeviceOperation uses 7 ProgramFactory variants selected by select_program
   - SoftmaxProgramFactoryAttentionOptimized: Softmax/ScaleMaskSoftmax/inplace variants
   - SoftmaxShardedProgramFactoryAttentionOptimized: sharded config
 
-compute_program_hash() includes (after fix):
+compute_program_hash() includes:
   program_factory.index(), softmax_type, dim, scale, inplace, output_mem_config,
   program_config, is_causal_mask, compute_kernel_config, is_scale_causal_mask_hw_dims,
   numeric_stable, input logical_shape, input dtype, input memory_config, input layout,
-  mask dtype (if present), mask memory_config (if present), mask padded_shape (if present).
+  mask dtype (if present), mask memory_config (if present).
 
-Mask tensor properties were added to the hash because:
+mask_padded_shape is NOT included because it is provably redundant: scale_mask_softmax
+enforces mask.padded_shape()[-1] == input.padded_shape()[-1] and mask.padded_shape()[-2]
+is always tile_height at the device op level. Therefore num_tiles_causal_mask equals
+Wt_of_input, which is already determined by input.logical_shape()[-1] in the hash.
+
+Mask tensor properties added to the hash:
   - mask dtype → affects CB data format (compile-time configuration)
-  - mask memory_config → affects TensorAccessorArgs (compile-time args)
-  - mask padded_shape → num_tiles_causal_mask for causal mask (compile-time arg)
+  - mask memory_config → affects TensorAccessorArgs IsDram flag (compile-time arg)
 """
 
-import os
 import pytest
 import torch
 import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") != None
 
 
 @pytest.fixture
@@ -79,7 +77,6 @@ def run_softmax_4d(device, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.D
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
     """Same op, same 5D shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 1, 32, 64]
@@ -96,7 +93,6 @@ def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
     assert not torch.equal(tt_out1, tt_out2)
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
     """Same op, same 4D shape with last dim -> 1 cache entry (attention optimized factory)."""
     shape = [1, 1, 32, 64]
@@ -118,7 +114,6 @@ def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
     """Different dims on 5D tensor -> different factories -> different cache entries.
     dim=-1 -> WSmall/WLarge, dim=-2 -> HSmall/HLarge, dim=-3 -> CLarge."""
@@ -133,7 +128,6 @@ def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     """5D W-softmax vs 4D last-dim softmax -> different factories -> different cache entries."""
     shape_5d = [1, 1, 1, 32, 64]
@@ -150,7 +144,6 @@ def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -164,7 +157,6 @@ def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 32, 64]
@@ -182,7 +174,6 @@ def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cac
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
     """Different logical shapes -> different cache entries.
     logical_shape is in compute_program_hash() determining Wt, Ht, work distribution."""
@@ -200,7 +191,6 @@ def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_program_cache):
     """scale_mask_softmax with masks of different dtypes -> different cache entries.
 
@@ -221,22 +211,18 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     tt_mask_bf16 = ttnn.from_torch(torch_mask_bf16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_out1 = ttnn.scale_mask_softmax(tt_a, scale=None, mask=tt_mask_bf16)
-    torch_ref1 = ttnn.to_torch(tt_out1)
-    assert_with_pcc(F.softmax(torch_a, dim=-1), torch_ref1, 0.999)
+    assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out1), 0.999)
 
     # Second call: mask in float32 (different dtype)
     torch_mask_fp32 = torch.zeros(mask_shape, dtype=torch.float32)
     tt_a2 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     tt_mask_fp32 = ttnn.from_torch(torch_mask_fp32, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
     tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask_fp32)
-    torch_ref2 = ttnn.to_torch(tt_out2)
-    assert_with_pcc(F.softmax(torch_a, dim=-1), torch_ref2, 0.999)
+    assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out2), 0.999)
 
-    # Different mask dtypes must produce different cache entries
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, isolate_program_cache):
     """scale_mask_softmax with masks in different memory locations -> different cache entries.
 
@@ -254,7 +240,7 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     torch_a = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_mask = torch.zeros(mask_shape, dtype=torch.bfloat16)
 
-    # First call: mask in DRAM (default)
+    # First call: mask in DRAM
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     tt_mask_dram = ttnn.from_torch(
         torch_mask, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -270,11 +256,9 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     tt_out2 = ttnn.scale_mask_softmax(tt_a2, scale=None, mask=tt_mask_l1)
     assert_with_pcc(F.softmax(torch_a, dim=-1), ttnn.to_torch(tt_out2), 0.999)
 
-    # Different mask memory configs must produce different cache entries
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_scale_mask_softmax_cache_reuse_same_mask_config(device, isolate_program_cache):
     """scale_mask_softmax with same mask config twice -> 1 cache entry, different outputs."""
     batch = 1
