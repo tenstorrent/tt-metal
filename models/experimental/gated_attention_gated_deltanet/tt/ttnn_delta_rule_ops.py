@@ -19,6 +19,82 @@ import math
 import torch
 import ttnn
 
+TILE_SIZE = 32  # TTNN tile size
+
+
+def create_matmul_program_config(device, M, K, N, grid_size=None):
+    """
+    Create a multi-core matmul program config to parallelize across available cores.
+
+    Args:
+        device: TTNN device
+        M: First dimension of output (M x N)
+        K: Inner dimension (M x K @ K x N)
+        N: Second dimension of output
+        grid_size: Optional (cores_x, cores_y) tuple. If None, uses device's compute grid.
+
+    Returns:
+        ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+    """
+    if grid_size is None:
+        device_grid = device.compute_with_storage_grid_size()
+        cores_x = device_grid.x
+        cores_y = device_grid.y
+    else:
+        cores_x, cores_y = grid_size
+
+    # Calculate tiles
+    M_tiles = math.ceil(M / TILE_SIZE)
+    N_tiles = math.ceil(N / TILE_SIZE)
+    K_tiles = math.ceil(K / TILE_SIZE)
+
+    # Calculate per-core work
+    per_core_M = max(1, math.ceil(M_tiles / cores_y))
+    per_core_N = max(1, math.ceil(N_tiles / cores_x))
+
+    # Calculate in0_block_w (must divide K_tiles evenly across cores_y)
+    # Higher is better for performance
+    K_tiles_per_core = math.ceil(K_tiles / cores_y)
+    in0_block_w = 1
+    if K_tiles_per_core > 0:
+        # Find largest divisor that fits
+        for divisor in range(K_tiles_per_core, 0, -1):
+            if K_tiles_per_core % divisor == 0:
+                in0_block_w = divisor
+                break
+
+    # Subblock sizes (must divide per_core dimensions)
+    # CRITICAL: out_subblock_h * out_subblock_w <= 4 for FP32 accumulation
+    # Find the best combination that maximizes product while staying <= 4
+    out_subblock_h = 1
+    out_subblock_w = 1
+    max_product = 0
+
+    # Find all valid divisors for per_core_M and per_core_N
+    valid_h = [h for h in range(1, per_core_M + 1) if per_core_M % h == 0]
+    valid_w = [w for w in range(1, per_core_N + 1) if per_core_N % w == 0]
+
+    # Find combination with maximum product <= 4
+    for h in valid_h:
+        for w in valid_w:
+            product = h * w
+            if product <= 4 and product > max_product:
+                max_product = product
+                out_subblock_h = h
+                out_subblock_w = w
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(cores_x, cores_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
 
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     """L2 normalization along a given dimension."""
@@ -286,12 +362,23 @@ def chunk_gated_delta_rule_ttnn(
     v_beta_c = ttnn.reshape(v_beta, [batch, chunk_size, V])
     g_c = ttnn.reshape(g, [batch, chunk_size])
 
+    # OPTIMIZATION: Create program configs for pre-loop matmuls
+    # k_beta_c @ k_c_t: [batch, chunk_size, K] @ [batch, K, chunk_size] -> [batch, chunk_size, chunk_size]
+    mm_kk_config = create_matmul_program_config(device, batch * chunk_size, K, chunk_size)
+    # Neumann series matmuls: [batch, chunk_size, chunk_size] @ [batch, chunk_size, chunk_size]
+    mm_neumann_config = create_matmul_program_config(device, batch * chunk_size, chunk_size, chunk_size)
+    # attn @ v_beta_c: [batch, chunk_size, chunk_size] @ [batch, chunk_size, V] -> [batch, chunk_size, V]
+    mm_attn_v_beta_config = create_matmul_program_config(device, batch * chunk_size, chunk_size, V)
+    # attn @ k_beta_c: [batch, chunk_size, chunk_size] @ [batch, chunk_size, K] -> [batch, chunk_size, K]
+    mm_attn_k_beta_config = create_matmul_program_config(device, batch * chunk_size, chunk_size, K)
+
     # --- Cumsum via matmul with upper-triangular ones ---
     triu_torch = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
     triu_ones = ttnn.from_torch(triu_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size])
+    # Small matmul [batch, 1, chunk_size] @ [1, chunk_size, chunk_size] - may not benefit from multi-core
     decay = ttnn.reshape(ttnn.matmul(g_c_3d, triu_ones), [batch, chunk_size])
 
     # decay_exp for weighting k_beta: [batch, cs, 1]
@@ -311,7 +398,7 @@ def chunk_gated_delta_rule_ttnn(
 
     # --- Intra-chunk interaction matrix M ---
     k_c_t = ttnn.transpose(k_c, 1, 2)
-    kk = ttnn.matmul(k_beta_c, k_c_t)
+    kk = ttnn.matmul(k_beta_c, k_c_t, program_config=mm_kk_config)
 
     M = ttnn.neg(ttnn.multiply(kk, L_mask))
     strict_lower_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32), diagonal=-1)
@@ -326,17 +413,17 @@ def chunk_gated_delta_rule_ttnn(
     eye = ttnn.reshape(eye, [1, chunk_size, chunk_size])
 
     R = ttnn.add(M, eye)
-    P = ttnn.matmul(M, M)
+    P = ttnn.matmul(M, M, program_config=mm_neumann_config)
     num_steps = max(int(math.ceil(math.log2(max(chunk_size, 2)))) - 1, 0)
     for _ in range(num_steps):
-        R = ttnn.add(R, ttnn.matmul(R, P))
-        P = ttnn.matmul(P, P)
+        R = ttnn.add(R, ttnn.matmul(R, P, program_config=mm_neumann_config))
+        P = ttnn.matmul(P, P, program_config=mm_neumann_config)
 
     attn = R
 
     # --- Corrected values and keys ---
-    v_corrected = ttnn.matmul(attn, v_beta_c)
-    k_cumdecay = ttnn.matmul(attn, ttnn.multiply(k_beta_c, decay_exp))
+    v_corrected = ttnn.matmul(attn, v_beta_c, program_config=mm_attn_v_beta_config)
+    k_cumdecay = ttnn.matmul(attn, ttnn.multiply(k_beta_c, decay_exp), program_config=mm_attn_k_beta_config)
 
     # --- Cross-chunk recurrence ---
     q_c_4d = ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K])
@@ -352,9 +439,22 @@ def chunk_gated_delta_rule_ttnn(
     lower_causal_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
     lower_causal = ttnn.from_torch(lower_causal_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    S = ttnn.zeros([BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    S = ttnn.zeros(
+        [BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     if initial_state is not None:
-        S = ttnn.typecast(ttnn.reshape(initial_state, [BH, K, V]), ttnn.float32)
+        S = ttnn.typecast(ttnn.reshape(initial_state, [BH, K, V]), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # OPTIMIZATION: Create matmul program configs to use more cores
+    # These configs parallelize matmuls across available device cores
+    # q_i @ k_i_t: [BH, chunk_size, K] @ [BH, K, chunk_size] -> [BH, chunk_size, chunk_size]
+    mm_qk_config = create_matmul_program_config(device, BH * chunk_size, K, chunk_size)
+    # k_cum_i @ S and q_i @ S: [BH, chunk_size, K] @ [BH, K, V] -> [BH, chunk_size, V]
+    mm_kv_config = create_matmul_program_config(device, BH * chunk_size, K, V)
+    # intra_attn @ v_new: [BH, chunk_size, chunk_size] @ [BH, chunk_size, V] -> [BH, chunk_size, V]
+    mm_attn_v_config = create_matmul_program_config(device, BH * chunk_size, chunk_size, V)
+    # k_decay_t @ v_new: [BH, K, chunk_size] @ [BH, chunk_size, V] -> [BH, K, V]
+    mm_k_decay_v_config = create_matmul_program_config(device, BH * K, chunk_size, V)
 
     outputs = []
     for i in range(num_chunks):
@@ -368,29 +468,50 @@ def chunk_gated_delta_rule_ttnn(
 
         # Intra-chunk attention: (q @ k^T) * L_mask, lower-triangular
         k_i_t = ttnn.transpose(k_i, 1, 2)
-        intra_attn = ttnn.multiply(ttnn.matmul(q_i, k_i_t), L_mask_i)
-        intra_attn = ttnn.multiply(intra_attn, lower_causal)
+        intra_attn = ttnn.multiply(
+            ttnn.matmul(q_i, k_i_t, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=mm_qk_config),
+            L_mask_i,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        intra_attn = ttnn.multiply(intra_attn, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Cross-chunk: read from state
-        v_prime = ttnn.matmul(k_cum_i, S)
-        v_new = ttnn.subtract(v_i, v_prime)
+        v_prime = ttnn.matmul(k_cum_i, S, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=mm_kv_config)
+        v_new = ttnn.subtract(v_i, v_prime, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        decay_i_exp = ttnn.reshape(ttnn.exp(decay_i), [BH, chunk_size, 1])
-        o_inter = ttnn.matmul(ttnn.multiply(q_i, decay_i_exp), S)
+        decay_i_exp = ttnn.reshape(ttnn.exp(decay_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, chunk_size, 1])
+        o_inter = ttnn.matmul(
+            ttnn.multiply(q_i, decay_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG),
+            S,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=mm_kv_config,
+        )
 
-        o_i = ttnn.add(o_inter, ttnn.matmul(intra_attn, v_new))
+        o_i = ttnn.add(
+            o_inter,
+            ttnn.matmul(intra_attn, v_new, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=mm_attn_v_config),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V]))
 
         # Update state
         dl_i = decay_last[:, i]
-        dl_i_exp = ttnn.reshape(ttnn.exp(dl_i), [BH, 1, 1])
-        S = ttnn.multiply(S, dl_i_exp)
+        dl_i_exp = ttnn.reshape(ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, 1, 1])
+        S = ttnn.multiply(S, dl_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         dl_i_2d = ttnn.reshape(dl_i, [BH, 1])
-        decay_diff = ttnn.subtract(dl_i_2d, decay_i)
-        k_decay = ttnn.multiply(k_i, ttnn.reshape(ttnn.exp(decay_diff), [BH, chunk_size, 1]))
+        decay_diff = ttnn.subtract(dl_i_2d, decay_i, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k_decay = ttnn.multiply(
+            k_i,
+            ttnn.reshape(ttnn.exp(decay_diff, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, chunk_size, 1]),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         k_decay_t = ttnn.transpose(k_decay, 1, 2)
-        S = ttnn.add(S, ttnn.matmul(k_decay_t, v_new))
+        S = ttnn.add(
+            S,
+            ttnn.matmul(k_decay_t, v_new, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=mm_k_decay_v_config),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     o = ttnn.concat(outputs, dim=1)
     o = ttnn.reshape(o, [BH, L, V])
