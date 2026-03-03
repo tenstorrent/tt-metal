@@ -51,7 +51,7 @@ fused = Sequential(
         ),
         Sequential(op3, op6),     # right half: slice → RMS (4 cores)
     ),
-).build(device)
+).build()
 
 fused.launch()
 ttnn.synchronize_device(device)
