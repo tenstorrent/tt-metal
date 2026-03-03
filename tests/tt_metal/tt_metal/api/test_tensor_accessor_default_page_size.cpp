@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
