@@ -165,6 +165,7 @@ class Transformer(LightweightModule):
         if lm_head_input_mem_cfg.is_sharded():
             logits = ttnn.interleaved_to_sharded(logits, lm_head_input_mem_cfg)
         logits = self.lm_head(logits)
+        logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
@@ -564,12 +565,9 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(
             tt_logits,
             use_multicore=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
-
-        if not self.args.is_galaxy:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits, None
 
@@ -648,4 +646,6 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        if mode == Mode.PREFILL:
+            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

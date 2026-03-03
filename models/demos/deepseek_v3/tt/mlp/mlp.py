@@ -425,15 +425,49 @@ class MLP(AbstractModule):
         return x6
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_compute_only(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig, mode: str) -> ttnn.Tensor:
+        """
+        Core MLP computation without CCL operations.
+        Used by SharedExpert since MoEDecoderBlock2D handles CCLs externally.
+
+        Args:
+            x: Input tensor (already gathered if needed)
+            cfg: Configuration for prefill or decode mode
+            mode: Either "prefill" or "decode"
+
+        Returns:
+            Output tensor without reduce_scatter applied
+        """
+        if mode == "prefill":
+            # For SharedExpert, we handle de-chunking here since no reduce_scatter follows
+            output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
+
+            # De-chunk the output if needed (for SharedExpert usage)
+            num_layers = x.shape[0]
+            _, num_chunks, _, output_dim = output.shape
+            if num_chunks > 1:
+                output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+                if pad_rows > 0:
+                    output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
+
+            return output
+        elif mode == "decode":
+            return cls._forward_decode_compute_only(x, cfg)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+    @classmethod
+    def _forward_prefill_compute_only(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig
+    ) -> tuple[ttnn.Tensor, tuple[int, int]]:
+        """
+        Prefill computation without CCL operations.
+
+        Returns:
+            Tuple of (output tensor, (original_seq_len, pad_rows))
+        """
         num_layers, _, seq_len, _ = x.shape
         original_seq_len = seq_len
-
-        # CCL runtime initialization in execution order
-        ccl = cfg["ccl"]
-
-        # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
         pad_rows = 0
@@ -456,22 +490,56 @@ class MLP(AbstractModule):
         )
         ttnn.deallocate(x)
 
-        # Apply silu
-        # w1_out_activated = cls._silu_workaround(w1_out)
-        # ttnn.deallocate(w1_out)
-
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        # Down projection with dynamic program configs, no need to reshard as we are using dram activations
+        # Down projection with dynamic program configs
         output = ttnn.linear(
             activated,
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"]),
             **cfg["w2"],
         )
         ttnn.deallocate(activated)
+
+        # Return output and chunking info for de-chunking after reduce_scatter
+        return output, (original_seq_len, pad_rows)
+
+    @classmethod
+    def _forward_decode_compute_only(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        """Decode computation without CCL operations."""
+        # Gate and up projections
+        w1_out = ttnn.linear(x, **cfg["w1"])
+        w3_out = ttnn.linear(x, **cfg["w3"])
+
+        # Apply silu
+        w1_out_activated = cls._silu_workaround(w1_out)
+        ttnn.deallocate(w1_out)
+
+        # Apply activation and multiply
+        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out_activated)
+        ttnn.deallocate(w3_out)
+
+        # Down projection
+        output = ttnn.linear(activated, **cfg["w2"])
+        ttnn.deallocate(activated)
+
+        return output
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        num_layers = x.shape[0]
+
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        # All gather for efficient matmuls
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+
+        # Perform the core computation
+        output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
 
         # Reduce-scatter across devices to sum partial results
         output = ttnn.experimental.reduce_scatter_minimal_async(
@@ -496,22 +564,8 @@ class MLP(AbstractModule):
         # All gather
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
-        # Gate and up projections
-        w1_out = ttnn.linear(x, **cfg["w1"])
-        w3_out = ttnn.linear(x, **cfg["w3"])
-
-        # Apply silu
-        w1_out_activated = cls._silu_workaround(w1_out)
-        ttnn.deallocate(w1_out)
-
-        # Apply activation and multiply
-        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-        ttnn.deallocate(w1_out_activated)
-        ttnn.deallocate(w3_out)
-
-        # Down projection
-        w2_out = ttnn.linear(activated, **cfg["w2"])
-        ttnn.deallocate(activated)
+        # Perform the core computation
+        w2_out = cls._forward_decode_compute_only(x, cfg)
 
         # Add reduce-scatter
         output = ttnn.experimental.reduce_scatter_minimal_async(
