@@ -152,4 +152,3 @@ graph_descriptors {
 }
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-

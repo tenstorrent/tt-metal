@@ -116,9 +116,7 @@ def run_ttnn_fabric_verification() -> None:
 
             padded_shape = [1, 1, 32, 32]
             recv_tensor = ttnn.allocate_tensor_on_device(
-                ttnn.TensorSpec(
-                    padded_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT
-                ),
+                ttnn.TensorSpec(padded_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT),
                 device,
             )
 
@@ -165,10 +163,12 @@ def run_ttnn_fabric_verification() -> None:
     return
 
 
-
 @click.command()
 @click.option(
-    "-c", "--config", type=str, default="training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml"
+    "-c",
+    "--config",
+    type=str,
+    default="training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml",
 )
 def main(config: str):
     """Main training function.
