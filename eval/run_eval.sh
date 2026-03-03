@@ -150,7 +150,7 @@ run_single() {
         local venv_sentinel="${clone_dir}/.venv_complete"
         local infra_failed="${clone_dir}/.infra_failed"
 
-        # 4. Build + venv in background
+        # 4. Build and venv in parallel
         (
             echo "[${prompt_name}:${run_id}] Building metal..."
             if ! ./build_metal.sh --enable-ccache > "${log_dir}/build.log" 2>&1; then
@@ -159,7 +159,11 @@ run_single() {
                 exit 1
             fi
             touch "$build_sentinel"
+            echo "[${prompt_name}:${run_id}] Build complete"
+        ) &
+        local build_pid=$!
 
+        (
             echo "[${prompt_name}:${run_id}] Creating python env..."
             if ! ./create_venv.sh --force > "${log_dir}/venv.log" 2>&1; then
                 echo "VENV_FAIL" > "${log_dir}/result.txt"
@@ -167,9 +171,9 @@ run_single() {
                 exit 1
             fi
             touch "$venv_sentinel"
-            echo "[${prompt_name}:${run_id}] Build + venv complete"
+            echo "[${prompt_name}:${run_id}] Venv complete"
         ) &
-        local build_pid=$!
+        local venv_pid=$!
 
         # 5. Install a gate script that blocks until build+venv are done.
         #    tt-test.sh sources python_env/bin/activate and needs built artifacts,
@@ -178,21 +182,23 @@ run_single() {
         mkdir -p "${clone_dir}/.eval"
         cat > "${clone_dir}/.eval/wait_for_build.sh" <<GATE
 #!/bin/bash
-# Blocks until build + venv are complete or failed.
-while [ ! -f "${build_sentinel}" ] && [ ! -f "${infra_failed}" ]; do
+# Blocks until both build and venv are complete.
+# If either background job failed, exits cleanly so Claude
+# can rebuild on its own and tests will work.
+while [ ! -f "${build_sentinel}" ]; do
+    if [ -f "${infra_failed}" ]; then
+        echo "NOTE: Background build failed. Proceeding (agent may rebuild)." >&2
+        break
+    fi
     sleep 5
 done
-if [ -f "${infra_failed}" ]; then
-    echo "ERROR: Build infrastructure failed. Check build/venv logs." >&2
-    exit 1
-fi
-while [ ! -f "${venv_sentinel}" ] && [ ! -f "${infra_failed}" ]; do
+while [ ! -f "${venv_sentinel}" ]; do
+    if [ -f "${infra_failed}" ]; then
+        echo "NOTE: Background venv failed. Proceeding (agent may recreate)." >&2
+        break
+    fi
     sleep 5
 done
-if [ -f "${infra_failed}" ]; then
-    echo "ERROR: Venv creation failed. Check venv logs." >&2
-    exit 1
-fi
 GATE
         chmod +x "${clone_dir}/.eval/wait_for_build.sh"
 
@@ -215,13 +221,14 @@ WRAPPER
         claude -p \
             --dangerously-skip-permissions \
             --output-format json \
-            --max-turns 100 \
+            --max-turns 150 \
             --model opus \
             "$prompt_content" \
             > "${log_dir}/claude_output.json" 2> "${log_dir}/claude_stderr.log"
 
-        # Clean up: wait for build process to finish (may already be done)
+        # Clean up: wait for background processes to finish (may already be done)
         wait "$build_pid" 2>/dev/null || true
+        wait "$venv_pid" 2>/dev/null || true
     ) || claude_exit=$?
 
     echo "[${prompt_name}:${run_id}] Exited with code: $claude_exit"
