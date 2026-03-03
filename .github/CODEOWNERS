@@ -82,7 +82,7 @@ tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorr
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/event @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-bypass
-tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
+tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
 tt_metal/impl/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
@@ -131,8 +131,8 @@ tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/api/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @SeanNijjar @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_metal/sfpi/ @nathan-TT @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/sfpi/ @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @tenstorrent/codeowner-bypass
 tests/tt_metal/multihost/ @tenstorrent/metalium-developers-metal-distributed @tenstorrent/codeowner-bypass
