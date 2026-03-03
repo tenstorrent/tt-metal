@@ -31,11 +31,10 @@ void kernel_main() {
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         cb_reserve_back(cb_grad_in, per_core_block_size);
+        cb_wait_front(cb_grad_out, per_core_block_size);
+        cb_wait_front(cb_input, per_core_block_size);
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            cb_wait_front(cb_grad_out, per_core_block_size);
-            cb_wait_front(cb_input, per_core_block_size);
-
             tile_regs_acquire();
             tile_regs_wait();
 
@@ -52,10 +51,10 @@ void kernel_main() {
 
             tile_regs_commit();
             tile_regs_release();
-
-            cb_pop_front(cb_grad_out, per_core_block_size);
-            cb_pop_front(cb_input, per_core_block_size);
         }
+
+        cb_pop_front(cb_grad_out, per_core_block_size);
+        cb_pop_front(cb_input, per_core_block_size);
         cb_push_back(cb_grad_in, per_core_block_size);
     }
 }
