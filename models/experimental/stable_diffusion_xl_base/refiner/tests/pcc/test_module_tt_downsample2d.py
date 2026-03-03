@@ -26,6 +26,10 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1024, 1024), (1, 384, 128, 128), 0),
         ((1024, 1024), (1, 768, 64, 64), 1),
         ((1024, 1024), (1, 1536, 32, 32), 2),
+        # 512x512 image resolution
+        ((512, 512), (1, 384, 64, 64), 0),
+        ((512, 512), (1, 768, 32, 32), 1),
+        ((512, 512), (1, 1536, 16, 16), 2),
     ],
 )
 @pytest.mark.parametrize("stride", [(2, 2)])
@@ -44,10 +48,6 @@ def test_downsample2d(
     is_ci_env,
     reset_seeds,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,

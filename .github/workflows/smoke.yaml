@@ -36,12 +36,7 @@ on:
 jobs:
   smoke:
     timeout-minutes: 30
-    runs-on: >-
-      ${{
-        (github.workflow == 'Blackhole post-commit tests' && github.ref_name == 'main' && inputs.runner == 'P150b-viommu')
-          && 'tt-ubuntu-2204-p150b-viommu-post-commit'
-          || format('tt-ubuntu-2204-{0}-stable', inputs.runner)
-      }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
       image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:

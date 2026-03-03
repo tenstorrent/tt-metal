@@ -41,4 +41,14 @@ void kernel_main() {
     DPRINT << value << ENDL();
     *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
 #endif
+
+#ifdef TRISC_ISOLATE_SFPU
+    int32_t A = 4;
+    int32_t B = 2;
+
+    DPRINT << "TEST isolate sfpu" << ENDL();
+    const uint32_t value = A + B + thread_idx;
+    DPRINT << value << ENDL();
+    *((uint32_t*)(l1_address + MEM_L1_UNCACHED_BASE + thread_idx * sizeof(uint32_t))) = value;
+#endif
 }

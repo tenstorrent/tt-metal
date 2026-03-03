@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 #include "modules/distributed/linear.hpp"
 #include "modules/distributed/multi_head_attention.hpp"
@@ -32,7 +34,8 @@ public:
     explicit DistributedGPTBlock(
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;
 
 private:
     std::shared_ptr<DistributedGPTMLP> m_mlp;
