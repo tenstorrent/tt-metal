@@ -22,6 +22,7 @@ private:
     RpcServer& get_rpc_server();
     void rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results);
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
+    void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
     void rpc_get_mesh_workload_runtime_entries(rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results);
     void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
     void rpc_get_kernel(

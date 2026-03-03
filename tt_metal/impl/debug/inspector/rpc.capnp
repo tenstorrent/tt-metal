@@ -45,6 +45,26 @@ struct MeshDeviceData {
     initialized @4 :Bool;
 }
 
+struct MeshCoordinate {
+    coordinates @0 :List(Int32);
+}
+
+struct MeshWorkloadProgramData {
+    programId @0 :UInt64;
+    coordinates @1 :List(MeshCoordinate);
+}
+
+struct MeshDeviceBinaryStatus {
+    meshId @0 :UInt64;
+    status @1 :BinaryStatus;
+}
+
+struct MeshWorkloadData {
+    meshWorkloadId @0 :UInt64;
+    programs @1 :List(MeshWorkloadProgramData);
+    binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
+}
+
 struct MeshWorkloadRuntimeEntry {
     workloadId @0 :UInt64;
     runtimeId @1 :UInt64;
@@ -138,27 +158,30 @@ interface Inspector {
     # Get mesh devices currently alive
     getMeshDevices @1 () -> (meshDevices :List(MeshDeviceData));
 
+    # Get mesh workloads currently alive
+    getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
+
     # Get list of local devices that are being used by this Metal runtime
-    getDevicesInUse @2 () -> (metalDeviceIds :List(UInt64));
+    getDevicesInUse @3 () -> (metalDeviceIds :List(UInt64));
 
     # Search for a kernel
-    getKernel @3 (watcherKernelId :Int32) -> (kernel :KernelData);
+    getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
 
     # Get build environment information for all devices
     # Returns device-specific firmware paths and build configuration.
     # This replaces the old approach of constructing relative paths,
     # providing correct firmware locations for each device
-    getAllBuildEnvs @4 () -> (buildEnvs :List(BuildEnvPerDevice));
+    getAllBuildEnvs @5 () -> (buildEnvs :List(BuildEnvPerDevice));
 
     # Get all core Info
-    getAllDispatchCoreInfos @5 () -> (coresByCategory :List(CoreEntriesByCategory));
+    getAllDispatchCoreInfos @6 () -> (coresByCategory :List(CoreEntriesByCategory));
 
     # Get mapping from metal device ID to unique ID for all devices
-    getMetalDeviceIdMappings @6 () -> (mappings :List(MetalDeviceIdToUniqueId));
+    getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
 
     # Get runtime entries for mesh workloads
-    getMeshWorkloadRuntimeEntries @7 () -> (runtimeEntries :List(MeshWorkloadRuntimeEntry));
+    getMeshWorkloadRuntimeEntries @8 () -> (runtimeEntries :List(MeshWorkloadRuntimeEntry));
 
     # Chip -> block type -> list of logical (x,y). One entry per chip.
-    getBlocksByType @8 () -> (chips :List(ChipBlocksByType));
+    getBlocksByType @9 () -> (chips :List(ChipBlocksByType));
 }

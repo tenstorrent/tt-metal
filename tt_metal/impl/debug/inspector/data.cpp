@@ -31,6 +31,7 @@ Data::Data()
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
+            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
@@ -121,6 +122,43 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
 
         mesh_device.setParentMeshId(mesh_device_data.parent_mesh_id.value_or(-1));
         mesh_device.setInitialized(mesh_device_data.initialized);
+    }
+}
+
+void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_workloads_mutex);
+    auto mesh_workloads = results.initMeshWorkloads(mesh_workloads_data.size());
+    uint32_t i = 0;
+    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
+        auto mesh_workload = mesh_workloads[i++];
+        mesh_workload.setMeshWorkloadId(mesh_workload_id);
+
+        const auto& programs = mesh_workload_data.mesh_workload->get_programs();
+        auto programs_data = mesh_workload.initPrograms(programs.size());
+        uint32_t j = 0;
+        for (const auto& [device_range, program] : programs) {
+            auto program_data = programs_data[j++];
+            program_data.setProgramId(program.impl().get_id());
+            auto coordinates_list = program_data.initCoordinates(device_range.shape().mesh_size());
+            uint32_t k = 0;
+            for (const auto& device_coordinate : device_range) {
+                auto mesh_coordinate = coordinates_list[k++];
+                auto coords = device_coordinate.coords();
+                auto coordinates = mesh_coordinate.initCoordinates(coords.size());
+                for (size_t l = 0; l < coords.size(); ++l) {
+                    coordinates.set(l, coords[l]);
+                }
+            }
+        }
+
+        auto binary_status_list =
+            mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
+        j = 0;
+        for (const auto& [mesh_id, status] : mesh_workload_data.binary_status_per_device) {
+            auto binary_status = binary_status_list[j++];
+            binary_status.setMeshId(mesh_id);
+            binary_status.setStatus(convert_binary_status(status));
+        }
     }
 }
 
