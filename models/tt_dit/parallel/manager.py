@@ -261,7 +261,7 @@ class CCLManager:
             buffers = []
             for _ in range(2):
                 output_buffer = ttnn.from_torch(
-                    torch.empty(output_shape),
+                    torch.zeros(output_shape),
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=dtype,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -320,6 +320,13 @@ class CCLManager:
         num_links: list,
         use_persistent_buffer: bool = False,
     ) -> ttnn.Tensor:
+        # Device-side mesh barrier: ensures all devices have completed prior ops
+        # before neighbor_pad starts. Unlike synchronize_device, this does NOT
+        # block the host — each device's CQ waits for all other devices to reach
+        # this point, then proceeds.
+        event = ttnn.record_event(self.mesh_device)
+        ttnn.wait_for_event(mesh_event=event)
+
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
         persistent_buf = None
