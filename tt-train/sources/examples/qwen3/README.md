@@ -183,7 +183,7 @@ qwen3/
 ├── model_qwen3_distributed.py   # Tensor-parallel model
 └── utils/
     ├── checkpoint.py            # Gradient checkpointing (activation recomputation)
-    ├── context_managers.py      # no_grad, empty_init context managers
+    ├── context_managers.py      # empty_init context manager
     ├── dataset.py               # TextDataset, SourceCodeDataset loaders
     ├── device_setup.py          # Device/mesh initialization
     ├── dist_helpers.py          # Sharded/replicated tensor constructors

@@ -87,7 +87,7 @@ import ttml
 from utils.sharded_loss import sharded_cross_entropy_loss
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
-from utils.context_managers import no_grad
+from ttml.common.utils import no_grad
 from utils.tensor_utils import (
     create_causal_mask,
     create_input_tensor,
@@ -158,7 +158,8 @@ def evaluate(
 ):
     """Compute average validation loss over num_batches."""
     model.eval()
-    with no_grad() as ctx:
+    ctx = ttml.autograd.AutoContext.get_instance()
+    with no_grad():
         losses = []
         for _ in range(num_batches):
             x_np, y_np = val_dataset.get_batch(batch_size)
@@ -193,7 +194,8 @@ def generate_text(
 ):
     """Generate text using the model (greedy decoding)."""
     model.eval()
-    with no_grad() as ctx:
+    ctx = ttml.autograd.AutoContext.get_instance()
+    with no_grad():
         orig_vocab = config.vocab_size
         causal_mask = create_causal_mask(max_seq_len)
 

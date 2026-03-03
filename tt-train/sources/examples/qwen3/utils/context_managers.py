@@ -4,9 +4,6 @@
 
 """Context managers for training control flow.
 
-``no_grad``
-    Temporarily disable gradient tracking, restoring the previous mode on exit.
-
 ``empty_init``
     Skip tensor value initialisation during model construction — all
     weight/bias tensors are allocated directly on device via ``ttnn.empty``
@@ -17,30 +14,6 @@
             model = Qwen3ForCausalLM(config)
         load_weights_from_hf(model, state_dict, config)
 """
-
-from contextlib import contextmanager
-
-import ttml
-
-
-# ------------------------------------------------------------------
-# Gradient-mode context manager
-# ------------------------------------------------------------------
-
-
-@contextmanager
-def no_grad():
-    """Temporarily disable gradient tracking, restoring the previous mode on exit."""
-    ctx = ttml.autograd.AutoContext.get_instance()
-    prev = ctx.get_gradient_mode() if hasattr(ctx, "get_gradient_mode") else None
-    ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
-    try:
-        yield ctx
-    finally:
-        if prev is not None:
-            ctx.set_gradient_mode(prev)
-        else:
-            ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
 
 
 # ------------------------------------------------------------------
