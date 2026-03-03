@@ -81,10 +81,12 @@ def test_deepseek_v3_mla_tilize_trace_mode(
 
     # Configure memory config based on type
     if memory_config_type == "width_sharded":
-        # WIDTH_SHARDED: grid=[{x:0,y:0}-{x:7,y:1}], shape=[16, 1024], ROW_MAJOR
+        # WIDTH_SHARDED: grid=[{x:1,y:0}-{x:4,y:1}], shape=[32, 2048], ROW_MAJOR
+        # Avoid column 0 which contains dispatch cores when dispatch_core_axis=COL
+        # 8 cores (4x2 grid), each processes 16384/8 = 2048 width
         shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            [32, 1024],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 1))}),
+            [32, 2048],
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         input_memory_config = ttnn.MemoryConfig(
