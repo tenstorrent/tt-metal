@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -17,7 +19,11 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -27,6 +33,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
+#include "common/filesystem_utils.hpp"
 #include "common/stable_hash.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
@@ -50,6 +57,10 @@ namespace tt::tt_metal {
 
 namespace {
 
+// ESTALE retry parameters for NFS resilience
+inline constexpr int kMaxFsRetries = 5;
+inline constexpr int kFsRetryDelayMs = 500;
+
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
@@ -65,14 +76,15 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
                                                  : build.get_out_path() + settings->get_full_kernel_name() + "/";
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+    file.close();
+    // Sync to ensure the success marker is written to NFS before continuing
+    if (!file.fail()) {
+        ::sync();
+    }
 }
 
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
-    std::error_code ec;
-    std::filesystem::create_hard_link(target, link, ec);
-    if (ec) {
-        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
-    }
+    jit_build::utils::safe_hard_link_or_copy(target, link);
 }
 
 }  // namespace
@@ -80,7 +92,7 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
 std::string get_default_root_path() {
     const std::string emptyString;
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
-    if (!home_path.empty() && std::filesystem::exists(home_path)) {
+    if (!home_path.empty() && tt::filesystem::safe_exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
     }
     return "/tmp/tt-metal-cache/";
@@ -117,7 +129,7 @@ void JitBuildEnv::init(
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
         auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
-        if (std::filesystem::exists(gxx)) {
+        if (tt::filesystem::safe_exists(gxx)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";
             log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
@@ -437,22 +449,37 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
 
 bool JitBuildState::build_state_matches(const string& out_dir) const {
-    std::ifstream file(out_dir + string(BUILD_STATE_HASH_FILE));
-    if (!file.is_open()) {
-        return false;
+    std::string hash_path = out_dir + string(BUILD_STATE_HASH_FILE);
+
+    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+        std::ifstream file(hash_path);
+        if (!file.is_open()) {
+            if (errno == ESTALE && attempt < kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+                continue;
+            }
+            return false;
+        }
+        uint64_t stored_hash{};
+        file >> stored_hash;
+        if (file.fail()) {
+            if (errno == ESTALE && attempt < kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+                continue;
+            }
+        }
+        if (file.fail() || stored_hash != build_state_hash_) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Build state hash mismatch in {}: stored={}, current={}",
+                out_dir,
+                stored_hash,
+                build_state_hash_);
+            return false;
+        }
+        return true;
     }
-    uint64_t stored_hash{};
-    file >> stored_hash;
-    if (file.fail() || stored_hash != build_state_hash_) {
-        log_debug(
-            tt::LogBuildKernels,
-            "Build state hash mismatch in {}: stored={}, current={}",
-            out_dir,
-            stored_hash,
-            build_state_hash_);
-        return false;
-    }
-    return true;
+    return false;
 }
 
 void JitBuildState::write_build_state_hash(const string& out_dir) const {
@@ -534,16 +561,16 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
-    fs::remove(log_file.path());
+    jit_build::utils::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
-    fs::remove(temp_d_path);  // .d file not needed after hash is written
+    jit_build::utils::safe_remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
-    return env_.get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
+    return env_.get_rtoptions().get_force_jit_compile() || !tt::filesystem::safe_exists(out_dir + obj) ||
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
@@ -577,7 +604,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
 bool JitBuildState::need_link(const string& out_dir) const {
     std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !tt::filesystem::safe_exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
@@ -614,7 +641,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
-    fs::remove(log_file.path());
+    jit_build::utils::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
@@ -624,7 +651,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(dephash_file.path());
+        jit_build::utils::safe_remove(dephash_file.path());
     }
 }
 
@@ -677,7 +704,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     }
     const size_t num_objs = this->objs_.size();
 
-    fs::create_directories(out_dir);
+    // Handle race conditions in directory creation - another thread may have created it
+    jit_build::utils::safe_create_directories(out_dir);
 
     // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
     // have changed, force full recompilation and relinking.
@@ -709,7 +737,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
     for (const auto* target : link_targets) {
         string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
-        fs::create_directories(target_out_dir);
+        jit_build::utils::safe_create_directories(target_out_dir);
         if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
             target->link(target_out_dir, settings, link_objs);
@@ -724,18 +752,19 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
     if (!link_objs.empty()) {
         // Rename the temporary .o and .dephash files after linking is done.
+        // Handle race conditions - another thread may have already renamed/removed the file
         fs::path src_path = out_dir;
         fs::path dst_path = out_dir;
         for (size_t i = 0; i < num_objs; ++i) {
             src_path.replace_filename(this->temp_objs_[i]);
             dst_path.replace_filename(this->objs_[i]);
             if (compiled.test(i)) {
-                fs::rename(src_path, dst_path);
+                jit_build::utils::safe_rename(src_path, dst_path, true);
                 src_path += ".dephash";
                 dst_path += ".dephash";
-                fs::rename(src_path, dst_path);
+                jit_build::utils::safe_rename(src_path, dst_path, true);
             } else {
-                fs::remove(src_path);
+                jit_build::utils::safe_remove(src_path);
             }
         }
     }

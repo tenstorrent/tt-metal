@@ -6,10 +6,12 @@
 
 #include <elf.h>
 #include <cerrno>
+#include <chrono>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <thread>
 #include <unistd.h>
 #include <algorithm>
 #include <cstring>
@@ -61,6 +63,10 @@ static constexpr uint32_t mask_lo12_s = 0x01fff07f;
 static constexpr unsigned mask_lo12_s_split = 5;
 static constexpr unsigned mask_lo12_s_shift_1 = 7;
 static constexpr unsigned mask_lo12_s_shift_2 = 25;
+
+// ESTALE retry parameters for NFS resilience
+inline constexpr int kMaxFsRetries = 5;
+inline constexpr int kFsRetryDelayMs = 500;
 
 using namespace ll_api;
 
@@ -270,18 +276,32 @@ void ElfFile::ReadImage(const std::string& path) {
 }
 
 ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st{};
     void* buffer = MAP_FAILED;
-    if (fd >= 0 && fstat(fd, &st) >= 0) {
-        buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    int saved_errno = 0;
+
+    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+        int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd >= 0 && fstat(fd, &st) >= 0) {
+            buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+        }
+        saved_errno = errno;
+        if (fd >= 0) {
+            close(fd);
+        }
+        if (buffer != MAP_FAILED) {
+            break;
+        }
+        if (saved_errno != ESTALE) {
+            break;
+        }
+        if (attempt < kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+        }
     }
-    if (fd >= 0) {
-        // It is acceptable to close a mapped file -- the mapping stays.
-        close(fd);
-    }
+
     if (buffer == MAP_FAILED) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(saved_errno));
     }
 
     owner.contents_ = std::span(reinterpret_cast<std::byte*>(buffer), st.st_size);
@@ -309,18 +329,35 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
 }
 
 void ElfFile::WriteImage(std::string const& path) {
-    // open is an os-defined varadic function, it the API to use.
-    int file_descriptor = open(
-        path.c_str(),
-        O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
-        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
-    bool failed = file_descriptor < 0;
-    if (!failed) {
-        failed = write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
-        close(file_descriptor);
+    bool failed = true;
+    int saved_errno = 0;
+
+    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+        int file_descriptor = open(
+            path.c_str(),
+            O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
+            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+        failed = file_descriptor < 0;
+        if (!failed) {
+            failed = write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
+            saved_errno = errno;
+            close(file_descriptor);
+        } else {
+            saved_errno = errno;
+        }
+        if (!failed) {
+            break;
+        }
+        if (saved_errno != ESTALE) {
+            break;
+        }
+        if (attempt < kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+        }
     }
+
     if (failed) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+        TT_THROW("{}: cannot write elf file: {}", path, strerror(saved_errno));
     }
 }
 

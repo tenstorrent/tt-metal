@@ -26,6 +26,7 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "common/filesystem_utils.hpp"
 
 namespace tt::tt_fabric {
 
@@ -151,7 +152,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
 void serialize_mesh_coordinates_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
     // Ensure output directory exists
-    std::filesystem::create_directories(output_file_path.parent_path());
+    tt::filesystem::safe_create_directories(output_file_path.parent_path());
 
     // Get the mapping from TopologyMapper
     const auto& mapping = topology_mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
@@ -191,7 +192,7 @@ void serialize_mesh_coordinates_to_file(
 void serialize_asic_to_fabric_node_mapping_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
     // Ensure output directory exists
-    std::filesystem::create_directories(output_file_path.parent_path());
+    tt::filesystem::safe_create_directories(output_file_path.parent_path());
 
     const auto& mesh_graph = topology_mapper.get_mesh_graph();
     const auto& physical_system_descriptor = topology_mapper.get_physical_system_descriptor();
