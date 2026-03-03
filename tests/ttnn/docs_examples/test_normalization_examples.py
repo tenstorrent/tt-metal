@@ -213,6 +213,30 @@ def test_rms_norm_distributed(device):
     # output = ttnn.rms_norm(input_tensor, weight=weight)
 
 
+def test_dit_rms_norm_unary_fused(device):
+    # Fused RMSNorm + SiLU activation in a single kernel pass.
+    # Equivalent to: ttnn.silu(ttnn.rms_norm(x, weight=weight))
+    seq_len, hidden_dim = 64, 128
+    input_tensor = ttnn.rand([1, 1, seq_len, hidden_dim], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.rand([1, hidden_dim], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Pass activation as a string — or use ttnn.UnaryOpType.SILU
+    output = ttnn.experimental.dit_rms_norm_unary_fused(
+        input_tensor,
+        weight=weight,
+        activation="silu",
+    )
+    logger.info(f"dit_rms_norm_unary_fused (silu, string) result shape: {output.shape}")
+
+    # Pass activation as a ttnn.UnaryOpType
+    output2 = ttnn.experimental.dit_rms_norm_unary_fused(
+        input_tensor,
+        weight=weight,
+        activation=ttnn.UnaryOpType.SILU,
+    )
+    logger.info(f"dit_rms_norm_unary_fused (silu, UnaryOpType) result shape: {output2.shape}")
+
+
 def test_batch_norm(device):
     # Setup input tensor and parameters
     N, C, H, W = 2, 3, 4, 5
