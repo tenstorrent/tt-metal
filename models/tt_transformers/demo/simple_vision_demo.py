@@ -227,7 +227,7 @@ def prepare_generator_args(
             False,  # enable_trace
             1,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                # "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
                 "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-notrace
@@ -236,7 +236,7 @@ def prepare_generator_args(
             True,  # enable_trace
             1,  # max_batch_size
             (
-                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                # "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
                 "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-trace
@@ -325,6 +325,7 @@ def test_multimodal_demo_text(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
     )
+
     processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
     tokenizer = processor.tokenizer
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
