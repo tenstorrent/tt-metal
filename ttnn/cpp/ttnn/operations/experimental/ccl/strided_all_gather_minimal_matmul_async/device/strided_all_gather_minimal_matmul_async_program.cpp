@@ -60,13 +60,11 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
         auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
             program, shared_variables.mm_shared_variables);
 
-        // Create a vector for the single output tensor
-        std::vector<Tensor> matmul_output_vec = {output_tensor.at(1)};
         ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
             {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
-            matmul_output_vec);
+            {output_tensor.at(1)});
     }
 }
 
@@ -112,19 +110,19 @@ strided_all_gather_minimal_matmul_async_program(
         read_local_slice_from_input,
         read_local_slice_from_input ? std::optional<const Tensor>(input_tensor) : std::nullopt);
 
-    // Matmul - wrap single output tensor in vector for unified interface
-    std::vector<Tensor> matmul_output_tensors = {matmul_output_tensor};
-    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper_common(
+    // Matmul
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
+    auto mm_shared_variables = ttnn::experimental::prim::minimal_matmul_factory_helper(
         program,
         all_gather_output_tensor,
         weight_tensor,
         bias,
         fused_activation,
         config,
-        matmul_output_tensors,
+        matmul_output_tensor,
         compute_kernel_config,
         matmul_fused_op_signaler,
-        1);  // N_chunks = 1 for single output
+        empty_srs_fused_op_signaler);
 
     // Create the all gather fused op signaler
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> all_gather_fused_op_signaler =

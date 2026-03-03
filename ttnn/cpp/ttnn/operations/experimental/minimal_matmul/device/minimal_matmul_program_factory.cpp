@@ -128,7 +128,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_b) {
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
     (void)fused_ternary_scalar;  // Scalar not needed in dataflow kernel, only in compute kernel
     auto* device = input_tensor.device();
 
@@ -232,7 +233,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    bool transpose_core_grid = M > N;
+    // When fusing with strided reduce scatter, disable transpose to satisfy RS iteration constraints (mm_N_block_wt <=
+    // slice_Wt).
+    bool transpose_core_grid = M > N && !srs_fused_op_signaler.has_value();
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -772,12 +775,42 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
 
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const Tensor& output_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
+    std::vector<Tensor> output_tensors = {output_tensor};
+    return minimal_matmul_factory_helper_common(
+        program,
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        fused_activation,
+        config,
+        output_tensors,
+        compute_kernel_config,
+        fused_op_signaler,
+        1,  // N_chunks
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        srs_fused_op_signaler);
+}
+
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
     const MinimalMatmulParams& operation_attributes,
     const MinimalMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
 
     auto shared_vars = minimal_matmul_factory_helper_common(
         program,
@@ -792,7 +825,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         static_cast<uint32_t>(operation_attributes.chunks),
         operation_attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b);
+        tensor_args.fused_ternary_input_b,
+        empty_srs_fused_op_signaler);
 
     return {std::move(program), std::move(shared_vars)};
 }

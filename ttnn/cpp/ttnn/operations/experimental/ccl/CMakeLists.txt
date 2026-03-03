@@ -30,6 +30,9 @@ file(
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
+    strided_reduce_scatter_async/device/kernels/*
+    deepseek_minimal_broadcast/device/kernels/*
+    deepseek_minimal_all_reduce/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
     deepseek_b1_reduce_to_one/device/kernels/*
     moe_compute/device/kernels/*
@@ -100,6 +103,9 @@ target_sources(
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
+        minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.cpp
+        minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.cpp
+        minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_program.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
@@ -121,6 +127,15 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
+        strided_reduce_scatter_async/strided_reduce_scatter_async.cpp
+        strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation.cpp
+        strided_reduce_scatter_async/device/strided_reduce_scatter_async_program.cpp
+        deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
+        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
+        deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
+        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
+        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
