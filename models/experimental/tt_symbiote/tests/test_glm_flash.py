@@ -4,8 +4,10 @@
 
 """Test for GLM 4.7 Flash model with TTNN backend."""
 
+import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -32,6 +34,17 @@ from models.experimental.tt_symbiote.modules.attention import (
 assert transformers.__version__.startswith(
     "5."
 ), "This test requires transformers version 5.0.0.dev0. Try: `pip install git+https://github.com/huggingface/transformers.git`"
+
+
+def load_glm4_moe_config():
+    """Load tt-moe GLM-4 config from models/tt-moe/configs/glm4.json."""
+    # test file: .../models/experimental/tt_symbiote/tests/test_glm_flash.py
+    models_dir = Path(__file__).resolve().parents[3]
+    config_path = models_dir / "tt-moe" / "configs" / "glm4.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"tt-moe GLM-4 config not found: {config_path}")
+    with open(config_path) as f:
+        return json.load(f)["moe_block"]
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -78,8 +91,18 @@ MESH_DEVICE_MAP = {
 def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     """Test GLM model with TTNN acceleration."""
 
+    # Load tt-moe GLM-4 config (unified MoE architecture description)
+    moe_cfg = load_glm4_moe_config()
+    params = moe_cfg["model_params"]
+
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
+
+    if model.config.hidden_size == params["hidden_size"]:
+        assert model.config.n_routed_experts == params["num_experts"]
+        assert model.config.num_experts_per_tok == params["num_experts_per_tok"]
+        assert model.config.moe_intermediate_size == params["moe_intermediate_size"]
+
     nn_to_ttnn = {
         model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,
         model.model.layers[1].mlp.__class__: TTNNMoE,
