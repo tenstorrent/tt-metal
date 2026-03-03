@@ -436,6 +436,12 @@ tests:
   157:
     name: "One from All Custom"
 
+  158:
+    name: "One to One Packet Sizes 2.0"
+
+  159:
+    name: "One from One Packet Sizes 2.0"
+
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
 
