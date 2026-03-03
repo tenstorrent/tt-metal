@@ -200,6 +200,11 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
+    // Stall to avoid clobbering current packer configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
+    // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
 }
