@@ -5,51 +5,9 @@
 import os
 import shutil
 import subprocess
-import sys
-import textwrap
-from time import sleep
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 LEGACY_WORMHOLE_ARGS = ["-wr", "all"]
-
-DEVICE_PROBE_TIMEOUT = 60
-
-_STALE_DEVICE_MARKERS = [
-    "still running",
-    "unexpected run_mailbox",
-    "TT_FATAL",
-    "TT_THROW",
-]
-
-_DEVICE_PROBE_SCRIPT = textwrap.dedent(
-    """\
-    import torch
-    import ttnn
-    num_devices = ttnn.get_num_devices()
-    if num_devices > 1:
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-        mesh = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(1, num_devices),
-            dispatch_core_config=ttnn.DispatchCoreConfig(),
-        )
-        t = torch.randn(1, 1, 32, 32 * num_devices)
-        tt_in = ttnn.from_torch(
-            t, device=mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=3),
-        )
-        tt_out = ttnn.all_gather(tt_in, dim=3, num_links=1)
-        ttnn.close_mesh_device(mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-        del mesh
-    else:
-        dev = ttnn.open_device(device_id=0)
-        t = torch.randn(1, 1, 32, 32)
-        tt_in = ttnn.from_torch(t, device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        tt_out = ttnn.add(tt_in, tt_in)
-        ttnn.close_device(dev)
-"""
-)
 
 
 class ResetUtil:

@@ -170,7 +170,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, device_index, topology, true);
     auto [forward_args, backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        topology, coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
     // Tensor Info
     [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
