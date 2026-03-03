@@ -335,7 +335,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
     ttnn.distributed_context_barrier()
 
     if is_stage1:
-        logger.info(f"[rank=1] launching MoE bcast + reduce + D2D0 (num_iterations=1)")
+        logger.info(f"[rank=1] launching MoE bcast + reduce (num_iterations=1)")
         result_scores, result_indices, result_output = MoeOp.op(
             r["ttnn_residual_mcast_src"],
             gate_mm_weights_tensor=r["ttnn_gate_mm_weights"],
