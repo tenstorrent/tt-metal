@@ -38,7 +38,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       recreate_weights_cache:
-        description: 'Recalculate weights cache in a new directory'
+        description: 'Recreate weights cache in a new directory'
         required: false
         type: choice
         default: "No"
@@ -46,7 +46,7 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreate_weights_cache is Yes.'
+        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache.'
         required: false
         type: string
         default: ''
