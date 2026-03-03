@@ -34,16 +34,15 @@ ALWI void lgamma_stirling_tile_init() {
 }
 
 /**
- * Performs elementwise natural logarithm of the gamma function: out = lgamma(x). lgamma is computed using Stirling
- * approximation for x > 0.5. For x < 0.5, the reflection formula (1 - x) is used. The result adjustment for (inputs <
+ * Performs adjustment for x < 0.5, the reflection formula (1 - x) is used. The result adjustment for (inputs <
  * 0.5) is not part of this kernel.
  *
  * | Argument | Description                                                | Type     | Valid Range | Required |
  * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0    | Lgamma stirling result                                     | uint32_t | 0 to (num_dests-1) | Yes      |
- * | idst1    | log|sin(pi*x)| result with correction for integer values   | uint32_t | 0 to (num_dests-1) | Yes      |
- * | idst2    | x                                          | uint32_t      | 0 to (num_dests-1) | Yes      | | idst3 |
- * Destination index                                          | uint32_t | 0 to (num_dests-1) | Yes      |
+ * | idst0    | Index of the tile in DST register buffer (lgamma stirling) | uint32_t | 0 to (num_dests-1) | Yes      |
+ * | idst1    | Index of the tile in DST register buffer (log|sin(pi*x)|)  | uint32_t | 0 to (num_dests-1) | Yes      |
+ * | idst2    | Index of the tile in DST register buffer (input)           | uint32_t | 0 to (num_dests-1) | Yes      |
+ * | idst3    | Index of the tile in DST register buffer (output)          | uint32_t | 0 to (num_dests-1) | Yes      |
  */
 
 // clang-format on

@@ -91,103 +91,11 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
 }
 
 Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    std::cout << "_lgamma_fast" << std::endl;
-
-    // // 1. Reflection for x < 0.5
-    // Tensor is_small = ttnn::lt(x, 0.5f);
-    // Tensor z = ttnn::where(is_small, ttnn::rsub_sfpu(x, 1.0f), x);
-
-    // // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
-    // Tensor log_z = ttnn::log(z, true);
-    // Tensor res = ttnn::multiply(ttnn::subtract(z, 0.5f), log_z);
-    // res = ttnn::subtract(res, z);
-    // res = ttnn::add(res, 0.9189385332046727f);
-
-    // // 3. High-Accuracy Correction (The "Bernoulli" series)
-    // // We use a minimax rational fit for 1/z.
-    // // This replaces the 9 Lanczos terms with just 3 operations.
-    // Tensor inv_z2 = ttnn::reciprocal(ttnn::multiply(z, z)); // 1/z^2
-
-    // // Minimal coefficients for Float32 0-3 ULP
-    // const float r0 = 0.0833333333f;    // 1/12
-    // const float r1 = -0.0027777777f;   // -1/360
-
-    // // correction = (1/z) * (r0 + r1/z^2)
-    // Tensor correction = ttnn::multiply(ttnn::reciprocal(z), ttnn::add(ttnn::multiply(inv_z2, r1), r0));
-    // res = ttnn::add(res, correction);
-
-    // lgamma_partial(x): for x >= 0.5 returns lgamma(x); for x < 0.5 returns lgamma(1-x) (Stirling + 1/12, -1/360).
-    // Tensor res_positive = ttnn::lgamma_partial(x, output_mem_config);
-
-    // // Reflection term for x < 0.5: ln(pi) - log|sin(pi*x)|. Zero sin(pi*x) at integers handled via where.
-    // Tensor sin_pi_x = ttnn::sin(ttnn::multiply(x, (float)M_PI));
-    // Tensor is_integer = ttnn::eq(x, ttnn::floor(x));
-    // sin_pi_x = ttnn::where(is_integer, 0.0f, sin_pi_x);
-    // Tensor log_abs_sin = ttnn::log(ttnn::abs(sin_pi_x));
-    // Tensor reflection_adj = ttnn::rsub_sfpu(log_abs_sin, 1.1447298858f);  // ln(pi) - log|sin(pi*x)|
-
-    // // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_positive.
-    // return ttnn::where(
-    //     ttnn::lt(x, 0.5f), ttnn::subtract(reflection_adj, res_positive), res_positive, output_mem_config);
-
     return ttnn::operations::unary::ExecuteUnary<unary::UnaryOpType::LGAMMA>::invoke(x, output_mem_config);
 }
 
-// FP32 implementation of lgamma. This is yet to be optimized.
-Tensor _lgamma_fp32(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    std::cout << "_lgamma_refined_g7" << std::endl;
-    // 1. Handle Reflection for x < 0.5
-    // This is vital for negative numbers and inputs close to zero.
-    Tensor is_small = ttnn::lt(x, 0.5f);
-    Tensor x_reflected = ttnn::rsub_sfpu(x, 1.0f);
-    Tensor z = ttnn::where(is_small, x_reflected, x);
-
-    // 2. Lanczos Approximation (g=7, n=9)
-    // High-precision Godfrey coefficients
-    const float log_sqrt_2pi = 0.9189385332046727f;
-    const float c0 = 0.99999999999980993f;
-    const float c1 = 676.5203681218851f;
-    const float c2 = -1259.1392167224028f;
-    const float c3 = 771.32342877765313f;
-    const float c4 = -176.61502916214059f;
-    const float c5 = 12.507343278686905f;
-    const float c6 = -0.13857109526572012f;
-    const float c7 = 9.9843695780195716e-6f;
-    const float c8 = 1.5056327351493116e-7f;
-
-    // Unrolled Series: series = c0 + c1/(z+1) + c2/(z+2) ...
-    // Note: We use z directly (no z-1 shift) for better stability near 1.0
-    Tensor series = ttnn::full_like(z, c0);
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 1.0f)), c1));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 2.0f)), c2));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 3.0f)), c3));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 4.0f)), c4));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 5.0f)), c5));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 6.0f)), c6));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 7.0f)), c7));
-    series = ttnn::add(series, ttnn::multiply(ttnn::reciprocal(ttnn::add(z, 8.0f)), c8));
-
-    // Lanczos calculation:
-    // res = (z + 0.5) * log(z + 7.5) - (z + 7.5) + log(sqrt(2*pi) * series / z)
-    Tensor tmp = ttnn::add(z, 7.5f, std::nullopt, output_mem_config);
-    Tensor log_tmp = ttnn::log(tmp, true, output_mem_config);
-
-    Tensor term1 = ttnn::multiply(ttnn::add(z, 0.5f), log_tmp);
-    Tensor term2 = ttnn::subtract(ttnn::add(ttnn::log(series), log_sqrt_2pi), ttnn::log(z));
-    Tensor res_positive = ttnn::subtract(ttnn::add(term1, term2), tmp);
-
-    // 3. Reflection Adjustment for x < 0.5
-    // reflection = log(pi) - log(abs(sin(pi * x))) - res_positive
-    Tensor pi_x = ttnn::multiply(x, (float)M_PI);
-    Tensor log_sin_pi_x = ttnn::log(ttnn::abs(ttnn::sin(pi_x)));
-    Tensor reflection_adj = ttnn::rsub_sfpu(log_sin_pi_x, (float)std::log(M_PI));
-    Tensor res_reflected = ttnn::subtract(reflection_adj, res_positive);
-
-    // 4. Final Result Selection
-    return ttnn::where(ttnn::lt(x, 0.5f), res_reflected, res_positive, output_mem_config);
-}
-
-// Existing implementation of lgamma. This is used for testing purposes.
+// Existing implementation of lgamma.
+// TODO: Remove this once the lgamma kernel for float32 is supported.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {
@@ -276,9 +184,8 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
 Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     if (x.dtype() == DataType::FLOAT32) {
         return _lgamma(x, output_mem_config);
-    } else {
-        return _lgamma_fast(x, output_mem_config);
     }
+    return _lgamma_fast(x, output_mem_config);
 }
 
 // multivariate log-gamma function

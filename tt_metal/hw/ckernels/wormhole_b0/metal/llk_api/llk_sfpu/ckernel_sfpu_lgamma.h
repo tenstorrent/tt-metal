@@ -40,11 +40,12 @@ inline void calculate_lgamma_stirling() {
         sfpi::vFloat correction = _sfpu_reciprocal_<2>(z) * (r0 + inv_z2 * r1);
         res = res + correction;
 
-        // use a poly bridge here instead
+        // TODO: use a polynomial bridge here instead
         v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
         v_endif;
 
-        // adjustment for inputs < 0.5 are done in composite.
+        // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
+
         if constexpr (!is_fp32_dest_acc_en) {
             res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, 0));
         }
@@ -55,7 +56,6 @@ inline void calculate_lgamma_stirling() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void lgamma_stirling_init() {
-    // log_init<false, false, is_fp32_dest_acc_en>();
     _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
@@ -85,7 +85,6 @@ inline void calculate_lgamma_adjusted(
         v_if(in < 0.5f) { result = reflection_adj - res_stirling; }
         v_endif;
 
-        // adjustment for inputs < 0.5 are done in composite.
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
         }
