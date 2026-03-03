@@ -24,13 +24,14 @@ tt_moe_path = str(Path(__file__).parent.parent)
 if tt_moe_path not in sys.path:
     sys.path.insert(0, tt_moe_path)
 
-# Import MoEBlock
+# Import MoEBlock and original MoE
 from moe_block import MoEBlock
 
 from models.common.utility_functions import comp_pcc
 
 # Import reference implementation - use the ORIGINAL one from demos/deepseek_v3
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
+from models.demos.deepseek_v3.tt.moe import MoE  # For weight loading
 
 # Import test utilities
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -123,8 +124,12 @@ def test_moe_block(
     torch.manual_seed(5)
 
     # 3. Setup TTNN configs
+    # Use MoE for weight conversion to ensure weights match the reference model
+    # (MoEBlock uses the same weight format as MoE)
+    from models.demos.deepseek_v3.tt.moe import MoE
+
     weight_config = get_test_weight_config(
-        MoEBlock,
+        MoE,  # Use MoE for weight conversion to match reference model
         hf_config,
         (state_dict_for_ttnn,),
         cache_path,
@@ -134,13 +139,14 @@ def test_moe_block(
         real_weights=False,  # Using random weights like test_moe.py
     )
 
+    # Use MoEBlock for model config as well to ensure compatibility
     model_config = get_model_config(MoEBlock, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
 
-    # Create model state with CCL
-    model_state = MoEBlock.create_state(hf_config, mesh_device, ccl)
+    # Create model state with CCL - use MoE for consistency
+    model_state = MoE.create_state(hf_config, mesh_device, ccl)
 
-    # Create shared state
-    model_shared_state = MoEBlock.create_shared_state(hf_config, mesh_device)
+    # Create shared state - use MoE for consistency
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
 
     # Create run config
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
@@ -265,8 +271,10 @@ def test_moe_block_simplified(
     )
 
     # 3. Setup TTNN configs
+    # IMPORTANT: Use MoE for weight config to share the same cached weights
+    # This ensures MoEBlock uses the exact same weights as the original MoE
     weight_config = get_test_weight_config(
-        MoEBlock,
+        MoE,  # Use MoE here to get the same weight cache path
         hf_config,
         (state_dict_for_ttnn,),
         cache_path,
@@ -276,6 +284,7 @@ def test_moe_block_simplified(
         real_weights=False,  # Using random weights
     )
 
+    # Use MoEBlock for model config as well to ensure compatibility
     model_config = get_model_config(MoEBlock, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
     model_state = MoEBlock.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoEBlock.create_shared_state(hf_config, mesh_device)
