@@ -283,15 +283,13 @@ void kernel_main() {
                 // Read V chunk - either from DRAM or from K's L1 buffer (transpose) when reuse_k is true
                 read_v<
                     cb_v_in,
-                    DHt,
                     vDHt,
                     num_kv_heads,
                     block_size_t,
                     v_tile_bytes,
                     barrier_threshold,
                     is_page_table_sharded,
-                    reuse_k,
-                    use_k_mcast>(
+                    reuse_k>(
                     v_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,

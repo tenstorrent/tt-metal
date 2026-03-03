@@ -216,6 +216,29 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // column-major group indexing is used to keep batch groups spatially close for efficient K multicast along columns.
     const bool use_col_major_group_indexing =
         (q_heads_parallel_factor > 1) && (grid_size.y >= num_cores_per_head) && !on_subcoregrid && q_locally_available;
+    uint32_t num_group_rows = 0;
+    uint32_t num_group_cols = 0;
+    uint32_t num_groups_total = 0;
+    if (use_col_major_group_indexing) {
+        num_groups_total = num_active_cores / num_cores_per_head;
+        num_group_rows = grid_size.x / num_cores_per_head;
+        num_group_cols = num_groups_total / num_group_rows;
+        TT_FATAL(
+            num_group_cols % q_heads_parallel_factor == 0,
+            "num_group_cols must be divisible by q_heads_parallel_factor");
+        TT_FATAL(
+            num_heads_per_core == 1, "Column major allocation of core groups is only supported for num kv heads = 1");
+        TT_FATAL(
+            num_active_cores % num_cores_per_head == 0,
+            "num_active_cores must be divisible by num_cores_per_head for even distribution.");
+        TT_FATAL(grid_size.x % num_cores_per_head == 0, "grid_size.x must be divisible by num_cores_per_head");
+        TT_FATAL(
+            num_groups_total == B,
+            "num_groups_total must be equal to B (for q heads parallel factor > 1, B is number of virtual batches)");
+        TT_FATAL(
+            num_group_cols * num_group_rows == num_groups_total,
+            "num_group_cols * num_group_rows must be equal to num_groups_total");
+    }
 
     // ========== Core Group Assignment ==========
     // Core layout depends on sharding and indexing mode:
@@ -262,11 +285,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // ========== Physical Core Coordinate Maps ==========
     // Col-major group index for reducer/output cores
     // Guard: if num_cores_per_head > grid_size.x, groups don't fit in a row, so clamp to 1
-    const uint32_t num_groups_per_row = std::max(1u, (uint32_t)(grid_size.x / num_cores_per_head));
-    const uint32_t num_group_rows = (num_output_cores + num_groups_per_row - 1) / num_groups_per_row;
     auto get_col_major_group_idx = [&](uint32_t row_major_idx) -> uint32_t {
-        uint32_t group_row = row_major_idx / num_groups_per_row;
-        uint32_t group_col = row_major_idx % num_groups_per_row;
+        uint32_t group_row = row_major_idx / num_group_rows;
+        uint32_t group_col = row_major_idx % num_group_rows;
         return (group_col * num_group_rows) + group_row;
     };
 
@@ -319,7 +340,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         "Column-major group indexing: enabled={}, cores_per_head={}, groups_per_row={}",
         use_col_major_group_indexing,
         num_cores_per_head,
-        num_groups_per_row);
+        num_group_rows);
 
     // ========== Compute Configuration ==========
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -527,7 +548,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     create_cb(CBIndex::c_16, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     create_cb(CBIndex::c_17, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     create_cb(CBIndex::c_18, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    create_cb(CBIndex::c_19, intermed_output_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    if (intermed_output_tiles > 0) {
+        create_cb(CBIndex::c_19, intermed_output_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    }
     auto cb_out_final_id = create_cb(
         CBIndex::c_20,
         out_tiles * out_tile_size,
@@ -677,7 +700,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         sliding_window_size,
         num_tree_reduction_rounds,
         original_block_size,
-        reuse_k,  // reuse_k: if V not provided or q_heads_parallel_factor > 1
     };
 
     // ========== Compute Defines ==========
@@ -744,9 +766,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0, core_num_in_output = 0;
         if (use_col_major_group_indexing) {
             uint32_t group_idx = i / num_cores_per_head;          // row-major group index
-            uint32_t group_row = group_idx / num_groups_per_row;  // which row of groups (0 to grid_size.y-1)
-            uint32_t group_col = group_idx % num_groups_per_row;  // which column of groups
-            cur_batch = group_col * grid_size.y + group_row;      // column-major: batches go down columns first
+            uint32_t group_row = group_idx / num_group_rows;      // which row of groups (0 to grid_size.y-1)
+            uint32_t group_col = group_idx % num_group_rows;      // which column of groups
+            cur_batch = group_col * num_group_cols + group_row;   // column-major: batches go down columns first
             cur_head = 0;                                         // single KV head when using this indexing
             core_num_in_reduce =
                 i % num_cores_per_head;               // position within the reduction group (0 to num_cores_per_head-1)
@@ -905,7 +927,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             std::vector<uint32_t> reader_rt_args(20, 0);
 
             // Writer runtime args - need to match the size with tree reduction params
-            // Base args (9) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
+            // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
             // (2*num_cores_per_head)
             // + reducer coords + output coords
             std::vector<uint32_t> writer_rt_args(10 + 6 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
@@ -947,7 +969,9 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
          .is_causal = is_causal,
          .use_mla = use_mla,
          .use_col_major_group_indexing = use_col_major_group_indexing,
-         .grid_size = grid_size}};
+         .grid_size = grid_size,
+         .num_group_rows = num_group_rows,
+         .num_group_cols = num_group_cols}};
 }
 
 void SdpaDecodeProgramFactory::override_runtime_arguments(
@@ -980,6 +1004,7 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const bool is_causal = shared_variables.is_causal;
     const bool use_col_major_group_indexing = shared_variables.use_col_major_group_indexing;
     const auto& grid_size = shared_variables.grid_size;
+    const uint32_t num_group_cols = shared_variables.num_group_cols;
 
     auto* q_buffer = tensor_args.q.buffer();
     auto* k_buffer = tensor_args.k.buffer();
@@ -1024,7 +1049,7 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
             uint32_t group_idx = i / num_cores_per_head;          // row-major group index
             uint32_t group_row = group_idx / num_groups_per_row;  // which row of groups (0 to grid_size.y-1)
             uint32_t group_col = group_idx % num_groups_per_row;  // which column of groups
-            cur_batch = group_col * grid_size.y + group_row;      // column-major: batches go down columns first
+            cur_batch = group_col * num_group_cols + group_row;   // column-major: batches go down columns first
             cur_head = 0;                                         // single KV head when using this indexing
             core_num_in_reduce = i % num_cores_per_head;          // position within the reduction group
             core_num_in_output = core_num_in_reduce;              // same as reduce for single head

@@ -108,6 +108,8 @@ struct SdpaDecodeProgramFactory {
         bool use_mla = false;
         bool use_col_major_group_indexing = false;  // Column-major batch indexing for spatial locality
         CoreCoord grid_size{0, 0};                  // Grid dimensions for spatial calculations
+        uint32_t num_group_rows = 0;
+        uint32_t num_group_cols = 0;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
