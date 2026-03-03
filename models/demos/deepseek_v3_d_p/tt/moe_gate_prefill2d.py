@@ -8,18 +8,18 @@ import ttnn
 class MoEGatePrefill:
     """MoE gate module from DeepSeek-R1."""
 
-    def __init__(self, config, seq_len, col_submesh, row_submesh):
+    def __init__(self, config, seq_len, mesh2d):
         self.dim = config.dim
         self.topk = config.n_activated_experts
         self.n_groups = config.n_expert_groups
         self.topk_groups = config.n_limited_groups
         self.score_func = config.score_func
         self.route_scale = config.route_scale
-        self.col_submesh = col_submesh
-        self.row_submesh = row_submesh
+        self.mesh2d = mesh2d
+        # self.row_submesh = row_submesh
         self.seq_len_per_chip = seq_len
-        self.num_chips_in_row = row_submesh.get_num_devices()
-        self.num_chips_in_col = col_submesh.get_num_devices()
+        self.num_chips_in_row = mesh2d.get_num_devices()
+        self.num_chips_in_col = mesh2d.get_num_devices()
 
         self.core_grid = config.core_grid
 
@@ -29,11 +29,9 @@ class MoEGatePrefill:
         self.mm_program_config = config.mm_configs["DEFAULT_PROGRAM_CONFIG"]
         self.ccl_config = config.ccl_config
 
-        self.weight = ttnn.zeros(
-            [config.n_routed_experts, config.dim], device=self.col_submesh, layout=ttnn.TILE_LAYOUT
-        )
+        self.weight = ttnn.zeros([config.n_routed_experts, config.dim], device=self.mesh2d, layout=ttnn.TILE_LAYOUT)
         self.bias = (
-            ttnn.zeros([seq_len, 256], device=self.col_submesh, layout=ttnn.TILE_LAYOUT) if config.dim == 7168 else None
+            ttnn.zeros([seq_len, 256], device=self.mesh2d, layout=ttnn.TILE_LAYOUT) if config.dim == 7168 else None
         )
 
     def linear(self, x: ttnn.Tensor):
