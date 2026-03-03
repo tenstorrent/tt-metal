@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
 )
 from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
@@ -36,10 +37,56 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_moe_routed_experts,
     prepare_embedding_weights,
     prepare_lm_head_weights,
+    prepare_moe_layer_weights,
 )
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
 FIRST_K_DENSE_REPLACE = 3
+
+
+def _layer_key(layer_id: int, suffix: str) -> str:
+    """State dict key under model.layers.{layer_id}."""
+    return f"model.layers.{layer_id}.{suffix}"
+
+
+def _build_synthetic_moe_state_dict(
+    layer_id: int,
+    *,
+    num_routed_experts: int = NUM_ROUTED_EXPERTS,
+) -> dict[str, torch.Tensor]:
+    """Build a synthetic MoE layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
+    state_dict: dict[str, torch.Tensor] = {}
+    dtype = torch.bfloat16
+
+    # Attention weights (HF shapes)
+    state_dict[_layer_key(layer_id, "self_attn.q_a_proj.weight")] = torch.randn(1536, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.q_b_proj.weight")] = torch.randn(24576, 1536, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.kv_a_proj_with_mqa.weight")] = torch.randn(576, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.kv_b_proj.weight")] = torch.randn(32768, 512, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.o_proj.weight")] = torch.randn(7168, 16384, dtype=dtype)
+
+    # Norms (ones per plan)
+    state_dict[_layer_key(layer_id, "input_layernorm.weight")] = torch.ones(7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.q_a_layernorm.weight")] = torch.ones(1536, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.kv_a_layernorm.weight")] = torch.ones(512, dtype=dtype)
+    state_dict[_layer_key(layer_id, "post_attention_layernorm.weight")] = torch.ones(7168, dtype=dtype)
+
+    # MoE gate
+    state_dict[_layer_key(layer_id, "mlp.gate.weight")] = torch.randn(256, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "mlp.gate.e_score_correction_bias")] = torch.randn(256, dtype=dtype)
+
+    # Shared experts
+    state_dict[_layer_key(layer_id, "mlp.shared_experts.gate_proj.weight")] = torch.randn(2048, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "mlp.shared_experts.up_proj.weight")] = torch.randn(2048, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "mlp.shared_experts.down_proj.weight")] = torch.randn(7168, 2048, dtype=dtype)
+
+    # Routed experts
+    for e in range(num_routed_experts):
+        state_dict[_layer_key(layer_id, f"mlp.experts.{e}.gate_proj.weight")] = torch.randn(2048, 7168, dtype=dtype)
+        state_dict[_layer_key(layer_id, f"mlp.experts.{e}.up_proj.weight")] = torch.randn(2048, 7168, dtype=dtype)
+        state_dict[_layer_key(layer_id, f"mlp.experts.{e}.down_proj.weight")] = torch.randn(7168, 2048, dtype=dtype)
+
+    return state_dict
 
 
 def _fabric_config_for_num_procs(num_procs: int):
@@ -97,6 +144,11 @@ class CacheWeightProvider:
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         return load_lm_head_weights(self._path, device)
 
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        with ttnn.device.setup_fast_dispatch(device):
+            preloaded_experts = load_moe_routed_experts(self._path, device, layer_id)
+        return load_moe_decoder_layer(self._path, device, layer_id, preloaded_routed_experts=preloaded_experts)
+
 
 class SyntheticWeightProvider:
     """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
@@ -117,6 +169,13 @@ class SyntheticWeightProvider:
             device,
             move_to_device=True,
         )
+
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+
+        sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        bdw = BlitzDecodeWeights(device)
+        return prepare_moe_layer_weights(bdw, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
 
 
 def load_weights_from_cache(

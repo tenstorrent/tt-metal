@@ -21,7 +21,11 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageKind,
 )
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
+    DeepSeekV3MoELayerWeights,
+)
 
 
 class WeightProvider(Protocol):
@@ -31,6 +35,9 @@ class WeightProvider(Protocol):
         ...
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        ...
+
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         ...
 
 
@@ -96,6 +103,34 @@ def create_single_pod_pipeline_configuration(
     return PipelineConfiguration(stage_factories)
 
 
+def create_sp4_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """64-stage super-pod: Embed -> 63x Activation fwd -> LMHead -> Token fwd."""
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(weight_provider.load_embedding(device))
+
+    def stage_62(device: ttnn.MeshDevice) -> StageKind:
+        return LMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
+    passthrough_activation = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
+        0: stage_0,
+        **{i: passthrough_activation for i in range(1, 62)},
+        62: stage_62,
+        63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+    }
+    return PipelineConfiguration(stage_factories)
+
+
 def create_pipeline_configuration_from_num_procs(
     num_procs: int,
     weight_provider: WeightProvider,
@@ -112,6 +147,12 @@ def create_pipeline_configuration_from_num_procs(
         )
     if num_procs == 16:
         return create_single_pod_pipeline_configuration(
+            weight_provider,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+    if num_procs == 64:
+        return create_sp4_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
