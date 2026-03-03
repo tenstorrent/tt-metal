@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
 
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+
 
 # =============================================================================
 # Data Classes
@@ -139,17 +141,6 @@ def _get_node_core_range(node: Any) -> Any:
     return _coords_to_core_range_set(all_coords)
 
 
-def _get_node_allowed_coords(node: Any) -> Set[Tuple[int, int]]:
-    """Get the allowed core coordinates for a node.
-
-    Returns coords from ``node.allowed_core_range`` if set, otherwise
-    falls back to the actual core range from ``_get_node_core_range()``.
-    """
-    if getattr(node, "allowed_core_range", None) is not None:
-        return _core_range_set_to_coords(node.allowed_core_range)
-    return _core_range_set_to_coords(_get_node_core_range(node))
-
-
 def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
     """Return the RISC processor type: 'riscv_0', 'riscv_1', or 'compute'.
 
@@ -210,16 +201,43 @@ def _get_role_key(
     return (_get_risc_type(kernel_desc), _core_ranges_key(cr))
 
 
+# =============================================================================
+# No-Op Sentinel
+# =============================================================================
+
+
+class _NoOpProgramDescriptor:
+    """A ProgramDescriptor with no kernels, CBs, or semaphores.
+
+    Used by the narrow→wide topology support: cores active in a wide
+    child but not in the narrow parent get a ``_NOOP_OP`` entry so
+    their phase count matches cores that participate in every phase.
+    """
+
+    kernels = []
+    cbs = []
+    semaphores = []
+
+
+_NOOP_OP = OpDescriptor(
+    descriptor=_NoOpProgramDescriptor(),
+    input_tensors=[],
+    output_tensors=[],
+    name="noop",
+)
+
+
 __all__ = [
     "BarrierConfig",
     "BarrierSegment",
     "MultiBarrierSpec",
     "_BuildResult",
+    "_NoOpProgramDescriptor",
+    "_NOOP_OP",
     "_core_range_set_to_coords",
     "_core_ranges_key",
     "_coords_to_core_range_set",
     "_get_node_core_range",
-    "_get_node_allowed_coords",
     "_get_risc_type",
     "_get_role_key",
     "_kernel_overlaps_core_range",

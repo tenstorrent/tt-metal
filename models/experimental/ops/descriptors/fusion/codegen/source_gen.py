@@ -687,6 +687,13 @@ def _generate_fused_source(
     else:
         dispatch_phases = [idx for idx, _ in role_sources]
 
+    # Emit empty namespace blocks for phases without a kernel for this role.
+    # Every phase gets a phase_N::run() — phases with no work get an empty body.
+    for phase_idx in dispatch_phases:
+        if phase_idx not in role_phase_set:
+            lines.append(f"namespace phase_{phase_idx} {{ void run() {{}} }}")
+            lines.append("")
+
     # Barrier namespace — use ALL phase indices, not just role_sources.
     # This ensures the barrier dispatch table includes ALL phase transitions
     # so that CB reset/resync and segment sync happen at every phase boundary
@@ -732,7 +739,8 @@ def _generate_fused_source(
             else:
                 lines.append(f"    phase_{phase_idx}::run();")
         else:
-            lines.append(f"    // {label} (no-op for this RISC)")
+            lines.append(f"    // {label} (no-op)")
+            lines.append(f"    phase_{phase_idx}::run();")
 
         is_last = count == len(dispatch_phases) - 1
         if needs_barrier and (not is_last or has_trailing):
