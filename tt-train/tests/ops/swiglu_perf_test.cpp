@@ -58,30 +58,44 @@ PerfResult run_swiglu_variant(
 
     const auto& input_shape = shape.input_shape;
     const uint32_t input_dim = input_shape.back();
-    std::vector<uint32_t> w13_shape = {1, 1, input_dim, shape.hidden_dim};
-    std::vector<uint32_t> w2_shape = {1, 1, shape.hidden_dim, input_dim};
+    const uint32_t H = shape.hidden_dim;
+
+    // Generate weights in LinearLayer convention [out, in]
+    std::vector<uint32_t> w13_lin_shape = {H, input_dim};
+    std::vector<uint32_t> w2_lin_shape = {input_dim, H};
 
     xt::xarray<float> input_data = xt::empty<float>(input_shape);
     create_random_data(input_data, rng());
-    xt::xarray<float> w1_data = xt::empty<float>(w13_shape);
-    create_random_data(w1_data, rng());
-    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
-    create_random_data(w2_data, rng());
-    xt::xarray<float> w3_data = xt::empty<float>(w13_shape);
-    create_random_data(w3_data, rng());
+    xt::xarray<float> w1_lin = xt::empty<float>(w13_lin_shape);
+    create_random_data(w1_lin, rng());
+    xt::xarray<float> w2_lin = xt::empty<float>(w2_lin_shape);
+    create_random_data(w2_lin, rng());
+    xt::xarray<float> w3_lin = xt::empty<float>(w13_lin_shape);
+    create_random_data(w3_lin, rng());
+
+    // Pre-compute rank-4 transposed weights for baseline
+    auto to_rank4 = [](const xt::xarray<float>& w, uint32_t r, uint32_t c) {
+        return xt::xarray<float>(xt::reshape_view(xt::transpose(w), {1U, 1U, r, c}));
+    };
+    auto w1_r4 = to_rank4(w1_lin, input_dim, H);
+    auto w2_r4 = to_rank4(w2_lin, H, input_dim);
+    auto w3_r4 = to_rank4(w3_lin, input_dim, H);
 
     auto run_fwd_bwd_timed = [&](PerfResult& result) {
         auto input_tensor = autograd::create_tensor(core::from_xtensor(input_data, device));
-        auto w1_tensor = autograd::create_tensor(core::from_xtensor(w1_data, device));
-        auto w2_tensor = autograd::create_tensor(core::from_xtensor(w2_data, device));
-        auto w3_tensor = autograd::create_tensor(core::from_xtensor(w3_data, device));
 
         auto t0 = std::chrono::high_resolution_clock::now();
         autograd::TensorPtr out;
         if (use_optimized) {
-            out = ops::swiglu_optimized(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+            auto w1 = autograd::create_tensor(core::from_xtensor(w1_lin, device));
+            auto w2 = autograd::create_tensor(core::from_xtensor(w2_lin, device));
+            auto w3 = autograd::create_tensor(core::from_xtensor(w3_lin, device));
+            out = ops::swiglu_optimized(input_tensor, w1, w2, w3);
         } else {
-            out = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+            auto w1 = autograd::create_tensor(core::from_xtensor(w1_r4, device));
+            auto w2 = autograd::create_tensor(core::from_xtensor(w2_r4, device));
+            auto w3 = autograd::create_tensor(core::from_xtensor(w3_r4, device));
+            out = ops::swiglu(input_tensor, w1, w2, w3);
         }
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -99,17 +113,20 @@ PerfResult run_swiglu_variant(
 
     auto run_fwd_bwd_memory = [&](PerfResult& result) {
         auto input_tensor = autograd::create_tensor(core::from_xtensor(input_data, device));
-        auto w1_tensor = autograd::create_tensor(core::from_xtensor(w1_data, device));
-        auto w2_tensor = autograd::create_tensor(core::from_xtensor(w2_data, device));
-        auto w3_tensor = autograd::create_tensor(core::from_xtensor(w3_data, device));
 
         auto guard = utils::MemoryUsageTracker::begin_capture();
 
         autograd::TensorPtr out;
         if (use_optimized) {
-            out = ops::swiglu_optimized(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+            auto w1 = autograd::create_tensor(core::from_xtensor(w1_lin, device));
+            auto w2 = autograd::create_tensor(core::from_xtensor(w2_lin, device));
+            auto w3 = autograd::create_tensor(core::from_xtensor(w3_lin, device));
+            out = ops::swiglu_optimized(input_tensor, w1, w2, w3);
         } else {
-            out = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+            auto w1 = autograd::create_tensor(core::from_xtensor(w1_r4, device));
+            auto w2 = autograd::create_tensor(core::from_xtensor(w2_r4, device));
+            auto w3 = autograd::create_tensor(core::from_xtensor(w3_r4, device));
+            out = ops::swiglu(input_tensor, w1, w2, w3);
         }
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         utils::MemoryUsageTracker::snapshot("forward");

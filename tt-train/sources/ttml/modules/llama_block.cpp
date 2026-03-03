@@ -37,7 +37,7 @@ LlamaMLP::LlamaMLP(
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
     if (m_use_fused) {
-        return ops::swiglu_fused(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), m_dropout_prob);
+        return ops::swiglu_optimized(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), m_dropout_prob);
     }
 
     auto swished = ops::silu((*m_w1)(input));
