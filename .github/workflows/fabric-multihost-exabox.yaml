@@ -118,6 +118,11 @@ jobs:
           name: ${{ needs.wheel-artifact.outputs.wheel-artifact-name }}
           path: /ci/artifacts
 
+      - name: Install wheel on runner
+        run: |
+          # Install wheel on runner so tt-run command has the correct version
+          pip install $(find /ci/artifacts | grep whl)
+
       - name: Unpack artifacts & install
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
