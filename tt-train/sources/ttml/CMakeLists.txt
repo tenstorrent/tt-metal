@@ -201,6 +201,7 @@ target_compile_definitions(
     PRIVATE
         TTML_ROOT="${CMAKE_SOURCE_DIR}/tt-train"
         TTML_DATA_ROOT="${CMAKE_SOURCE_DIR}/data"
+)
 # Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
 # Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
 target_compile_options(
