@@ -124,11 +124,32 @@ void kernel_main() {
                     uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
+                    if (l1_write_addr + page_size > MEM_L1_SIZE) {
+                        WATCHER_RING_BUFFER_PUSH(0xBADCBADD);
+                        WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(l1_write_addr + page_size));
+                        WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(MEM_L1_SIZE));
+                        while (true) {
+                        }
+                    }
                     l1_write_addr += page_size;
                     tiles_read++;
                 }
 
                 noc_async_read_barrier();
+                {
+                    size_t l1_write_addr_tmp = get_write_ptr(cb_output_id);
+                    for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_tmp + j * page_size) ==
+                            0xfefefefe) {
+                            WATCHER_RING_BUFFER_PUSH(0xBADBAD00);
+                            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(l1_write_addr_tmp + j * page_size));
+                            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(0xfefefefe));
+                            while (true) {
+                            }
+                        }
+                    }
+                }
+
                 cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
             }
             tiles_read = input_tile_id_start;

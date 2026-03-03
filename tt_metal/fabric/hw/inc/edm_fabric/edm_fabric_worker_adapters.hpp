@@ -593,6 +593,15 @@ private:
     FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
+        if (size_bytes + sizeof(PACKET_HEADER_TYPE) > this->buffer_size_bytes) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00005);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(size_bytes));
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(this->buffer_size_bytes));
+            while (true) {
+            }
+        }
+        ASSERT(size_bytes + sizeof(PACKET_HEADER_TYPE) <= this->buffer_size_bytes);
+
         // skip past the first part of the buffer which will be occupied by the packet header
         send_chunk_from_address<blocking_mode>(
             source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
@@ -600,7 +609,23 @@ private:
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
+        if (size_bytes > this->buffer_size_bytes) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00006);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(size_bytes));
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(this->buffer_size_bytes));
+            while (true) {
+            }
+        }
         ASSERT(size_bytes <= this->buffer_size_bytes);
+        if (!tt::tt_fabric::is_valid(
+                *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address)))) {
+            auto* hdr = const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address));
+            WATCHER_RING_BUFFER_PUSH(0xBAD00007);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(hdr->noc_send_type));
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(hdr->payload_size_bytes));
+            while (true) {
+            }
+        }
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
@@ -610,6 +635,13 @@ private:
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
+        if (num_pages * page_size > this->buffer_size_bytes) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00008);
+            WATCHER_RING_BUFFER_PUSH(num_pages * page_size);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(this->buffer_size_bytes));
+            while (true) {
+            }
+        }
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
         post_send_payload_increment_pointers();

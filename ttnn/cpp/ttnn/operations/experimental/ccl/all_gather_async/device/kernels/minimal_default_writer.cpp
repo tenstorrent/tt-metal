@@ -331,6 +331,13 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
     }
 
+    {
+        cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
+        auto l1_read_addr_tmp = get_read_ptr(cb_output_id);
+        WATCHER_RING_BUFFER_PUSH(0xCB00ADD1);
+        WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(l1_read_addr_tmp));
+    }
+
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     uint32_t num_channels_processed_in_current_batch = 0;

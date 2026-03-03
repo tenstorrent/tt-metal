@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
+#include "api/debug/ring_buffer.h"
 
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::linear::experimental {
@@ -89,6 +90,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
 
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -152,6 +154,12 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
+    if constexpr (UpdateMask == UnicastWriteUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -430,6 +438,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
 
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -495,6 +505,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
         noc_unicast_scatter_atomic_inc_fused_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -564,6 +576,12 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_atomic_inc_fused_command_header);
+    if constexpr (UpdateMask == UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -692,6 +710,13 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_scatter_write_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
+    assert_payload_fits_in_buffer(client_interface, static_cast<uint32_t>(packet_header->payload_size_bytes));
+    if constexpr (UpdateMask == UnicastScatterWriteUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -968,6 +993,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
 
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1032,6 +1059,13 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_fused_unicast_atomic_inc_command_header);
+    assert_payload_fits_in_buffer(client_interface, static_cast<uint32_t>(packet_header->payload_size_bytes));
+    if constexpr (UpdateMask == UnicastFusedAtomicIncUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -1153,6 +1187,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1218,6 +1254,13 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
+    assert_payload_fits_in_buffer(client_interface, static_cast<uint32_t>(packet_header->payload_size_bytes));
+    if constexpr (UpdateMask == UnicastWriteUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -1513,6 +1556,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
 
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1585,6 +1630,12 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_scatter_write_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
+    if constexpr (UpdateMask == UnicastScatterWriteUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -1875,6 +1926,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1950,6 +2003,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
         noc_unicast_scatter_atomic_inc_fused_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -2022,6 +2077,13 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_atomic_inc_fused_command_header);
+    assert_payload_fits_in_buffer(client_interface, static_cast<uint32_t>(packet_header->payload_size_bytes));
+    if constexpr (UpdateMask == UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -2154,6 +2216,13 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_fused_unicast_atomic_inc_command_header);
+    assert_payload_fits_in_buffer(client_interface, static_cast<uint32_t>(packet_header->payload_size_bytes));
+    if constexpr (UpdateMask == UnicastFusedAtomicIncUpdateMask::PayloadSize) {
+        assert_input_buffer_doesnt_spill_past_l1(src_addr, packet_size_bytes, MEM_L1_SIZE);
+    } else {
+        assert_input_buffer_doesnt_spill_past_l1(
+            src_addr, static_cast<uint32_t>(packet_header->payload_size_bytes), MEM_L1_SIZE);
+    }
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -2278,6 +2347,8 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     packet_header->to_chip_sparse_multicast(
         tt::tt_fabric::SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE>{hops});
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    assert_payload_fits_in_buffer(client_interface, size);
+    assert_input_buffer_doesnt_spill_past_l1(src_addr, size, MEM_L1_SIZE);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     bool one_time_profile = true;
@@ -92,6 +93,39 @@ void kernel_main() {
             in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
 
             noc_async_read_barrier();
+
+            // DEBUG: Scan in0 buffer for 0xfefefefe corruption
+            {
+                volatile tt_l1_ptr uint32_t* buf =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in0));
+                uint32_t num_words = (in0_block_num_tiles * in0_single_tile_size_bytes) / sizeof(uint32_t);
+                for (uint32_t i = 0; i < num_words; i++) {
+                    if (buf[i] == 0xfefefefe) {
+                        DPRINT << "CORRUPT in0 b=" << b << " blk=" << block << " word=" << i << " addr=0x" << HEX()
+                               << (uint32_t)&buf[i] << ENDL();
+                        WATCHER_RING_BUFFER_PUSH(0xBADBAD08);
+                        ASSERT(false);
+                        while (true) {
+                        }
+                    }
+                }
+            }
+            // DEBUG: Scan in1 buffer for 0xfefefefe corruption
+            {
+                volatile tt_l1_ptr uint32_t* buf =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in1));
+                uint32_t num_words = (in1_block_num_tiles * in1_single_tile_size_bytes) / sizeof(uint32_t);
+                for (uint32_t i = 0; i < num_words; i++) {
+                    if (buf[i] == 0xfefefefe) {
+                        DPRINT << "CORRUPT in1 b=" << b << " blk=" << block << " word=" << i << " addr=0x" << HEX()
+                               << (uint32_t)&buf[i] << ENDL();
+                        WATCHER_RING_BUFFER_PUSH(0xBADBAD07);
+                        ASSERT(false);
+                        while (true) {
+                        }
+                    }
+                }
+            }
 
             cb_push_back(cb_id_in0, in0_block_num_tiles);
             cb_push_back(cb_id_in1, in1_block_num_tiles);

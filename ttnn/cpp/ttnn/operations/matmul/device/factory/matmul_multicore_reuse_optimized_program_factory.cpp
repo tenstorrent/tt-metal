@@ -384,6 +384,13 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         cb_src0_config = cb_src0_config.set_globally_allocated_address(*in0_buffer);
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    log_info(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        src0_cb_index,
+        in0_single_tile_size,
+        in0_CB_size / in0_single_tile_size,
+        in0_CB_size);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
@@ -394,6 +401,13 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         cb_src1_config = cb_src1_config.set_globally_allocated_address(*in1_buffer);
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    log_info(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        src1_cb_index,
+        in1_single_tile_size,
+        in1_CB_size / in1_single_tile_size,
+        in1_CB_size);
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
@@ -440,6 +454,13 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         output_cb_config = output_cb_config.set_globally_allocated_address(*out_buffer);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
+    log_info(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        output_cb_index,
+        output_single_tile_size,
+        out_CB_size / output_single_tile_size,
+        out_CB_size);
 
     // Intermediate CB read
     if (in1_needs_intermediate_cb_read) {

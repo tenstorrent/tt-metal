@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <type_traits>
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "api/debug/ring_buffer.h"
 
 namespace tt::tt_fabric::common::experimental {
 
@@ -197,6 +198,13 @@ static FORCE_INLINE void populate_unicast_write_fields(
         packet_header->command_fields.unicast_write.noc_address = noc_addr;
     }
     if constexpr (has_flag(UpdateMask, UnicastWriteUpdateMask::PayloadSize)) {
+        if (packet_size_bytes == 0) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00001);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(packet_size_bytes));
+            while (true) {
+            }
+        }
+        ASSERT(packet_size_bytes > 0);
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 }
@@ -276,6 +284,13 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
     }
 
     if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::PayloadSize)) {
+        if (packet_size_bytes == 0) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00002);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(packet_size_bytes));
+            while (true) {
+            }
+        }
+        ASSERT(packet_size_bytes > 0);
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 
@@ -333,6 +348,13 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
         packet_header->command_fields.unicast_seminc_fused.flush = command_header.flush;
     }
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::PayloadSize)) {
+        if (packet_size_bytes == 0) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00003);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(packet_size_bytes));
+            while (true) {
+            }
+        }
+        ASSERT(packet_size_bytes > 0);
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 }
@@ -406,7 +428,40 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
     }
 
     if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize)) {
+        if (packet_size_bytes == 0) {
+            WATCHER_RING_BUFFER_PUSH(0xBAD00004);
+            WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(packet_size_bytes));
+            while (true) {
+            }
+        }
+        ASSERT(packet_size_bytes > 0);
         packet_header->payload_size_bytes = packet_size_bytes;
+    }
+}
+
+template <typename FabricSenderType>
+static FORCE_INLINE void assert_payload_fits_in_buffer(
+    tt_l1_ptr FabricSenderType* client_interface, uint32_t payload_size) {
+    auto max_payload = client_interface->buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
+    if (payload_size > max_payload) {
+        WATCHER_RING_BUFFER_PUSH(0xBAD10000);
+        WATCHER_RING_BUFFER_PUSH(payload_size);
+        WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(client_interface->buffer_size_bytes));
+        while (true) {
+        }
+    }
+    ASSERT(payload_size <= max_payload);
+}
+
+static FORCE_INLINE void assert_input_buffer_doesnt_spill_past_l1(
+    uint32_t src_addr, uint32_t payload_size, uint32_t l1_size) {
+    ASSERT(src_addr + payload_size <= l1_size);
+    if (src_addr + payload_size > l1_size) {
+        WATCHER_RING_BUFFER_PUSH(0xBAD10000);
+        WATCHER_RING_BUFFER_PUSH(src_addr + payload_size);
+        WATCHER_RING_BUFFER_PUSH(static_cast<uint32_t>(l1_size));
+        while (true) {
+        }
     }
 }
 

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
@@ -278,6 +279,22 @@ void kernel_main() {
                             noc_async_read_barrier();
                         }
 #endif  // IN0_SHARDED
+
+                        // DEBUG: Scan in0 buffer for 0xfefefefe corruption
+                        {
+                            volatile tt_l1_ptr uint32_t* buf =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in0));
+                            uint32_t num_words = in0_block_size_bytes / sizeof(uint32_t);
+                            for (uint32_t i = 0; i < num_words; i++) {
+                                if (buf[i] == 0xfefefefe) {
+                                    DPRINT << "CORRUPT in0_sender blk=" << block << " word=" << i << " addr=0x" << HEX()
+                                           << (uint32_t)&buf[i] << ENDL();
+                                    WATCHER_RING_BUFFER_PUSH(0xBADBAD09);
+                                    while (true) {
+                                    }
+                                }
+                            }
+                        }
 
 #ifndef SKIP_MCAST
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr

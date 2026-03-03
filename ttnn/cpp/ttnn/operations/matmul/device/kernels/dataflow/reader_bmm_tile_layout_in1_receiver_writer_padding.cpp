@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
@@ -120,6 +121,24 @@ void kernel_main() {
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+
+                    // DEBUG: Scan in1 buffer for 0xfefefefe corruption
+                    {
+                        volatile tt_l1_ptr uint32_t* buf =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in1));
+                        uint32_t in1_tile_size = get_tile_size(cb_id_in1);
+                        uint32_t num_words = (in1_block_num_tiles * in1_tile_size) / sizeof(uint32_t);
+                        for (uint32_t i = 0; i < num_words; i++) {
+                            if (buf[i] == 0xfefefefe) {
+                                DPRINT << "CORRUPT in1_recv b=" << b << " blk=" << block << " word=" << i << " addr=0x"
+                                       << HEX() << (uint32_t)&buf[i] << ENDL();
+                                WATCHER_RING_BUFFER_PUSH(0xBADBAD09);
+                                ASSERT(false);
+                                while (true) {
+                                }
+                            }
+                        }
+                    }
 
                     cb_push_back(cb_id_in1, in1_block_num_tiles);
                 }
