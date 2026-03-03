@@ -313,6 +313,10 @@ void py_module(nb::module_& m) {
             [](AutoContext& self) -> const ParallelismContext& { return self.get_parallelism_context(); },
             nb::rv_policy::reference,
             "Get parallelism context");
+        py_auto_context.def(
+            "is_parallelism_context_initialized",
+            &AutoContext::is_parallelism_context_initialized,
+            "Check if parallelism context has been initialized");
     }
 
     {

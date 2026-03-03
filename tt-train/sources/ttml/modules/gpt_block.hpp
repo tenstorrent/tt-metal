@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/layer_norm_module.hpp"
@@ -36,7 +38,7 @@ public:
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;
 };
 
 }  // namespace ttml::modules

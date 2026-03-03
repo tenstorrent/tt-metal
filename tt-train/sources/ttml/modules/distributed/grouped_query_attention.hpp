@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 #include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
@@ -35,7 +37,7 @@ public:
     explicit DistributedGroupedQueryAttention(const GQAConfig& config);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& x, const std::optional<autograd::TensorPtr>& mask) override;
 };
 
 }  // namespace ttml::modules::distributed

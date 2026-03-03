@@ -122,7 +122,7 @@ Transformer::Transformer(const TransformerConfig &config) {
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
-    const ttml::autograd::TensorPtr &x, const ttml::autograd::TensorPtr &mask) {
+    const ttml::autograd::TensorPtr &x, const std::optional<ttml::autograd::TensorPtr> &mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
     for (auto &block : blocks) {
