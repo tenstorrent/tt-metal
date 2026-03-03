@@ -305,8 +305,8 @@ class MoEGate(AbstractModule):
 
         grid = cfg["mesh_device"].compute_with_storage_grid_size()
         input_shard_shape = (16, 16)
-        logits_shard_shape = (16, 16)
-        output_shard_shape = (1, 16)
+        logits_shard_shape = (32, 32)
+        output_shard_shape = (32, 32)
         input_tile = ttnn.Tile(input_shard_shape)
         logits_tile = ttnn.Tile(logits_shard_shape)
         output_tile = ttnn.Tile(output_shard_shape)
@@ -354,7 +354,7 @@ class MoEGate(AbstractModule):
         scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_mem_config)
 
         # create the output buffer
-        torch_output = torch.zeros((batch_size, 1, 16), dtype=torch.bfloat16)
+        torch_output = torch.zeros((batch_size, 32, 32), dtype=torch.bfloat16)
         output_tensor = ttnn.from_torch(
             torch_output,
             dtype=ttnn.bfloat16,
@@ -379,7 +379,7 @@ class MoEGate(AbstractModule):
             tile=input_tile,
         )
 
-        torch_output_indices = torch.zeros((batch_size, 1, 16), dtype=torch.uint16)
+        torch_output_indices = torch.zeros((batch_size, 32, 32), dtype=torch.uint16)
         ttnn_output_indices = ttnn.from_torch(
             torch_output_indices,
             dtype=ttnn.uint16,

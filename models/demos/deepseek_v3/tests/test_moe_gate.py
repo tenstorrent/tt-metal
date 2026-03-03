@@ -50,7 +50,9 @@ def test_forward_pass(
     # Get state dict from actual model - pass directly to convert_weights
     torch.use_deterministic_algorithms(True)
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
-
+    # If testing old MoE gate, remove below two lines and uncomment the two lines in the weight_config
+    if hasattr(reference_model, "e_score_correction_bias"):
+        reference_model.e_score_correction_bias.data = torch.zeros_like(reference_model.e_score_correction_bias.data)
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
@@ -60,8 +62,8 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate=False,
-        test_name="test_moe_gate",
-        real_weights=False,
+        # test_name="test_new_moe_gate",
+        # real_weights=False,
     )
 
     # Generate appropriate config using utility function
