@@ -81,12 +81,16 @@ void kernel_main() {
 
         if (fmt == compressed::FMT_BFP0) {
             // bfp0: just copy in0 tile to output (add zero = identity)
+            copy_tile_to_dst_init_short(cb_in0);
             tile_regs_acquire();
             copy_tile(cb_in0, tile_id, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_out);
             tile_regs_release();
+            // Reinit add path for subsequent non-bfp0 tiles
+            reconfig_data_format<false, true>(cb_in0, cb_in1);
+            compressed::add_tiles_init_in1_compressed(cb_in0);
         } else {
             // Reconfig unpacker B for this tile's format
             compressed::reconfig_unpack_srcb(fmt);
