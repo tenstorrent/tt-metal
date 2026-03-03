@@ -244,13 +244,16 @@ class Penalties1D(LightweightModule):
             ttnn.typecast(accum.output_mask, ttnn.bfloat16, **op), params.presence_penalties, **op
         )
         presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op)
+        presence_term.deallocate()
         logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op)
         presence_term_bf16.deallocate()
 
         # Frequency: logits -= typecast(output_counts, bf16) * frequency
         output_counts_bf16 = ttnn.typecast(accum.output_counts, ttnn.bfloat16, **op)
         freq_term = ttnn.multiply(output_counts_bf16, params.frequency_penalties, **op)
+        output_counts_bf16.deallocate()
         freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op)
+        freq_term.deallocate()
         logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op)
         freq_term_bf16.deallocate()
 
@@ -264,6 +267,7 @@ class Penalties1D(LightweightModule):
 
         logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op)
         logits_gt1 = ttnn.gt(logits_bf16, 0, **op)
+        logits_bf16.deallocate()
         scaling = ttnn.where(logits_gt1, inverse_penalties, penalties, **op)
         logits_gt1.deallocate()
         penalties.deallocate()
