@@ -653,7 +653,6 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
                << result.per_hop_max_ns << "," << result.per_hop_avg_ns << "," << result.per_hop_p99_ns << "\n";
 
     csv_stream.close();
-    log_info(tt::LogTest, "Latency result appended to CSV file: {}", csv_file_path_.string());
 }
 
 void LatencyResultsManager::load_golden_csv() {
