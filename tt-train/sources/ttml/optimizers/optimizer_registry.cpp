@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optimizer_factory.hpp"
+#include "optimizer_registry.hpp"
 
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"

@@ -12,7 +12,7 @@
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
-#include "optimizers/optimizer_factory.hpp"
+#include "optimizers/optimizer_registry.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"

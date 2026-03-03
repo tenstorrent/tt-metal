@@ -25,7 +25,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/optimizer_base.hpp"
-#include "optimizers/optimizer_factory.hpp"
+#include "optimizers/optimizer_registry.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
