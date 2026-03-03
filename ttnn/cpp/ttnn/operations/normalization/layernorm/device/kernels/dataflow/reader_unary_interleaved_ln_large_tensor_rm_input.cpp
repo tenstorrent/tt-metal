@@ -9,7 +9,7 @@
 // This reader pushes the row-major input data into cb_in_rm for each required pass.
 //
 // Compile-time args:
-//   CTA[0]     = blk (block size in tiles)
+//   CTA[0]     = block_size (block size in tiles)
 //   CTA[1..]   = TensorAccessorArgs for input a (ROW_MAJOR, page_size = W * elem_size)
 //   ...        = TensorAccessorArgs for b / residual (TILE, may be null)
 //   ...        = TensorAccessorArgs for gamma (TILE, may be null)
@@ -49,14 +49,14 @@ void kernel_main() {
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W = get_arg_val<uint32_t>(9);
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    // constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0; // Unused
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_in_rm = tt::CBIndex::c_27;
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
 
     // No use_welford arg (large-tensor + welford uses a separate kernel).
-    constexpr uint32_t blk = get_compile_time_arg_val(0);
+    constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr auto src0_args = TensorAccessorArgs<1>();
     [[maybe_unused]] constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
@@ -97,71 +97,61 @@ void kernel_main() {
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     // cb_in_rm row stride: full-block-width of row-major elements per row.
-    // Each row in cb_in_rm occupies blk * TILE_WIDTH * elem_size bytes.
+    // Each row in cb_in_rm occupies block_size * TILE_WIDTH * elem_size bytes.
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
-    constexpr uint32_t full_row_stride = blk * TILE_W * elem_size_bytes;
-
-    auto push_rm_input = [&](uint32_t abs_tile_row) {
-        for (auto block : generic::blocks(Wt, blk)) {
-            const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
-            const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
-
-            cb_reserve_back(cb_id_in_rm, block.full_block_size());
-            uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
-
-            for (uint32_t row = 0; row < TILE_H; ++row) {
-                const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
-                noc_async_read(noc_addr, l1_ptr, row_read_bytes);
-                l1_ptr += full_row_stride;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in_rm, block.full_block_size());
-        }
-    };
+    constexpr uint32_t full_row_stride = block_size * TILE_W * elem_size_bytes;
 
     uint32_t tile_offs = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t abs_tile_row = row_offset / TILE_H + ncht;
 
 #ifndef RMSNORM
-        push_rm_input(abs_tile_row);
+        DPRINT << "[rm_reader] pushing row-major block to cb_in_rm for E(x)" << ENDL();
+        // Data for Calculating E[X]
+        layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
 #ifdef FUSE_PRE_ADD
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
                 cb_id_in1, src_b, src1_tile_bytes, tile_offs + block.start() + tile_offset, block);
         }
 #endif
 #endif
+        DPRINT << "[rm_reader] pushed row-major block to cb_in_rm for first pass" << ENDL();
 
         // Pass 1 for TILIZE_IN: variance calculation
-        push_rm_input(abs_tile_row);
+        layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
 #ifdef FUSE_PRE_ADD
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
                 cb_id_in1, src_b, src1_tile_bytes, tile_offs + block.start() + tile_offset, block);
         }
 #endif
+        DPRINT << "[rm_reader] pushed row-major block to cb_in_rm for second pass" << ENDL();
 
         // Pass 2 for TILIZE_IN: final normalization
-        push_rm_input(abs_tile_row);
+        layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
 #ifdef FUSE_PRE_ADD
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
                 cb_id_in1, src_b, src1_tile_bytes, tile_offs + block.start() + tile_offset, block);
         }
 #endif
 #ifdef FUSE_GAMMA
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
         }
 #endif
 #ifdef FUSE_BETA
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
         }
 #endif
 
         tile_offs += Wt;
     }
+    DPRINT << "end of reader kernel" << ENDL();
 }

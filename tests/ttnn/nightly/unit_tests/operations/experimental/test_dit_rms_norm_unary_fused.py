@@ -294,8 +294,9 @@ def test_dit_rms_norm_unary_fused_sharded_weight_bias(
         (64, 128, "small"),
         (64, 512, "medium"),
         (128, 1024, "large"),
+        (512, 4096, "larger"),
     ],
-    ids=["one_block", "tiny", "small", "medium", "large"],
+    ids=["one_block", "tiny", "small", "medium", "large", "larger"],
 )
 def test_dit_rms_norm_unary_fused_row_major_basic_shapes(device, h, w, name):
     """ROW_MAJOR input, small and medium shapes, no gamma/bias."""
@@ -310,28 +311,28 @@ def test_dit_rms_norm_unary_fused_row_major_basic_shapes(device, h, w, name):
     assert check_result["relative_rmse"] < 0.03, f"[{name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
-# @pytest.mark.parametrize(
-#     "h, w, config_name",
-#     [
-#         (9472, 5120, "wan2.2_14b-720p-full"),
-#         (2368, 5120, "wan2.2_14b-720p-single"),
-#     ],
-#     ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
-# )
-# def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, h, w, config_name):
-#     """ROW_MAJOR input with Wan2.2 shapes (triggers large-tensor kernel path)."""
-#     check_result = run_dit_rms_norm_unary_fused_test(
-#         device=device,
-#         h=h,
-#         w=w,
-#         activation="silu",
-#         dtype=ttnn.bfloat16,
-#         input_layout=ttnn.ROW_MAJOR_LAYOUT,
-#     )
-#     assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
-#     assert (
-#         check_result["relative_rmse"] < 0.04
-#     ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
+@pytest.mark.parametrize(
+    "h, w, config_name",
+    [
+        (9472, 5120, "wan2.2_14b-720p-full"),
+        (2368, 5120, "wan2.2_14b-720p-single"),
+    ],
+    ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
+)
+def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, h, w, config_name):
+    """ROW_MAJOR input with Wan2.2 shapes (triggers large-tensor kernel path)."""
+    check_result = run_dit_rms_norm_unary_fused_test(
+        device=device,
+        h=h,
+        w=w,
+        activation="silu",
+        dtype=ttnn.bfloat16,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
+    assert (
+        check_result["relative_rmse"] < 0.04
+    ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
