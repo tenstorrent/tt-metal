@@ -35,6 +35,11 @@ class OverlappedShardSpec:
       partial width).  ``num_cores`` divides the width.
     - ``HEIGHT_SHARDED``: each core gets a row slice (partial height,
       full width).  ``num_cores`` divides the height.
+
+    When data is preprocessed (shuffled / block-sharded) before
+    overlapping, ``raw_tensor_shape`` reflects the physical layout
+    while ``logical_tensor_shape`` preserves the original per-device
+    shape for downstream consumers.
     """
 
     core_range_set: ttnn.CoreRangeSet
@@ -46,6 +51,8 @@ class OverlappedShardSpec:
     tile_w: int = 32
 
     tp_dim: tuple[int | None, int | None] = (None, None)
+
+    logical_tensor_shape: tuple[int, int] | None = None
 
     def _tile_bytes(self) -> int:
         num_elements = self.tile_h * self.tile_w
@@ -285,12 +292,14 @@ def overlap_tensors(
     result = []
     for lane in tensors:
         for tensor, spec in lane:
-            pdh = spec.per_device_height(mesh_shape)
-            pdw = spec.per_device_width(mesh_shape)
+            ts = spec.logical_tensor_shape or (
+                spec.per_device_height(mesh_shape),
+                spec.per_device_width(mesh_shape),
+            )
             result.append(
                 OverlappedTensor(
                     fused_tensor=fused,
-                    tensor_shape=(pdh, pdw),
+                    tensor_shape=ts,
                     shard_shape=spec.shard_shape(mesh_shape),
                     core_range_set=spec.core_range_set,
                     dtype=spec.dtype,
