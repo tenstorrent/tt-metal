@@ -168,6 +168,7 @@ file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
+    third_party/tt_llk/common/*.h
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
     third_party/tt_llk/tt_llk_quasar/**/*.h
@@ -222,6 +223,8 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
             tools/profiler/noc_event_profiler.hpp
+            tools/profiler/noc_debugging_profiler.hpp
+            tools/profiler/noc_debugging_metadata.hpp
             tools/profiler/cpp_device_analyses.json
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
@@ -238,6 +241,8 @@ target_sources(
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
             ${TT_LLK_HEADERS}
+            # SFPI Version for kernel caching
+            sfpi-version
 )
 
 include(CheckFunctionExists)

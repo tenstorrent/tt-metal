@@ -446,4 +446,27 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
     }
 }
 
+TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
+    for (auto& device : devices_) {
+        auto& cq = device->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        auto grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
+
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
+        CircularBufferConfig config =
+            CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
+        CreateCircularBuffer(program_, cr_set, config);
+
+        EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
+}
+
 }  // namespace tt::tt_metal

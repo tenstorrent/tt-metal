@@ -40,9 +40,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
-@pytest.mark.parametrize(
-    "position_id", [127, 255, 1023]
-)  # Must test 128 chunk aligned decode postions, add other tests when causal masks are in for SDPA
+@pytest.mark.parametrize("position_id", [0, 1, 127, 242, 255, 564, 1023])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -545,7 +543,7 @@ def test_pre_sdpa(
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
     # from 0 to position id, the kv cache is valid, position_id data is filled by test
-    torch_kv_cache = torch.full(cache_shape, float("-inf"), dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
     for i in range(position_id):
         torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
 
