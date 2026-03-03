@@ -21,17 +21,11 @@ override_runtime_arguments() only updates buffer addresses — shape/work distri
 changes require separate cache entries (padded_shape is in hash).
 """
 
-import os
 import pytest
 import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0
-
-
-def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") != None
 
 
 @pytest.fixture
@@ -63,7 +57,6 @@ def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttn
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 64, 64]
@@ -85,7 +78,6 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 # =============================================================================
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     """Different reduce math ops (sum vs max) -> different cache entries."""
     shape = [1, 1, 64, 64]
@@ -99,7 +91,6 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     """Different reduce dims (W vs H) -> different program factories -> different cache entries."""
     shape = [1, 1, 64, 64]
@@ -115,7 +106,6 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     shape = [1, 1, 64, 64]
@@ -129,7 +119,6 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     shape = [1, 1, 64, 64]
@@ -147,7 +136,6 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     """Different padded shapes -> different cache entries.
     padded_shape is included in compute_program_hash() because Ht, Wt are compile-time args."""
@@ -160,7 +148,6 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@pytest.mark.skipif(is_simulator() and is_wormhole_b0(), reason="Issue #38203")
 def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is in compute_program_hash() and affects work distribution (compile-time)."""
