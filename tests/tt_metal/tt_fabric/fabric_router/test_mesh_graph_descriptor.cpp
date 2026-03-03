@@ -515,7 +515,158 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     // Simple device check for one mesh (M2): just count and a few local IDs
     check_mesh_devices_simple(desc, "M2", 8 * 4, {0, 5, 31});
 
+    // Test all_names() returns unique names (as unordered_set)
+    {
+        auto all_names = desc.all_names();
+        // Verify it's a set (no duplicates) by checking size matches expected unique count
+        EXPECT_GE(all_names.size(), 8u) << "Should have at least 8 unique names (G2, G0, G1, M0-M4)";
+
+        // Verify expected names are present
+        EXPECT_TRUE(all_names.contains("G2")) << "Should contain G2";
+        EXPECT_TRUE(all_names.contains("G0")) << "Should contain G0";
+        EXPECT_TRUE(all_names.contains("G1")) << "Should contain G1";
+        EXPECT_TRUE(all_names.contains("M0")) << "Should contain M0";
+        EXPECT_TRUE(all_names.contains("M1")) << "Should contain M1";
+        EXPECT_TRUE(all_names.contains("M2")) << "Should contain M2";
+        EXPECT_TRUE(all_names.contains("M3")) << "Should contain M3";
+        EXPECT_TRUE(all_names.contains("M4")) << "Should contain M4";
+
+        // Verify no duplicates by checking that inserting all names into a new set gives same size
+        std::unordered_set<std::string> verification_set(all_names.begin(), all_names.end());
+        EXPECT_EQ(all_names.size(), verification_set.size())
+            << "all_names() should return unique names (no duplicates)";
+    }
+
+    // Test all_types() returns unique types (as unordered_set)
+    {
+        auto all_types = desc.all_types();
+        // Verify it's a set (no duplicates)
+        EXPECT_GE(all_types.size(), 4u) << "Should have at least 4 unique types (CLUSTER, POD, MESH, DEVICE)";
+
+        // Verify expected types are present
+        EXPECT_TRUE(all_types.contains("CLUSTER")) << "Should contain CLUSTER type";
+        EXPECT_TRUE(all_types.contains("POD")) << "Should contain POD type";
+        EXPECT_TRUE(all_types.contains("MESH")) << "Should contain MESH type";
+        EXPECT_TRUE(all_types.contains("DEVICE")) << "Should contain DEVICE type";
+
+        // Verify no duplicates by checking that inserting all types into a new set gives same size
+        std::unordered_set<std::string> verification_set(all_types.begin(), all_types.end());
+        EXPECT_EQ(all_types.size(), verification_set.size())
+            << "all_types() should return unique types (no duplicates)";
+    }
+
     desc.print_all_nodes();
+}
+
+TEST(MeshGraphDescriptorTests, TestGetChipCount) {
+    // Test get_chip_count() with various mesh dimensions
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
+
+    MeshGraphDescriptor desc(text_proto_file_path);
+
+    // Get mesh instances
+    auto mesh_ids = desc.instances_by_type("MESH");
+    ASSERT_GE(mesh_ids.size(), 1u) << "Should have at least one mesh instance";
+
+    // Test get_chip_count with GlobalNodeId
+    for (auto mesh_id : mesh_ids) {
+        const auto& mesh_instance = desc.get_instance(mesh_id);
+        ASSERT_TRUE(desc.is_mesh(mesh_instance)) << "Instance should be a mesh";
+
+        uint32_t chip_count = desc.get_chip_count(mesh_id);
+        EXPECT_GT(chip_count, 0u) << "Chip count should be positive for mesh " << mesh_instance.name;
+
+        // Test get_chip_count with InstanceData reference
+        uint32_t chip_count_ref = desc.get_chip_count(mesh_instance);
+        EXPECT_EQ(chip_count, chip_count_ref) << "Both overloads should return same chip count";
+    }
+
+    // Test with a specific mesh file that has known dimensions
+    const std::filesystem::path dual_4x4_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto";
+
+    if (std::filesystem::exists(dual_4x4_file_path)) {
+        MeshGraphDescriptor dual_desc(dual_4x4_file_path);
+        auto dual_mesh_ids = dual_desc.instances_by_type("MESH");
+
+        for (auto mesh_id : dual_mesh_ids) {
+            uint32_t chip_count = dual_desc.get_chip_count(mesh_id);
+            // 4x4 mesh should have 16 chips
+            EXPECT_EQ(chip_count, 16u) << "4x4 mesh should have 16 chips";
+        }
+    }
+
+    // Test with 32x4 mesh if available
+    const std::filesystem::path mesh_32x4_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+
+    if (std::filesystem::exists(mesh_32x4_file_path)) {
+        MeshGraphDescriptor mesh_32x4_desc(mesh_32x4_file_path);
+        auto mesh_32x4_ids = mesh_32x4_desc.instances_by_type("MESH");
+
+        for (auto mesh_id : mesh_32x4_ids) {
+            uint32_t chip_count = mesh_32x4_desc.get_chip_count(mesh_id);
+            // 32x4 mesh should have 128 chips
+            EXPECT_EQ(chip_count, 128u) << "32x4 mesh should have 128 chips";
+        }
+    }
+
+    // Test error case: get_chip_count on non-mesh instance should fail
+    // Note: TT_FATAL will abort, so we can't test this with EXPECT_THROW
+    // This is expected behavior - the function should only be called on mesh instances
+    auto graph_ids = desc.instances_by_type("POD");
+    if (!graph_ids.empty()) {
+        const auto& graph_instance = desc.get_instance(graph_ids[0]);
+        EXPECT_FALSE(desc.is_mesh(graph_instance)) << "Graph instance should not be a mesh";
+        // The function will TT_FATAL if called on non-mesh, which is correct behavior
+    }
+}
+
+TEST(MeshGraphDescriptorTests, TestCountInstancesByType) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
+
+    MeshGraphDescriptor desc(text_proto_file_path);
+
+    // Test counting existing types
+    {
+        std::vector<std::string> types = {"MESH", "POD", "CLUSTER"};
+        auto counts = desc.count_instances_by_type(types);
+
+        EXPECT_EQ(counts.size(), 3u) << "Should return counts for all requested types";
+        EXPECT_EQ(counts.at("MESH"), 5u) << "Should have 5 MESH instances";
+        EXPECT_EQ(counts.at("POD"), 2u) << "Should have 2 POD instances";
+        EXPECT_EQ(counts.at("CLUSTER"), 1u) << "Should have 1 CLUSTER instance";
+    }
+
+    // Test counting with non-existent types
+    {
+        std::vector<std::string> types = {"MESH", "NONEXISTENT", "POD"};
+        auto counts = desc.count_instances_by_type(types);
+
+        EXPECT_EQ(counts.size(), 3u) << "Should return counts for all requested types";
+        EXPECT_EQ(counts.at("MESH"), 5u) << "Should have 5 MESH instances";
+        EXPECT_EQ(counts.at("NONEXISTENT"), 0u) << "Non-existent type should return 0";
+        EXPECT_EQ(counts.at("POD"), 2u) << "Should have 2 POD instances";
+    }
+
+    // Test with empty types list
+    {
+        std::vector<std::string> types = {};
+        auto counts = desc.count_instances_by_type(types);
+
+        EXPECT_EQ(counts.size(), 0u) << "Empty types list should return empty map";
+    }
+
+    // Test with single type
+    {
+        std::vector<std::string> types = {"MESH"};
+        auto counts = desc.count_instances_by_type(types);
+
+        EXPECT_EQ(counts.size(), 1u) << "Should return count for single type";
+        EXPECT_EQ(counts.at("MESH"), 5u) << "Should have 5 MESH instances";
+    }
 }
 
 TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
@@ -572,6 +723,40 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     connections = desc.connections_by_source_device_id(device_2);
     ASSERT_EQ(connections.size(), 3);
     check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
+
+    // Test all_names() returns unique names (as unordered_set)
+    {
+        auto all_names = desc.all_names();
+        // Verify it's a set (no duplicates) - should have M0 + 6 devices = 7 unique names
+        EXPECT_EQ(all_names.size(), 7u) << "Should have exactly 7 unique names (M0 + D0-D5)";
+
+        // Verify expected names are present (M0 mesh and D0-D5 devices)
+        EXPECT_TRUE(all_names.contains("M0")) << "Should contain M0";
+        for (int i = 0; i < 6; ++i) {
+            EXPECT_TRUE(all_names.contains("D" + std::to_string(i))) << "Should contain D" << i;
+        }
+
+        // Verify no duplicates by checking that inserting all names into a new set gives same size
+        std::unordered_set<std::string> verification_set(all_names.begin(), all_names.end());
+        EXPECT_EQ(all_names.size(), verification_set.size())
+            << "all_names() should return unique names (no duplicates)";
+    }
+
+    // Test all_types() returns unique types (as unordered_set)
+    {
+        auto all_types = desc.all_types();
+        // Verify it's a set (no duplicates) - should have exactly 2 types
+        EXPECT_EQ(all_types.size(), 2u) << "Should have exactly 2 unique types (MESH, DEVICE)";
+
+        // Verify expected types are present
+        EXPECT_TRUE(all_types.contains("MESH")) << "Should contain MESH type";
+        EXPECT_TRUE(all_types.contains("DEVICE")) << "Should contain DEVICE type";
+
+        // Verify no duplicates by checking that inserting all types into a new set gives same size
+        std::unordered_set<std::string> verification_set(all_types.begin(), all_types.end());
+        EXPECT_EQ(all_types.size(), verification_set.size())
+            << "all_types() should return unique types (no duplicates)";
+    }
 }
 
 
