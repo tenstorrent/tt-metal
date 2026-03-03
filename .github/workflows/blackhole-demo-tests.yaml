@@ -142,7 +142,7 @@ jobs:
   blackhole-demo-tests:
     needs: [build-artifact, generate-card-matrix]
     secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl-reorg.yaml
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
