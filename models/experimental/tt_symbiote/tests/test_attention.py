@@ -107,3 +107,30 @@ def test_glm4_flash_attention_with_paged_kv_cache(device):
 
     assert paged_cache.get_seq_length(0) == 5
     assert dynamic_cache.get_seq_length(0) == 5
+
+    # --- Decode step (seq_length=1): exercises _forward_decode_paged and paged SDPA decode ---
+    hidden_decode = torch.randn(1, 1, 512, dtype=torch.bfloat16)
+    pos_decode = torch.tensor([[5]], dtype=torch.long)
+    cos_decode, sin_decode = model.model.rotary_emb(hidden_decode, pos_decode)
+    cache_position_decode = torch.tensor([[5]])
+
+    torch_out_decode = torch_attn(
+        hidden_decode,
+        attention_mask=None,
+        position_embeddings=(cos_decode, sin_decode),
+        past_key_values=dynamic_cache,
+        cache_position=cache_position_decode,
+    )
+
+    inputs_decode = TorchTTNNTensor(hidden_decode)
+    ttnn_out_decode = ttnn_attn(
+        inputs_decode,
+        position_embeddings=(cos_decode, sin_decode),
+        past_key_values=paged_cache,
+        cache_position=cache_position_decode,
+    )
+
+    compare_fn_outputs(torch_out_decode, ttnn_out_decode, "Glm4MoeLiteAttention_PagedDecode")
+
+    assert paged_cache.get_seq_length(0) == 6
+    assert dynamic_cache.get_seq_length(0) == 6
