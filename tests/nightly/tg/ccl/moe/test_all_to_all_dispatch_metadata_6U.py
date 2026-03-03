@@ -23,6 +23,9 @@ MESH_GRAPH_DESC_16x1 = (
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_1x8 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
+)
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -652,8 +655,8 @@ def run_all_to_all_dispatch_metadata_test(
 # Correctness test - single focused test case for pipeline validation
 # Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -671,7 +674,7 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device, cluster_axis",
     [
-        pytest.param((1, 16), (1, 16), 1, id="1x16"),
+        pytest.param((1, 8), (1, 8), 1, id="1x8"),
     ],
     indirect=["mesh_device"],
 )
@@ -681,7 +684,7 @@ def test_correctness(
     cluster_axis,
 ):
     batches_per_device = 32
-    experts = 2 * 16
+    experts = 2 * mesh_shape[1]  # 2 * 8 for 1x8 mesh, 2 * 16 for 1x16 mesh
     select_experts_k = 8
     hidden_size = 7168
     seq_len = 1
