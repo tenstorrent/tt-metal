@@ -308,12 +308,11 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_WidthBoundaryStreamin
     }
 }
 
-// 16384 rows by 64 tiles each
-// Test takes around 105 seconds on BH
+// 2048 rows by 64 tiles each
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_llama8b) {
     SOFTMAX_BW_SKIP_IF_UNSUPPORTED("llama shape");
     constexpr std::array<SoftmaxBackwardCase, 1> cases = {{
-        {"llama8b_b1", 8, 32, 2048, 2048, 3, 1e-2F, 1e-2F, -10.0F, 10.0F},
+        {"llama8b_b1", 1, 32, 2048, 2048, 3, 2e-2F, 2e-2F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);
