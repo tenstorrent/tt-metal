@@ -792,6 +792,7 @@ def prepare_lm_head_weights(
     along the vocabulary dimension (TP = mesh size). Per-device layout matches the LM head
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
     """
+    logger.info("Preparing LM head weights...")
     # lm_head.weight: HF (vocab_size, hidden_size) = (129280, 7168) -> (7168, 129280) for matmul
     lm_w = state_dict["lm_head.weight"]
     assert lm_w.shape == (
@@ -804,6 +805,7 @@ def prepare_lm_head_weights(
     )
 
     # model.norm.weight: (7168,) -> (1, 7168), HEIGHT_SHARDED on the mcast core
+    logger.info("Preparing LM head norm...")
     norm_w = state_dict["model.norm.weight"]
     assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
 

@@ -19,6 +19,7 @@ import ttnn
 from conftest import bh_2d_mesh_device_context
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
+    WeightProvider,
     create_fabric_router_config,
     create_pipeline_configuration_from_num_procs,
     token_page_size_bytes,
@@ -82,6 +83,40 @@ def decoder_layer_id_from_mesh_id(mesh_id: int) -> int:
 
 SYSTEM_MESH_ID_EMBEDDING = 0
 SYSTEM_MESH_ID_LM_HEAD = 62
+
+
+class CacheWeightProvider:
+    """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
+
+    def __init__(self, cache_path: Path) -> None:
+        self._path = cache_path
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        return load_embedding_weights(self._path, device)
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        return load_lm_head_weights(self._path, device)
+
+
+class SyntheticWeightProvider:
+    """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        emb_w = torch.zeros((129280, 7168), dtype=torch.bfloat16)
+        emb_w[torch.arange(129280), torch.arange(129280, dtype=torch.int64) % 7168] = 1
+        return prepare_embedding_weights({"model.embed_tokens.weight": emb_w}, device, move_to_device=True)
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        lm_w = torch.full((129280, 7168), -1.0, dtype=torch.bfloat16)
+        lm_w[torch.arange(7168, dtype=torch.int64) % 16160, torch.arange(7168)] = 1
+        return prepare_lm_head_weights(
+            {
+                "lm_head.weight": lm_w,
+                "model.norm.weight": torch.ones(7168, dtype=torch.bfloat16),
+            },
+            device,
+            move_to_device=True,
+        )
 
 
 def load_weights_from_cache(
@@ -190,24 +225,11 @@ def run_demo(
             raise RuntimeError(f"Pod pipeline requires 4 or 16 distributed processes; got {num_procs}")
         ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
-        # TODO: extend to all stages and allow for flipping between synthetic and real weights
-        emb_w = torch.zeros((129280, 7168), dtype=torch.bfloat16)
-        emb_w[torch.arange(129280), torch.arange(129280, dtype=torch.int64) % 7168] = 1
-        embedding_weights = prepare_embedding_weights(
-            {"model.embed_tokens.weight": emb_w}, mesh_device, move_to_device=True
-        )
-        lm_w = torch.full((129280, 7168), -1.0, dtype=torch.bfloat16)
-        lm_w[torch.arange(7168, dtype=torch.int64) % 16160, torch.arange(7168)] = 1
-        lm_head_weights = prepare_lm_head_weights(
-            {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(7168, dtype=torch.bfloat16)},
-            mesh_device,
-            move_to_device=True,
-        )
-
+        # Each host loads/creates only the weights for its stage via the provider.
+        provider: WeightProvider = SyntheticWeightProvider()
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
-            embedding_weights=embedding_weights,
-            lm_head_weights=lm_head_weights,
+            provider,
             fp32_dest_acc_en=fp32,
             persistent_mode=persistent_mode,
         )
