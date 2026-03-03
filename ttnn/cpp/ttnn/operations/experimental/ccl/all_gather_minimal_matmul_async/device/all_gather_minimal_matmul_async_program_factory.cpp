@@ -499,6 +499,13 @@ all_gather_minimal_matmul_async_factory_helper(
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
+
+        // Workaround for LLK bug (https://github.com/tenstorrent/tt-llk/issues/1338)
+        // - If ternary_b / gate is float32 then use unary_bcast (row broadcast) + mul_binary_tile (accurate)
+        // - If ternary_b / gate is bfloat16 then use mul_tiles_bcast (row broadcast) (workaround)
+        if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
+            defines["TERNARY_B_IS_FLOAT32"] = "1";
+        }
     }
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";

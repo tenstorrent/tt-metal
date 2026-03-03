@@ -126,7 +126,6 @@ def run_test_linear_impl(
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
         )
         tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        breakpoint()
     else:
         tt_addcmul_a = None
         tt_addcmul_b = None
