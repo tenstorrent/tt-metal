@@ -280,35 +280,8 @@ void kernel_main() {
     size_t worker_connection_handshake_l1_base = connection_handshake_l1_base_addrs[WORKER_CHANNEL_TYPE_IDX];
     size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
 
-    // Detect if worker channel 0 uses stream register (address >= 0xFFB00000) via address range check
-    // Stream registers: 0xFFB00000 - 0xFFBC0000, L1: 0x0 - ~0x100000
-    constexpr size_t STREAM_REG_BASE = 0xFFB00000;
-    bool constexpr worker_ch0_uses_stream_reg = (connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX] >= STREAM_REG_BASE);
-
-    // Worker channel 0 uses stream register - special handling with tt_reg_ptr
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>
-        worker_channel_interface_zero;
-
-    if constexpr (worker_ch0_uses_stream_reg) {
-        setup_channel<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>(
-            &worker_channels[0],
-            &worker_channel_interface_zero,
-            worker_channel_connection_established[0],
-            0,
-            BUFFER_SIZE_WORKER,
-            worker_channel_base_address,
-            worker_connection_info_address,
-            worker_connection_handshake_address,
-            worker_flow_control_address,
-            StreamId{worker_stream_ids[0]},
-            worker_is_persistent[0] == 1);
-
-        // For channels 1+, use L1 base address instead of arithmetic from stream register
-        worker_connection_handshake_address = worker_connection_handshake_l1_base;
-    }
-
     // All worker channels use regular L1 interface
-    for (uint32_t i = worker_ch0_uses_stream_reg; i < NUM_WORKER_CHANNELS; i++) {
+    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_WORKER, volatile tt_l1_ptr uint32_t*>(
             &worker_channels[i],
             &worker_channel_interfaces[i],
@@ -330,33 +303,8 @@ void kernel_main() {
     size_t router_connection_handshake_l1_base = connection_handshake_l1_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
     size_t router_flow_control_address = flow_control_base_addrs[ROUTER_CHANNEL_TYPE_IDX];
 
-    // Detect if router channel 0 uses stream register (address >= 0xFFB00000)
-    bool constexpr router_ch0_uses_stream_reg = (connection_handshake_base_addrs[ROUTER_CHANNEL_TYPE_IDX] >= STREAM_REG_BASE);
-
-    // Router channel 0 uses stream register - special handling with tt_reg_ptr
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_ROUTER, volatile tt_reg_ptr uint32_t*>
-        router_channel_interface_zero;
-
-    if constexpr (router_ch0_uses_stream_reg) {
-        setup_channel<NUM_BUFFERS_ROUTER, volatile tt_reg_ptr uint32_t*>(
-            &router_channels[0],
-            &router_channel_interface_zero,
-            router_channel_connection_established[0],
-            0,
-            BUFFER_SIZE_ROUTER,
-            router_channel_base_address,
-            router_connection_info_address,
-            router_connection_handshake_address,
-            router_flow_control_address,
-            StreamId{router_stream_ids[0]},
-            router_is_persistent[0] == 1);
-
-        // For channels 1+, use L1 base address instead of arithmetic from stream register
-        router_connection_handshake_address = router_connection_handshake_l1_base;
-    }
-
     // All router channels use regular L1 interface
-    for (uint32_t i = router_ch0_uses_stream_reg; i < NUM_ROUTER_CHANNELS; i++) {
+    for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_ROUTER, volatile tt_l1_ptr uint32_t*>(
             &router_channels[i],
             &router_channel_interfaces[i],
@@ -394,42 +342,17 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
-    // Wait for persistent channels to be ready
-    if constexpr (worker_ch0_uses_stream_reg) {
-        // Handle worker channel 0 separately when using stream register
-        if (worker_is_persistent[0] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interface_zero);
-        }
-        for (uint32_t i = 1; i < NUM_WORKER_CHANNELS; i++) {
-            if (worker_is_persistent[i] == 1) {
-                wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i]);
-            }
-        }
-    } else {
-        // All worker channels use same interface type
-        for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
-            if (worker_is_persistent[i] == 1) {
-                wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i]);
-            }
+    // All worker channels use same interface type
+    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+        if (worker_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i]);
         }
     }
 
-    if constexpr (router_ch0_uses_stream_reg) {
-        // Handle router channel 0 separately when using stream register
-        if (router_is_persistent[0] == 1) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interface_zero);
-        }
-        for (uint32_t i = 1; i < NUM_ROUTER_CHANNELS; i++) {
-            if (router_is_persistent[i] == 1) {
-                wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i]);
-            }
-        }
-    } else {
-        // All router channels use same interface type
-        for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
-            if (router_is_persistent[i] == 1) {
-                wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i]);
-            }
+    // All router channels use same interface type
+    for (uint32_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
+        if (router_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_ROUTER>(router_channel_interfaces[i]);
         }
     }
 
@@ -441,22 +364,9 @@ void kernel_main() {
 
     while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            // Process worker channels (WORKER_CHANNEL)
-
-            if constexpr (worker_ch0_uses_stream_reg) {
-                // Worker channel 0 with stream register interface
-                forward_data<NUM_BUFFERS_WORKER, volatile tt_reg_ptr uint32_t*>(
-                    worker_channels[0],
-                    worker_channel_interface_zero,
-                    fabric_connection,
-                    worker_channel_connection_established[0],
-                    StreamId{worker_stream_ids[0]},
-                    worker_is_persistent[0] == 1,
-                    worker_channel_injection_status[0]);
-            }
 
             // All worker channels with L1 interface
-            for (uint32_t channel_id = worker_ch0_uses_stream_reg; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
+            for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
                 forward_data<NUM_BUFFERS_WORKER, volatile tt_l1_ptr uint32_t*>(
                     worker_channels[channel_id],
                     worker_channel_interfaces[channel_id],
@@ -467,21 +377,8 @@ void kernel_main() {
                     worker_channel_injection_status[channel_id]);
             }
 
-            // Process router channels (ROUTER_CHANNEL)
-            if constexpr (router_ch0_uses_stream_reg) {
-                // Router channel 0 with stream register interface
-                forward_data<NUM_BUFFERS_ROUTER, volatile tt_reg_ptr uint32_t*>(
-                    router_channels[0],
-                    router_channel_interface_zero,
-                    fabric_connection,
-                    router_channel_connection_established[0],
-                    StreamId{router_stream_ids[0]},
-                    router_is_persistent[0] == 1,
-                    router_channel_injection_status[0]);
-            }
-
             // All router channels with L1 interface
-            for (uint32_t channel_id = router_ch0_uses_stream_reg; channel_id < NUM_ROUTER_CHANNELS; channel_id++) {
+            for (uint32_t channel_id = 0; channel_id < NUM_ROUTER_CHANNELS; channel_id++) {
                 forward_data<NUM_BUFFERS_ROUTER, volatile tt_l1_ptr uint32_t*>(
                     router_channels[channel_id],
                     router_channel_interfaces[channel_id],
