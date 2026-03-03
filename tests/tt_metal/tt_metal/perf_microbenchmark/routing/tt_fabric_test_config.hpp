@@ -230,6 +230,9 @@ struct ParsedYamlConfig {
     std::optional<PhysicalMeshConfig> physical_mesh_config;
 };
 
+// Expands configs with enable_channel_trimming into consecutive CAPTURE + REPLAY pairs.
+std::vector<ParsedTestConfig> expand_channel_trimming(std::vector<ParsedTestConfig> configs);
+
 template <typename TrafficPatternType>
 inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const TrafficPatternType& specific) {
     TrafficPatternType merged;
@@ -515,6 +518,11 @@ private:
         const ParsedTrafficPatternConfig& base_pattern);
 
     void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test);
+
+    // In benchmark mode, split senders that would require multiple fabric connections
+    // into separate senders (one per routing direction) so each worker feeds exactly
+    // one fabric connection. This prevents the worker from becoming the bottleneck.
+    void split_senders_by_direction_for_benchmark(ParsedTestConfig& test);
 
     bool expand_link_duplicates(ParsedTestConfig& test);
 

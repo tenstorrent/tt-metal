@@ -10,6 +10,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -288,7 +289,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
         a.device()->l1_size_per_core());
-    if (!rms_norm and !use_row_major_kernel) {
+    if (!use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
@@ -364,12 +365,23 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (gamma.has_value()) {
         reader_defines.emplace_back("FUSE_GAMMA", "1");
     }
+
     if (beta.has_value()) {
         reader_defines.emplace_back("FUSE_BETA", "1");
     }
 
     if (rms_norm) {
+        reader_defines.emplace_back("RMSNORM", "1");
         compute_defines.emplace_back("RMSNORM", "1");
+    }
+
+    if (operation_attributes.fused_activation.has_value()) {
+        const auto& act = operation_attributes.fused_activation.value();
+        auto act_defines =
+            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output.dtype());
+        for (auto& [key, val] : act_defines) {
+            compute_defines.emplace_back(key, val);
+        }
     }
 
     // Select reader kernel path
@@ -560,8 +572,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     program_descriptor.cbs.push_back(
         make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size));
 
-    // CB 24: Intermediate 0 (if not (rms_norm and no residual add))
-    if (!(rms_norm && !b.has_value())) {
+    // CB 24: Intermediate 0
+    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
         program_descriptor.cbs.push_back(
             make_cb_descriptor(im0_t * single_tile_size, tt::CBIndex::c_24, cb_data_format, single_tile_size));
     }

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import pytest
 import torch
 import random
@@ -687,16 +688,12 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     del mesh_device
 
 
-@pytest.fixture(scope="function")
-def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
-    # Generic blackhole configuration
-    # This preserves the 2D mesh configuration in rackbox and galaxy
+@contextlib.contextmanager
+def bh_2d_mesh_device_context(device_params):
     import ttnn
 
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
-        pytest.skip()
-
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+        raise RuntimeError("bh_2d_mesh_device requires 1, 2, 4, 8, or 32 devices (got %s)" % ttnn.get_num_devices())
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
@@ -720,14 +717,62 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
             **updated_device_params,
         )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
+    try:
+        yield mesh_device
+    finally:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        reset_fabric(fabric_config)
+        del mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
 
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    with bh_2d_mesh_device_context(device_params) as mesh_device:
+        yield mesh_device
+
+
+def _check_requires_grid_size(device_or_mesh, marker):
+    """Skip the test if device worker grid (compute_with_storage_grid_size) is smaller than required by the mark."""
+    if marker is None or len(marker.args) == 0:
+        return
+    required = marker.args[0]
+    grid = device_or_mesh.compute_with_storage_grid_size()
+    if isinstance(required, tuple):
+        min_x, min_y = required
+        if grid.x < min_x or grid.y < min_y:
+            pytest.skip(
+                f"Test requires device worker grid at least {min_x}x{min_y} but "
+                f"got {grid.x}x{grid.y} ({grid.x * grid.y} cores)"
+            )
+    else:
+        min_cores = int(required)
+        total = grid.x * grid.y
+        if total < min_cores:
+            pytest.skip(f"Test requires at least {min_cores} worker cores but got {total} ({grid.x}x{grid.y})")
+
+
+@pytest.fixture(autouse=True)
+def check_requires_grid_size(request):
+    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores)."""
+    marker = request.node.get_closest_marker("requires_grid_size")
+    if marker is None:
+        return
+    for name in ("bh_2d_mesh_device", "mesh_device", "device"):
+        if name in request.fixturenames:
+            device_or_mesh = request.getfixturevalue(name)
+            _check_requires_grid_size(device_or_mesh, marker)
+            return
+    pytest.skip(
+        "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"
+    )
 
 
 @pytest.fixture()

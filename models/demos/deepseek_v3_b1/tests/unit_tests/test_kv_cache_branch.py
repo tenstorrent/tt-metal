@@ -388,6 +388,26 @@ def test_kv_cache_dram_shard(device, position_id):
         tile=rope_input_tile,
     )
 
+    # pass in address of position_id tensor
+    grid_size = device.compute_with_storage_grid_size()
+    position_ids = torch.ones(1, dtype=torch.int32) * position_id
+    position_replicated = torch.full((grid_size.x * grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=pos_mem_config,
+    )
+
     # Create TTNN input tensor with WIDTH_SHARDED memory and tiny tile
     ttnn_output = ttnn.from_torch(
         torch_nope_cache,
@@ -408,8 +428,6 @@ def test_kv_cache_dram_shard(device, position_id):
     kvpe_dim = 576
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
     torch_kv_cache = torch.randn(cache_shape, dtype=torch.bfloat16)
-    # for i in range(max_seq_len):
-    #   torch_kv_cache[:, :, i, :] = torch.arange(576, dtype=torch.bfloat16).reshape(1, 1, 1, 576) * i
 
     # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
     # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
@@ -439,10 +457,21 @@ def test_kv_cache_dram_shard(device, position_id):
         memory_config=kv_mem_config,
     )
 
-    _ = KVCacheUpdate.op(ttnn_nope_cache, ttnn_rope_cache, ttnn_kv_cache, ttnn_output, position_id)
+    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache)
+
+    _ = KVCacheUpdate.op(ttnn_nope_cache, ttnn_rope_cache, ttnn_kv_cache, ttnn_position_ids, output_tensor=ttnn_output)
 
     torch_kv_cache_output = ttnn.to_torch(ttnn_kv_cache)
+    # check that kv cache for 0 to pos_id -  1 is identical to kv cache before op
+    for i in range(position_id):
+        assert torch.allclose(
+            kv_cache_bfp8_before_op[..., i, :], torch_kv_cache_output[..., i, :], atol=1e-6
+        ), "KV Cache before and after op mismatch"
+
+    logger.info(f"Old cache validation passed")
+
     compare_kv_cache = torch_kv_cache_output[:, :, position_id]
+
     # Split into nope (first 512 elements) and rope (last 64 elements)
     nope_dim = 512
 

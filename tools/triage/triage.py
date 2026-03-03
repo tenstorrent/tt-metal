@@ -238,6 +238,13 @@ class TriageScript:
             return result
         except TimeoutDeviceRegisterError:
             raise
+        except ValueError as e:
+            if log_error:
+                self.failed = True
+                self.failure_message = f"{e}"
+                return None
+            else:
+                raise
         except Exception as e:
             if log_error:
                 self.failed = True
@@ -609,7 +616,7 @@ def log_check_device(device: Device, success: bool, message: str) -> None:
 
 def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
     device = location.device
-    block_type = device.get_block_type(location)
+    block_type = location.noc_block.block_type
     location_str = location.to_user_str()
     formatted_message = f"{block_type} [{location_str}]: {message}"
     log_check_device(device, success, formatted_message)

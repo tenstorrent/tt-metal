@@ -176,6 +176,9 @@ struct DRAMStreamingMatmul {
                 expert_offset_bytes = expert_idx * expert_size_bytes;
             }
 
+            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
             // Setup DRAM read for in1
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
             uint32_t l1_write_addr_in1;
@@ -263,7 +266,7 @@ struct DRAMStreamingMatmul {
             } else {
                 reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
-                custom_mm_block_init_short<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
+                custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
 

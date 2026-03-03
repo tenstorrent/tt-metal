@@ -9,7 +9,6 @@
 #include <future>
 #include <vector>
 #include <unordered_set>
-#include <sys/wait.h>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -814,8 +813,10 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
-    // Only clear if control plane exists; do not call get_control_plane() or we may lazily create one
-    // during teardown (e.g. after devices are closed), which can trigger topology mapper failures.
+
+    // Only clear if control plane exists; do not call get_control_plane() or
+    // we may lazily create one during teardown (e.g. after devices are
+    // closed), which can trigger topology mapper failures.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (control_plane_) {
         control_plane_->clear_fabric_context();
@@ -2065,41 +2066,22 @@ void MetalContext::on_dispatch_timeout_detected() {
     if (!dispatch_timeout_detection_processed_) {
         dispatch_timeout_detection_processed_ = true;
         log_error(tt::LogMetal, "Timeout detected");
-        // Serialize Inspector RPC data if enabled (non-fatal; allow triage command to run on failure)
+        // Serialize Inspector RPC data if enabled
         if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
-            try {
-                log_info(tt::LogMetal, "Serializing Inspector RPC data");
-                Inspector::serialize_rpc();
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "Serializing Inspector RPC data failed: {}", e.what());
-            } catch (...) {
-                log_warning(tt::LogMetal, "Serializing Inspector RPC data failed with unknown exception");
-            }
+            log_info(tt::LogMetal, "Serializing Inspector RPC data");
+            Inspector::serialize_rpc();
         }
 
         // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
         std::string command = rtoptions_.get_dispatch_timeout_command_to_execute();
         if (!command.empty()) {
-            try {
-                log_info(tt::LogMetal, "Executing command: {}", command);
-                int result = std::system(command.c_str());
-                if (result == -1) {
-                    log_warning(tt::LogMetal, "Timeout command '{}' failed to execute (system error)", command);
-                } else if (result != 0) {
-                    if (WIFEXITED(result)) {
-                        log_warning(
-                            tt::LogMetal,
-                            "Timeout command '{}' returned non-zero exit code: {}",
-                            command,
-                            WEXITSTATUS(result));
-                    } else {
-                        log_warning(tt::LogMetal, "Timeout command '{}' terminated by signal", command);
-                    }
-                }
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "Timeout command execution threw: {}", e.what());
-            } catch (...) {
-                log_warning(tt::LogMetal, "Timeout command execution threw unknown exception");
+            log_info(tt::LogMetal, "Executing command: {}", command);
+
+            int result = std::system(command.c_str());
+
+            if (result != 0) {
+                log_warning(
+                    tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
             }
         }
     }
