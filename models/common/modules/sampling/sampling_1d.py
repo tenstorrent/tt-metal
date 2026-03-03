@@ -54,7 +54,9 @@ class Sampling1DConfig:
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
     # Static index buffers (computed from vocab_size + num_devices, never mutated)
     index_offsets: LazyBuffer | ttnn.Tensor | None = None  # [1,1,32,max_top_k*num_devices], int32, TILE
-    local_indices: LazyBuffer | ttnn.Tensor | None = None  # [1,1,32,vocab_per_device], uint16, TILE
+    local_indices: LazyBuffer | ttnn.Tensor | None = (
+        None  # [1,1,32,W], uint16, TILE (W=vocab for 1x1, per_dev_vocab otherwise)
+    )
     # Seed/ID buffers (seeds mutable via LazyBuffer.update(), user_ids static)
     seeds: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
     user_ids: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
@@ -505,11 +507,25 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
     )
     to_set["index_offsets"] = _resolve_buf(config.index_offsets, idx_defaults, _make_index_offsets)
 
-    # local_indices: [1, 1, B, per_device_vocab]
+    # local_indices: [1, 1, B, local_indices_width]
+    # For multi-device: width = per_device_vocab (each device's shard)
+    # For single-device split (multi_step_reduction): width = V (full vocab), so that
+    #   after ttnn.split(..., V//2, dim=3) each half has width V//2 = per_device_vocab,
+    #   matching the logits half width. Each half contains a 0-based range [0..V//2-1].
+    #   Bug fix: TTTv1 used per_device_vocab here too, causing a 2x width mismatch
+    #   between indices_tensor and logits in ttnn.topk on single-device.
+    local_indices_width = V if multi_step_reduction else per_device_vocab
+
     def _make_local_indices():
-        indices = torch.zeros(1, 1, B, per_device_vocab, dtype=torch.int32)
-        for i in range(per_device_vocab):
-            indices[:, :, :, i] = i
+        indices = torch.zeros(1, 1, B, local_indices_width, dtype=torch.int32)
+        if multi_step_reduction:
+            half = local_indices_width // 2
+            for i in range(half):
+                indices[:, :, :, i] = i
+                indices[:, :, :, half + i] = i
+        else:
+            for i in range(local_indices_width):
+                indices[:, :, :, i] = i
         return indices
 
     local_idx_defaults = dict(
