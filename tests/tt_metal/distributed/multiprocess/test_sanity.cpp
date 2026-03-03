@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <numeric>
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -229,6 +230,16 @@ TEST_F(BigMeshDualRankTest2x4, SubmeshCreationMultipleSubmeshes) {
     for (const auto& submesh : submeshes) {
         ASSERT_NE(submesh, nullptr);
         EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
+    }
+}
+
+TEST(UnitMeshesDualRankTest2x4, UnitMeshesCreation) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, dev] : devs) {
+        ASSERT_NE(dev, nullptr);
+        EXPECT_EQ(dev->shape(), MeshShape(1, 1));
     }
 }
 

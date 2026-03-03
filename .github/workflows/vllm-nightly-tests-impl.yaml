@@ -480,6 +480,8 @@ jobs:
             --model ${{ matrix.test-group.model }} \
             --num-prompts 32 \
             --percentile-metrics ttft,tpot,itl,e2el \
+            --dataset json-unique \
+            --output-len 1024 \
             --save-result \
             --result-filename output/vllm_result_structured.json \
             "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
