@@ -160,31 +160,46 @@ void H2DSocket::write_socket_metadata(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
 }
 
-void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device) {
+void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id) {
+    TT_FATAL(mesh_device || device_id.has_value(), "Either mesh_device or device_id must be provided.");
+
+    uint32_t recv_device_id;
+    CoreCoord recv_virtual_core;
+
     const auto& cluster = MetalContext::instance().get_cluster();
-    auto recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
-    auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
-    receiver_core_tlb_ = cluster.get_driver()
-                             ->get_chip(recv_device_id)
-                             ->get_tlb_manager()
-                             ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
+
+    if (mesh_device) {
+        recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
+        receiver_core_tlb_ = cluster.get_driver()
+                                 ->get_chip(recv_device_id)
+                                 ->get_tlb_manager()
+                                 ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
+    } else {
+        recv_device_id = device_id.value();
+        std::cout << "Recv Logical Core: " << recv_core_.core_coord.str() << " Device ID: " << recv_device_id
+                  << std::endl;
+        recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
+    }
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
         pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
             receiver_core_tlb_->write_block(device_addr, data, num_bytes);
         };
-    } else if (arch == tt::ARCH::WORMHOLE_B0) {
+    } else {
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
         pcie_writer = [recv_device_id, recv_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
         };
-    } else {
-        TT_THROW("Unsupported architecture: {}", arch);
     }
+    // else {
+    //     TT_THROW("Unsupported architecture: {}", arch);
+    // }
 }
 
 H2DSocket::H2DSocket(
@@ -359,27 +374,35 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     desc.core_y = recv_core_.core_coord.y;
 
     descriptor_path_ = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
+    std::cout << "Exported to: " << descriptor_path_ << std::endl;
     desc.write_to_file(descriptor_path_);
     exported_ = true;
     return descriptor_path_;
 }
 
-std::unique_ptr<H2DSocket> H2DSocket::connect(
-    const std::shared_ptr<MeshDevice>& mesh_device, const std::string& descriptor_path) {
+std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id) {
+    auto descriptor_path = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (!std::filesystem::exists(descriptor_path)) {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::high_resolution_clock::now() - start_time)
+                              .count();
+        if (elapsed_ms > 10000) {
+            TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
     auto desc = SocketDescriptor::read_from_file(descriptor_path);
     TT_FATAL(desc.socket_type == "h2d", "Descriptor type mismatch: expected 'h2d', got '{}'", desc.socket_type);
 
     auto socket = std::unique_ptr<H2DSocket>(new H2DSocket());
     socket->is_owner_ = false;
-    socket->mesh_device_ = mesh_device.get();
     socket->fifo_size_ = desc.fifo_size;
     socket->h2d_mode_ = static_cast<H2DMode>(desc.h2d_mode);
     socket->aligned_data_buf_start_ = desc.aligned_data_buf_start;
     socket->config_buffer_address_ = desc.config_buffer_address;
-
-    auto device_coord = mesh_device->get_view().find_device(static_cast<ChipId>(desc.device_id));
-    socket->recv_core_ = MeshCoreCoord{device_coord, CoreCoord{desc.core_x, desc.core_y}};
-
+    socket->recv_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
 
     if (socket->h2d_mode_ == H2DMode::DEVICE_PULL) {
@@ -391,7 +414,7 @@ std::unique_ptr<H2DSocket> H2DSocket::connect(
         socket->bytes_acked_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr());
     }
 
-    socket->init_receiver_tlb(mesh_device);
+    socket->init_receiver_tlb(nullptr, desc.device_id);
 
     return socket;
 }
