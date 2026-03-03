@@ -144,7 +144,7 @@ void send_eth_msg(
     }
 }
 
-void send_eth_msg_to_links(const std::vector<ResetLink>& links, BHEthMsg eth_msg) {
+void send_eth_msg_to_links(const std::vector<ResetLink>& links, const BHEthMsg& eth_msg) {
     log_warning(tt::LogDistributed, eth_msg.log_message);
     for (const auto& link : links) {
         log_warning(tt::LogDistributed, "  " + link.log_message);
