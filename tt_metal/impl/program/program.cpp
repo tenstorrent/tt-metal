@@ -44,8 +44,9 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_core_common.hpp"
+#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -54,7 +55,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
@@ -163,23 +163,20 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    // watcher/dprint enabled are accounted for in the build key.
+    tt::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
+    hasher.update(kernel->compute_hash());
+    size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -253,14 +250,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
         auto config = std::visit(
             tt::stl::overloaded{
-                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
-                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
@@ -268,7 +265,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return DataMovementConfig{
                         .processor = dm_descriptor.processor,
                         .noc = dm_descriptor.noc,
@@ -280,7 +277,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ComputeConfig{
                         .math_fidelity = compute_descriptor.math_fidelity,
                         .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
@@ -292,18 +289,6 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
-                    };
-                },
-                [&](const EthernetConfigDescriptor& ethernet_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
-                    return EthernetConfig{
-                        .eth_mode = ethernet_descriptor.eth_mode,
-                        .noc = ethernet_descriptor.noc,
-                        .processor = ethernet_descriptor.processor,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
             },
@@ -951,6 +936,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
+void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
+    auto grid_size = device->compute_with_storage_grid_size();
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& cr : cb->core_ranges().ranges()) {
+            TT_FATAL(
+                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                cr.str(),
+                this->id,
+                grid_size.x,
+                grid_size.y);
+        }
+    }
+}
+
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     const auto& hal = MetalContext::instance().hal();
@@ -1471,6 +1471,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
@@ -1714,17 +1716,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
-    detail::DataflowBuffersGetter dataflow_buffers_getter =
-        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
-        return this->dataflow_buffers_;
-    };
-
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
+        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
 }
@@ -1736,11 +1733,18 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance().hal();
+
+    // Collect dataflow buffers from all programs
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
+    for (ProgramImpl* program : programs) {
+        for (const auto& dfb : program->dataflow_buffers()) {
+            dataflow_buffers.push_back(dfb);
+        }
+    }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
@@ -1762,7 +1766,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index,
             kernel_groups_getter(index),
-            dataflow_buffers_getter(),
+            dataflow_buffers,
             state.offset,
             state.dfb_offset,
             state.dfb_size);

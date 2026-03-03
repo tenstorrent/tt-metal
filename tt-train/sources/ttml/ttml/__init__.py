@@ -1,12 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """TTML Python package.
 
 This package provides Python bindings and implementations for the TTML
-(Tenstorrent Machine Learning) library. All symbols from the _ttml C++
-extension are automatically imported here, with Python implementations
-taking precedence when they exist.
+(Tenstorrent Machine Learning) library. C++ symbols from the _ttml nanobind
+extension are explicitly re-exported here and in subpackage __init__.py files.
 """
 
 import sys
@@ -23,16 +22,23 @@ try:
 except ImportError:
     from . import _ttml
 
-# IMPORTANT: Import all Python subpackages AFTER _ttml is available but BEFORE
-# calling _recursive_import_from_ttml. This establishes the real Python packages
-# in sys.modules with proper __path__ and __file__ attributes.
-# The subpackages can now access _ttml for their C++ type imports.
+# --- Top-level symbols from _ttml ---
+from ._ttml import NamedParameters
+
+# --- Python subpackages ---
 from . import autograd
 from . import models
 from . import modules
 
-from ._recursive_import import _recursive_import_from_ttml
+# --- Re-export _ttml submodules that have no Python package counterpart ---
+# These are pure C++ nanobind submodules; making them attributes of ttml
+# and registering in sys.modules allows both attribute access (ttml.ops.loss.*)
+# and import statements (from ttml import ops).
+ops = _ttml.ops
+sys.modules[f"{__name__}.ops"] = ops
 
-# Recursively import all _ttml symbols into this module
-# C++ symbols are merged into the already-imported Python packages
-_recursive_import_from_ttml(_ttml, sys.modules[__name__])
+core = _ttml.core
+sys.modules[f"{__name__}.core"] = core
+
+optimizers = _ttml.optimizers
+sys.modules[f"{__name__}.optimizers"] = optimizers

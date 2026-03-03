@@ -282,11 +282,6 @@ void kernel_main() {
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                     // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
-                    // may not be sent in order they are issued
-                    noc_async_writes_flushed();
-#endif
 
                     if (is_receiver_core) {
                         // We should also multicast VALID flag to destinations for receiver semaphore
@@ -335,7 +330,10 @@ void kernel_main() {
         start_reader_idx = reader_idx;
         if constexpr (split_reader_enabled) {
             // Increment reader index for the next number of segments (number of segments for other reader)
-            start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+            // Only read reader indices on cores that have sharded input (is_sender_core).
+            if (is_sender_core) {
+                start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+            }
         }
     }
 
