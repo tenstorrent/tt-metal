@@ -129,6 +129,12 @@ run_single() {
     git -C "$clone_dir" checkout -b "$run_branch" \
         >> "${log_dir}/clone.log" 2>&1
 
+    # 1b. Register SubagentStart hook for breadcrumb logging
+    if [[ -f "${clone_dir}/.claude/scripts/logging/enable_breadcrumbs.sh" ]]; then
+        (cd "$clone_dir" && .claude/scripts/logging/enable_breadcrumbs.sh) \
+            >> "${log_dir}/clone.log" 2>&1
+    fi
+
     # 2. Init submodules
     echo "[${prompt_name}:${run_id}] Initializing submodules..."
     git -C "$clone_dir" submodule update --init --recursive \
