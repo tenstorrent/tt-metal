@@ -4192,10 +4192,6 @@ class MoeOp:
                     ncrisc_args=bcast_ncrisc_per_core,
                 )
 
-    def _build_d2d0_per_device(self, reduce_root_coord, coord, row, col):
-        """No-op: D2D0 aggregation is now handled by the reduce worker aggregator core."""
-        return
-
     def _setup_fabric_connections(self, coord, row, col, reduce_root_coord, kernel_result, program):
         """Setup fabric connections for reduce, broadcast, and D2D0 fabric cores."""
         ctx = self.ctx
@@ -4617,9 +4613,6 @@ class MoeOp:
         # Apply broadcast modifications (no-op when bcast disabled)
         self._build_bcast_per_device(coord, row, col, chip_id)
 
-        # Integrate D2D0 aggregator into unified kernel on ROOT1
-        self._build_d2d0_per_device(reduce_root_coord, coord, row, col)
-
     @staticmethod
     def op(
         shared_residual_mcast_src_tensor,
@@ -4678,6 +4671,27 @@ class MoeOp:
 
         When enable_routing=False, operates as a dense MLP without routing logic
         (no gate MM, gate gather, gate/TopK, index mcast, expert scale mcast).
+
+        Args:
+            shared_residual_mcast_src_tensor: Input activation on sender core (provides device, dtype, K)
+            gate_proj_weights_tensor, up_proj_weights_tensor, down_proj_weights_tensor: Expert weights
+            final_output_tensor: Final output tensor
+            rmsnorm_gamma_tensor: RMSNorm gamma weights on sender core
+            shared_gate_weights_overlapped: Gate proj OverlappedTensor
+            shared_up_weights_overlapped: Up proj OverlappedTensor
+            shared_down_weights_tensor: Shared expert down weights
+            shared_k_parallel, shared_n_parallel: Shared expert parallelism factors
+            enable_routing: If True, run full MoE with routing. If False, run as dense MLP.
+            gate_mm_weights_tensor, gate_bias_tensor, gate_indices_tensor: Gate weights (routing only)
+            gate_output_scores_tensor, gate_output_indices_tensor: Gate output tensors (routing only)
+            sdpa_kv_cache_buffer, sdpa_out_interm_buffer: SDPA buffers for CB memory overlap
+            num_iterations: Number of iterations to loop inside the kernel (default 1)
+            reduce_intermediate_tensors: (Optional) List of 3 intermediate tensors for reduce rounds
+            reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device
+            reduce_semaphores: (Optional) List of 4 global semaphores for reduce synchronization
+            reduce_root_coord: (Optional) MeshCoordinate of ROOT1 device
+            reconfig_moe_cbs: If True, create a per-core CB config tensor and reconfigure
+                CBs at kernel start (for fusion with a preceding op)
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor or reduce_output_tensor)

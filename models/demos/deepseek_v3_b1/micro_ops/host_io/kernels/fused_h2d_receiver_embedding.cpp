@@ -233,6 +233,7 @@ void kernel_main() {
         } else {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
+
             socket_reserve_pages(sender_socket, 1);
             send_pages_over_socket(
                 sender_socket,
@@ -257,6 +258,7 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
+
     if constexpr (use_fabric) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
