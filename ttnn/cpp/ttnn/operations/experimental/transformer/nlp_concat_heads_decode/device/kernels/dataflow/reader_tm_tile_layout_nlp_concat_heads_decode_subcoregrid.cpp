@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
+
+using namespace tt::constants;
 
 void kernel_main() {
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);
@@ -38,7 +41,12 @@ void kernel_main() {
     const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
 
     for (uint32_t q = 0; q < batch; ++q) {
-        uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
+        uint32_t tile_row_index = q / TILE_HEIGHT;
+        uint32_t row_in_tile = q % TILE_HEIGHT;
+        uint32_t offset_in_tile = row_in_tile < face_h
+                                      ? row_in_tile * SUBTILE_LINE_BYTES
+                                      : (row_in_tile - face_h) * SUBTILE_LINE_BYTES + face_hw * ELEMENT_SIZE;
+        uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
         uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             // Read first phase
