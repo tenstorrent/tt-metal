@@ -19,12 +19,8 @@
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 // ============================================================================
-// SwiGLU Gate-Up Compute Kernel (Design A Step 1) — with M sub-blocking
-//   and N-block batching to reduce sync overhead.
-//
-// Weight CB layout (per batch): n_blocks_per_batch N-blocks loaded together.
-// Each CB row (K-tile) has n_blocks_per_batch * block_size weight tiles.
-// K-step stride through CB = n_blocks_per_batch * block_size (full row width).
+// SwiGLU Gate-Up Compute Kernel — M sub-blocking only.
+// One N-block of weights (W1/W3) per load; no N-block batching.
 // ============================================================================
 
 constexpr uint32_t per_core_N = get_compile_time_arg_val(0);
@@ -34,15 +30,11 @@ constexpr uint32_t Wt = get_compile_time_arg_val(3);
 constexpr uint32_t num_n_blocks = get_compile_time_arg_val(4);
 constexpr uint32_t block_h = get_compile_time_arg_val(5);
 constexpr uint32_t num_m_blocks = get_compile_time_arg_val(6);
-constexpr uint32_t n_blocks_per_batch = get_compile_time_arg_val(7);
-constexpr uint32_t num_n_batch_iters = get_compile_time_arg_val(8);
 
 constexpr uint32_t tiles_per_n_block = block_size * block_size;
-constexpr uint32_t tiles_per_receive = n_blocks_per_batch * tiles_per_n_block;
 constexpr uint32_t x_tiles_per_block = block_h * block_size;
 constexpr uint32_t acc_tiles_total = block_h * per_core_N_rounded;
-// CB row width: tiles in one K-row when n_blocks_per_batch N-blocks are loaded.
-constexpr uint32_t in1_k_stride = n_blocks_per_batch * block_size;
+constexpr uint32_t in1_k_stride = block_size;
 
 constexpr auto cb_in0_idx = tt::CBIndex::c_0;
 constexpr auto cb_w1_idx = tt::CBIndex::c_1;
@@ -52,8 +44,7 @@ constexpr auto cb_xw3_acc_idx = tt::CBIndex::c_4;
 constexpr auto cb_m_out_idx = tt::CBIndex::c_5;
 
 // Matmul one row: multiply X row by one N-block of weights in CB.
-// in1_start: offset to first tile of this N-block in K-row 0 of the CB.
-// in1_stride: distance between consecutive K-rows in CB (= n_blocks_per_batch * block_size).
+// in1_stride: distance between consecutive K-rows in CB (= block_size).
 inline void matmul_one_row_fast(
     const tt::CBIndex cb_x_idx,
     const tt::CBIndex cb_w_idx,
@@ -105,13 +96,11 @@ inline void compute_silu_tile(uint32_t tile_offset, uint32_t base_reg) {
     mul_binary_tile(base_reg, base_reg + 1U, base_reg);
 }
 
-// Process a batch of N-blocks for one weight matrix (W1 or W3).
-// Hoists mm_block_init_short and pack_reconfig once per batch.
-inline void matmul_rows_for_weight_batch(
+// Process one N-block of weights for one weight matrix (W1 or W3).
+inline void matmul_rows_for_one_n_block(
     const tt::CBIndex cb_w_idx,
     const tt::CBIndex cb_acc_idx,
-    const uint32_t n_batch_start,
-    const uint32_t n_blocks_in_batch,
+    const uint32_t n_block_offset,
     const uint32_t k_block_size,
     const bool first_k_block) {
     mm_block_init_short(
@@ -119,21 +108,16 @@ inline void matmul_rows_for_weight_batch(
     pack_reconfig_data_format(cb_acc_idx);
     pack_reconfig_l1_acc(first_k_block ? 0 : 1U);
 
-    for (uint32_t blk = 0U; blk < n_blocks_in_batch; ++blk) {
-        const uint32_t n_offset = (n_batch_start + blk) * block_size;
-        const uint32_t in1_start = blk * block_size;
-
-        for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
-            matmul_one_row_fast(
-                cb_in0_idx,
-                cb_w_idx,
-                cb_acc_idx,
-                m_sub * block_size,
-                m_sub * per_core_N_rounded + n_offset,
-                in1_start,
-                in1_k_stride,
-                k_block_size);
-        }
+    for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
+        matmul_one_row_fast(
+            cb_in0_idx,
+            cb_w_idx,
+            cb_acc_idx,
+            m_sub * block_size,
+            m_sub * per_core_N_rounded + n_block_offset,
+            /*in1_start=*/0U,
+            in1_k_stride,
+            k_block_size);
     }
 
     pack_reconfig_l1_acc(0);
@@ -153,19 +137,16 @@ void kernel_main() {
 
             cb_wait_front(cb_in0_idx, x_tiles_per_block);
 
-            for (uint32_t n_batch = 0U; n_batch < num_n_batch_iters; ++n_batch) {
-                const uint32_t n_batch_start = n_batch * n_blocks_per_batch;
-                const uint32_t n_blocks_in_batch = std::min(n_blocks_per_batch, num_n_blocks - n_batch_start);
+            for (uint32_t n_block = 0U; n_block < num_n_blocks; ++n_block) {
+                const uint32_t n_block_offset = n_block * block_size;
 
-                cb_wait_front(cb_w1_idx, tiles_per_receive);
-                matmul_rows_for_weight_batch(
-                    cb_w1_idx, cb_xw1_acc_idx, n_batch_start, n_blocks_in_batch, k_block_size, first_k_block);
-                cb_pop_front(cb_w1_idx, tiles_per_receive);
+                cb_wait_front(cb_w1_idx, tiles_per_n_block);
+                matmul_rows_for_one_n_block(cb_w1_idx, cb_xw1_acc_idx, n_block_offset, k_block_size, first_k_block);
+                cb_pop_front(cb_w1_idx, tiles_per_n_block);
 
-                cb_wait_front(cb_w3_idx, tiles_per_receive);
-                matmul_rows_for_weight_batch(
-                    cb_w3_idx, cb_xw3_acc_idx, n_batch_start, n_blocks_in_batch, k_block_size, first_k_block);
-                cb_pop_front(cb_w3_idx, tiles_per_receive);
+                cb_wait_front(cb_w3_idx, tiles_per_n_block);
+                matmul_rows_for_one_n_block(cb_w3_idx, cb_xw3_acc_idx, n_block_offset, k_block_size, first_k_block);
+                cb_pop_front(cb_w3_idx, tiles_per_n_block);
             }
 
             cb_pop_front(cb_in0_idx, x_tiles_per_block);

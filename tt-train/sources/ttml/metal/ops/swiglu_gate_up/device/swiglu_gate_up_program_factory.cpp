@@ -100,14 +100,7 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     uint32_t block_h = std::clamp(max_block_h, 1U, per_core_M);
     uint32_t num_m_blocks = (per_core_M + block_h - 1U) / block_h;
 
-    // n_blocks_per_batch: batch multiple N-blocks per weight load to reduce sync points.
-    // Use leftover L1 (after block_h rows + baseline weight CBs) for larger weight CBs.
-    // Each extra N-block costs 4 * kTilesPerBatch * tile_size (W1+W3 double-buffered).
-    uint32_t shape_dependent_l1 = per_row_l1 * block_h + baseline_weight_l1;
-    uint32_t remaining_l1 = (kL1UsableBytes > shape_dependent_l1) ? (kL1UsableBytes - shape_dependent_l1) : 0U;
-    uint32_t extra_n_blocks = remaining_l1 / (4U * kTilesPerBatch * single_tile_size);
-    uint32_t n_blocks_per_batch = std::clamp(1U + extra_n_blocks, 1U, num_n_blocks);
-    uint32_t num_n_batch_iters = (num_n_blocks + n_blocks_per_batch - 1U) / n_blocks_per_batch;
+    // One N-block of weights per load (no batching); simplifies code with no perf gain on target shapes.
 
     // -------------------------------------------------------------------------
     // 3) Build core ranges
@@ -141,7 +134,7 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     // 4) Allocate circular buffers
     // -------------------------------------------------------------------------
     uint32_t x_cb_tiles = 2U * block_h * kBlockSize;         // double-buffered, block_h rows
-    uint32_t w_cb_tiles = 2U * n_blocks_per_batch * kTilesPerBatch;  // double-buffered, N-block batching
+    uint32_t w_cb_tiles = 2U * kTilesPerBatch;               // double-buffered, one N-block
     uint32_t acc_cb_tiles = block_h * per_core_N_rounded;    // block_h rows of accumulators
     uint32_t m_out_cb_tiles = block_h * per_core_N_rounded;  // block_h rows of M output
 
@@ -234,8 +227,6 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
         per_core_N,
         per_core_N_rounded,
         num_n_blocks,
-        n_blocks_per_batch,
-        num_n_batch_iters,
         in1_mcast_sender_semaphore_id,
         in1_mcast_receiver_semaphore_id,
     };
@@ -263,8 +254,6 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
             per_core_N,
             per_core_N_rounded,
             num_n_blocks,
-            n_blocks_per_batch,
-            num_n_batch_iters,
             in1_mcast_sender_semaphore_id,
             in1_mcast_receiver_semaphore_id,
         };
@@ -290,8 +279,6 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
         num_n_blocks,
         block_h,
         num_m_blocks,
-        n_blocks_per_batch,
-        num_n_batch_iters,
     };
     auto compute_kernel_id = create_compute_kernel(
         program, all_cores_set, compute_ct_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);

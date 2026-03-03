@@ -6,9 +6,7 @@
 // IN1 Receiver + M Writer (RISCV_0) — Non-top-row cores
 //
 // Outer loop iterates num_m_blocks times. For each m_block, receives W1/W3
-// weight batches ONCE, then writes block_h rows of M tiles to DRAM.
-//
-// N-block batching: receives n_blocks_per_batch N-blocks per multicast.
+// one N-block at a time, then writes block_h rows of M tiles to DRAM.
 // ============================================================================
 
 #include <algorithm>
@@ -28,13 +26,10 @@ constexpr uint32_t num_m_blocks = get_compile_time_arg_val(4);
 constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
 constexpr uint32_t per_core_N_rounded = get_compile_time_arg_val(6);
 constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
-constexpr uint32_t n_blocks_per_batch = get_compile_time_arg_val(8);
-constexpr uint32_t num_n_batch_iters = get_compile_time_arg_val(9);
-constexpr uint32_t in1_mcast_sender_semaphore_id = get_compile_time_arg_val(10);
-constexpr uint32_t in1_mcast_receiver_semaphore_id = get_compile_time_arg_val(11);
+constexpr uint32_t in1_mcast_sender_semaphore_id = get_compile_time_arg_val(8);
+constexpr uint32_t in1_mcast_receiver_semaphore_id = get_compile_time_arg_val(9);
 
 constexpr uint32_t tiles_per_n_block = block_size * block_size;
-constexpr uint32_t tiles_per_receive = n_blocks_per_batch * tiles_per_n_block;
 constexpr uint32_t num_k_blocks = (Wt + block_size - 1U) / block_size;
 
 void kernel_main() {
@@ -51,21 +46,21 @@ void kernel_main() {
     const uint32_t mcast_sender_semaphore_addr = get_semaphore(in1_mcast_sender_semaphore_id);
     const uint32_t mcast_receiver_semaphore_addr = get_semaphore(in1_mcast_receiver_semaphore_id);
 
-    constexpr auto m_args = TensorAccessorArgs<12>();
-    const auto m_addr_gen = TensorAccessor(m_args, m_address, tile_bytes);
+    constexpr auto m_args = TensorAccessorArgs<10>();
+    const auto m_addr_gen = TensorAccessor(m_args, static_cast<size_t>(m_address), tile_bytes);
 
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
     const uint64_t sender_semaphore_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, mcast_sender_semaphore_addr);
 
     for (uint32_t mb = 0U; mb < num_m_blocks; ++mb) {
-        // ---- Receive W1/W3 for all K-blocks (once per m_block), batched N-blocks ----
+        // ---- Receive W1/W3 for all K-blocks (once per m_block), one N-block per receive ----
         for (uint32_t k = 0U; k < num_k_blocks; ++k) {
-            for (uint32_t n_batch = 0U; n_batch < num_n_batch_iters; ++n_batch) {
+            for (uint32_t n_block = 0U; n_block < num_n_blocks; ++n_block) {
                 mcast_receiver_reserve_and_receive(
-                    cb_w1_idx, tiles_per_receive, receiver_sem_ptr, sender_semaphore_noc_addr);
+                    cb_w1_idx, tiles_per_n_block, receiver_sem_ptr, sender_semaphore_noc_addr);
                 mcast_receiver_reserve_and_receive(
-                    cb_w3_idx, tiles_per_receive, receiver_sem_ptr, sender_semaphore_noc_addr);
+                    cb_w3_idx, tiles_per_n_block, receiver_sem_ptr, sender_semaphore_noc_addr);
             }
         }
 

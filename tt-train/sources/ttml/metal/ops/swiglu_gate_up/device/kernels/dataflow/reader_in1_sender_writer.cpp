@@ -6,11 +6,8 @@
 // IN1 Sender + M Writer (RISCV_0) — Top row cores
 //
 // Outer loop iterates num_m_blocks times. For each m_block, reads and
-// multicasts W1/W3 weight batches ONCE (reused by compute across block_h M
+// multicasts W1/W3 one N-block at a time (reused by compute across block_h M
 // rows), then writes block_h rows of M tiles to DRAM.
-//
-// N-block batching: sends n_blocks_per_batch N-blocks per multicast to reduce
-// sync overhead. The CB row contains n_blocks_per_batch * block_size tiles.
 // ============================================================================
 
 #include <algorithm>
@@ -30,14 +27,11 @@ constexpr uint32_t num_m_blocks = get_compile_time_arg_val(4);
 constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
 constexpr uint32_t per_core_N_rounded = get_compile_time_arg_val(6);
 constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
-constexpr uint32_t n_blocks_per_batch = get_compile_time_arg_val(8);
-constexpr uint32_t num_n_batch_iters = get_compile_time_arg_val(9);
-constexpr uint32_t in1_mcast_sender_semaphore_id = get_compile_time_arg_val(10);
-constexpr uint32_t in1_mcast_receiver_semaphore_id = get_compile_time_arg_val(11);
+constexpr uint32_t in1_mcast_sender_semaphore_id = get_compile_time_arg_val(8);
+constexpr uint32_t in1_mcast_receiver_semaphore_id = get_compile_time_arg_val(9);
 
 constexpr uint32_t tiles_per_n_block = block_size * block_size;
-constexpr uint32_t tiles_per_send = n_blocks_per_batch * tiles_per_n_block;
-constexpr uint32_t cb_row_width = n_blocks_per_batch * block_size;
+constexpr uint32_t cb_row_width = block_size;
 
 void kernel_main() {
     uint32_t ra = 0U;
@@ -58,12 +52,12 @@ void kernel_main() {
     const uint32_t mcast_sender_semaphore_addr = get_semaphore(in1_mcast_sender_semaphore_id);
     const uint32_t mcast_receiver_semaphore_addr = get_semaphore(in1_mcast_receiver_semaphore_id);
 
-    constexpr auto w1_args = TensorAccessorArgs<12>();
+    constexpr auto w1_args = TensorAccessorArgs<10>();
     constexpr auto w3_args = TensorAccessorArgs<w1_args.next_compile_time_args_offset()>();
     constexpr auto m_args = TensorAccessorArgs<w3_args.next_compile_time_args_offset()>();
-    const auto w1_addr_gen = TensorAccessor(w1_args, w1_address, tile_bytes);
-    const auto w3_addr_gen = TensorAccessor(w3_args, w3_address, tile_bytes);
-    const auto m_addr_gen = TensorAccessor(m_args, m_address, tile_bytes);
+    const auto w1_addr_gen = TensorAccessor(w1_args, static_cast<size_t>(w1_address), tile_bytes);
+    const auto w3_addr_gen = TensorAccessor(w3_args, static_cast<size_t>(w3_address), tile_bytes);
+    const auto m_addr_gen = TensorAccessor(m_args, static_cast<size_t>(m_address), tile_bytes);
 
     volatile tt_l1_ptr uint32_t* sender_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_sender_semaphore_addr);
@@ -86,11 +80,9 @@ void kernel_main() {
         for (uint32_t k_block_start = 0U; k_block_start < Wt; k_block_start += block_size) {
             const uint32_t k_block_size = std::min(block_size, Wt - k_block_start);
 
-            for (uint32_t n_batch = 0U; n_batch < num_n_batch_iters; ++n_batch) {
-                const uint32_t n_batch_start = n_batch * n_blocks_per_batch;
-                const uint32_t n_blocks_in_batch = std::min(n_blocks_per_batch, num_n_blocks - n_batch_start);
-                const uint32_t n_offset = n_start + n_batch_start * block_size;
-                const uint32_t valid_tiles_per_row = std::min(n_blocks_in_batch * block_size, hidden_Wt - n_offset);
+            for (uint32_t n_block = 0U; n_block < num_n_blocks; ++n_block) {
+                const uint32_t n_offset = n_start + n_block * block_size;
+                const uint32_t valid_tiles_per_row = std::min(block_size, hidden_Wt - n_offset);
                 const uint32_t w_tile_start = k_block_start * hidden_Wt + n_offset;
 
                 mcast_sender_read_batched_rows_and_send_loopback(
