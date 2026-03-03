@@ -18,7 +18,30 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+
+# Add repo root and current dir to sys.path BEFORE dependent imports
+_current_file = os.path.abspath(__file__)
+_current_dir = os.path.dirname(_current_file)
+_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+
+
+# Inline lead_models_filter state (avoids dependency on untracked/separate module)
+class lead_models_filter:
+    _lead_models_only = os.environ.get("TTNN_LEAD_MODELS_ONLY", "").lower() in ("1", "true", "yes")
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        cls._lead_models_only = enabled
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1" if enabled else "0"
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        return cls._lead_models_only
+
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -32,21 +55,48 @@ try:
 except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
-        """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+        """Get the tt-metal base directory.
+
+        Resolution order:
+        1. Walk up from this script's location to find model_tracer/traced_operations
+        2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+        3. PYTHONPATH entries
+        4. Current working directory
+        """
+        _marker = os.path.join("model_tracer", "traced_operations")
+
+        def _walk_up(start_dir):
+            current = os.path.abspath(start_dir)
+            while current != "/":
+                if os.path.isdir(os.path.join(current, _marker)):
+                    return current
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+            return None
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        base = _walk_up(script_dir)
+        if base:
+            return base
+
+        tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+        if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+            return tt_metal_home
+
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
-            paths = pythonpath.split(":")
-            for path in paths:
-                if "tt-metal" in path:
-                    if path.endswith("tt-metal"):
-                        return path
-                    parts = path.split("tt-metal")
-                    if parts:
-                        return parts[0] + "tt-metal"
+            for path in pythonpath.split(":"):
+                base = _walk_up(path)
+                if base:
+                    return base
+
         current_dir = os.getcwd()
-        if "tt-metal" in current_dir:
-            parts = current_dir.split("tt-metal")
-            return parts[0] + "tt-metal"
+        base = _walk_up(current_dir)
+        if base:
+            return base
+
         return current_dir
 
 
@@ -100,12 +150,15 @@ class MasterConfigLoader:
             This must be called BEFORE importing sweep modules that use MasterConfigLoader,
             as the filtering happens at module load time when get_suite_parameters() is called.
         """
-        cls._lead_models_only = enabled
+        # Use shared global filter state
+        lead_models_filter.set_lead_models_filter(enabled)
+        cls._lead_models_only = enabled  # Keep for backwards compatibility
 
     @classmethod
     def get_lead_models_filter(cls) -> bool:
         """Get the current lead models filter setting."""
-        return cls._lead_models_only
+        # Read from shared global filter state
+        return lead_models_filter.get_lead_models_filter()
 
     @classmethod
     def set_database_mode(cls, enabled: bool) -> None:
@@ -158,24 +211,6 @@ class MasterConfigLoader:
             if isinstance(s, list):
                 return s
             return []
-
-    @staticmethod
-    def _compute_global_shape_from_shard(shard_shape: tuple, tensor_placement: Optional[Dict]) -> tuple:
-        """
-        Return the original shape without any transformation based on mesh placement.
-
-        Note: Shape transformation based on mesh placement/distribution has been disabled
-        to allow sweep tests to use the original traced shapes directly.
-
-        Args:
-            shard_shape: Tensor shape from traced config
-            tensor_placement: Placement info (ignored)
-
-        Returns:
-            Original tensor shape (unchanged)
-        """
-        # Return original shape without any mesh-based transformation
-        return shard_shape
 
     @staticmethod
     def _extract_tensor_config(arg_data: Dict) -> Optional[TensorConfig]:
@@ -293,11 +328,9 @@ class MasterConfigLoader:
                 logger.info(f"✅ Using V2 JSON: {v2_path}")
                 master_file_path = v2_path
             else:
-                logger.warning(f"⚠️  V2 JSON not found at {v2_path}")
-                logger.warning(
-                    f"   Please ensure ttnn_operations_master_v2.json exists in model_tracer/traced_operations/"
-                )
-                master_file_path = v2_path  # Set it anyway, will fail gracefully in load_master_data
+                # JSON not available (e.g., in CI execution jobs where only pre-generated
+                # vectors are needed). Skip silently — the loader will return empty configs.
+                master_file_path = None
 
         self.master_file_path = master_file_path
         self.master_data = None
@@ -310,6 +343,9 @@ class MasterConfigLoader:
         to allow the system to function in degraded mode (no traced configs).
         """
         if self.master_data is None:
+            if self.master_file_path is None:
+                self.master_data = {"operations": {}}
+                return
             try:
                 with open(self.master_file_path, "r") as f:
                     self.master_data = json.load(f)
@@ -414,8 +450,8 @@ class MasterConfigLoader:
             List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
-        # Uses class-level setting instead of environment variable for cleaner control
-        lead_models_only = MasterConfigLoader._lead_models_only
+        # Uses shared global filter state to work across V1 and V2 loaders
+        lead_models_only = lead_models_filter.get_lead_models_filter()
 
         normalized = []
         for config in configs:
@@ -549,10 +585,13 @@ class MasterConfigLoader:
         return True
 
     def parse_memory_config(self, memory_config: Dict, tensor_shape: list = None) -> Any:
-        """Convert memory config dict to serializable format for test vectors
+        """Convert memory config dict to ttnn memory config
 
         Parses both INTERLEAVED and SHARDED memory configs from the master JSON.
-        Returns a serializable dict that can be deserialized later to MemoryConfig objects.
+        Now properly handles shard_spec with grid, shape, and orientation.
+
+        Raises exceptions on parsing errors instead of falling back to defaults,
+        making it easier to identify and fix issues.
 
         Args:
             memory_config: Memory config dictionary from master JSON
@@ -561,12 +600,9 @@ class MasterConfigLoader:
         Raises:
             ValueError: If memory config is invalid or incomplete
         """
-        # If empty or missing, return default in serializable format
+        # If empty or missing, return default
         if not memory_config or not isinstance(memory_config, dict):
-            return {
-                "type": "ttnn._ttnn.tensor.MemoryConfig",
-                "data": {"buffer_type": "DRAM", "memory_layout": "INTERLEAVED", "created_with_nd_shard_spec": False},
-            }
+            return ttnn.DRAM_MEMORY_CONFIG
 
         buffer_type = memory_config.get("buffer_type")
         memory_layout = memory_config.get("memory_layout")
@@ -577,50 +613,27 @@ class MasterConfigLoader:
         if not memory_layout:
             raise ValueError(f"Missing memory_layout in memory_config: {memory_config}")
 
-        # Normalize buffer_type string
+        # Map buffer types - fail if unknown
         if "DRAM" in buffer_type:
-            buffer_type_str = "DRAM"
+            buffer_type_ttnn = ttnn.BufferType.DRAM
         elif "L1" in buffer_type:
-            buffer_type_str = "L1"
+            buffer_type_ttnn = ttnn.BufferType.L1
         else:
             raise ValueError(f"Unknown buffer_type: {buffer_type}")
 
-        # Parse INTERLEAVED configs - return serializable dict
+        # Parse INTERLEAVED configs
         if "INTERLEAVED" in memory_layout:
-            return {
-                "type": "ttnn._ttnn.tensor.MemoryConfig",
-                "data": {
-                    "buffer_type": buffer_type_str,
-                    "memory_layout": "INTERLEAVED",
-                    "created_with_nd_shard_spec": False,
-                },
-            }
+            memory_layout_ttnn = ttnn.TensorMemoryLayout.INTERLEAVED
+            return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
 
         # Parse SHARDED configs
         elif "SHARDED" in memory_layout:
             # Parse shard_spec - REQUIRED for sharded configs
             shard_spec_dict = memory_config.get("shard_spec")
-
-            # Handle case where shard_spec is None or string "None" - fall back to INTERLEAVED
-            if shard_spec_dict is None or shard_spec_dict == "None" or not isinstance(shard_spec_dict, dict):
-                # Invalid sharded config without shard_spec - treat as INTERLEAVED
-                # Normalize buffer_type
-                buffer_type = memory_config.get("buffer_type", "BufferType.DRAM")
-                if "DRAM" in str(buffer_type):
-                    buffer_type_str = "DRAM"
-                elif "L1" in str(buffer_type):
-                    buffer_type_str = "L1"
-                else:
-                    buffer_type_str = "DRAM"  # Default fallback
-
-                return {
-                    "type": "ttnn._ttnn.tensor.MemoryConfig",
-                    "data": {
-                        "memory_layout": "INTERLEAVED",
-                        "buffer_type": buffer_type_str,
-                        "created_with_nd_shard_spec": False,
-                    },
-                }
+            if not shard_spec_dict or not isinstance(shard_spec_dict, dict):
+                raise ValueError(
+                    f"Sharded memory layout '{memory_layout}' requires shard_spec, " f"but got: {shard_spec_dict}"
+                )
 
             # Extract grid, shape, and orientation from shard_spec
             grid_list = shard_spec_dict.get("grid")
@@ -635,26 +648,48 @@ class MasterConfigLoader:
             if not orientation_str:
                 raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
 
-            # Determine memory layout type
+            # Create CoreRangeSet from grid
+            # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
+            core_ranges = set()
+            for range_dict in grid_list:
+                start = range_dict.get("start")
+                end = range_dict.get("end")
+
+                if not start or not end:
+                    raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
+                if "x" not in start or "y" not in start:
+                    raise ValueError(f"Invalid grid start (missing x/y): {start}")
+                if "x" not in end or "y" not in end:
+                    raise ValueError(f"Invalid grid end (missing x/y): {end}")
+
+                core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+                core_ranges.add(core_range)
+
+            shard_grid = ttnn.CoreRangeSet(core_ranges)
+
+            # Map orientation
+            if orientation_str == "COL_MAJOR":
+                orientation = ttnn.ShardOrientation.COL_MAJOR
+            elif orientation_str == "ROW_MAJOR":
+                orientation = ttnn.ShardOrientation.ROW_MAJOR
+            else:
+                raise ValueError(f"Unknown orientation: {orientation_str}")
+
+            # Create ShardSpec
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+
+            # Map memory layout
             if "WIDTH_SHARDED" in memory_layout:
-                memory_layout_str = "WIDTH_SHARDED"
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.WIDTH_SHARDED
             elif "HEIGHT_SHARDED" in memory_layout:
-                memory_layout_str = "HEIGHT_SHARDED"
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             elif "BLOCK_SHARDED" in memory_layout:
-                memory_layout_str = "BLOCK_SHARDED"
+                memory_layout_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
             else:
                 raise ValueError(f"Unknown sharded layout: {memory_layout}")
 
-            # Return serializable dict format (orientation as string, will be converted by serialize.py infra)
-            return {
-                "type": "ttnn._ttnn.tensor.MemoryConfig",
-                "data": {
-                    "buffer_type": buffer_type_str,
-                    "memory_layout": memory_layout_str,
-                    "created_with_nd_shard_spec": False,
-                    "shard_spec": {"grid": grid_list, "shape": shard_shape, "orientation": orientation_str},
-                },
-            }
+            # Create and return sharded memory config
+            return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
 
         else:
             raise ValueError(f"Unknown memory_layout: {memory_layout}")
@@ -712,8 +747,18 @@ class MasterConfigLoader:
         """
         traced_config_list = []
 
+        logger.debug(f"_get_generic_parameters processing {len(configs)} configs for {operation_name}")
+
         for config_args, source, machine_info, config_hash in configs:
             try:
+                # Convert config_args from list of dicts to single dict if needed
+                if isinstance(config_args, list):
+                    merged_args = {}
+                    for arg_dict in config_args:
+                        if isinstance(arg_dict, dict):
+                            merged_args.update(arg_dict)
+                    config_args = merged_args
+
                 config_dict = {}
                 positional_tensors = []
 
@@ -733,47 +778,7 @@ class MasterConfigLoader:
                 while f"arg{arg_idx}" in positional_args:
                     arg_value = positional_args[f"arg{arg_idx}"]
 
-                    # Special case: List of tensors (e.g., concat)
-                    if isinstance(arg_value, list) and len(arg_value) > 0 and isinstance(arg_value[0], dict):
-                        # Check if it's a list of tensors
-                        all_tensors = all(
-                            isinstance(item, dict) and item.get("type") == "ttnn.Tensor" for item in arg_value
-                        )
-                        if all_tensors:
-                            # It's a list of tensors - build list of tensor specs
-                            tensor_list = []
-                            for tensor_dict in arg_value:
-                                tensor_config = self._extract_tensor_config(tensor_dict)
-                                if tensor_config:
-                                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                                    parsed_layout = self.parse_layout(tensor_config.layout)
-                                    parsed_mem_config = self.parse_memory_config(
-                                        tensor_config.memory_config, tensor_config.shape
-                                    )
-                                    if parsed_mem_config is None:
-                                        raise ValueError(f"Memory config parsing returned None for tensor in list")
-
-                                    # Convert per-shard shape to global shape
-                                    shard_shape = tuple(tensor_config.shape)
-                                    global_shape = self._compute_global_shape_from_shard(
-                                        shard_shape, tensor_config.tensor_placement
-                                    )
-
-                                    tensor_list.append(
-                                        {
-                                            "shape": global_shape,
-                                            "dtype": parsed_dtype,
-                                            "layout": parsed_layout,
-                                            "memory_config": parsed_mem_config,
-                                            "tensor_placement": tensor_config.tensor_placement,
-                                        }
-                                    )
-                            # Store the list of tensor specs as arg0 (for concat, etc.)
-                            config_dict[f"arg{arg_idx}"] = tensor_list
-                            arg_idx += 1
-                            continue
-
-                    # Try to extract as single tensor
+                    # Try to extract as tensor
                     tensor_config = self._extract_tensor_config(arg_value)
                     if tensor_config:
                         # It's a tensor - parse and store
@@ -788,15 +793,9 @@ class MasterConfigLoader:
                                 f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
                             )
 
-                        # Convert per-shard shape to global shape
-                        shard_shape = tuple(tensor_config.shape)
-                        global_shape = self._compute_global_shape_from_shard(
-                            shard_shape, tensor_config.tensor_placement
-                        )
-
                         positional_tensors.append(
                             {
-                                "shape": global_shape,
+                                "shape": tuple(tensor_config.shape),
                                 "dtype": parsed_dtype,
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
@@ -815,31 +814,28 @@ class MasterConfigLoader:
                 logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
                 continue
 
-            # Skip if no tensors found (unless we have arg0/arg1/etc with list-of-tensors)
-            has_list_args = any(
-                key.startswith("arg") and isinstance(config_dict.get(key), list) for key in config_dict.keys()
-            )
-            if not positional_tensors and not has_list_args:
+            # If no tensors found, add a minimal entry with just the source info
+            # This ensures configs pass through even if tensor extraction fails
+            if not positional_tensors:
+                config_dict["traced_source"] = source
+                config_dict["traced_machine_info"] = machine_info
+                config_dict["config_hash"] = config_hash
+                traced_config_list.append(config_dict)
                 continue
 
             # Add positional tensor parameters with consistent naming
             # Always use input_a_, input_b_, input_c_ pattern (even for unary)
             for i, tensor in enumerate(positional_tensors):
                 suffix = chr(97 + i)  # a, b, c, ...
-
-                # IMPORTANT: tensor["shape"] is the per-shard shape from tracing
-                # Convert to global shape using tensor placement info
-                shard_shape = tensor["shape"]
-                global_shape = self._compute_global_shape_from_shard(shard_shape, tensor.get("tensor_placement"))
-
-                config_dict[f"input_{suffix}_shape"] = global_shape
+                config_dict[f"input_{suffix}_shape"] = tensor["shape"]
                 config_dict[f"input_{suffix}_dtype"] = tensor["dtype"]
                 config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                 config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                 config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
 
-            # Process named keyword arguments FIRST
-            # This ensures we capture memory_config if it's explicitly provided for the output
+            config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
+
+            # Process named keyword arguments
             # Named tensor kwargs preserve their semantic names (e.g., weight, bias_tensor)
             # Scalar/bool kwargs are passed as-is
             for key, value in named_kwargs.items():
@@ -855,11 +851,7 @@ class MasterConfigLoader:
                         logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
                         continue
 
-                    # Convert per-shard shape to global shape
-                    shard_shape = tuple(tensor_config.shape)
-                    global_shape = self._compute_global_shape_from_shard(shard_shape, tensor_config.tensor_placement)
-
-                    config_dict[f"{key}_shape"] = global_shape
+                    config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
                     config_dict[f"{key}_dtype"] = parsed_dtype
                     config_dict[f"{key}_layout"] = parsed_layout
                     config_dict[f"{key}_memory_config"] = parsed_mem_config
@@ -871,39 +863,6 @@ class MasterConfigLoader:
                     if parsed_value == value:  # If enum parsing didn't change it, try float
                         parsed_value = self.parse_special_float(value)
                     config_dict[key] = parsed_value
-
-            # Set output_memory_config AFTER processing named kwargs
-            # This way, if memory_config was explicitly provided (e.g., for concat output),
-            # it won't be overwritten. Otherwise, default to first tensor's memory_config.
-            if "memory_config" not in named_kwargs:
-                # No explicit output memory_config provided, use default from first tensor
-                if positional_tensors:
-                    config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
-                elif has_list_args:
-                    # For list-of-tensors args (like concat), try to get memory_config from first item
-                    for key, value in config_dict.items():
-                        if key.startswith("arg") and isinstance(value, list) and len(value) > 0:
-                            if isinstance(value[0], dict) and "memory_config" in value[0]:
-                                config_dict["output_memory_config"] = value[0]["memory_config"]
-                                break
-            else:
-                # memory_config was explicitly provided in named_kwargs
-                # Parse it and use as output_memory_config
-                mem_config_value = named_kwargs["memory_config"]
-                if isinstance(mem_config_value, dict):
-                    # Get shape from the expected output (for concat, this is sum of input widths on concat dim)
-                    # For now, extract from the memory_config's shard_spec if available
-                    shard_spec = mem_config_value.get("shard_spec", {})
-                    if isinstance(shard_spec, dict):
-                        output_shard_shape = shard_spec.get("shape", [])
-                    else:
-                        output_shard_shape = []
-
-                    parsed_output_mem_config = self.parse_memory_config(mem_config_value, output_shard_shape)
-                    if parsed_output_mem_config:
-                        config_dict["output_memory_config"] = parsed_output_mem_config
-                        # Also store as "memory_config" for backward compatibility
-                        config_dict["memory_config"] = parsed_output_mem_config
 
             # Add metadata
             config_dict["traced_source"] = source

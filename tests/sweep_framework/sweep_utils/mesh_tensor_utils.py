@@ -114,70 +114,6 @@ def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] =
     )
 
 
-def compute_global_shape_from_shard(
-    shard_shape: tuple,
-    tensor_placement: Optional[Dict] = None,
-) -> tuple:
-    """
-    Compute global tensor shape from per-shard shape using placement info.
-
-    When a tensor is traced on a mesh with sharding, the stored shape is the
-    per-shard shape. To recreate the tensor correctly, we need to compute the
-    global shape by multiplying the sharded dimension by the distribution factor.
-
-    Args:
-        shard_shape: Per-shard tensor shape from traced config
-        tensor_placement: Placement info with distribution_shape and placement
-
-    Returns:
-        Global tensor shape
-
-    Example:
-        shard_shape = (8, 197, 768)
-        placement = "PlacementShard(0)", distribution_shape = "[2]"
-        -> global_shape = (16, 197, 768)  # dim 0 multiplied by 2
-    """
-    if not tensor_placement:
-        return shard_shape
-
-    placement_str = tensor_placement.get("placement", "")
-
-    # Only adjust for sharded placements
-    if "PlacementShard" not in placement_str:
-        return shard_shape
-
-    # Parse shard dimension
-    import re
-
-    shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement_str)
-    if not shard_dims:
-        return shard_shape
-
-    shard_dim = int(shard_dims[-1])
-
-    # Parse distribution shape to get the distribution factor
-    distribution_shape_str = tensor_placement.get("distribution_shape", "")
-    try:
-        import ast
-
-        distribution_shape = ast.literal_eval(distribution_shape_str)
-        if isinstance(distribution_shape, list) and len(distribution_shape) > 0:
-            # For PlacementShard(N), distribution_shape tells us how many parts
-            # the tensor was split into along that dimension
-            distribution_factor = distribution_shape[shard_dim] if shard_dim < len(distribution_shape) else 1
-        else:
-            distribution_factor = 1
-    except (ValueError, SyntaxError, IndexError):
-        distribution_factor = 1
-
-    # Compute global shape by multiplying the sharded dimension
-    global_shape = list(shard_shape)
-    if shard_dim < len(global_shape) and distribution_factor > 1:
-        global_shape[shard_dim] *= distribution_factor
-
-    return tuple(global_shape)
-
-
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -190,7 +126,7 @@ def create_tensor_on_mesh(
     Create a TTNN tensor on a mesh device with optional placement.
 
     Args:
-        torch_tensor: Input torch tensor (should be global shape, not per-shard)
+        torch_tensor: Input torch tensor
         mesh_device: Mesh device to create tensor on
         dtype: TTNN data type
         layout: TTNN layout (TILE/ROW_MAJOR)
@@ -215,24 +151,7 @@ def create_tensor_on_mesh(
             shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement_str)
             shard_dim = int(shard_dims[-1]) if shard_dims else -1
 
-            # Convert shard_dim to 2D mesh dims
-            # For a 1D shard, we need to determine which mesh dimension to shard along
-            # Based on mesh shape and shard dimension
-            mesh_shape = tuple(mesh_device.shape)
-            if mesh_shape[0] > 1 and mesh_shape[1] == 1:
-                # Mesh is vertical (e.g., 2x1, 4x1) - shard along first dimension
-                dims = (shard_dim, None)
-            elif mesh_shape[0] == 1 and mesh_shape[1] > 1:
-                # Mesh is horizontal (e.g., 1x2, 1x8) - shard along second dimension
-                dims = (None, shard_dim)
-            elif mesh_shape[0] > 1 and mesh_shape[1] > 1:
-                # 2D mesh - use shard_dim for first mesh dimension
-                dims = (shard_dim, None)
-            else:
-                # Single device (1x1) - no sharding
-                dims = (None, None)
-
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape)
+            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, shard_dim)
         else:
             # Default to replicate if placement not recognized
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
