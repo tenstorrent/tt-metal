@@ -106,3 +106,56 @@ jobs:
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
+
+  install-and-run-llama70b-t3k:
+    name: TT-Installer and run T3K Llama 70B Demo
+    runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
+    timeout-minutes: 180
+    steps:
+      - name: Prepare system
+        run: |
+          # The runners come with docker preinstalled but we want to
+          # simulate a completely blank system for our Podman install
+          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
+
+      - name: Install TT dependencies via TT-Installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
+          chmod +x install.sh
+
+          timeout 600 bash ./install.sh \
+            --update-firmware=off \
+            --install-metalium-models-container \
+            --verbose \
+            --reboot-option=never \
+            --mode-non-interactive
+
+      - name: Download Llama 70B weights from LFC
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
+          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
+          mkdir -p huggingface/tt_cache
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/meta-llama/Llama-3.1-70B-Instruct/"
+
+      - name: Patch tt-metalium-models to mount workspace volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          SCRIPT=$(which tt-metalium-models)
+          sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
+
+      - name: Run T3K Llama 70B Demo via tt-metalium-models
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          tt-metalium-models \
+            -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py::test_demo_text[wormhole_b0-8-device_params0-False-performance-batch-1] -k 'not performance-ci-stress-1'"
