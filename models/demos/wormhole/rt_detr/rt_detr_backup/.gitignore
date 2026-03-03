@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+# external repos
+RT-DETR/
+
+# data and weights
+data/
+weights/
+
+# eval output
+results.json
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# generated profiler output
+generated/
