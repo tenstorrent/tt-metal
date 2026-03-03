@@ -1371,7 +1371,8 @@ template <
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS,
     bool blocked_pack = false,
-    uint32_t KT_DIM_MATMUL = INNER_DIM>
+    uint32_t KT_DIM_MATMUL = INNER_DIM,
+    bool trigger_reduce = false>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -1408,6 +1409,9 @@ void blocked_matmul_and_pack(
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
             dst_idx += SUBBLOCK_W;
         }
+        if constexpr (trigger_reduce) {
+            PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+        }
     } else
 #endif
     {
@@ -1432,7 +1436,8 @@ template <
     uint32_t scale_cb,
     uint32_t cols,
     uint32_t SBH,
-    uint32_t ROW_STRIDE = cols>
+    uint32_t ROW_STRIDE = cols,
+    bool respect_trigger = false>
 void reduce_c_row_group(
     uint32_t in0_cb,
     uint32_t out_cb,
@@ -1464,17 +1469,19 @@ void reduce_c_row_group(
         }
     }
 
-    // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
-    // When do_eltwise_max=true, the prev_cb wait + copy_tile work above can overlap
-    // with in0_cb data arrival.
-    cb_wait_front(in0_cb, cumulative_input_tiles);
+    if constexpr (!respect_trigger) {
+        // Standard path: wait for all input tiles before reduce.
+        cb_wait_front(in0_cb, cumulative_input_tiles);
+    }
+    // When respect_trigger=true, the unpack MOP is split into two halves with a
+    // HW semaphore wait in between, so we don't need cb_wait_front here.
 
-    reduce_block_max_row_init<cols>();
+    reduce_block_max_row_init<cols, respect_trigger>();
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (in0_row_start + i) * ROW_STRIDE;
-        reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row<cols, respect_trigger>(in0_cb, scale_cb, input_tile_start, i);
     }
-    reduce_block_max_row_uninit(in0_cb);
+    reduce_block_max_row_uninit<false, respect_trigger>(in0_cb);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -1914,22 +1921,45 @@ void sdpa_inner_loop_step(
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
                 reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
-                blocked_matmul_and_pack<
-                    true,
-                    qkt_subblock_w,
-                    sbh,
-                    in0_block_w,
-                    KT_stride,
-                    KT_stride,
-                    true /*blocked_pack*/>(
-                    cb_q_in,
-                    cb_kt_in,
-                    cb_qkt_im,
-                    q_index_offset,
-                    kt_index_offset,
-                    q_subblock,
-                    kt_subblock * qkt_subblock_w);
-                kt_index_offset += qkt_subblock_w;
+                if (kt_subblock == 0) {
+                    blocked_matmul_and_pack<
+                        true,
+                        qkt_subblock_w,
+                        sbh,
+                        in0_block_w,
+                        KT_stride,
+                        KT_stride,
+                        true /*blocked_pack*/,
+                        in0_block_w,
+                        false /*trigger_reduce*/>(
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_qkt_im,
+                        q_index_offset,
+                        kt_index_offset,
+                        q_subblock,
+                        kt_subblock * qkt_subblock_w);
+                    kt_index_offset += qkt_subblock_w;
+                } else {
+                    blocked_matmul_and_pack<
+                        true,
+                        qkt_subblock_w,
+                        sbh,
+                        in0_block_w,
+                        KT_stride,
+                        KT_stride,
+                        true /*blocked_pack*/,
+                        in0_block_w,
+                        true /*trigger_reduce*/>(
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_qkt_im,
+                        q_index_offset,
+                        kt_index_offset,
+                        q_subblock,
+                        kt_subblock * qkt_subblock_w);
+                    kt_index_offset += qkt_subblock_w;
+                }
             }
         }
         // Partial last subblock: only present on the reduced path (effective_Sk % qkt_subblock_w != 0).
@@ -1985,7 +2015,15 @@ void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
             cb_reserve_back(cur_max, sbh);
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh, KT_stride>(
+            constexpr bool reduce_trigger = (kt_num_subblocks > 1);
+            reduce_c_row_group<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                cb_identity_scale_in,
+                Sk_chunk_t,
+                sbh,
+                KT_stride,
+                reduce_trigger>(
                 cb_qkt_im,
                 cur_max,
                 prev_max,
@@ -2286,7 +2324,7 @@ void sdpa_standard_v2(
     constexpr uint32_t effective_Sk = Sk_chunk_t - padded_k_tiles;
 
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
-        // DeviceZoneScopedN("Q chunk");
+        DeviceZoneScopedN("Q chunk");
         uint32_t alias_prev_sum = cb_sum_A, alias_cur_sum = cb_sum_B;
         uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
         uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
