@@ -132,10 +132,9 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 ParallelismContext::ParallelismContext(
     const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
     const uint32_t num_axes = (uint32_t)config.enable_ddp + (uint32_t)config.enable_tp;
-    const size_t mesh_dims = mesh_device.shape().dims();
     const size_t mesh_size = mesh_device.shape().mesh_size();
     TT_FATAL(
-        (mesh_size == 1 && num_axes == 0) || (mesh_size > 1 && num_axes == mesh_dims),
+        (mesh_size == 1 && num_axes == 0) || (mesh_size > 1),
         "Invalid parallelization configuration: for a single-device mesh, the number of parallelization axes must be "
         "0; for a multi-device mesh, it must be equal to the number of mesh shape dimensions.");
 

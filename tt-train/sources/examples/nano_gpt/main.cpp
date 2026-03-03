@@ -284,6 +284,10 @@ inline void pipeline_transfer_targets_if_needed(const MultihostConfig &config, c
 }  // namespace
 
 int main(int argc, char **argv) {
+    if (std::getenv("TTML_NAIVE_PROFILER")) {
+        ttml::autograd::ctx().get_profiler().set_naive_profiling(true);
+    }
+
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
@@ -701,14 +705,17 @@ int main(int argc, char **argv) {
                 auto loss = ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
-                ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
+                ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
 
                 memory_snapshot("FORWARD_PASS");
                 loss->backward();
+                ttml::autograd::ctx().get_profiler().read_results(device, "backward_pass_done");
                 memory_snapshot("BACKWARD_PASS");
             } else {
+                ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
                 memory_snapshot("FORWARD_PASS");
                 output->backward();
+                ttml::autograd::ctx().get_profiler().read_results(device, "backward_pass_done");
                 memory_snapshot("BACKWARD_PASS");
             }
 
@@ -723,6 +730,7 @@ int main(int argc, char **argv) {
                 if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
+                ttml::autograd::ctx().get_profiler().read_results(device, "gradient_sync_done");
 
                 if (training_config.use_clip_grad_norm) {
                     if (device_config.enable_tp) {
@@ -732,6 +740,7 @@ int main(int argc, char **argv) {
                 }
                 optimizer->step();
                 scheduler->step();
+                ttml::autograd::ctx().get_profiler().read_results(device, "optimizer_step_done");
                 auto global_step = optimizer->get_steps();
                 if (needs_to_call_loss) {
                     if (multihost_config.enable_mpi) {
