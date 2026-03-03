@@ -5,17 +5,68 @@ This document details the implementation of `Sequential` and `Parallel`, two bui
 
 <img src="images/overview.png" style="width:1000px;"/>
 
-The above dependency graph is expressed in Python as the following:
+The above dependency graph is expressed in Python as (using concrete descriptors):
 
 ```python
-# Each of these returns an OpDescriptor, which
-# is a thin wrapper around ProgramDescriptor with
-# some additional data for the fusion infrastructure
-op1_desc =
+import models.experimental.ops.descriptors as descriptors
+from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+# Compute config — all fused phases must agree on fp32, approx mode, and fidelity
+compute_cfg = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+)
+
+# Core grids — single row of 8 cores, split left/right then top/bottom
+full_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})  # 8 cores
+left_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})  # 4 cores (left)
+right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})  # 4 cores (right)
+left_top    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})  # 2 cores (left-top)
+left_bot    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})  # 2 cores (left-bottom)
+
+# Each descriptor function returns an OpDescriptor — a thin wrapper
+# around ProgramDescriptor with input/output tensors.
+op1 = descriptors.matmul(act, weights, core_range_set=full_cores,
+                         compute_kernel_config=compute_cfg)
+op2 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, H, W // 2],
+                        core_range_set=left_cores)
+op3 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, W // 2], [1, 1, H, W],
+                        core_range_set=right_cores)
+op4 = descriptors.matmul(op2.output_tensors[0], proj, core_range_set=left_top,
+                         compute_kernel_config=compute_cfg)
+op5 = descriptors.layer_norm(op2.output_tensors[0], core_range_set=left_bot,
+                             weight=ln_w, bias=ln_b, epsilon=1e-5,
+                             compute_kernel_config=compute_cfg)
+op6 = descriptors.rms_norm(op3.output_tensors[0], core_range_set=right_cores,
+                           weight=rms_w, epsilon=1e-5,
+                           compute_kernel_config=compute_cfg)
+
+fused = Sequential(
+    op1,                          # matmul on all 8 cores
+    Parallel(
+        Sequential(               # left half (4 cores)
+            op2,                  # slice left
+            Parallel(op4, op5),   # matmul (top 2) + LN (bottom 2)
+        ),
+        Sequential(op3, op6),     # right half: slice → RMS (4 cores)
+    ),
+).build(device)
+
+fused.launch()
+ttnn.synchronize_device(device)
+
+# Read leaf outputs
+result_op4 = ttnn.to_torch(op4.output_tensors[0])
+result_op5 = ttnn.to_torch(op5.output_tensors[0])
+result_op6 = ttnn.to_torch(op6.output_tensors[0])
 ```
 
+The compositional framework both encourages op genericity and reuse and reduces the need to write single-use custom fused ops for cases where the performance of existing ops is satisfactory.
 
-The temporal fusion is a strict stitching-together of the underlying kernels - there are no optimizations made to keep things in registers or L1, overlap dataflow with compute, etc. It simply constructs a unified kernel for each core type and implements the logic of each in turn with appropriate synchronization, CB reassignment, and state cleanup between ops.
+The temporal fusion is a strict stitching-together of the underlying kernels - there are no optimizations made to keep things in registers or L1, overlap dataflow with compute, etc. It simply constructs a composite kernel for each core type and implements the logic of each in turn with appropriate synchronization, CB reassignment, and state cleanup between ops.
+
+The rest of this document provides implementation details for the various components of the fusion infrastructure.
 
 ## Table of Contents
 
@@ -26,7 +77,7 @@ The temporal fusion is a strict stitching-together of the underlying kernels - t
   - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment)
 - [Opt-In Requirements](#opt-in-requirements)
 - [Representing Fused Op Structure](#representing-fused-op-structure)
-  - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
+  - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Narrow→Wide Topology](#narrowwide-topology-and-no-op-phases) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
 - [Synchronization Protocol](#synchronization-protocol)
   - [Key Concepts](#key-concepts) | [MultiBarrierSpec](#multibarrierspec) | [Segment Cache](#segment-cache) | [Two-Level Barrier](#two-level-barrier) | [Cross-Core NOC Barrier](#cross-core-noc-barrier)
 - [CB Pool Allocator](#cb-pool-allocator)
@@ -274,30 +325,22 @@ just a tree with branching factor 1.
   support today.
 - **Sibling disjointness**: Children of the same parent must have
   non-overlapping core ranges. Each core runs exactly one kernel binary.
-- **Child subset of parent**: A child's core range must be a subset of its
-  parent's range.
+- **Widening and narrowing allowed**: A child's core range can be a subset
+  (wide→narrow), superset (narrow→wide), or equal to its parent's range.
+  See [Narrow→Wide Topology](#narrowwide-topology-and-no-op-phases) for
+  how the infrastructure handles widening.
 - **Partial coverage allowed**: Children don't need to fully tile their parent.
   Uncovered cores don't participate in child phases.
 
 Topology is validated by `_validate_topology()` before any device allocation.
+The only structural check is sibling disjointness.
 
 ### Spatial Independence
 
 Each node's core range comes from its op's `ProgramDescriptor` kernels. The
-topology rules above require children to occupy disjoint subsets of their
-parent's cores. This spatial disjointness is what makes parallel execution
-safe — sibling branches never share a core.
-
-`_propagate_allowed_ranges()` computes allowed ranges bottom-up: leaves default
-to their actual kernel core range, and internal nodes get the union of their
-own range plus their children's.  `_validate_topology()` uses these propagated
-ranges for sibling disjointness and child-subset-of-parent checks.  This lets a
-parent partially cover its children — uncovered cores simply skip the parent's
-phase.
-
-> **Note:** `OpDescriptor.allowed_core_range` exists as an optional override but
-> is not used by any current op.  The default propagation from actual kernel
-> ranges is sufficient for topology validation.
+topology rules above require siblings to occupy disjoint core ranges. This
+spatial disjointness is what makes parallel execution safe — sibling branches
+never share a core.
 
 #### What "disjoint" means
 
@@ -327,6 +370,79 @@ coordinate sets (`Set[Tuple[int, int]]`), not rectangular bounding boxes.  A
 `CoreRangeSet` with gaps (e.g., rows 0-1 + row 3 + row 5, skipping rows 2 and 4)
 works identically to a contiguous grid.  The barrier coordinator unicasts the
 release signal to each core individually, skipping gaps.
+
+#### Narrow→Wide Topology and No-Op Phases
+
+A child node can run on **more** cores than its parent. For example, an
+interleaved LayerNorm on 3 cores can feed into a matmul on 32 cores. This is
+called **narrow→wide** topology.
+
+The challenge: every core in a fused kernel must execute the same number of
+phases so that barrier counts stay aligned. If the parent runs on 3 cores and
+the child runs on 32, the 29 extra cores have no work during the parent's
+phase — but they still need a phase entry so their barrier counter increments
+in lockstep with the 3 cores that do real work.
+
+**`_NOOP_OP`** (`common.py`) solves this. It is a singleton `OpDescriptor`
+with an empty `ProgramDescriptor` (no kernels, no CBs, no semaphores):
+
+```python
+class _NoOpProgramDescriptor:
+    kernels = []
+    cbs = []
+    semaphores = []
+
+_NOOP_OP = OpDescriptor(
+    descriptor=_NoOpProgramDescriptor(),
+    input_tensors=[],
+    output_tensors=[],
+    name="noop",
+)
+```
+
+During the tree walk in `_compute_core_groups()`, each node's op is recorded
+for the cores in its kernel range. For cores in the node's
+`_effective_leaf_range()` but **not** in its kernel range, a `_NOOP_OP` entry
+is recorded instead:
+
+```python
+def _walk(node):
+    eff_coords = self._effective_leaf_range(node)    # all descendant leaf cores
+    node_coords = _core_range_set_to_coords(...)     # this node's kernel cores
+
+    for coord in node_coords:
+        per_core[coord].append((node.op, eff_range))       # real phase
+
+    for coord in eff_coords - node_coords:
+        per_core[coord].append((_NOOP_OP, eff_range))      # no-op phase
+```
+
+**Example**: Parent on cores 0-1, child on cores 0-3:
+
+| Core | Phase 0 | Phase 1 |
+|------|---------|---------|
+| 0 | Parent (real) | Child (real) |
+| 1 | Parent (real) | Child (real) |
+| 2 | `_NOOP_OP` | Child (real) |
+| 3 | `_NOOP_OP` | Child (real) |
+
+Cores 0-1 form one group (phase sequence = `[Parent, Child]`). Cores 2-3 form
+another group (phase sequence = `[_NOOP_OP, Child]`). Both groups have 2 phases
+and 1 barrier transition, so barrier counts align.
+
+**How no-op phases propagate through the stack:**
+
+- **CB pool**: No-op phases use `NOOP_PHASE_INDEX = None` in `phase_op_indices`.
+  The global pool skips them during slot computation. The projected pool inserts
+  empty remaps `{}` at no-op positions so the builder's positional indexing works.
+- **PhaseInfo**: No-op phases get `PhaseInfo(cb_info={})` — no CBs to allocate,
+  reset, or rebind.
+- **Source gen**: Phases without a kernel for a given RISC get an empty namespace:
+  `namespace phase_N { void run() {} }`. The dispatcher calls `phase_N::run()`
+  unconditionally, which compiles to nothing.
+- **Barrier**: No-op phases produce empty CB reset arrays
+  (`std::array<uint32_t, 0>`). `reset_cbs<0>(...)` is a valid no-op. The barrier
+  `sync()` call still executes normally, incrementing counters to stay aligned.
 
 ### Core Groups
 
@@ -487,8 +603,8 @@ class MultiBarrierSpec:
 ```
 
 Each `BarrierSegment` holds a `BarrierConfig` with the physical core geometry
-(`core0_phys_x/y`, `mcast_start/end`, `num_cores`) and the `arrive`/`release`
-GlobalSemaphore L1 addresses for that scope.
+(`core0_phys_x/y`, `other_core_phys_coords`, `num_cores`) and the
+`arrive`/`release` GlobalSemaphore L1 addresses for that scope.
 
 `_build_group_barriers()` (`graph.py`) converts a group's barrier scopes into
 the `MultiBarrierSpec`. It walks the scopes in order, creating a new segment
@@ -543,8 +659,8 @@ namespace barrier {
 ```
 
 Each `seg_N` namespace contains its own `num_cores`, `core0_phys_x/y`,
-`mcast_start/end` (all `constexpr` from named compile-time args), plus mutable
-`call_count`, `arrive`, and `release` pointers. The namespace provides
+`other_core_phys` array (all `constexpr` from named compile-time args), plus
+mutable `call_count`, `arrive`, and `release` pointers. The namespace provides
 compile-time isolation — the segment geometry is resolved to constants, not
 looked up from arrays at runtime.
 
@@ -571,7 +687,7 @@ for group in groups:
 
 `_create_barrier_segment_config()` (`builder.py`) allocates a pair of
 GlobalSemaphores (`arrive`, `release`) on the given core range and computes
-the physical core coordinates for NOC multicast.
+the physical core coordinates for NOC unicast release.
 
 For the example tree, the cache ends up with three entries:
 
@@ -629,11 +745,11 @@ namespace local {
 }
 ```
 
-**BRISC `group::sync()`** — per-transition cross-core segment multicast:
+**BRISC `group::sync()`** — per-transition cross-core segment barrier:
 
 ```c++
 namespace group {
-    namespace seg_0 { ... }                         // multicast template per segment
+    namespace seg_0 { ... }                         // unicast barrier per segment
     void sync() {
         if (done == 1) { seg_0::sync(); }           // cross-core NOC barrier
     }
@@ -698,26 +814,36 @@ hasn't finished resetting op semaphores, clobbering in-flight
 After local RISC sync and CB reset, the reader executes a cross-core barrier.
 One designated core ("core 0") acts as the coordinator. `arrive` and `release`
 are `GlobalSemaphore` L1 words. `arrive` accumulates on core 0 via NOC atomic
-increments. `release` is multicast from core 0 to all cores in the bounding
-box. Both are **monotonic** — `call_count` tracks invocations so each `sync()`
+increments. `release` is unicast from core 0 to each other core individually.
+Both are **monotonic** — `call_count` tracks invocations so each `sync()`
 waits for a strictly increasing threshold, preventing stale semaphore values
 from a previous dispatch from being mistaken for the current one.
+
+Unicast (rather than multicast) removes the rectangular grid constraint —
+non-contiguous core grids (e.g., DRAM-sharded matmul's scattered cores)
+work because each core receives its release signal individually. The
+performance cost is negligible: the release loop is N-1 writes of 4 bytes
+each (~tens of nanoseconds), while the barrier is dominated by the arrive
+phase (N atomic increments serialized at core 0) and spin-wait polling.
+Measured barrier latency is ~1.5 us regardless of release method.
 
 ```c++
 // barrier::segment_N — BRISC side (coordinator)
 namespace segment_N {
     uint32_t call_count;
     volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
-    volatile tt_l1_ptr uint32_t* release;   // L1, multicast to all cores
+    volatile tt_l1_ptr uint32_t* release;   // L1, unicast to each core
 
     void sync() {
         noc_semaphore_inc(core0_arrive_noc_addr, 1);        // all cores increment arrive
         if (is_core_0) {
             noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));
             *release = call_count + 1;
-            // Loopback: core 0 must receive its own multicast write,
-            // otherwise it would never see the release value it just set.
-            noc_semaphore_set_multicast_loopback_src(release, mcast_addr, num_cores);
+            // Unicast release to each other core
+            for (uint32_t i = 0; i < other_core_phys.size(); i += 2) {
+                uint64_t noc_addr = get_noc_addr(other_core_phys[i], other_core_phys[i+1], release);
+                noc_async_write(release, noc_addr, 4);
+            }
             noc_async_write_barrier();
         } else {
             noc_semaphore_wait_min(release, call_count + 1); // spin until released
@@ -728,7 +854,7 @@ namespace segment_N {
 ```
 
 Writer and compute RISCs see only the `release` semaphore — they spin on it
-in `segment_N::sync()` without participating in the arrive/multicast protocol.
+in `segment_N::sync()` without participating in the arrive/unicast protocol.
 
 
 ## CB Pool Allocator
@@ -1967,7 +2093,7 @@ by RISC type:
 
 BRISC (riscv_0) is the coordinator — it receives both local semaphore
 addresses plus the full `arrive`/`release` pair for each segment, since it
-runs the multicast protocol.  Followers only need their own signaling
+runs the unicast release protocol.  Followers only need their own signaling
 semaphore and each segment's `release` address to spin on.  The starting index of the barrier suffix is
 recorded as the named CT arg `barrier_rt_offset`.
 
@@ -2125,14 +2251,8 @@ development or when switching between different device configurations.
   are rejected at build time (see [Topology Rules](#topology-rules)).
 - **fp32_dest_acc_en must match across all phases**: `DST_ACCUM_MODE` is a
   compile-time constant. Cannot change mid-kernel.
-- **All phases must have all three kernel types** (reader, compute, writer).
 - **32 CB slot limit**: Multi-phase fusion with many phantom CBs may exhaust
   the 32-slot hardware limit.
-- **Rectangular core grids only**: The cross-core NOC barrier uses hardware
-  multicast, which writes to all cores in the physical bounding box.
-  Non-rectangular grids (e.g., L-shaped) would multicast to unintended cores,
-  corrupting their L1.  `_validate_rectangular_grid()` rejects these at build
-  time.
 - **C++ binding objects cannot be deepcopied**: The save/restore mechanism
   works around this by saving individual field values.
 - **MUST_MATCH defines must be consistent**: `REDUCE_OP`, `REDUCE_DIM`,
