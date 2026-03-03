@@ -2945,3 +2945,599 @@ def test_moe_device_dispatch_device_combine(device):
 
     assert pcc >= 0.97, f"MoE output PCC {pcc:.6f} < 0.97"
     logger.info("[moe_device_dispatch_device_combine] PASSED")
+
+
+# Kernel paths for fused pipeline
+
+
+# Kernel paths for fused pipeline
+
+
+# Kernel paths for fused pipeline
+DISPATCH_WRITER_FUSED_KERNEL = f"{KERNEL_DIR}/dispatch_writer_fused.cpp"
+EXPERT_READER_FUSED_KERNEL = f"{KERNEL_DIR}/expert_reader_fused.cpp"
+EXPERT_WRITER_FUSED_KERNEL = f"{KERNEL_DIR}/expert_writer_fused.cpp"
+COMBINE_DM_FUSED_KERNEL = f"{KERNEL_DIR}/combine_dm_fused.cpp"
+
+
+def _make_fused_expert_program(
+    device,
+    # Dispatch inputs
+    hs_tensor,
+    pkt_buf_tensor,
+    # Compute inputs/outputs
+    shuffled_w_tensor,
+    down_w_tensor,
+    inter_tensor,
+    out_tensor,
+    # Combine inputs
+    output_tensor,
+    routing_meta_e,
+    topk_weights,
+    # Core grids
+    compute_grid,
+    dispatch_core,
+    combine_core,
+    # Physical coords
+    phys_coords,
+    leader_phys_x,
+    leader_phys_y,
+    dispatch_phys_x,
+    dispatch_phys_y,
+    combine_phys_x,
+    combine_phys_y,
+    # Tile counts
+    NUM_CORES,
+    GRID_X,
+    GRID_Y,
+    k_tiles,
+    D_tiles,
+    n_weight_per_core_gu,
+    n_weight_tiles_gu,
+    n_out_per_core,
+    n_per_core_dn,
+    n_tiles_dn,
+):
+    """Create a ProgramDescriptor for a single fused expert: dispatch → compute → combine.
+
+    Uses 4 L1 semaphores to chain dispatch, compute, and combine stages
+    without device synchronization between stages:
+      SEM_BARRIER (0): Cross-core barrier for Phase A and Phase B within compute
+      SEM_GO (1): Leader → all cores go signal within compute
+      SEM_PKT_READY (2): Dispatch → compute leader signal
+      SEM_EXPERT_DONE (3): Compute leader → combine core signal
+    """
+    # ---- Compile-time args ----
+    # Reader (dm0 on compute cores): TensorAccessorArgs for act (=pkt_buf) and inter
+    reader_ct_args = list(ttnn.TensorAccessorArgs(pkt_buf_tensor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(inter_tensor).get_compile_time_args())
+
+    # Writer (dm1 on compute cores): TensorAccessorArgs for gate_up_w, inter, down_w, output (=out_buf)
+    writer_ct_args = list(ttnn.TensorAccessorArgs(shuffled_w_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(inter_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(down_w_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
+
+    # Compute: compile-time args
+    compute_ct_args = [k_tiles, n_weight_per_core_gu, n_per_core_dn]
+
+    # Dispatch writer (dm1 on dispatch core): TensorAccessorArgs for hs and pkt_buf
+    dispatch_ct_args = list(ttnn.TensorAccessorArgs(hs_tensor).get_compile_time_args())
+    dispatch_ct_args.extend(ttnn.TensorAccessorArgs(pkt_buf_tensor).get_compile_time_args())
+
+    # Combine reader (dm0 on combine core): TensorAccessorArgs for output tensor
+    combine_ct_args = list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    # ---- Runtime args: compute reader (per-core) ----
+    reader_rt_args = ttnn.RuntimeArgs()
+    for y in range(GRID_Y):
+        for x in range(GRID_X):
+            core_idx = y * GRID_X + x
+            is_leader = 1 if core_idx == 0 else 0
+            args = [
+                pkt_buf_tensor.buffer_address(),  # act_addr (pkt_buf is the activation)
+                k_tiles,
+                inter_tensor.buffer_address(),
+                is_leader,
+                NUM_CORES,
+                combine_phys_x,
+                combine_phys_y,
+            ]
+            # Physical coords of all compute cores
+            for px, py in phys_coords:
+                args.append(px)
+                args.append(py)
+            reader_rt_args[x][y] = args
+
+    # ---- Runtime args: compute writer (per-core) ----
+    writer_rt_args = ttnn.RuntimeArgs()
+    for y in range(GRID_Y):
+        for x in range(GRID_X):
+            core_idx = y * GRID_X + x
+            args = [
+                shuffled_w_tensor.buffer_address(),
+                inter_tensor.buffer_address(),
+                down_w_tensor.buffer_address(),
+                out_tensor.buffer_address(),
+                k_tiles,
+                n_weight_per_core_gu,
+                n_weight_tiles_gu,
+                core_idx * n_weight_per_core_gu,  # core_weight_offset_gu
+                core_idx * n_out_per_core,  # core_out_offset_gu
+                n_out_per_core,
+                n_per_core_dn,
+                n_tiles_dn,
+                core_idx * n_per_core_dn,  # core_dn_offset
+                leader_phys_x,
+                leader_phys_y,
+            ]
+            writer_rt_args[x][y] = args
+
+    # ---- Runtime args: dispatch writer (single core at logical (0, GRID_Y)) ----
+    # RuntimeArgs indexed by [x][y] logical coords
+    dispatch_rt_args = ttnn.RuntimeArgs()
+    dispatch_rt_args[0][GRID_Y] = [
+        hs_tensor.buffer_address(),
+        pkt_buf_tensor.buffer_address(),
+        D_tiles,
+        leader_phys_x,
+        leader_phys_y,
+    ]
+
+    # ---- Runtime args: combine reader (single core) ----
+    # Pad to fixed size (5 + 2*MAX_TOKENS) so generic_op program caching works across experts.
+    # IMPORTANT: token indices and weights are packed contiguously (M_e tokens then M_e weights),
+    # with padding only at the end. The kernel computes weights_base = tokens_base + M_e,
+    # so there must be NO padding between the token indices and weight values.
+    MAX_TOKENS = 32  # P = max tokens per packet
+    FIXED_COMBINE_ARGS = 5 + 2 * MAX_TOKENS  # 69 total args
+    meta = routing_meta_e
+    M_e = meta["M_e"]
+    combine_args_list = [
+        output_tensor.buffer_address(),
+        D_tiles,
+        1,  # num_experts = 1 (one expert per fused program)
+    ]
+    # Expert 0 (the only one in this program)
+    combine_args_list.append(out_tensor.buffer_address())
+    combine_args_list.append(M_e)
+    # M_e token row indices (NO padding here — weights must immediately follow)
+    for i in range(M_e):
+        combine_args_list.append(meta["token_indices"][i])
+    # M_e weights as BF16 bit patterns (NO padding here)
+    for i in range(M_e):
+        t = meta["token_indices"][i]
+        k = meta["k_indices"][i]
+        w = topk_weights[t, k].item()
+        w_bf16 = int(torch.tensor(w, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+        combine_args_list.append(w_bf16)
+    # Pad remainder to fixed total size
+    while len(combine_args_list) < FIXED_COMBINE_ARGS:
+        combine_args_list.append(0)
+
+    # RuntimeArgs indexed by [x][y] logical coords — combine core at (1, GRID_Y)
+    combine_rt_args = ttnn.RuntimeArgs()
+    combine_rt_args[1][GRID_Y] = combine_args_list
+
+    # ---- Semaphores: all 4 on all cores ----
+    all_cores = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1)),  # compute
+            ttnn.CoreRange(ttnn.CoreCoord(0, GRID_Y), ttnn.CoreCoord(1, GRID_Y)),  # dispatch + combine
+        ]
+    )
+
+    sem_barrier = ttnn.SemaphoreDescriptor(
+        id=0,
+        core_type=ttnn.CoreType.WORKER,
+        core_ranges=all_cores,
+        initial_value=0,
+    )
+    sem_go = ttnn.SemaphoreDescriptor(
+        id=1,
+        core_type=ttnn.CoreType.WORKER,
+        core_ranges=all_cores,
+        initial_value=0,
+    )
+    sem_pkt_ready = ttnn.SemaphoreDescriptor(
+        id=2,
+        core_type=ttnn.CoreType.WORKER,
+        core_ranges=all_cores,
+        initial_value=0,
+    )
+    sem_expert_done = ttnn.SemaphoreDescriptor(
+        id=3,
+        core_type=ttnn.CoreType.WORKER,
+        core_ranges=all_cores,
+        initial_value=0,
+    )
+
+    # ---- Circular Buffers ----
+    # Compute cores
+    cb0_compute = ttnn.CBDescriptor(
+        total_size=BF16_TILE_BYTES,
+        core_ranges=compute_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=0,
+                data_format=ttnn.bfloat16,
+                page_size=BF16_TILE_BYTES,
+            )
+        ],
+    )
+    cb1_compute = ttnn.CBDescriptor(
+        total_size=n_weight_per_core_gu * BFP4_TILE_BYTES,
+        core_ranges=compute_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=1,
+                data_format=ttnn.bfloat4_b,
+                page_size=BFP4_TILE_BYTES,
+            )
+        ],
+    )
+    cb2_compute = ttnn.CBDescriptor(
+        total_size=n_out_per_core * BF16_TILE_BYTES,
+        core_ranges=compute_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=2,
+                data_format=ttnn.bfloat16,
+                page_size=BF16_TILE_BYTES,
+            )
+        ],
+    )
+
+    # Dispatch core — uses CB3 (unique index to avoid conflict with compute CB0)
+    cb3_dispatch = ttnn.CBDescriptor(
+        total_size=BF16_TILE_BYTES,
+        core_ranges=dispatch_core,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=3,
+                data_format=ttnn.bfloat16,
+                page_size=BF16_TILE_BYTES,
+            )
+        ],
+    )
+
+    # Combine core — uses CB4, CB5 (unique indices to avoid conflict with compute CB0/CB1)
+    cb4_combine = ttnn.CBDescriptor(
+        total_size=BF16_TILE_BYTES,
+        core_ranges=combine_core,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=4,
+                data_format=ttnn.bfloat16,
+                page_size=BF16_TILE_BYTES,
+            )
+        ],
+    )
+    cb5_combine = ttnn.CBDescriptor(
+        total_size=BF16_TILE_BYTES,
+        core_ranges=combine_core,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=5,
+                data_format=ttnn.bfloat16,
+                page_size=BF16_TILE_BYTES,
+            )
+        ],
+    )
+
+    # ---- Kernel Descriptors ----
+    # Compute reader (dm0 on compute cores)
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=EXPERT_READER_FUSED_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=compute_grid,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # Compute writer (dm1 on compute cores)
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=EXPERT_WRITER_FUSED_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=compute_grid,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # Compute kernel (tensix on compute cores) — UNCHANGED from Phase 3
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=EXPERT_COMPUTE_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=compute_grid,
+        compile_time_args=compute_ct_args,
+        runtime_args=ttnn.RuntimeArgs(),
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        ),
+    )
+
+    # Dispatch writer (dm1 on dispatch core)
+    dispatch_kernel = ttnn.KernelDescriptor(
+        kernel_source=DISPATCH_WRITER_FUSED_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=dispatch_core,
+        compile_time_args=dispatch_ct_args,
+        runtime_args=dispatch_rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # Combine reader (dm0 on combine core)
+    combine_kernel = ttnn.KernelDescriptor(
+        kernel_source=COMBINE_DM_FUSED_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=combine_core,
+        compile_time_args=combine_ct_args,
+        runtime_args=combine_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    return ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel, dispatch_kernel, combine_kernel],
+        semaphores=[sem_barrier, sem_go, sem_pkt_ready, sem_expert_done],
+        cbs=[
+            cb0_compute,
+            cb1_compute,
+            cb2_compute,
+            cb3_dispatch,
+            cb4_combine,
+            cb5_combine,
+        ],
+    )
+
+
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+def test_moe_semaphore_chained(device):
+    """Phase 4 Step 4.5: Semaphore-chained fused dispatch+compute+combine per expert.
+
+    Each expert runs as a single program with 3 stages chained by L1 semaphores:
+      1. Dispatch core copies hidden_states → pkt_buf, signals SEM_PKT_READY
+      2. Compute cores wait for pkt_buf, run gate_up+SwiGLU+barrier+down, signal SEM_EXPERT_DONE
+      3. Combine core waits for output, runs weighted accumulation into output tensor
+
+    Core layout: compute (0,0)-(4,2), dispatch (0,3), combine (1,3).
+    4 program launches (one per expert), no synchronize between stages within each.
+
+    PCC target: >= 0.96 (matches Step 4.3).
+    """
+    D = 2880
+    D_FF = 5760
+    D_FF_HALF = D_FF // 2
+    P = 32
+    N_TOKENS = 32
+    NUM_EXPERTS = 4
+    TOP_K = 2
+    NUM_CORES = 15
+    GRID_X, GRID_Y = 5, 3
+
+    k_tiles = D // TILE
+    D_tiles = D // TILE  # 90
+    n_weight_tiles_gu = D_FF // TILE
+    n_weight_per_core_gu = n_weight_tiles_gu // NUM_CORES
+    n_out_per_core = n_weight_per_core_gu // 2
+    n_tiles_dn = D // TILE
+    n_per_core_dn = n_tiles_dn // NUM_CORES
+
+    cols_per_core = n_weight_per_core_gu * TILE
+    half_cols = n_out_per_core * TILE
+
+    torch.manual_seed(123)
+
+    # ---- Generate inputs (same seed as Steps 4.1-4.3) ----
+    hidden_states = torch.randn(N_TOKENS, D, dtype=torch.bfloat16)
+
+    topk_indices = torch.zeros(N_TOKENS, TOP_K, dtype=torch.int64)
+    for t in range(N_TOKENS):
+        perm = torch.randperm(NUM_EXPERTS)[:TOP_K]
+        topk_indices[t] = perm
+
+    raw_weights = torch.rand(N_TOKENS, TOP_K, dtype=torch.float32)
+    topk_weights = raw_weights / raw_weights.sum(dim=1, keepdim=True)
+
+    gate_up_ws = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+    down_ws = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+
+    # Pre-shuffle gate_up weights
+    shuffled_ws = []
+    for w in gate_up_ws:
+        gate_cols = w[:, :D_FF_HALF]
+        up_cols = w[:, D_FF_HALF:]
+        s = torch.empty_like(w)
+        for c in range(NUM_CORES):
+            s[:, c * cols_per_core : c * cols_per_core + half_cols] = gate_cols[:, c * half_cols : (c + 1) * half_cols]
+            s[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core] = up_cols[
+                :, c * half_cols : (c + 1) * half_cols
+            ]
+        shuffled_ws.append(s)
+
+    # Build routing metadata
+    routing_meta = host_dispatch(hidden_states, topk_indices, NUM_EXPERTS, P)
+
+    for e in range(NUM_EXPERTS):
+        logger.info(
+            f"Expert {e}: M_e={routing_meta[e]['M_e']} tokens " f"(indices={routing_meta[e]['token_indices'][:8]})"
+        )
+
+    # ---- Upload to device ----
+    hs_tensor = ttnn.from_torch(
+        hidden_states.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    gu_w_tensors = [
+        ttnn.from_torch(
+            s.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for s in shuffled_ws
+    ]
+    dn_w_tensors = [
+        ttnn.from_torch(
+            w.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for w in down_ws
+    ]
+
+    # ---- Core grids ----
+    compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1))])
+    dispatch_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, GRID_Y), ttnn.CoreCoord(0, GRID_Y))])
+    combine_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, GRID_Y), ttnn.CoreCoord(1, GRID_Y))])
+
+    # Physical coords for compute cores
+    phys_coords = []
+    for y in range(GRID_Y):
+        for x in range(GRID_X):
+            phys = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            phys_coords.append((phys.x, phys.y))
+    leader_phys_x, leader_phys_y = phys_coords[0]
+
+    # Physical coords for dispatch and combine cores
+    dispatch_phys = device.worker_core_from_logical_core(ttnn.CoreCoord(0, GRID_Y))
+    dispatch_phys_x, dispatch_phys_y = dispatch_phys.x, dispatch_phys.y
+    combine_phys = device.worker_core_from_logical_core(ttnn.CoreCoord(1, GRID_Y))
+    combine_phys_x, combine_phys_y = combine_phys.x, combine_phys.y
+
+    logger.info(
+        f"Core layout: compute (0,0)-({GRID_X-1},{GRID_Y-1}), "
+        f"dispatch (0,{GRID_Y}) phys=({dispatch_phys_x},{dispatch_phys_y}), "
+        f"combine (1,{GRID_Y}) phys=({combine_phys_x},{combine_phys_y})"
+    )
+
+    # ---- Create zero-filled output tensor (persists across expert programs) ----
+    output_tensor = ttnn.from_torch(
+        torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # ---- Per-expert fused pipeline ----
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        logger.info(f"Expert {e}: running fused dispatch+compute+combine (M_e={meta['M_e']})")
+
+        # Allocate per-expert buffers
+        pkt_buf_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        inter_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D_FF_HALF]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Build fused program
+        fused_prog = _make_fused_expert_program(
+            device,
+            hs_tensor,
+            pkt_buf_tensor,
+            gu_w_tensors[e],
+            dn_w_tensors[e],
+            inter_tensor,
+            out_tensor,
+            output_tensor,
+            meta,
+            topk_weights,
+            compute_grid,
+            dispatch_core,
+            combine_core,
+            phys_coords,
+            leader_phys_x,
+            leader_phys_y,
+            dispatch_phys_x,
+            dispatch_phys_y,
+            combine_phys_x,
+            combine_phys_y,
+            NUM_CORES,
+            GRID_X,
+            GRID_Y,
+            k_tiles,
+            D_tiles,
+            n_weight_per_core_gu,
+            n_weight_tiles_gu,
+            n_out_per_core,
+            n_per_core_dn,
+            n_tiles_dn,
+        )
+
+        # io_tensors: all tensors whose DRAM addresses are used
+        io_tensors = [
+            hs_tensor,
+            pkt_buf_tensor,
+            gu_w_tensors[e],
+            dn_w_tensors[e],
+            inter_tensor,
+            out_tensor,
+            output_tensor,
+        ]
+        ttnn.generic_op(io_tensors, fused_prog)
+        ttnn.synchronize_device(device)
+
+    # ---- Read output (from output_tensor directly, NOT generic_op return) ----
+    combined_output = ttnn.to_torch(output_tensor).squeeze().float()
+
+    # ---- Reference (same as Step 4.3) ----
+    gu_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in gu_w_tensors]
+    dn_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in dn_w_tensors]
+
+    ref_output = torch.zeros(N_TOKENS, D, dtype=torch.float32)
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        if meta["M_e"] == 0:
+            continue
+
+        ref_gu = hidden_states.float() @ gu_w_dequant[e]
+        ref_inter = torch.empty(P, D_FF_HALF, dtype=torch.float32)
+        for c in range(NUM_CORES):
+            g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
+            u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
+            ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
+        ref_out = ref_inter.bfloat16().float() @ dn_w_dequant[e]
+
+        for i in range(meta["M_e"]):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights[t, k].float().item()
+            ref_output[t] += w * ref_out[t]
+
+    # ---- Verify PCC ----
+    pcc = torch.corrcoef(torch.stack([combined_output.flatten(), ref_output.flatten()]))[0, 1].item()
+    max_err = (combined_output - ref_output).abs().max().item()
+    mean_err = (combined_output - ref_output).abs().mean().item()
+
+    logger.info(f"[moe_semaphore_chained] N_tokens={N_TOKENS}, K={TOP_K}, " f"experts={NUM_EXPERTS}")
+    logger.info(f"[moe_semaphore_chained] PCC={pcc:.6f} max_err={max_err:.6f} " f"mean_err={mean_err:.6f}")
+
+    assert pcc >= 0.96, f"MoE output PCC {pcc:.6f} < 0.96"
+    logger.info("[moe_semaphore_chained] PASSED")
