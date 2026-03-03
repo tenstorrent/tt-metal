@@ -23,3 +23,4 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
 )
+target_precompile_headers(unit_tests_ttnn_udm REUSE_FROM TTNN::PCH)
