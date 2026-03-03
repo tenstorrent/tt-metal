@@ -18,10 +18,8 @@
 #include "api/debug/noc_logging.h"
 #include "api/debug/dprint.h"
 
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
-    defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
+#if !defined(COMPILE_FOR_TRISC) && defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && \
+    !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
 #include "internal/hw_thread.h"
@@ -46,6 +44,12 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_TARGET true
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
+
+#ifdef ARCH_QUASAR
+#define VALID_L1_SIZE (MEM_L1_SIZE)
+#else
+#define VALID_L1_SIZE MEM_L1_SIZE
+#endif
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
@@ -165,7 +169,9 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
-    if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
+    if (addr + len > MEM_L1_BASE + VALID_L1_SIZE) {
+        DPRINT << "debug_valid_worker_addr: 0x" << HEX() << VALID_L1_SIZE << ENDL();
+        DPRINT << "addr, len: " << HEX() << addr << ", " << len << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
 
@@ -187,6 +193,7 @@ inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > core_info->noc_pcie_addr_end) {
+        DPRINT << "debug_valid_pcie_addr" << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
     return DebugSanitizeOK;
@@ -201,6 +208,7 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > core_info->noc_dram_addr_end) {
+        DPRINT << "debug_valid_dram_addr" << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
     return DebugSanitizeOK;
@@ -214,6 +222,7 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
         return DebugSanitizeNocAddrUnderflow;
     }
     if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE) {
+        DPRINT << "debug_valid_eth_addr" << ENDL();
         return DebugSanitizeNocAddrOverflow;
     }
     constexpr uint64_t mem_mailbox_end = MEM_IERISC_MAILBOX_END < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END
@@ -343,6 +352,7 @@ uint32_t debug_sanitize_noc_addr(
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir,
     bool check_linked) {
+    DPRINT << "Inside debug_sanitize_noc_addr Here" << ENDL();
     // Different encoding of noc addr depending on multicast vs unitcast
     uint8_t x, y;
     if (multicast) {
@@ -536,7 +546,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #if defined(COMPILE_FOR_ERISC)
     constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
 #else
-    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
+    constexpr uint64_t l1_overflow_addr = VALID_L1_SIZE;
 #endif
     if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
@@ -579,6 +589,10 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     }
 #endif
 }
+
+#ifdef ARCH_QUASAR
+#define NOC_AT_LEN_BE NOC_AT_LEN
+#endif
 
 // TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id, read_cmd_buf)                                       \
