@@ -4,16 +4,17 @@
 // layer_norm_rm - Reader Kernel
 //
 // Reads RM sticks from DRAM into CB 0 for tilize.
-// Also prepares scaler tiles for reduce operations (stages 2+).
+// Prepares scaler and epsilon tiles for reduce operations.
+// Reads gamma/beta sticks (32 repeated copies) into CB 6/7 for tilize by compute.
 //
 // Compile-time args:
 //   [0] stick_size_bytes
-//   [1] gamma_stick_size (unused until stage 4)
+//   [1] gamma_stick_size
 //   [2] has_gamma
 //   [3] has_beta
-//   [4+] TensorAccessorArgs for input
-//   [N+] TensorAccessorArgs for gamma (if has_gamma)
-//   [M+] TensorAccessorArgs for beta (if has_beta)
+//   [4]   TensorAccessorArgs for input (1 arg for interleaved)
+//   [5]   TensorAccessorArgs for gamma (if has_gamma, 1 arg)
+//   [5/6] TensorAccessorArgs for beta (if has_beta, 1 arg)
 //
 // Runtime args:
 //   [0] src_addr
@@ -21,8 +22,8 @@
 //   [2] beta_addr
 //   [3] num_sticks (total RM sticks this core processes)
 //   [4] start_stick_id
-//   [5] scaler_value (1/W packed bf16)
-//   [6] eps_value (epsilon packed bf16)
+//   [5] scaler_value (unused - compute scaler in kernel from stick_size)
+//   [6] eps_value (unused - hardcoded 1e-5f)
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -33,7 +34,12 @@ void kernel_main() {
     constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(1);
     constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+
+    // Input tensor accessor starts at CTA index 4
     constexpr auto input_tensor_args = TensorAccessorArgs<4>();
+    // Gamma tensor accessor follows input (at next_compile_time_args_offset)
+    constexpr uint32_t gamma_cta_offset = input_tensor_args.next_compile_time_args_offset();
+    // Beta tensor accessor follows gamma (or input if no gamma)
 
     // Wt = number of tiles per row = stick_size / (32 * 2) for bf16
     constexpr uint32_t Wt = stick_size_bytes / (32 * 2);
@@ -52,8 +58,7 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
     const uint32_t num_sticks = get_arg_val<uint32_t>(3);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(4);
-    const uint32_t scaler_value = get_arg_val<uint32_t>(5);
-    const uint32_t eps_value = get_arg_val<uint32_t>(6);
+    // Args 5,6 reserved for scaler_value and eps_value (computed locally)
 
     // Early exit for idle cores
     if (num_sticks == 0) {
@@ -64,39 +69,68 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_tensor_args, src_addr, stick_size_bytes);
 
     // ===== One-time setup: prepare scaler and epsilon tiles =====
-    // Scaler value is already packed as bf16-pair uint32
-    // Use prepare_reduce_scaler with the float-converted scaler
-    // The scaler_value from host is already in bf16-packed format
-    // We use the host-provided packed value directly by reinterpreting
     {
-        // Reinterpret scaler_value (bf16 packed uint32) back to float for prepare_reduce_scaler
-        // Actually, prepare_reduce_scaler takes a float and converts it internally
-        // The host packed it as bf16, so we need to pass the original float 1.0/W
-        // But we only have the packed value. Let's use generate_reduce_scaler_helper.
-        // Actually, looking at the API: prepare_reduce_scaler<cb_id>(float scaler_f)
-        // The host sends scaler_value as packed bf16 for convenience, but the kernel
-        // function needs the actual float. Let me use a different approach: write the
-        // packed value directly into the tile.
-
-        // For prepare_reduce_scaler, we need the float value 1.0f/W
-        // W = stick_size_bytes / 2 (bf16 = 2 bytes per element)
         constexpr uint32_t W = stick_size_bytes / 2;
         constexpr float scaler_float = 1.0f / W;
         dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_float);
     }
 
     // Prepare epsilon tile
-    {
-        // eps = 1e-5
-        // The eps_value from host is packed bf16, but prepare_reduce_scaler wants float
-        // Use constexpr default for now; the host passes eps in runtime args
-        // but prepare_reduce_scaler needs float. We'll reconstruct from runtime arg.
-        // Actually for stage 1 we don't use eps, but we prepare it anyway for simplicity.
-        // For correctness, let's compute it properly:
-        // eps_value is bf16-packed uint32 from host. We can extract the float approximation.
-        // But prepare_reduce_scaler takes float and converts internally.
-        // For now, use the literal 1e-5f. The host epsilon parameter defaults to 1e-5.
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(1e-5f);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_eps>(1e-5f);
+
+    // ===== One-time: read gamma and beta sticks =====
+    // Gamma/beta have shape (1,1,1,W) = 1 stick of gamma_stick_size bytes.
+    // We read 32 copies of this stick into the staging CB to form a tilizable block.
+    if constexpr (has_gamma) {
+        constexpr auto gamma_tensor_args = TensorAccessorArgs<gamma_cta_offset>();
+        const auto gamma_accessor = TensorAccessor(gamma_tensor_args, gamma_addr, gamma_stick_size);
+
+        cb_reserve_back(cb_gamma_rm, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_gamma_rm);
+
+        // Read the single gamma stick, then copy it 32 times
+        // First read stick 0 from DRAM
+        uint64_t gamma_noc_addr = get_noc_addr(0, gamma_accessor);
+        noc_async_read(gamma_noc_addr, l1_write_addr, gamma_stick_size);
+        noc_async_read_barrier();
+
+        // Copy the first stick to the remaining 31 positions
+        uint32_t src_l1_addr = l1_write_addr;
+        for (uint32_t s = 1; s < TILE_HEIGHT; s++) {
+            uint32_t dst_l1_addr = l1_write_addr + s * gamma_stick_size;
+            // Use local L1 copy (noc_async_read from own L1)
+            uint64_t src_noc_addr = get_noc_addr(src_l1_addr);
+            noc_async_read(src_noc_addr, dst_l1_addr, gamma_stick_size);
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(cb_gamma_rm, Wt);
+    }
+
+    if constexpr (has_beta) {
+        // Beta CTA offset depends on whether gamma is present
+        constexpr uint32_t beta_cta_offset =
+            has_gamma ? TensorAccessorArgs<gamma_cta_offset>().next_compile_time_args_offset() : gamma_cta_offset;
+        constexpr auto beta_tensor_args = TensorAccessorArgs<beta_cta_offset>();
+        const auto beta_accessor = TensorAccessor(beta_tensor_args, beta_addr, gamma_stick_size);
+
+        cb_reserve_back(cb_beta_rm, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_beta_rm);
+
+        // Read the single beta stick, then copy it 32 times
+        uint64_t beta_noc_addr = get_noc_addr(0, beta_accessor);
+        noc_async_read(beta_noc_addr, l1_write_addr, gamma_stick_size);
+        noc_async_read_barrier();
+
+        uint32_t src_l1_addr = l1_write_addr;
+        for (uint32_t s = 1; s < TILE_HEIGHT; s++) {
+            uint32_t dst_l1_addr = l1_write_addr + s * gamma_stick_size;
+            uint64_t src_noc_addr = get_noc_addr(src_l1_addr);
+            noc_async_read(src_noc_addr, dst_l1_addr, gamma_stick_size);
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(cb_beta_rm, Wt);
     }
 
     // ===== Per-tile-row loop: read RM sticks into cb_in_rm =====
@@ -104,11 +138,9 @@ void kernel_main() {
     uint32_t stick_id = start_stick_id;
 
     for (uint32_t tr = 0; tr < num_tile_rows; tr++) {
-        // Reserve Wt tile-sized pages in CB 0
         cb_reserve_back(cb_in_rm, Wt);
         uint32_t l1_write_addr = get_write_ptr(cb_in_rm);
 
-        // Read 32 sticks into the reserved space
         for (uint32_t s = 0; s < TILE_HEIGHT; s++) {
             uint64_t noc_addr = get_noc_addr(stick_id, input_accessor);
             noc_async_read(noc_addr, l1_write_addr, stick_size_bytes);
@@ -117,8 +149,6 @@ void kernel_main() {
         }
 
         noc_async_read_barrier();
-
-        // Push Wt pages (32 sticks = Wt tile-pages worth of data)
         cb_push_back(cb_in_rm, Wt);
     }
 }
