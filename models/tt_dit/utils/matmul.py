@@ -102,8 +102,14 @@ grid_12_10_configs = {
     (9472, 3456, 5120): (8, 4, 8, (1, 2)),
 }
 
+grid_12_9_configs = {
+    (9472, 5120, 1280): (10, 8, 8, (2, 1)),
+    (128, 5120, 1280): (1, 16, 8, (1, 2)),
+    (9472, 5120, 3456): (9, 5, 12, (1, 2)),
+}
 
-def get_matmul_config(M, K, N, core_grid):
+
+def get_matmul_config(M, K, N, core_grid, default_block_size=None):
     # Default to 8x8x8 with subblock 2x2 when unknown
     subblock_h = 2
     subblock_w = 2
@@ -128,9 +134,14 @@ def get_matmul_config(M, K, N, core_grid):
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
+    elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 9:
+        config_tuple = grid_12_9_configs.get((M, K, N))
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
 
     if config_tuple is None:
-        M_block_size, K_block_size, N_block_size = 8, 8, 8
+        M_block_size, K_block_size, N_block_size = default_block_size if default_block_size is not None else (8, 8, 8)
 
         M_tiles = math.ceil(M / 32)
         N_tiles = math.ceil(N / 32)

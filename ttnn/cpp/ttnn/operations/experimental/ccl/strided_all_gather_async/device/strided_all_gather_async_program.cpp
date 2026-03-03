@@ -235,7 +235,6 @@ StridedAllGatherAsyncProgramFactory::create_at(
             attributes.semaphore,
             empty_fused_op_signaler,
             false,
-            attributes.tiles_per_chunk,
             attributes.num_workers_per_link,
             attributes.num_buffers_per_channel,
             attributes.mm_cores_y,
@@ -260,7 +259,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const std::vector<GlobalSemaphore>& semaphore,
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
     bool read_local_slice_from_input,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
@@ -312,7 +310,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
+        sender_device_coord, forward_coord, backward_coord, mesh_device);
 
     const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, std::nullopt, core_grid_offset);
@@ -384,13 +382,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
     uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
 
-    uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
     uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
     uint32_t mm_block_ht_val = mm_block_ht.value_or(0);
     uint32_t mm_block_wt_val = mm_block_wt.value_or(0);
-    if (fuse_op) {
-        tiles_per_chunk_val = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
-    }
 
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
@@ -515,7 +509,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     fuse_op,                          // fused op
-                    tiles_per_chunk_val,
                     global_worker_count,
                     global_worker_id,
                 };
@@ -585,7 +578,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     fuse_op,                          // fused op
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
-                    tiles_per_chunk_val,
                     global_worker_count,
                     global_worker_id,
                 };

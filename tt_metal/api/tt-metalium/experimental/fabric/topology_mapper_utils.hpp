@@ -6,6 +6,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,11 @@ struct TopologyMappingConfig {
     // When true, disables rank binding constraints. Rank mappings will be ignored
     // and any mapping that satisfies connectivity constraints will be valid.
     bool disable_rank_bindings = false;
+
+    // Optional: Map from hostname to ASIC IDs on that host. When non-empty, enforces that each host
+    // has exactly one rank binding (all ASICs on the same host map to fabric nodes with the same rank).
+    // Used even when some ASICs have UNSET rank. Default empty.
+    std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
 };
 
 /**
@@ -443,6 +449,6 @@ struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::PhysicalExitNode> {
     auto format(const tt::tt_metal::experimental::tt_fabric::PhysicalExitNode& exit_node, format_context& ctx) const
         -> format_context::iterator {
         return fmt::format_to(
-            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id);
+            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id.get());
     }
 };

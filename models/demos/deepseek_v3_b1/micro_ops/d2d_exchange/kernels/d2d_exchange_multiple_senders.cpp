@@ -42,12 +42,6 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
     return true;
 }
 
-FORCE_INLINE void write_data_to_local_core_with_ack(
-    SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t write_size) {
-    noc_async_write(l1_read_addr, dst_addr, write_size);
-    noc_async_writes_flushed();
-}
-
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
@@ -59,8 +53,7 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
-        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    fabric_connection.send_payload_blocking_from_address((uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
 FORCE_INLINE void send_pages_over_socket(
@@ -72,18 +65,17 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t l1_read_addr,
     uint64_t dst_addr) {
-    if constexpr (use_fabric_on_sender) {
-        for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
-            write_data_to_remote_core_with_ack(
-                downstream_fabric_connection,
-                downstream_data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
-                downstream_bytes_sent_noc_addr,
-                whole_packet_size);
-            l1_read_addr += whole_packet_size;
-            dst_addr += whole_packet_size;
-        }
+    for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
+        write_data_to_remote_core_with_ack(
+            downstream_fabric_connection,
+            downstream_data_packet_header_addr,
+            l1_read_addr,
+            dst_addr,
+            downstream_bytes_sent_noc_addr,
+            whole_packet_size);
+        l1_read_addr += whole_packet_size;
+        dst_addr += whole_packet_size;
+    }
 
         for (uint32_t i = 0; i < num_whole_fabric_packets_link_1; ++i) {
             write_data_to_remote_core_with_ack(
@@ -106,9 +98,6 @@ FORCE_INLINE void send_pages_over_socket(
                 downstream_bytes_sent_noc_addr,
                 partial_packet_size);
         }
-    } else {
-        write_data_to_local_core_with_ack(sender_socket, l1_read_addr, dst_addr, upstream_page_size);
-    }
 }
 
 void kernel_main() {
@@ -169,58 +158,79 @@ void kernel_main() {
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
 
-    uint32_t bytes_accumulated = 0;
+    while (true) {
+        uint32_t bytes_accumulated = 0;
+        bool terminated = false;
 
-    socket_reserve_pages(sender_socket, 1);
+        socket_reserve_pages(sender_socket, 1);
 
-    // Collect data from all upstream sockets into a single larger page
-    // Process num_upstream_sockets pages (one from each worker) for reduce-to-one
-    for (uint32_t i = 0; i < num_upstream_sockets; i++) {
-        // Wait for pages in current upstream socket with termination checks
-        if (!socket_wait_for_pages_with_termination(receiver_sockets[i], 1, termination_semaphore)) {
+        // Collect data from all upstream sockets into a single larger page
+        // Process num_upstream_sockets pages (one from each worker) for reduce-to-one
+        for (uint32_t i = 0; i < num_upstream_sockets; i++) {
+            // Wait for pages in current upstream socket with termination checks
+            if (!socket_wait_for_pages_with_termination(receiver_sockets[i], 1, termination_semaphore)) {
+                terminated = true;
+                break;
+            }
+
+            auto l1_read_addr = receiver_sockets[i].read_ptr;
+            // Calculate offset within the downstream buffer for this socket's data
+            uint32_t skt_offset = bytes_accumulated;
+            uint32_t dst_l1_addr = downstream_fifo_l1_addr + sender_socket.write_ptr + skt_offset;
+            uint64_t dst_addr =
+                get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, dst_l1_addr);
+
+            // accumulation phase
+            noc_async_write(l1_read_addr, dst_addr, upstream_page_size);
+            noc_async_writes_flushed();
+
+            socket_pop_pages(receiver_sockets[i], 1);
+            socket_notify_sender(receiver_sockets[i]);
+
+            invalidate_l1_cache();
+
+            // Update accumulation offset
+            bytes_accumulated += upstream_page_size;
+        }
+
+        // Check if we should exit due to termination
+        if (terminated) {
             break;
         }
 
-        auto l1_read_addr = receiver_sockets[i].read_ptr;
-        // Calculate offset within the downstream buffer for this socket's data
-        uint32_t skt_offset = bytes_accumulated;
-        uint32_t dst_l1_addr = downstream_fifo_l1_addr + sender_socket.write_ptr + skt_offset;
-        uint64_t dst_addr =
-            get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, dst_l1_addr);
+        // Now send the accumulated page once (14,336 bytes total from all 8 workers)
+        if (bytes_accumulated >= sender_page_size) {
+            // If using fabric, send the accumulated data via fabric in chunks
+            if constexpr (use_fabric_on_sender) {
+                uint32_t l1_read_addr = downstream_fifo_l1_addr + sender_socket.write_ptr;
+                uint64_t dst_addr = get_noc_addr(
+                    downstream_enc.d2d.downstream_noc_x,
+                    downstream_enc.d2d.downstream_noc_y,
+                    downstream_fifo_l1_addr + sender_socket.write_ptr);
 
-        send_pages_over_socket(
-            sender_socket,
-            downstream_fabric_connection,
-            downstream_fabric_connection_2,
-            downstream_data_packet_header_addr,
-            downstream_data_packet_header_addr_2,
-            downstream_bytes_sent_noc_addr,
-            l1_read_addr,
-            dst_addr);
-
-        socket_pop_pages(receiver_sockets[i], 1);
-
-        socket_notify_sender(receiver_sockets[i]);
+                send_pages_over_socket(
+                    sender_socket,
+                    downstream_fabric_connection,
+                    downstream_fabric_connection_2,
+                    downstream_data_packet_header_addr,
+                    downstream_data_packet_header_addr_2,
+                    downstream_bytes_sent_noc_addr,
+                    l1_read_addr,
+                    dst_addr);
+            }
+            // if not using fabric: Data already accumulated in downstream buffer via noc_async_write
+            // Just push the page to the socket
+            socket_push_pages(sender_socket, 1);
+            socket_notify_receiver(sender_socket);
+        }
 
         invalidate_l1_cache();
-
-        // Update accumulation
-        bytes_accumulated += upstream_page_size;
     }
-
-    // Push the aggregated page after collecting all worker data
-    if (bytes_accumulated >= sender_page_size) {
-        socket_push_pages(sender_socket, 1);
-        socket_notify_receiver(sender_socket);
-    }
-
-    invalidate_l1_cache();
 
     update_socket_config(sender_socket);
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         update_socket_config(receiver_sockets[i]);
     }
-
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();

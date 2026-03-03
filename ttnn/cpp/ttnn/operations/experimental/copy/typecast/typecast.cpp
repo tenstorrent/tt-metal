@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "typecast.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 

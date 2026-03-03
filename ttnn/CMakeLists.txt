@@ -127,6 +127,7 @@ target_sources(
         core/config.cpp
         core/core.cpp
         core/device.cpp
+        core/device_operation_detail.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
         core/distributed/distribution_mode.cpp
@@ -139,7 +140,6 @@ target_sources(
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
         core/operation.cpp
-        core/graph/graph_argument_serializer.cpp
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/graph/levelized_graph.cpp
@@ -158,16 +158,6 @@ target_sources(
         core/tensor/xtensor/partition.cpp
         core/tensor/to_string.cpp
         core/tensor/py_to_tt_tensor.cpp
-)
-
-# graph_argument_serializer.cpp takes ~142s to compile due to combinatorial template
-# explosion (~48 types × ~60 specializations each). Exclude it from unity builds so it
-# compiles as its own TU in parallel, rather than blocking the entire unity batch.
-set_source_files_properties(
-    core/graph/graph_argument_serializer.cpp
-    PROPERTIES
-        SKIP_UNITY_BUILD_INCLUSION
-            ON
 )
 
 target_include_directories(
@@ -428,6 +418,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
@@ -487,6 +478,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
 ##################################################
@@ -550,6 +542,7 @@ target_sources(
             api/ttnn/decorators.hpp
             api/ttnn/device.hpp
             api/ttnn/device_operation.hpp
+            api/ttnn/device_operation_detail.hpp
             api/ttnn/distributed/api.hpp
             api/ttnn/distributed/bidirectional_fabric_socket.hpp
             api/ttnn/distributed/create_socket.hpp
@@ -565,8 +558,8 @@ target_sources(
             api/ttnn/events.hpp
             api/ttnn/global_circular_buffer.hpp
             api/ttnn/global_semaphore.hpp
-            api/ttnn/graph/graph_argument_serializer.hpp
             api/ttnn/graph/graph_consts.hpp
+            api/ttnn/graph/graph_serialization.hpp
             api/ttnn/graph/graph_operation_queries.hpp
             api/ttnn/graph/graph_processor.hpp
             api/ttnn/graph/graph_nanobind.hpp

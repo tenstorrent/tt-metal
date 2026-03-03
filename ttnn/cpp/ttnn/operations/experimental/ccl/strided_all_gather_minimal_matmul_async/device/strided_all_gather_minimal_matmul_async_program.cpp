@@ -4,9 +4,6 @@
 ///
 #include <algorithm>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -149,7 +146,6 @@ strided_all_gather_minimal_matmul_async_program(
             semaphore,
             all_gather_fused_op_signaler,
             read_local_slice_from_input,
-            std::nullopt,
             num_workers_per_direction_opt,
             num_buffers_per_channel,
             matmul_fused_op_signaler->num_fused_op_cores_to_signal,

@@ -11,13 +11,18 @@ import ttnn
 from ..utils.matmul import get_matmul_config
 from .module import Module, Parameter
 
+MATH_FIDELITY = {
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    ttnn.float32: ttnn.MathFidelity.HiFi4,
+}
+
 
 class Linear(Module):
     """
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None):
+    def __init__(self, in_features, out_features, bias=True, activation_fn=None, dtype=ttnn.bfloat16, mesh_device=None):
         super().__init__()
 
         self.in_features = in_features
@@ -38,14 +43,14 @@ class Linear(Module):
         """
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device)
-        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device) if bias else None
+        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -53,10 +58,10 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid)
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=self.weight.data,
@@ -81,6 +86,14 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
+def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
+    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
+    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
+    return 0.5 * x * one_plus_tanh
+
+
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -92,6 +105,7 @@ class ColParallelLinear(Module):
         out_features,
         bias=True,
         activation_fn=None,
+        dtype=ttnn.bfloat16,
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
@@ -122,17 +136,20 @@ class ColParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
         self.weight = Parameter(
-            total_shape=[self.in_features, self.out_features], mesh_axes=[fsdp_mesh_axis, mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=[fsdp_mesh_axis, mesh_axis],
+            device=mesh_device,
+            dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype)
             if bias
             else None
         )
@@ -163,7 +180,9 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor | list[ttnn.Tensor]:
+    def forward(
+            self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None
+    ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
         Return output fractured on columns.
@@ -179,31 +198,61 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid)
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
-        if self.chunks is not None:
-            outputs = ttnn.experimental.minimal_matmul_split(
-                x,
-                weight,
-                chunks=self.chunks,
-                dim=-1,
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
                 bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
                 fused_activation=self.fused_activation_fn,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
-                config=matmul_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=6,
+                num_buffers_per_channel=48,
             )
-            return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+        else:
+            M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
-        output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=weight,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            config=matmul_config,
-            fused_activation=self.fused_activation_fn,
-            compute_kernel_config=compute_kernel_config or self.compute_config,
-        )
+            if self.chunks is not None:
+                outputs = ttnn.experimental.minimal_matmul_split(
+                    x,
+                    weight,
+                    chunks=self.chunks,
+                    dim=-1,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    config=matmul_config,
+                )
+                return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+        
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -218,6 +267,7 @@ class RowParallelLinear(Module):
         in_features,
         out_features,
         bias=True,
+        dtype=ttnn.bfloat16,
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
@@ -237,7 +287,7 @@ class RowParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -246,10 +296,15 @@ class RowParallelLinear(Module):
         ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
         self.weight = Parameter(
-            total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=[mesh_axis, fsdp_mesh_axis],
+            device=mesh_device,
+            dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype
+            )
             if bias
             else None
         )
@@ -274,6 +329,7 @@ class RowParallelLinear(Module):
         *,
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
+        default_block_size: tuple = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -291,7 +347,7 @@ class RowParallelLinear(Module):
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid)
+        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=weight,
@@ -324,6 +380,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
+    if activation_fn == "gelu_tanh":
+        return gelu_tanh(t)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)
