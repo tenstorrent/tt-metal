@@ -589,81 +589,41 @@ void run_fused_swiglu_comparison(const FusedSwiGLUTestConfig &test_cfg) {
     ttml::autograd::ctx().close_device();
 }
 
-// Full sweep across model sizes and batch sizes
+// Full sweep: 3 models × batch sizes
+// NanoLlama3: D=384, H=default(~256), 6 blocks
+// TinyLlama:  D=2048, H=5632, 4 blocks
+// Llama-1B:   D=2048, H=8192, 4 blocks
 TEST_F(NanoLlamaTest, NIGHTLY_FusedSwiGLU_Sweep) {
-    std::vector<FusedSwiGLUTestConfig> configs = {
-        {.name = "NanoLlama3  B=4",
-         .embedding_dim = 384,
-         .num_heads = 6,
-         .num_groups = 3,
-         .num_blocks = 6,
-         .max_sequence_length = 256,
-         .batch_size = 4},
-        {.name = "NanoLlama3  B=32",
-         .embedding_dim = 384,
-         .num_heads = 6,
-         .num_groups = 3,
-         .num_blocks = 6,
-         .max_sequence_length = 256,
-         .batch_size = 32},
-        {.name = "NanoLlama3  B=64",
-         .embedding_dim = 384,
-         .num_heads = 6,
-         .num_groups = 3,
-         .num_blocks = 6,
-         .max_sequence_length = 256,
-         .batch_size = 64},
-        {.name = "TinyLlama   B=4",
-         .embedding_dim = 2048,
-         .num_heads = 32,
-         .num_groups = 4,
-         .num_blocks = 4,
-         .max_sequence_length = 256,
-         .batch_size = 4,
-         .intermediate_dim = 5632},
-        {.name = "TinyLlama   B=32",
-         .embedding_dim = 2048,
-         .num_heads = 32,
-         .num_groups = 4,
-         .num_blocks = 4,
-         .max_sequence_length = 256,
-         .batch_size = 32,
-         .intermediate_dim = 5632},
-        {.name = "TinyLlama   B=64",
-         .embedding_dim = 2048,
-         .num_heads = 32,
-         .num_groups = 4,
-         .num_blocks = 4,
-         .max_sequence_length = 256,
-         .batch_size = 64,
-         .intermediate_dim = 5632},
-        {.name = "Llama-1B    B=4",
-         .embedding_dim = 2048,
-         .num_heads = 32,
-         .num_groups = 8,
-         .num_blocks = 4,
-         .max_sequence_length = 256,
-         .batch_size = 4,
-         .intermediate_dim = 8192},
-        {.name = "Llama-1B    B=32",
-         .embedding_dim = 2048,
-         .num_heads = 32,
-         .num_groups = 8,
-         .num_blocks = 4,
-         .max_sequence_length = 256,
-         .batch_size = 32,
-         .intermediate_dim = 8192},
-        {.name = "Llama-1B    B=64",
-         .embedding_dim = 2048,
-         .num_heads = 32,
-         .num_groups = 8,
-         .num_blocks = 4,
-         .max_sequence_length = 256,
-         .batch_size = 64,
-         .intermediate_dim = 8192},
+    struct ModelTemplate {
+        std::string name;
+        uint32_t embedding_dim;
+        uint32_t num_heads;
+        uint32_t num_groups;
+        uint32_t num_blocks;
+        std::optional<uint32_t> intermediate_dim;
     };
 
-    for (const auto &cfg : configs) {
-        run_fused_swiglu_comparison(cfg);
+    const std::vector<ModelTemplate> models = {
+        {"NanoLlama3", 384, 6, 3, 6, std::nullopt},
+        {"TinyLlama", 2048, 32, 4, 4, 5632},
+        {"Llama-1B", 2048, 32, 8, 4, 8192},
+    };
+
+    const std::vector<uint32_t> batch_sizes = {4, 16, 32, 64, 128};
+
+    for (const auto &model : models) {
+        for (uint32_t B : batch_sizes) {
+            auto name = fmt::format("{:<12} B={}", model.name, B);
+            run_fused_swiglu_comparison({
+                .name = name,
+                .embedding_dim = model.embedding_dim,
+                .num_heads = model.num_heads,
+                .num_groups = model.num_groups,
+                .num_blocks = model.num_blocks,
+                .max_sequence_length = 256,
+                .batch_size = B,
+                .intermediate_dim = model.intermediate_dim,
+            });
+        }
     }
 }
