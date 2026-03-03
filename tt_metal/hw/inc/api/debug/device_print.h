@@ -10,8 +10,8 @@
 #include <tuple>
 #include <type_traits>
 
-#include "device_print_structures.h"
 #include "hostdevcommon/device_print_common.h"
+#include "hostdevcommon/device_print_structures.h"
 #include "waypoint.h"
 #include "internal/debug/dprint_buffer.h"
 #include "noc_overlay_parameters.h"

@@ -42,6 +42,8 @@
 #include "dprint_parser.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
+#include "hostdevcommon/device_print_common.h"
+#include "hostdevcommon/device_print_structures.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
@@ -282,25 +284,10 @@ private:
         ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
 };
 
-// New DEVICE_PRINT implementation (stub - to be implemented).
-
-// TODO: Can we reuse structure defined for device?
-struct DevicePrintHeader {
-    static constexpr uint32_t max_info_id_value = 65535;
-    static constexpr uint32_t max_message_payload_size = 1023;  // 10 bits for message_payload
-
-    uint32_t is_kernel : 1;         // 0 = firmware, 1 = kernel
-    uint32_t risc_id : 5;           // 0-31 risc id (supporting quasar)
-    uint32_t message_payload : 10;  // Message payload size (<1024 bytes)
-    uint32_t info_id : 16;          // Index into .device_print_strings_info (max 65536 entries)
-};
+// New DEVICE_PRINT implementation
+using DevicePrintHeader = device_print_detail::structures::DevicePrintHeader;
 static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
-
-struct DevicePrintStringInfo {
-    std::uint32_t format_string_ptr;
-    std::uint32_t file;
-    std::uint32_t line;
-};
+using DevicePrintStringInfo = device_print_detail::structures::DevicePrintStringInfo32;
 
 struct FormatPlaceholderInfo {
     uint32_t arg_id;

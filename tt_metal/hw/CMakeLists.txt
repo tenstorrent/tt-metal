@@ -521,7 +521,6 @@ target_sources(
             inc/api/socket_api.h
             inc/api/dataflow/dataflow_api.h
             inc/api/debug/assert.h
-            inc/api/debug/device_print_structures.h
             inc/api/debug/device_print.h
             inc/api/debug/dprint.h
             inc/api/debug/timing_perturbation.h
