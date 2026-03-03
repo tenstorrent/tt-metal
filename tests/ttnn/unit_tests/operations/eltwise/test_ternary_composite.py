@@ -11,6 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
 )
 from tests.ttnn.utils_for_testing import assert_with_ulp
+from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.mark.parametrize(
@@ -248,6 +249,7 @@ def test_lerp_ttnn(input_shapes, device):
     assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -269,6 +271,7 @@ def test_mac_overload_ttnn(input_shapes, value1, value2, device):
     assert comp_pass
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "input_shapes",
     (

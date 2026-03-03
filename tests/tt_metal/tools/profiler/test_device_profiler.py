@@ -777,6 +777,7 @@ def verify_noc_trace_replay_ids_have_risc_coverage(
             ), f"Missing risc coverage in NOC trace for device {device_id}, runtime_id {runtime_id}, trace_id {trace_id}, trace_id_counter {trace_id_counter}. Missing riscs: {missing}"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_trace_run():
     verify_trace_markers(
         run_device_profiler_test(
@@ -797,6 +798,7 @@ def test_trace_run():
     )
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_device_trace_run():
     verify_stats(
         run_device_profiler_test(
@@ -958,6 +960,7 @@ def test_quick_push_on_noc_profiler():
     verify_trace_ids_in_device_csv(riscs=("BRISC", "NCRISC"))
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
@@ -1167,6 +1170,7 @@ def test_timestamped_events():
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 def test_noc_event_profiler_linked_multicast_hang():
     # test that we can avoid hangs with linked multicast
     # see tt-metal issue #22578

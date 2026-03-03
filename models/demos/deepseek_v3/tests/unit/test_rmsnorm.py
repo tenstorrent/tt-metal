@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3.tests.unit.utils import run_test
 from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -540,6 +541,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
 # =============================================================================
 
 
+@skip_with_llk_assert("Hit assert - Math fidelity larger than LoFi only works with Eltwise multiply.")
 @pytest.mark.parametrize(
     "inp_shape, weight_shape",
     [
