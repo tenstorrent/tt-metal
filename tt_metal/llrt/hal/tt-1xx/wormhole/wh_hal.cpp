@@ -69,6 +69,7 @@ namespace tt::tt_metal {
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
+    using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
 
     std::vector<std::string> link_objs(const Params& params) const override {
@@ -135,10 +136,9 @@ public:
 
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // Additional defines on Wormhole for active ETH cores
-            if (rtoptions.get_erisc_iram_enabled()) {
+            if (params.rtoptions.get_erisc_iram_enabled()) {
                 defines.push_back("ENABLE_IRAM");
             }
             defines.push_back("COOPERATIVE_ERISC");
@@ -177,7 +177,6 @@ public:
     }
 
     std::string linker_script(const Params& params) const override {
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         const std::string_view path = "runtime/hw/toolchain/wormhole";
         std::string_view fork = params.is_fw ? "firmware" : "kernel";
         switch (params.core_type) {
@@ -195,7 +194,7 @@ public:
                     fork = "app";
                 }
                 return fmt::format(
-                    "{}/erisc-b0-{}{}.ld", path, fork, rtoptions.get_erisc_iram_enabled() ? "_iram" : "");
+                    "{}/erisc-b0-{}{}.ld", path, fork, params.rtoptions.get_erisc_iram_enabled() ? "_iram" : "");
             case HalProgrammableCoreType::IDLE_ETH:
                 if (params.processor_id < 2) {
                     return fmt::format("{}/{}_{}ierisc.ld", path, fork, params.processor_id ? "subordinate_" : "");
@@ -366,7 +365,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>();
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryWormhole>(*this);
 
     this->set_iram_text_size_func_ = [](dev_msgs::launch_msg_t::View launch_msg,
                                         HalProgrammableCoreType programmable_core_type,
