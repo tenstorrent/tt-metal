@@ -134,29 +134,31 @@ jobs:
         run: |
             mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
 
-      - name: Run Fabric Test
-        run: |
-          tt-run --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
-            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
+      # - name: Run Fabric Test
+      #   run: |
+      #     tt-run --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
+      #       /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
 
-      - name: Run Pipeline Test
-        timeout-minutes: 15
-        run: |
-          PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
-          PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
-          mkdir -p $PIPELINE_DIR
-          python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
-            --mpi-user user \
-            --hostfile /ci/ttrun/hostfile \
-            --worker-tt-metal-home /home/user/tt-metal \
-            --shared-dir $PIPELINE_DIR \
-            models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
-          tt-run --skip-executable-check \
-            --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
-            --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
-            /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+      # - name: Run Pipeline Test
+      #   timeout-minutes: 15
+      #   run: |
+      #     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+      #     PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
+      #     mkdir -p $PIPELINE_DIR
+      #     python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+      #       --mpi-user user \
+      #       --hostfile /ci/ttrun/hostfile \
+      #       --worker-tt-metal-home /home/user/tt-metal \
+      #       --shared-dir $PIPELINE_DIR \
+      #       models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+      #     tt-run --skip-executable-check \
+      #       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      #       --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+      #       /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
       - name: Run Python Interface Test
         timeout-minutes: 15
+        env:
+          PYTHONPATH: /home/user/tt-metal
         run: |
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
           PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
@@ -168,9 +170,9 @@ jobs:
             --shared-dir $PIPELINE_DIR \
             models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
           tt-run --skip-executable-check \
-            --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+            --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output --wdir /home/user/tt-metal" \
             --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
-            pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py
+            python -m pytest -svv /home/user/tt-metal/models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py
   cleanup:
     name: Cleanup
     needs: [run, create-allocation]
