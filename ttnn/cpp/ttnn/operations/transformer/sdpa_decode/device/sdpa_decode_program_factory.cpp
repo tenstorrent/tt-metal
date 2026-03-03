@@ -395,7 +395,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const tt::DataFormat mask_df = use_attention_mask
                                        ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                        : tt::DataFormat::Float16_b;
-    const tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat im_df = tt::DataFormat::Float16_b;
     const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 

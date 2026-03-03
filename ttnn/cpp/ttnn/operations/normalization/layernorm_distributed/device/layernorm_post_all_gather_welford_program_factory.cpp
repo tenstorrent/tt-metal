@@ -381,8 +381,8 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_eps_config);
     // c_in5 -> reduce scalar
     CircularBufferConfig cb_reduce_config =
-        CircularBufferConfig(in5_tiles * bfloat16_tile_size, {{tt::CBIndex::c_5, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_5, bfloat16_tile_size);
+        CircularBufferConfig(in5_tiles * single_tile_size, {{tt::CBIndex::c_5, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_5, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduce_config);
 
     // LN and RMS shared intermediates

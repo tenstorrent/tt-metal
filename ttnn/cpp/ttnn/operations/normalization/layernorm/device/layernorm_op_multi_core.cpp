@@ -183,6 +183,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    tt::DataFormat scaler_cb_data_format =
+        (in_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
+            ? tt::DataFormat::Float32
+            : tt::DataFormat::Float16_b;
+    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
@@ -297,7 +302,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         im5_t * single_tile_size,
         im4_t * single_tile_size,
         im1_t * single_tile_size,
-        in2_t * bfloat16_tile_size,
+        in2_t * scaler_tile_size,
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
@@ -629,8 +634,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // CB 2: Scaler for reduce (if not use_welford)
     if (!use_welford) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in2_t * bfloat16_tile_size, tt::CBIndex::c_2, tt::DataFormat::Float16_b, bfloat16_tile_size));
+        program_descriptor.cbs.push_back(
+            make_cb_descriptor(in2_t * scaler_tile_size, tt::CBIndex::c_2, scaler_cb_data_format, scaler_tile_size));
     }
 
     // CB 3: Epsilon
