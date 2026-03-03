@@ -1143,7 +1143,8 @@ class MasterConfigLoader:
                     config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                     config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
 
-                config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
+                if "output_memory_config" not in config_dict and "memory_config" in config_dict:
+                    config_dict["output_memory_config"] = config_dict["memory_config"]
 
             # Add metadata
             config_dict["traced_source"] = source
