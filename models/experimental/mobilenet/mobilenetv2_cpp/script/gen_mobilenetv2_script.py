@@ -5,7 +5,7 @@ import os
 import urllib.request
 import torch
 
-from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.vision.classification.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 save_path = os.path.join(script_dir, "mobilenet_v2-b0353104.pth")

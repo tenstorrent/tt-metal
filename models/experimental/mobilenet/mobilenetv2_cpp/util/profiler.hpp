@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _UTIL_PROFILER_
-#define _UTIL_PROFILER_
+#ifndef UTIL_PROFILER_HPP
+#define UTIL_PROFILER_HPP
 
 #include <chrono>
 #include <unordered_map>
 #include <string>
+#include <stdexcept>
 #include <cassert>
 
 class Profiler {
@@ -18,7 +19,12 @@ public:
     void start(const std::string& name) { timings[name] = std::chrono::high_resolution_clock::now(); }
 
     void stop(const std::string& name) {
-        assert(timings.find(name) != timings.end());
+        if (timings.find(name) == timings.end()) {
+            throw std::runtime_error(
+                "Profiler::stop() called for "
+                " + name + "
+                " without corresponding start()");
+        }
         auto& start_time = timings[name];
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration<double>(end_time - start_time).count();
@@ -42,4 +48,4 @@ private:
     std::unordered_map<std::string, double> results;
 };
 
-#endif  // _UTIL_PROFILER_
+#endif  // UTIL_PROFILER_HPP
