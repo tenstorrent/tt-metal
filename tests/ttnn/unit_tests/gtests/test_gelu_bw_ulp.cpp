@@ -273,12 +273,12 @@ TEST_F(GeluBwUlpTest, DerivativeAtZero) {
 // Catches broken positive saturation or wrong formula sign.
 TEST_F(GeluBwUlpTest, DerivativeAtPositiveValues) {
     std::vector<std::pair<float, int32_t>> test_cases = {
-        {0.5f, 5},
-        {1.0f, 5},
-        {2.0f, 5},
-        {3.0f, 5},
-        {5.0f, 5},
-        {10.0f, 5},
+        {0.5f, 2},
+        {1.0f, 2},
+        {2.0f, 2},
+        {3.0f, 2},
+        {5.0f, 2},
+        {10.0f, 2},
     };
 
     for (const auto& [input_val, max_expected_ulp] : test_cases) {
@@ -294,18 +294,17 @@ TEST_F(GeluBwUlpTest, DerivativeAtPositiveValues) {
 }
 
 // Correctness guard: GELU'(x) must approach 0 for negative x.
-// Thresholds are loose (up to 60 ULP) — catches gross errors but not subtle precision loss.
-// The erfc fix reduced ULP from 30,000+ to ~59 at x=-4.
+// Per-point ULP thresholds (2). Catches precision regression at any negative sample point.
 TEST_F(GeluBwUlpTest, DerivativeAtNegativeValues) {
     std::vector<std::pair<float, int32_t>> test_cases = {
-        {-0.5f, 5},
-        {-1.0f, 5},
-        {-2.0f, 5},
-        {-3.0f, 10},
-        {-4.0f, 60},  // Reduced from 30,000+ to ~59 by erfc fix
-        {-5.0f, 15},
-        {-6.0f, 20},
-        {-8.0f, 20},
+        {-0.5f, 2},
+        {-1.0f, 2},
+        {-2.0f, 2},
+        {-3.0f, 2},
+        {-4.0f, 2},
+        {-5.0f, 2},
+        {-6.0f, 2},
+        {-8.0f, 2},
     };
 
     for (const auto& [input_val, max_expected_ulp] : test_cases) {
@@ -333,7 +332,7 @@ TEST_F(GeluBwUlpTest, DerivativeNearZero) {
         std::cout << "x=" << input_val << ": expected=" << expected << ", actual=" << actual << ", ULP=" << ulp
                   << std::endl;
 
-        EXPECT_LE(ulp, 5) << "GELU'(" << input_val << ") near-zero ULP too high";
+        EXPECT_LE(ulp, 2) << "GELU'(" << input_val << ") near-zero ULP too high";
     }
 }
 
@@ -342,10 +341,10 @@ TEST_F(GeluBwUlpTest, DerivativeNearZero) {
 TEST_F(GeluBwUlpTest, WithGradientScaling) {
     std::vector<std::tuple<float, float, int32_t>> test_cases = {
         // {input, grad, max_ulp}
-        {1.0f, 2.0f, 5},
-        {-1.0f, 0.5f, 10},
+        {1.0f, 2.0f, 2},
+        {-1.0f, 0.5f, 2},
         {0.0f, 1.0f, 2},
-        {2.0f, -1.0f, 5},
+        {2.0f, -1.0f, 2},
     };
 
     for (const auto& [input_val, grad_val, max_expected_ulp] : test_cases) {
@@ -516,13 +515,13 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
     // Per-region regression guards
     // Thresholds based on the polynomial+exp implementation (overall max ULP = 5)
     std::vector<int> region_max_ulp_thresholds = {
-        10,  // Deep negative (x < -5): exp-based + saturation
-        10,  // Moderate negative [-5, -2]: polynomial transition
-        5,   // Near negative [-2, -0.5]: core polynomial
-        2,   // Near zero [-0.5, 0.5]: most accurate region
-        3,   // Near positive [0.5, 2]: core polynomial
-        3,   // Moderate positive [2, 5]: approaching saturation
-        2,   // Large positive (x > 5): saturation to 1
+        2,  // Deep negative (x < -5): exp-based + saturation
+        2,  // Moderate negative [-5, -2]: polynomial transition
+        2,  // Near negative [-2, -0.5]: core polynomial
+        2,  // Near zero [-0.5, 0.5]: most accurate region
+        2,  // Near positive [0.5, 2]: core polynomial
+        2,  // Moderate positive [2, 5]: approaching saturation
+        2,  // Large positive (x > 5): saturation to 1
     };
 
     for (size_t r = 0; r < regions.size(); ++r) {
@@ -531,8 +530,8 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
             << region_max_ulp_thresholds[r] << " (worst at x=" << regions[r].worst_x << ")";
     }
 
-    EXPECT_LE(overall_max_ulp, 10) << "Overall max ULP " << overall_max_ulp << " exceeds threshold 10"
-                                   << " (worst at x=" << overall_worst_x << ")";
+    EXPECT_LE(overall_max_ulp, 2) << "Overall max ULP " << overall_max_ulp << " exceeds threshold 2"
+                                  << " (worst at x=" << overall_worst_x << ")";
 }
 
 // Precision guard: builds ULP histogram across all ~65K BF16 values.
@@ -632,7 +631,7 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     std::cout << "============================================================\n";
 
     // Regression guards
-    EXPECT_LE(max_ulp, 10) << "Max ULP " << max_ulp << " at x=" << worst_x << " exceeds threshold 10";
+    EXPECT_LE(max_ulp, 2) << "Max ULP " << max_ulp << " at x=" << worst_x << " exceeds threshold 2";
 
     // At least 99% of values should be within 2 ULP
     int count_le_2 = 0;
@@ -673,8 +672,10 @@ TEST_F(GeluBwUlpTest, ReferenceImplementationVerification) {
 }
 
 // Precision guard: the [-5, -2] region where the original erfc bug had max ULP = 29,756.
-// Asserts max ULP <= 10 across 11 points in this critical region.
-// Directly guards against erfc -> erf regressions.
+// Asserts max ULP <= 10 across 11 sample points. Threshold is 10 (not 2) because some
+// sample values (e.g. -3.7f) are not exact BF16 representable — the reference truncates
+// to BF16 while torch.bfloat16 rounds to nearest, causing a 1-ULP input mismatch that
+// amplifies to ~10 ULP in the output. Comprehensive BF16 sweeps confirm max ULP = 1.
 TEST_F(GeluBwUlpTest, ModerateNegativeRegionBugAnalysis) {
     std::vector<float> moderate_negative_values = {
         -2.0f, -2.5f, -3.0f, -3.5f, -3.7f, -3.719f, -3.75f, -3.8f, -4.0f, -4.5f, -5.0f};
@@ -747,8 +748,8 @@ TEST_F(GeluBwUlpTest, DeepNegativeRegionStability) {
     std::cout << "========================================\n";
 
     // Regression guard: deep negative values should saturate cleanly
-    EXPECT_LE(max_ulp, 10) << "Deep negative region max ULP " << max_ulp << " at x=" << worst_x
-                           << " exceeds threshold 10";
+    EXPECT_LE(max_ulp, 2) << "Deep negative region max ULP " << max_ulp << " at x=" << worst_x
+                          << " exceeds threshold 10";
 }
 
 // Correctness guard: 6 key points spanning all kernel code paths.
@@ -763,14 +764,14 @@ TEST_F(GeluBwUlpTest, SummaryStatistics) {
     struct KeyPoint {
         std::string name;
         float x;
-        int max_ulp_threshold;  // 5 for local minimum (derivative ≈ 0), 3 otherwise
+        int max_ulp_threshold;
     };
 
     std::vector<KeyPoint> key_points = {
         {"Zero", 0.0f, 2},
-        {"Positive unity", 1.0f, 3},
-        {"Negative unity", -1.0f, 3},
-        {"Local minimum", -0.751f, 5},  // Derivative ≈ 0, larger relative error expected
+        {"Positive unity", 1.0f, 2},
+        {"Negative unity", -1.0f, 2},
+        {"Local minimum", -0.751f, 2},
         {"Large positive", 5.0f, 2},
         {"Large negative", -5.0f, 2},
     };
@@ -1059,7 +1060,7 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     }
 
     // Core region should have Max ULP <= 5 (actually achieves 1)
-    EXPECT_LE(core_max_ulp, 5) << "Polynomial GELU backward core region Max ULP should be <= 5";
+    EXPECT_LE(core_max_ulp, 2) << "Polynomial GELU backward core region Max ULP should be <= 2";
 
     std::cout << "\nComparison with standard implementation:\n";
     std::cout << "  Standard (erfc-based): Max ULP = ~32,460 at x = -3.376e+38\n";
@@ -1238,8 +1239,8 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     std::vector<int> segment_max_ulp_thresholds = {
         0,  // x <= -13.375: BF16 natural saturation to 0 — must be exact
         2,  // (-13.375, -5]: exp-based fused x*exp(t)
-        5,  // [-5, -3): LEFT polynomial
-        5,  // [-3, 3.1719): CORE polynomial
+        2,  // [-5, -3): LEFT polynomial
+        2,  // [-3, 3.1719): CORE polynomial
         0,  // x >= 3.1719: saturation to 1 — must be exact
     };
 
@@ -1251,8 +1252,8 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
         }
     }
 
-    EXPECT_LE(overall_max_ulp, 10) << "Overall max ULP " << overall_max_ulp << " exceeds threshold 10"
-                                   << " (worst at x=" << overall_worst_x << ")";
+    EXPECT_LE(overall_max_ulp, 2) << "Overall max ULP " << overall_max_ulp << " exceeds threshold 2"
+                                  << " (worst at x=" << overall_worst_x << ")";
 }
 
 // =============================================================================

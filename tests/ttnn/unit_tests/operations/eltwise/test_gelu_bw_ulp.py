@@ -181,17 +181,17 @@ class TestGeluBwDerivativeAtZero:
 
 class TestGeluBwPositiveValues:
     """Correctness guard: 6 positive-side points where GELU'(x) approaches 1.
-    Per-point ULP thresholds (1-3). Catches broken positive saturation path."""
+    Per-point ULP threshold (2). Catches broken positive saturation path."""
 
     @pytest.mark.parametrize(
         "input_value,max_expected_ulp",
         [
-            (0.5, 5),
-            (1.0, 5),
-            (2.0, 5),
-            (3.0, 5),
-            (5.0, 10),
-            (10.0, 10),
+            (0.5, 2),
+            (1.0, 2),
+            (2.0, 2),
+            (3.0, 2),
+            (5.0, 2),
+            (10.0, 2),
         ],
     )
     def test_positive_values(self, device, input_value, max_expected_ulp):
@@ -214,21 +214,20 @@ class TestGeluBwPositiveValues:
 
 
 class TestGeluBwNegativeValues:
-    """Correctness guard (weak): 8 negative-side points with intentionally loose thresholds
-    (up to 60 ULP). Catches gross errors but not subtle precision loss. The erfc fix
-    reduced ULP from 30,000+ to single digits at these points."""
+    """Correctness guard: 8 negative-side points with tight per-point thresholds (2 ULP).
+    Catches precision regression at any negative sample point."""
 
     @pytest.mark.parametrize(
         "input_value,max_expected_ulp",
         [
-            (-0.5, 5),
-            (-1.0, 5),
-            (-2.0, 10),
-            (-3.0, 15),
-            (-4.0, 20),
-            (-5.0, 25),
-            (-6.0, 30),
-            (-8.0, 50),
+            (-0.5, 2),
+            (-1.0, 2),
+            (-2.0, 2),
+            (-3.0, 2),
+            (-4.0, 2),
+            (-5.0, 2),
+            (-6.0, 2),
+            (-8.0, 2),
         ],
     )
     def test_negative_values(self, device, input_value, max_expected_ulp):
@@ -274,13 +273,13 @@ class TestGeluBwNearZero:
 
         logger.info(f"x={input_value:.2e}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
 
-        assert ulp_error <= 5, f"Expected ULP <= 5, got {ulp_error}"
+        assert ulp_error <= 2, f"Expected ULP <= 2, got {ulp_error}"
 
 
 class TestGeluBwLocalMinimum:
-    """Correctness guard (weak): 5 points near the GELU derivative's zero-crossing at
-    x ≈ -0.751. Intentionally loose thresholds (up to 60 ULP) because the derivative
-    changes sign here, making ULP ratios large even for small absolute errors."""
+    """Correctness guard: 5 points near the GELU derivative's zero-crossing at
+    x ≈ -0.751. Uses absolute error threshold (0.01) because near the zero-crossing,
+    the expected value is near 0 and even tiny absolute errors produce large ULPs."""
 
     @pytest.mark.parametrize(
         "input_value",
@@ -302,9 +301,10 @@ class TestGeluBwLocalMinimum:
 
         logger.info(f"x={input_value}: expected={expected:.6f}, actual={actual:.6f}, ULP={ulp_error}")
 
-        # The derivative is very small near the minimum, so ULP can be high
-        # but the absolute error should be small
-        assert ulp_error <= 50 or abs(actual - expected) < 0.01, f"Error too high at local minimum region"
+        # Near the zero-crossing, expected ≈ 0 so ULP can be large even for tiny absolute errors
+        assert (
+            ulp_error <= 2 or abs(actual - expected) < 0.01
+        ), f"ULP {ulp_error} and abs error {abs(actual - expected):.6f} both exceed thresholds"
 
 
 class TestGeluBwWithGradientScaling:
@@ -314,11 +314,11 @@ class TestGeluBwWithGradientScaling:
     @pytest.mark.parametrize(
         "input_value,grad_value,max_expected_ulp",
         [
-            (1.0, 2.0, 5),
-            (-1.0, 0.5, 10),
+            (1.0, 2.0, 2),
+            (-1.0, 0.5, 2),
             (0.0, 1.0, 2),
-            (2.0, -1.0, 5),
-            (0.5, 3.0, 5),
+            (2.0, -1.0, 2),
+            (0.5, 3.0, 2),
         ],
     )
     def test_with_gradient(self, device, input_value, grad_value, max_expected_ulp):
@@ -344,7 +344,7 @@ class TestGeluBwWithGradientScaling:
 
 def test_gelu_bw_ulp_summary(device):
     """Correctness guard: comprehensive summary of GELU backward ULP across all regions.
-    Tests 6 key points (zero, ±1, local min, ±5) and asserts max ULP <= 5.
+    Tests 6 key points (zero, ±1, local min, ±5) and asserts max ULP <= 2.
     Catches any single broken code path quickly via representative sampling."""
     logger.info("")
     logger.info("=" * 100)
@@ -403,6 +403,6 @@ def test_gelu_bw_ulp_summary(device):
     logger.info("=" * 100)
 
     # Regression guard: all key points must be within 5 ULP
-    assert max_ulp <= 5, (
-        f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 5. " f"See table above for per-point details."
+    assert max_ulp <= 2, (
+        f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
