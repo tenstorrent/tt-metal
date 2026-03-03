@@ -798,6 +798,42 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
     }
 }
 
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
+    ZoneScoped;
+
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+
+    auto device_id = device->id();
+
+    MetalContext::instance().get_cluster().dram_barrier(device_id);
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            auto runtime_id = program.get_runtime_id();
+
+            // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
+            dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
+            local_launch_msg.view().kernel_config().host_assigned_id() =
+                runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device_id);
+
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                device_id,
+                physical_core,
+                local_launch_msg.view(),
+                kg->go_msg.view(),
+                device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+        }
+    }
+}
+
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
