@@ -74,6 +74,8 @@ private:
     std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 
     bool asynchronous_slow_dispatch_enabled_ = false;
+
+    std::shared_ptr<ThreadPool> launch_thread_pool_;
 };
 
 }  // namespace tt::tt_metal::distributed
