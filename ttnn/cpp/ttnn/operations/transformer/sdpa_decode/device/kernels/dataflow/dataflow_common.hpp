@@ -677,7 +677,6 @@ uint64_t read_k(
 
 template <
     uint32_t cb_v_in,
-    uint32_t DHt,
     uint32_t vDHt,
     uint32_t num_kv_heads,
     uint32_t block_size_t,
@@ -685,7 +684,6 @@ template <
     uint32_t barrier_threshold,
     bool is_page_table_sharded,
     bool reuse_k,
-    bool use_mcast,
     typename VReaderType>
 void read_v(
     uint32_t v_chunk_tiles,

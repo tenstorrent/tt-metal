@@ -64,7 +64,6 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
-    constexpr bool reuse_k = get_compile_time_arg_val(32) == 1;
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
