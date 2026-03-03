@@ -70,7 +70,8 @@ void kernel_main() {
     constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
 
     constexpr auto dense_token_maps_ta_args = TensorAccessorArgs<0>();
-    constexpr auto dense_token_counts_ta_args = TensorAccessorArgs<1>();
+    constexpr auto dense_token_counts_ta_args =
+        TensorAccessorArgs<dense_token_maps_ta_args.next_compile_time_args_offset()>();
 
     uint32_t arg_index = 0;
     const auto dense_token_maps_addr = get_arg_val<uint32_t>(arg_index++);
