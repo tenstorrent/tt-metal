@@ -27,7 +27,6 @@
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "multi_device_fixture.hpp"

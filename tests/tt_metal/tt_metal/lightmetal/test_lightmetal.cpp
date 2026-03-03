@@ -30,7 +30,6 @@
 // #include <tt-metalium/tensor_accessor_args.hpp>
 // #include "gtest/gtest.h"
 // #include "hostdevcommon/kernel_structs.h"
-// #include <tt-metalium/kernel_types.hpp>
 // #include "lightmetal/host_api_capture_helpers.hpp"
 // #include <tt-metalium/lightmetal_capture_utils.hpp>
 // #include "lightmetal_fixture.hpp"
