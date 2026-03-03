@@ -9,7 +9,7 @@ import ttnn
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
-def slice_op(
+def slice(
     input_tensor: "ttnn.Tensor",
     begins: List[int],
     ends: List[int],
@@ -61,4 +61,4 @@ def slice_op(
     )
 
 
-__all__ = ["slice_op"]
+__all__ = ["slice"]
