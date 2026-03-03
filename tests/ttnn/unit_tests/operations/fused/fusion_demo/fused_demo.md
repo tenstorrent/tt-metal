@@ -327,9 +327,54 @@ No unfused comparison (custom `SOURCE_CODE` identity ops). No Tracy profiling (i
 | 6 | 0.190 ms | 0.224 ms | **1.18x** | 89.57 ms | 33.49 ms |
 
 **Key takeaways:**
+- **Barrier overhead is ~1.5 us per transition** (demo 8), independent of core count (1-64 cores). Multicast release provides no measurable benefit over unicast.
 - **Linear chains** (demos 1, 2): No device speedup — fused FW ~ sum of unfused kernels + barrier overhead. Demo 1 gets E2E speedup from eliminating 2 dispatch roundtrips; demo 2 is slower fused because `generic_op` dispatch overhead exceeds the single saved dispatch gap.
 - **Branching topologies** (demos 3, 5, 6): Device speedup from overlapping independent branches on disjoint core subsets. Demo 3 (1.54x) from 2 parallel chains; demo 5 (1.67x) from a full binary tree; demo 6 (1.22x) from asymmetric branches with a large serial stem.
+- **Dispatch overhead is ~11-26 us per op** (demo 8), scaling with core count. Fusion eliminates this for all but the first dispatch.
 - **Cold start**: Fused is slower than unfused (with JIT caches populated) because the Python-side fusion build (source gen, CB allocation, barrier setup) adds 40-100 ms vs 20-40 ms for dispatching individual cached programs. Without JIT caches (first process invocation), fused is faster because it JIT-compiles 1 kernel instead of N.
+
+---
+
+## Demo 8: Barrier Overhead Microbenchmark
+
+Measures pure barrier mechanism cost by chaining N no-op phases (empty `kernel_main()`) so the only work is the inter-phase barrier synchronization itself.
+
+**Setup:**
+- Each phase has 3 kernels (reader, compute, writer) with empty bodies
+- No CBs, no DRAM I/O, no compute — barrier transitions dominate
+- A single dummy DRAM tensor satisfies the `generic_op` tensor requirement
+- Parametrized over `num_phases` (2-6) and `num_cores` (1, 8, 16, 64)
+
+**Methodology:** Per-barrier cost = `(fused_N - fused_1) / (N - 1)`, where `fused_1` is a 1-phase baseline that captures fixed kernel launch overhead. At low N the baseline noise is a large fraction of the total, so per-barrier appears inflated; at high N (5-6) it converges to the true mechanism cost.
+
+**Results (Wormhole n150, unicast barrier release):**
+
+| Cores | Grid | 2 phases | 3 phases | 4 phases | 5 phases | 6 phases | Converged |
+|------:|:-----|-------:|-------:|-------:|-------:|-------:|----------:|
+| 1 | (0,0) | 4.6 us | 2.6 us | 1.9 us | 1.5 us | 1.6 us | ~1.5 us |
+| 8 | 1x8 | 3.7 us | 2.1 us | 1.2 us | 1.6 us | 1.3 us | ~1.4 us |
+| 16 | 2x8 | 4.0 us | 2.6 us | 1.9 us | 1.9 us | 1.5 us | ~1.5 us |
+| 64 | 8x8 | 4.8 us | 1.8 us | 2.4 us | 1.9 us | 1.7 us | ~1.7 us |
+
+**Per-barrier cost is ~1.5 us** regardless of core count (1 to 64). The barrier has two levels:
+
+- **`local::sync()`** — per-core 3-RISC rendezvous via L1 semaphores (compute_done, writer_done, reset_done). Coordinator (NCRISC) waits for followers, resets CB state, signals reset_done.
+- **`group::sync()`** — cross-core synchronization. Each core sends `noc_semaphore_inc` to core 0; core 0 waits for all arrivals, then unicast-releases each core individually.
+
+At 64 cores the unicast release loop sends 63 individual `noc_async_write` packets, yet converged cost is only ~0.2 us more than 1 core. The NOC writes are pipelined and the per-write cost is ~30 ns.
+
+**Multicast was benchmarked and removed.** Replacing the unicast release loop with a single `noc_async_write_multicast` for rectangular grids showed no measurable improvement (64-core 6-phase: 1.7 us unicast vs 1.5 us multicast — within noise). The release loop was never the bottleneck. Unicast is kept because it works with non-contiguous core grids (e.g., DRAM-sharded matmul's scattered cores) without special-casing.
+
+**Dispatch overhead comparison** (fused vs unfused, 6 phases):
+
+| Cores | Fused | Unfused | Per-dispatch overhead |
+|------:|------:|--------:|---------------------:|
+| 1 | 21.7 us | 77.9 us | ~11.2 us |
+| 8 | 21.6 us | 92.1 us | ~14.1 us |
+| 16 | 24.5 us | 100.5 us | ~15.2 us |
+| 64 | 36.2 us | 168.5 us | ~26.4 us |
+
+Fusion eliminates ~11-26 us of host dispatch overhead per op (scales with core count due to RT arg setup).
 
 ---
 
