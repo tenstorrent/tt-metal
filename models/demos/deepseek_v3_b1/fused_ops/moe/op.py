@@ -41,8 +41,6 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
-    BCAST_PKT = 46
-
 
 class MoeSem:
     """Global semaphore index constants for the fused MoE op.
@@ -926,7 +924,7 @@ class MoeRoutedExpertOp:
         reduce_scratch_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_packet_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_packet_header_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
-        bcast_pkt_cb = MoeCB.BCAST_PKT
+        bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
 
         # ==================================================================
         # RMSNorm tile reinterpretation (compute kernel needs 32x32 or 16x32 tiles)
