@@ -392,6 +392,7 @@ tools/triage/ @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-byp
 tools/tests/triage/ @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 scripts/install_debugger.sh @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 scripts/ttexalens_ref.txt @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
+scripts/tt-test.sh @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
