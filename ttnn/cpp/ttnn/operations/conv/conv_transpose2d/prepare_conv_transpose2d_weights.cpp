@@ -215,27 +215,6 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         auto [output_height, output_width] = calculate_ct2d_output_image_size(
             {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
 
-        Tensor temp_dummy_weight = tt::tt_metal::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
-                tt::tt_metal::TensorLayout(
-                    weight_dtype,
-                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                    MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})),
-            device);
-
-        std::optional<Tensor> temp_dummy_bias = std::nullopt;
-        if (has_bias) {
-            temp_dummy_bias = tt::tt_metal::create_device_tensor(
-                tt::tt_metal::TensorSpec(
-                    ttnn::Shape({1, 1, 1, out_channels}),
-                    tt::tt_metal::TensorLayout(
-                        weight_dtype,
-                        tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})),
-                device);
-        }
-
         auto temp_slice_attr = get_conv_transpose2d_slice_attr(
             batch_size,
             input_height,
@@ -251,8 +230,9 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             input_layout,
             input_dtype,
             conv_output_dtype,
-            std::ref(temp_dummy_weight),
-            has_bias ? std::make_optional(std::ref(temp_dummy_bias.value())) : std::nullopt,
+            weight_dtype,
+            kernel_size[1],
+            has_bias,
             conv_config,
             compute_config,
             device,
@@ -280,12 +260,6 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
                 "Auto determined DRAM Slice Config in Prepare Conv_Transpose2d Weights as {} for {}",
                 actual_slice_config.value(),
                 temp_slice_attr->name());
-        }
-
-        // Clean up temporary tensors
-        temp_dummy_weight.deallocate();
-        if (has_bias && temp_dummy_bias.has_value()) {
-            temp_dummy_bias.value().deallocate();
         }
     }
 
@@ -327,25 +301,6 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     }
 
     // DRAM path continues - need to set up slice configuration
-    Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
-            tt::tt_metal::TensorLayout(
-                weight_dtype,
-                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})),
-        device);
-    std::optional<Tensor> dummy_bias_tensor = std::nullopt;
-    if (has_bias) {
-        dummy_bias_tensor = tt::tt_metal::create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape({1, 1, 1, out_channels}),
-                tt::tt_metal::TensorLayout(
-                    weight_dtype,
-                    tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
-                    MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})),
-            device);
-    }
     auto [output_height, output_width] = calculate_ct2d_output_image_size(
         {input_height, input_width}, kernel_size, stride, padding_n4, {0, 0}, dilation);
     auto convt2d_slice_attr = get_conv_transpose2d_slice_attr(
@@ -363,8 +318,9 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         input_layout,
         input_dtype,
         conv_output_dtype,
-        std::ref(dummy_weight_tensor),
-        has_bias ? std::make_optional(std::ref(dummy_bias_tensor.value())) : std::nullopt,
+        weight_dtype,
+        kernel_size[1],
+        has_bias,
         conv_config,
         compute_config,
         device,
