@@ -103,7 +103,6 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
 
     # V2 format provides separate shapes for each input
-    # Master config loader already converts per-shard shapes to global shapes
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else input_b_shape
 

@@ -9,8 +9,12 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_multi_pos,
     run_test_sdpa_decode_single_iter,
     run_test_sdpa_decode_paged_attention,
+    run_test_sdpa_decode_paged_attention_single_iter,
     run_test_sdpa_decode_ndpcc,
     num_to_corerange,
+    nearest_n,
+    nearest_pow_2,
+    get_chunk_size,
 )
 
 
@@ -187,6 +191,137 @@ def test_sdpa_decode_paged_attention(
     )
 
     assert device.num_program_cache_entries() == 4
+
+
+@pytest.mark.parametrize(
+    "kv_dtype, q_dtype",
+    [
+        [ttnn.bfloat16, ttnn.bfloat16],
+    ],
+    ids=[
+        "all_bfp16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window_size",
+    (
+        [1, 32, 8, 32 * 16, 128, (8, 1), True, None],  # Bug #37927: block_size=16 repro, s=512
+        [1, 64, 8, 64 * 64, 64, (8, 1), True, None],  # Bug #37927: nh=64 d=64, q_chunk_size==head_size repro, s=4096
+    ),
+    ids=["paged-block16-regr", "paged-qchunk-eq-d-regr"],
+)
+@pytest.mark.parametrize("block_size", (16, 32, 64, 128), ids=["paged_16", "paged_32", "paged_64", "paged_128"])
+def test_sdpa_decode_paged_attention_regressions(
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
+):
+    """Regression tests for paged SDPA decode bug fixes (issue #37927).
+
+    Bug 1: block_size=16 with multi-block sequences.
+        b=1, nh=32, nkv=8, s=512, d=128, block_size=16 (bfloat16).
+        With s=512 and block_size=16, this creates 32 blocks (512/16).
+        The multi-block path had a bug that didn't manifest with larger
+        block sizes (32, 64, 128) where fewer blocks are needed.
+
+    Bug 2: q_chunk_size == head_size produces garbage output.
+        b=1, nh=64, nkv=8, s=4096, d=64, block_size=64 (bfloat16).
+        When d=64, the internal chunking logic had an edge case where
+        q_chunk_size == head_size led to incorrect buffer handling.
+    """
+    TILE_HEIGHT = 32
+    if block_size < TILE_HEIGHT:
+        # Sub-tile block sizes only support causal path; test a single causal iteration
+        padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+        cur_pos = s // 2
+        k_chunk_size = get_chunk_size(cur_pos + 1, s)
+        run_test_sdpa_decode_paged_attention_single_iter(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            kv_dtype,
+            grid_size,
+            q_dtype,
+            cur_pos=cur_pos,
+            block_size=block_size,
+            q_chunk_size=padded_num_heads,
+            k_chunk_size=k_chunk_size,
+            sharded_in=True,
+            sharded_out=False,
+        )
+    else:
+        run_test_sdpa_decode_paged_attention(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            kv_dtype,
+            grid_size,
+            q_dtype,
+            cur_pos_tensor,
+            block_size=block_size,
+            sharded_in=True,
+            sharded_out=False,
+            sliding_window_size=sliding_window_size,
+        )
+
+
+@pytest.mark.timeout(120)
+def test_sdpa_decode_tree_reduction_power_of_2_regression(device):
+    """Regression test for issue #38521: tree-reduction round count off-by-one for power-of-2 core counts.
+
+    The formula `32 - __builtin_clz(num_cores_per_head)` computes floor(log2(n)) + 1,
+    not ceil(log2(n)). For powers of 2 these differ by 1. With num_cores_per_head=64:
+        32 - __builtin_clz(64) = 7, but ceil(log2(64)) = 6.
+    This caused a TT_FATAL because 7 > MAX_TREE_REDUCTION_ROUNDS (6), even though
+    64 cores genuinely fits in 6 binary-tree reduction rounds.
+
+    By omitting program_config the op uses the full device grid with no
+    max_cores_per_head_batch cap. With b=1 and nkv=1 this gives
+    num_cores_per_head == total_device_cores. When that count is a power of 2
+    (e.g. 64 on WH 8x8) the off-by-one fires.
+
+    The fix: `(n <= 1) ? 0 : (32 - __builtin_clz(n - 1))`.
+    """
+    import torch
+
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    if num_cores < 2 or (num_cores & (num_cores - 1)) != 0:
+        pytest.skip(
+            f"Device grid {grid.x}x{grid.y}={num_cores} cores is not a power of 2; "
+            "bug only triggers on power-of-2 core counts"
+        )
+
+    b, nkv, nh, s, d = 1, 1, 8, 2048, 128
+
+    torch.manual_seed(1234)
+    Q = torch.randn(1, b, nh, d)
+    K = torch.randn(b, nkv, s, d)
+    V = torch.randn(b, nkv, s, d)
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_K = ttnn.as_tensor(K, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+
+    start_indices_tt = ttnn.Tensor(torch.tensor([s // 2] * b, dtype=torch.int32), ttnn.int32).to(device)
+
+    # Call without program_config so the op uses the full device grid.
+    # With b=1, nkv=1: num_cores_per_head = total device cores (power of 2).
+    # Before the fix, the tree-reduction round formula was off by one → TT_FATAL.
+    tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        cur_pos_tensor=start_indices_tt,
+        scale=d**-0.5,
+        memory_config=dram,
+    )
+    assert tt_out is not None
 
 
 @pytest.mark.parametrize(

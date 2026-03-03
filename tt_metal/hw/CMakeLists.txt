@@ -586,7 +586,7 @@ target_sources(
             inc/api/compute/eltwise_unary/isinf_isnan.h
             inc/api/compute/eltwise_unary/left_shift.h
             inc/api/compute/eltwise_unary/log1p.h
-            inc/api/compute/eltwise_unary/logical_not_noti.h
+            inc/api/compute/eltwise_unary/logical_not.h
             inc/api/compute/eltwise_unary/negative.h
             inc/api/compute/eltwise_unary/prelu.h
             inc/api/compute/eltwise_unary/rand.h
@@ -655,6 +655,7 @@ target_sources(
             inc/hostdev/rta_constants.h
             inc/hostdev/socket.h
             # Interface Headers
+            inc/internal/hw_thread.h
             inc/internal/atomic_rwptr.h
             inc/internal/bit_utils.h
             inc/internal/circular_buffer_interface.h

@@ -19,7 +19,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 120
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()

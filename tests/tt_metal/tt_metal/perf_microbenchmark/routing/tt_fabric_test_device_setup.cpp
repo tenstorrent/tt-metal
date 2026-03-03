@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_device_setup.hpp"
 
 namespace tt::tt_fabric::fabric_tests {

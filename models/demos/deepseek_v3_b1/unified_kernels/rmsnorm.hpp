@@ -55,11 +55,20 @@ struct RMSNorm {
     struct WriterCTArgs {};
 
     // Compute CTArgs: fp32_acc, num_tiles, rsqrt_fast_approx (template params)
-    template <bool FP32Acc, uint32_t NumTiles, bool RsqrtFastApprox>
+    template <
+        bool FP32Acc,
+        uint32_t NumTiles,
+        bool RsqrtFastApprox,
+        uint32_t InputCb,
+        uint32_t GammaCb,
+        uint32_t OutputCb>
     struct ComputeCTArgs {
         static constexpr bool fp32_acc = FP32Acc;
         static constexpr uint32_t num_tiles = NumTiles;
         static constexpr bool rsqrt_fast_approx = RsqrtFastApprox;
+        static constexpr uint32_t input_cb = InputCb;
+        static constexpr uint32_t gamma_cb = GammaCb;
+        static constexpr uint32_t output_cb = OutputCb;
     };
 
     // ========================================================================
@@ -70,9 +79,6 @@ struct RMSNorm {
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
     struct ComputeArgs {
-        uint32_t input_cb;
-        uint32_t gamma_cb;
-        uint32_t output_cb;
         uint32_t epsilon;
         float scalar;
     };
@@ -98,7 +104,7 @@ struct RMSNorm {
             // TRISC (Compute)
             // ================================================================
             // Init block done only once
-            cb_wait_front(args.gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
+            cb_wait_front(CTArgs::gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
 
             compute_rmsnorm(args);
 #endif
@@ -107,15 +113,15 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
-            reconfig_data_format<false, true>(args.input_cb, args.input_cb);
-            pack_reconfig_data_format<true>(args.output_cb);
+            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
+            pack_reconfig_data_format<true>(CTArgs::output_cb);
             {
                 // Square the input
-                mul_reduce_scalar_init(args.input_cb, args.input_cb);
+                mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
-                cb_wait_front(args.input_cb, num_tiles);
+                cb_wait_front(CTArgs::input_cb, num_tiles);
                 tile_regs_acquire();
-                mul_reduce_scalar_tile<PoolType::SUM>(args.input_cb, args.input_cb, num_tiles, args.scalar);
+                mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
             }
             {
@@ -123,24 +129,24 @@ struct RMSNorm {
             }
             {
                 // Multiply input by 1/RMS
-                rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(args.input_cb);
-                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(args.input_cb, 0, 0, 0);
+                rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(CTArgs::input_cb);
+                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
                 if constexpr (pop_input) {
-                    cb_pop_front(args.input_cb, num_tiles);
+                    cb_pop_front(CTArgs::input_cb, num_tiles);
                 }
             }
             {
                 // Multiply by the weight
-                cb_reserve_back(args.output_cb, num_tiles);
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(args.gamma_cb);
+                cb_reserve_back(CTArgs::output_cb, num_tiles);
+                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
                 for (uint32_t i = 0; i < num_tiles; i++) {
-                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(args.gamma_cb, i, i);
+                    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
                 }
 
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile_block(0, args.output_cb, num_tiles);
-                cb_push_back(args.output_cb, num_tiles);
+                pack_tile_block(0, CTArgs::output_cb, num_tiles);
+                cb_push_back(CTArgs::output_cb, num_tiles);
                 tile_regs_release();
             }
         }

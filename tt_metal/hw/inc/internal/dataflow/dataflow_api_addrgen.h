@@ -99,18 +99,26 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
                                                      : 6;
     switch (format & 0x1F) {
         case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
+#ifndef ARCH_QUASAR
         case ((uint8_t)DataFormat::UInt16):
+#endif
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (index << (datum_shift + 1));
         case ((uint8_t)DataFormat::Int32):
+#ifndef ARCH_QUASAR
         case ((uint8_t)DataFormat::UInt32):
+#else
+        case ((uint8_t)DataFormat::Tf32):
+#endif
         case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
+#ifndef ARCH_QUASAR
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (exp_shift)));
         case ((uint8_t)DataFormat::Bfp4):
         case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (exp_shift)));
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b):
+#endif
         // Keep default as Bfp8?
         default: return ((index << datum_shift) + (index << (exp_shift)));
     };

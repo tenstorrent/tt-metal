@@ -15,7 +15,15 @@ from .module import Module, Parameter
 
 
 class RMSNorm(Module):
-    def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
+    def __init__(
+        self,
+        embedding_dim,
+        norm_eps=1e-5,
+        norm_elementwise_affine=True,
+        bias=True,
+        mesh_device=None,
+        dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         # https://github.com/tenstorrent/tt-metal/issues/31216
@@ -28,8 +36,8 @@ class RMSNorm(Module):
         self.use_bias = norm_elementwise_affine and bias
 
         if norm_elementwise_affine:
-            self.weight = Parameter(total_shape=[1, embedding_dim], device=mesh_device)
-            self.bias = Parameter(total_shape=[1, embedding_dim], device=mesh_device) if bias else None
+            self.weight = Parameter(total_shape=[1, embedding_dim], device=mesh_device, dtype=dtype)
+            self.bias = Parameter(total_shape=[1, embedding_dim], device=mesh_device, dtype=dtype) if bias else None
         else:
             self.weight = None
             self.bias = None
@@ -193,21 +201,14 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-            x, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
+            x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-            stats = ttnn.experimental.all_gather_async(
+            stats = self.ccl_manager.all_gather_persistent_buffer(
                 stats,
                 dim=len(x.shape) - 1,
-                cluster_axis=self.mesh_axis,
-                mesh_device=x.device(),
-                topology=self.ccl_manager.topology,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
-                persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
-                    stats.shape, len(stats.shape) - 1, self.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
+                mesh_axis=self.mesh_axis,
             )
 
         x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
@@ -319,7 +320,7 @@ class DistributedLayerNorm(Module):
             )
 
     def forward(
-        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None
+        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None, dtype=None
     ) -> ttnn.Tensor:
         assert (dynamic_weight is None) == (
             dynamic_bias is None
@@ -354,6 +355,7 @@ class DistributedLayerNorm(Module):
             bias=bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            dtype=dtype,
         )
         return x
 
