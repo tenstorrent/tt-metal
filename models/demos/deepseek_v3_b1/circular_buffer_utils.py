@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import ttnn
+
+if TYPE_CHECKING:
+    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 
 
 class CircularBufferIdManager:
@@ -38,14 +43,30 @@ class CircularBufferIdManager:
                 return cb_id
 
         cb_id = self._next_id
-        if cb_id >= NUM_CIRCULAR_BUFFERS:
-            raise RuntimeError(f"All {NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted")
+        if cb_id >= self.NUM_CIRCULAR_BUFFERS:
+            raise RuntimeError(f"All {self.NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted")
         self._next_id += 1
         self._id_to_format[cb_id] = key
         return cb_id
 
-    def create_context(self) -> "CircularBufferIdContext":
-        return CircularBufferIdContext(self)
+    class Context:
+        """A scoped view into a :class:`CircularBufferIdManager`.
+
+        Within a single context every returned CB ID is unique.  Different
+        contexts may share IDs as long as the data_format and tile match.
+        """
+
+        def __init__(self, manager: CircularBufferIdManager):
+            self._manager = manager
+            self._used_ids: set[int] = set()
+
+        def get_cb_id(self, data_format, tile: ttnn.TileDescriptor) -> int:
+            cb_id = self._manager._allocate_id(data_format, tile, self._used_ids)
+            self._used_ids.add(cb_id)
+            return cb_id
+
+    def create_context(self) -> "CircularBufferIdManager.Context":
+        return CircularBufferIdManager.Context(self)
 
     def build_dummy_cb_descriptors(self, core_ranges) -> list:
         """Build minimal CB descriptors for every allocated CB ID.
@@ -72,23 +93,6 @@ class CircularBufferIdManager:
             desc.format_descriptors = [fmt]
             descs.append(desc)
         return descs
-
-
-class CircularBufferIdContext:
-    """A scoped view into a :class:`CircularBufferIdManager`.
-
-    Within a single context every returned CB ID is unique.  Different
-    contexts may share IDs as long as the data_format and tile match.
-    """
-
-    def __init__(self, manager: CircularBufferIdManager):
-        self._manager = manager
-        self._used_ids: set[int] = set()
-
-    def get_cb_id(self, data_format, tile: ttnn.TileDescriptor) -> int:
-        cb_id = self._manager._allocate_id(data_format, tile, self._used_ids)
-        self._used_ids.add(cb_id)
-        return cb_id
 
 
 def cb_descriptor_from_overlapped_tensor(
