@@ -1,0 +1,141 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "/localdev/mstaletovic/metal-2/tt-metal/ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "/localdev/mstaletovic/metal-2/tt-metal/ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads RM sticks, compute tilizes then untilizes (identity passthrough), writer writes RM sticks back to DRAM",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "return input_tensor",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "reduce_mean",
+      "description": "Tilize input, compute row-wise mean via reduce SUM with 1/W scaler, broadcast mean to full row, untilize and output",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_reduce_mean.py",
+      "reference_body": "mean = input_tensor.float().mean(dim=-1, keepdim=True)\n    return mean.expand_as(input_tensor).to(torch.bfloat16)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "subtract_mean",
+      "description": "Tilize input, compute mean, subtract mean from each tile using COL broadcast, untilize centered values",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_subtract_mean.py",
+      "reference_body": "x = input_tensor.float()\n    mean = x.mean(dim=-1, keepdim=True)\n    return (x - mean).to(torch.bfloat16)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "full_layer_norm",
+      "description": "Complete layer normalization: tilize, mean, center, variance, rsqrt, normalize, apply gamma and beta, untilize",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_full_layer_norm.py",
+      "reference_body": "x = input_tensor.float()\n    W = x.shape[-1]\n    result = torch.nn.functional.layer_norm(x, [W], weight=gamma.squeeze().float(), bias=beta.squeeze().float(), eps=1e-5)\n    return result.to(torch.bfloat16)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(2, 1, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", ttnn_gamma, ttnn_beta",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, shape[-1], dtype=torch.bfloat16)\n    beta = torch.randn(1, 1, 1, shape[-1], dtype=torch.bfloat16)",
+      "extra_ttnn_setup": "ttnn_gamma = ttnn.from_torch(gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\n    ttnn_beta = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
