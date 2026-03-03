@@ -137,19 +137,25 @@ void kernel_main() {
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
 
+    // DEBUG:
+    // DPRINT_MATH(
+    //     DPRINT << "[layernorm] NCHt=" << NCHt << " Wt=" << Wt << " blk=" << blk << ENDL();
+    // )
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         // Tilize ROW_MAJOR input into cb_in (CB 0) one block at a time.
         // tilize_init/uninit wrap each ncht iteration; tilize_block is called per block.
-        DPRINT_MATH(DPRINT << "[layernorm] TILIZE_IN ncht=" << ncht << " Wt=" << Wt << " blk=" << blk << ENDL();)
+        // DPRINT_MATH(DPRINT << "[layernorm] TILIZE_IN ncht=" << ncht << " Wt=" << Wt << " blk=" << blk << ENDL();)
         reconfig_data_format(cb_in_rm, cb_in_rm);
         pack_reconfig_data_format(cb_in);
 
         unary_op_init_common(cb_in_rm, cb_in_rm, cb_in_rm);
         tilize_init(cb_in_rm, blk, cb_in);
         for (auto block : generic::blocks(Wt, blk)) {
-            DPRINT_MATH(DPRINT << "[layernorm] tilize_block block.start=" << block.start() << " size=" << block.size()
-                               << " full=" << block.full_block_size() << ENDL();)
+            // DPRINT_MATH(DPRINT << "[layernorm] tilize_block block.start=" << block.start() << " size=" <<
+            // block.size()
+            //                    << " full=" << block.full_block_size() << ENDL();)
             cb_wait_front(cb_in_rm, block.full_block_size());
             cb_reserve_back(cb_in, block.full_block_size());
             tilize_block(cb_in_rm, block.full_block_size(), cb_in);
@@ -336,7 +342,7 @@ void kernel_main() {
             }
 
             if constexpr (do_gamma) {
-                if constexpr (do_beta == 0) {
+                if constexpr (do_beta == 0 && DST_ACCUM_MODE) {
                     pack_reconfig_data_format(cb_out);
                 }
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
@@ -349,6 +355,11 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+
+                    // DEBUG:
+                    // if (i == 0) {
+                    //     dprint_tensix_dest_reg(0);
+                    // }
 #ifdef SFPU_OP_INIT_ACTIVATION
                     // Activation must be applied last. If do_beta != 0 then
                     // activation will be applied after the beta addition.
@@ -381,6 +392,10 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+                                                                                         // if (i == 0) {
+                    //     dprint_tensix_dest_reg(0);
+                    // }
+
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
@@ -401,6 +416,9 @@ void kernel_main() {
         // Pack-untilize them block-by-block into cb_out_rm (CB 28) for the RM writer.
         // pack_untilize_block<blk, blk> produces true row-major output in cb_out_rm:
         //   row r starts at offset r * blk * TILE_W * elem_size from the CB base.
+
+        reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
+
         constexpr auto cb_out_rm = tt::CBIndex::c_28;
         pack_untilize_init<blk, blk>(cb_out, cb_out_rm);
         for (auto block : generic::blocks(Wt, blk)) {

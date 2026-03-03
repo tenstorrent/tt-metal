@@ -107,7 +107,6 @@ void kernel_main() {
         const uint32_t abs_tile_row = row_offset / TILE_H + ncht;
 
 #ifndef RMSNORM
-        DPRINT << "[rm_reader] pushing row-major block to cb_in_rm for E(x)" << ENDL();
         // Data for Calculating E[X]
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
             cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
@@ -118,8 +117,6 @@ void kernel_main() {
         }
 #endif
 #endif
-        DPRINT << "[rm_reader] pushed row-major block to cb_in_rm for first pass" << ENDL();
-
         // Pass 1 for TILIZE_IN: variance calculation
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
             cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
@@ -129,27 +126,39 @@ void kernel_main() {
                 cb_id_in1, src_b, src1_tile_bytes, tile_offs + block.start() + tile_offset, block);
         }
 #endif
-        DPRINT << "[rm_reader] pushed row-major block to cb_in_rm for second pass" << ENDL();
-
-        // Pass 2 for TILIZE_IN: final normalization
-        layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
-#ifdef FUSE_PRE_ADD
+        // Pass 2 for TILIZE_IN: normalization — input MUST be interleaved with gamma/beta
+        // per block.  Pushing all pass-2 input first and then all gamma deadlocks:
+        //   cb_in_rm capacity = 1 block; the compute's normalization loop reads gamma
+        //   INSIDE the same per-block loop that drains cb_in_rm.  Once compute finishes
+        //   the x/sqrt(var+eps) step it blocks on cb_gamma, while the reader is still
+        //   blocked on cb_in_rm for the next block — circular wait.
         for (auto block : generic::blocks(Wt, block_size)) {
+            // Pass 2 input for this block
+            const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
+            const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
+            cb_reserve_back(cb_id_in_rm, block.full_block_size());
+            uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
+            for (uint32_t row = 0; row < TILE_H; ++row) {
+                const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
+                noc_async_read(noc_addr, l1_ptr, row_read_bytes);
+                l1_ptr += full_row_stride;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in_rm, block.full_block_size());
+
+            // Gamma/beta for this block — pushed immediately after input so compute
+            // finds them in the CB when it reaches the gamma/beta multiplication step.
+#ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
                 cb_id_in1, src_b, src1_tile_bytes, tile_offs + block.start() + tile_offset, block);
-        }
 #endif
 #ifdef FUSE_GAMMA
-        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
-        }
 #endif
 #ifdef FUSE_BETA
-        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
-        }
 #endif
+        }
 
         tile_offs += Wt;
     }
