@@ -192,6 +192,9 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
     torch_out, _ = gated_deltanet_forward(**params, mode=torch_mode, chunk_size=chunk_size)
 
     device = ttnn.open_device(device_id=0, l1_small_size=16384)
+    # Note: Fast dispatch (default) already enables async execution
+    # The op-to-op gaps in the perf report are likely due to synchronization points
+    # or operation dependencies, not lack of async execution
     try:
         ttnn_params = {}
         skip_keys = {
@@ -211,13 +214,18 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
                 if key.endswith("_proj_weight"):
                     val = val.T.contiguous()
                 if key.endswith("_conv_weight"):
-                    ttnn_params[key] = ttnn.from_torch(val, dtype=ttnn.bfloat16)
+                    ttnn_params[key] = ttnn.from_torch(
+                        val,
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
                 else:
                     ttnn_params[key] = ttnn.from_torch(
                         val,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                         device=device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
             else:
                 ttnn_params[key] = val
