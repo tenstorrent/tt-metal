@@ -24,4 +24,9 @@ add_executable(mesh_device_test)
 target_sources(mesh_device_test PRIVATE mesh_device_test.cpp)
 target_link_libraries(mesh_device_test PUBLIC TT::Metalium)
 
+if(TARGET TT::CommonPCH)
+    target_precompile_headers(package_integration_test REUSE_FROM TT::CommonPCH)
+    target_precompile_headers(out_of_tree_test REUSE_FROM TT::CommonPCH)
+    target_precompile_headers(mesh_device_test REUSE_FROM TT::CommonPCH)
+endif()
 # Any other integration tests should be added here
