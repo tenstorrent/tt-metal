@@ -95,7 +95,9 @@ def _fabric_config_for_num_procs(num_procs: int):
         return ttnn.FabricConfig.FABRIC_2D
     if num_procs == 16:
         return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4 or 16)")
+    if num_procs == 64:
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
 
 
 @contextlib.contextmanager
@@ -280,7 +282,7 @@ def run_demo(
 
     with open_mesh_device() as mesh_device:
         num_procs = int(ttnn.distributed_context_get_size())
-        if num_procs not in (4, 16):
+        if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4 or 16 distributed processes; got {num_procs}")
         ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
