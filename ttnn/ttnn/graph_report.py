@@ -484,6 +484,10 @@ def import_graph(
     all_scope_output_ids = set()
     # Track ALL nested inputs at every depth so we can identify intermediate tensors
     all_nested_input_ids = set()
+    # Arguments lifted from the first C++ child operation for argument-less Python ops
+    first_child_arguments = None
+    # Connections from the parent Python-level function_start node
+    parent_node_connections = [1]
 
     # Internal C++ wrapper operations to skip (transparent: children still visible).
     _FILTERED_OP_PREFIXES = (
@@ -567,12 +571,14 @@ def import_graph(
                 real_function_depth += 1
                 op_nesting_depth += 1
                 current_op_nodes = [node]
+                parent_node_connections = node.get("connections", [])
                 nested_input_tensor_ids = []
                 nested_output_tensor_ids = []
                 nested_output_tensor_nodes = []
                 all_nested_output_ids = set()
                 all_scope_output_ids = set()
                 all_nested_input_ids = set()
+                first_child_arguments = None
                 parent_start_counter = counter
                 nodes_batch.append((base_operation_id, counter, operation_counter, name))
 
@@ -660,7 +666,10 @@ def import_graph(
             # ----- Python I/O: if available, use directly -----
             py_io = start_node.get("python_io") if start_node else None
 
-            if start_node:
+            if py_io and py_io.get("arguments"):
+                for key, val in py_io["arguments"].items():
+                    operation_arguments_batch.append((operation_id, str(key), str(val)))
+            elif start_node:
                 for idx, arg in enumerate(start_node.get("arguments", [])):
                     operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg)))
 
@@ -681,8 +690,6 @@ def import_graph(
                     for idx, tid in enumerate(direct_inputs):
                         input_tensors_batch.append((operation_id, idx, tid))
                 elif nested_input_tensor_ids:
-                    # Fallback I/O lifting from nested children:
-                    # Keep inputs that aren't intermediates (produced within this scope).
                     seen = set()
                     lifted_inputs = []
                     for tid in nested_input_tensor_ids:
@@ -736,25 +743,40 @@ def import_graph(
                     output_tensor_nodes = kept_nodes
 
             # Per-operation captured_graph subgraph
-            capture_start = {
-                "arguments": [],
-                "connections": [1],
-                "counter": 0,
-                "input_tensors": [],
-                "node_type": "capture_start",
-                "params": {},
-                "stacking_level": 0,
-            }
-            capture_end = {
-                "arguments": [],
-                "connections": [],
-                "counter": 0,
-                "input_tensors": [],
-                "node_type": "capture_end",
-                "params": {},
-                "stacking_level": 0,
-            }
-            subgraph = [capture_start] + current_op_nodes + output_tensor_nodes + [capture_end]
+            if py_io and py_io.get("captured_graph"):
+                subgraph = py_io["captured_graph"]
+            else:
+                capture_start = {
+                    "arguments": [],
+                    "connections": [1],
+                    "counter": 0,
+                    "input_tensors": [],
+                    "node_type": "capture_start",
+                    "params": {},
+                    "stacking_level": 0,
+                }
+                capture_end = {
+                    "arguments": [],
+                    "connections": [],
+                    "counter": 0,
+                    "input_tensors": [],
+                    "node_type": "capture_end",
+                    "params": {},
+                    "stacking_level": 0,
+                }
+                raw_subgraph = [capture_start] + current_op_nodes + output_tensor_nodes + [capture_end]
+                old_to_new = {}
+                for idx, nd in enumerate(raw_subgraph):
+                    old_to_new[nd.get("counter", 0)] = idx
+                subgraph = []
+                for idx, nd in enumerate(raw_subgraph):
+                    nd_copy = dict(nd)
+                    nd_copy["counter"] = idx
+                    if "connections" in nd_copy:
+                        nd_copy["connections"] = [old_to_new.get(c, c) for c in nd_copy["connections"]]
+                    if "input_tensors" in nd_copy:
+                        nd_copy["input_tensors"] = [old_to_new.get(c, c) for c in nd_copy["input_tensors"]]
+                    subgraph.append(nd_copy)
             captured_graph_batch.append((operation_id, json.dumps(subgraph)))
             current_op_nodes = []
 
@@ -931,6 +953,30 @@ def import_graph(
         else:
             filtered_tensors.append(t)
     tensors_batch = filtered_tensors
+
+    # Ensure py_io tensor IDs that don't have C++ graph entries get created.
+    # When enable_logging=True, Python's set_output_tensor_id_decorator assigns
+    # new tensor IDs after C++ records the output.  These Python-level IDs appear
+    # in py_io output_tensor_ids but have no C++ tensor node.  Create tensor
+    # entries for them by copying from the nearest tensor at the same address.
+    existing_tids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
+    io_tids = set()
+    for _, _, tid in input_tensors_batch:
+        io_tids.add(int(tid) if isinstance(tid, str) else tid)
+    for _, _, tid in output_tensors_batch:
+        io_tids.add(int(tid) if isinstance(tid, str) else tid)
+    missing_tids = io_tids - existing_tids
+    if missing_tids:
+        addr_to_tensor = {}
+        for t in tensors_batch:
+            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+            if addr is not None and addr not in addr_to_tensor:
+                addr_to_tensor[addr] = t
+        for mtid in missing_tids:
+            addr = tensor_address.get(mtid)
+            if addr is not None and addr in addr_to_tensor:
+                _, shape, dtype, layout, mem_cfg, dev_id, _, bt = addr_to_tensor[addr]
+                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt))
 
     kept_tensor_ids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
 
@@ -1233,31 +1279,79 @@ def import_report(
             per_op_bufs = report.get("per_operation_buffers")
 
             if bp_by_addr and per_op_bufs:
-                pages_lookup = {}
-                for addr_str, pages in bp_by_addr.items():
+
+                def _parse_page(p):
+                    return (
+                        p.get("device_id", 0),
+                        p.get("address", 0),
+                        p.get("core_y", 0),
+                        p.get("core_x", 0),
+                        p.get("bank_id", 0),
+                        p.get("page_index", 0),
+                        p.get("page_address", 0),
+                        p.get("page_size", 0),
+                        p.get("buffer_type", 0),
+                    )
+
+                # Build a timeline of page snapshots per address.
+                # Each address may have multiple snapshots from re-allocations.
+                # Format: {addr: [(alloc_counter, [page_tuples]), ...]} sorted by counter.
+                pages_timeline = {}
+                for addr_str, snapshots in bp_by_addr.items():
                     addr_int = int(addr_str)
-                    pages_lookup[addr_int] = [
-                        (
-                            p.get("device_id", 0),
-                            p.get("address", 0),
-                            p.get("core_y", 0),
-                            p.get("core_x", 0),
-                            p.get("bank_id", 0),
-                            p.get("page_index", 0),
-                            p.get("page_address", 0),
-                            p.get("page_size", 0),
-                            p.get("buffer_type", 0),
+                    if (
+                        isinstance(snapshots, list)
+                        and snapshots
+                        and isinstance(snapshots[0], dict)
+                        and "alloc_counter" in snapshots[0]
+                    ):
+                        timeline = sorted(
+                            [(s["alloc_counter"], [_parse_page(p) for p in s["pages"]]) for s in snapshots],
+                            key=lambda x: x[0],
                         )
-                        for p in pages
-                    ]
+                    else:
+                        timeline = [(0, [_parse_page(p) for p in snapshots])]
+                    pages_timeline[addr_int] = timeline
+
+                import bisect
+
+                def _get_pages_for_addr(addr, op_counter):
+                    """Pick the latest snapshot whose alloc_counter <= op_counter."""
+                    timeline = pages_timeline.get(addr)
+                    if not timeline:
+                        return []
+                    counters = [t[0] for t in timeline]
+                    idx = bisect.bisect_right(counters, op_counter) - 1
+                    if idx < 0:
+                        return timeline[0][1]
+                    return timeline[idx][1]
+
+                # Build function_start → function_end counter mapping.
+                # per_op_bufs keys are function_start counters but buffers
+                # are allocated DURING the operation, so we need the end
+                # counter to pick the correct page snapshot.
+                start_to_end = {}
+                if "graph" in report:
+                    end_stack = []
+                    for node in report["graph"]:
+                        nt = node.get("node_type", "")
+                        c = node.get("counter", 0)
+                        if nt == "function_start":
+                            end_stack.append(c)
+                        elif nt == "function_end" and end_stack:
+                            start_c = end_stack.pop()
+                            start_to_end[start_c] = c
+
                 buffer_pages_batch = []
                 for graph_counter_str, bufs in per_op_bufs.items():
-                    op_id = graph_counter_to_op_id.get(int(graph_counter_str))
+                    graph_counter = int(graph_counter_str)
+                    op_id = graph_counter_to_op_id.get(graph_counter)
                     if op_id is None:
                         continue
+                    end_counter = start_to_end.get(graph_counter, graph_counter)
                     for buf in bufs:
                         addr = buf.get("address", 0)
-                        for page_tuple in pages_lookup.get(addr, []):
+                        for page_tuple in _get_pages_for_addr(addr, end_counter):
                             buffer_pages_batch.append((op_id, *page_tuple))
                 if buffer_pages_batch:
                     cursor.executemany(

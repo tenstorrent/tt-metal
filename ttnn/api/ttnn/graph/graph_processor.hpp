@@ -123,9 +123,11 @@ private:
     std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
     // Per-operation buffer snapshots (function_start counter -> buffers)
     std::unordered_map<node_id, std::vector<ttnn::reports::BufferInfo>> per_op_buffers_;
-    // Buffer pages keyed by address (captured once per unique buffer allocation).
-    // Much smaller than per-operation snapshots: ~300 entries vs ~6M per-op rows.
-    std::unordered_map<uint64_t, std::vector<ttnn::reports::BufferPageInfo>> buffer_pages_by_address_;
+    // Buffer pages keyed by address, with versioning for re-allocations.
+    // Each address maps to a list of (allocation_counter, pages) pairs so that
+    // re-allocations at the same address with different page configs are preserved.
+    std::unordered_map<uint64_t, std::vector<std::pair<uint32_t, std::vector<ttnn::reports::BufferPageInfo>>>>
+        buffer_pages_by_address_;
 
     node_id add_tensor(const Tensor& t);
     node_id add_buffer(const tt::tt_metal::Buffer* buffer);
