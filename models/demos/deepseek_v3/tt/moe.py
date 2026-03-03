@@ -295,7 +295,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 f"(hidden_size={hidden_size}, tp_size={tp_size})"
             )
 
-        # breakpoint()
         ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[

@@ -457,6 +457,7 @@ class TTSampling(LightweightModule):
                     sub_core_grids=self.sub_core_grids,
                 )
             # Perform local top-k on each device
+            # breakpoint()
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,
                 k=self.max_top_k,

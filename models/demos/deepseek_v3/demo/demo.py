@@ -350,6 +350,7 @@ def run_demo(
             )
             raise
 
+    gen = None
     try:
         # If random single-layer requested with 'moe', fail fast (Model1D demo is MLP-only)
         if random_weights and single_layer and single_layer.lower() == "moe":
@@ -444,7 +445,8 @@ def run_demo(
     finally:
         # Clean up generator resources
         try:
-            gen.cleanup_all()
+            if gen is not None:
+                gen.cleanup_all()
         except Exception as e:
             logger.warning(f"Failed to cleanup generator: {e}")
         # Synchronize device before closing to flush pending ops (e.g. profiler data)
