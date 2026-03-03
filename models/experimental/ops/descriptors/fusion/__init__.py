@@ -14,6 +14,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     Parallel,
     Sequential,
     clear_build_cache,
+    launch,
 )
 from models.experimental.ops.descriptors.fusion.graph import (
     CoreGroup,
@@ -43,6 +44,7 @@ __all__ = [
     "Sequential",
     "Parallel",
     "FusedOp",
+    "launch",
     # Graph API
     "OpNode",
     "CoreGroup",
