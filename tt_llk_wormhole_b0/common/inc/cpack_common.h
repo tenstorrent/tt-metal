@@ -709,6 +709,11 @@ inline void program_packer_dest_offset_registers(std::uint32_t dest_tile_offset)
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
+    // Stall to avoid clobbering current packer configuration
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+
+    // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
+    // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
     const std::uint32_t pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);
 
     cfg_reg_rmw_tensix<
