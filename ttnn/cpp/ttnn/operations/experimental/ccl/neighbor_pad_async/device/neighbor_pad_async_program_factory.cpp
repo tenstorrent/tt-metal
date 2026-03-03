@@ -82,7 +82,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
                 worker_writer_runtime_args[0] = input.buffer()->address();
                 worker_writer_runtime_args[1] = output.buffer()->address();
                 worker_writer_runtime_args[13] = operation_attributes.h_neighbor_semaphore.address();
-                worker_writer_runtime_args[14] = !operation_attributes.using_persistent_buffers;
+                worker_writer_runtime_args[14] = true;  // always enable startup barrier
                 worker_writer_runtime_args[17] = operation_attributes.barrier_semaphore.address();
                 // Phase 2 signal target sem addresses: 8 targets starting at index 19,
                 // sem addr at offset +2 within each 3-element group
@@ -531,7 +531,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 virtual_core.x,                                       // neighbor_sem_noc0_x
                 virtual_core.y,                                       // neighbor_sem_noc0_y
                 operation_attributes.h_neighbor_semaphore.address(),  // neighbor_sem_bank_addr
-                !operation_attributes.using_persistent_buffers,       // use_barrier_semaphore
+                true,                                                 // use_barrier_semaphore
                 virtual_opposite_core.x,                              // barrier_sem_noc0_x
                 virtual_opposite_core.y,                              // barrier_sem_noc0_y
                 operation_attributes.barrier_semaphore.address()};
