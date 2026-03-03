@@ -147,8 +147,6 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    DPRINT << "Starting d2d exchange kernel" << ENDL();
-
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -190,15 +188,12 @@ void kernel_main() {
 
     while (true) {
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "Waiting for data on receiver socket\n";
-        DPRINT << "page size: " << page_size << "\n";
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-        DPRINT << "Data received on receiver socket, sending to sender socket\n";
         send_pages_over_socket(
             sender_socket,
             downstream_fabric_connection,
@@ -218,7 +213,6 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
-        DPRINT << "Finished processing data on receiver socket\n";
     }
 
     update_socket_config(sender_socket);
@@ -232,5 +226,4 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
-    DPRINT << "Exiting d2d exchange kernel\n";
 }
