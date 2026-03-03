@@ -745,8 +745,8 @@ struct SdpaReduceWorker {
         void compute_impl() {
             constexpr int vector_mode = VectorMode::RC_custom;
 
-            reconfig_data_format(CTArgs::cb_local_l, CTArgs::cb_local_l);
-            pack_reconfig_data_format(CTArgs::cb_l_out);
+            reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
+            pack_reconfig_data_format<true>(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE, false>();
 
             bool local_valid = true;
