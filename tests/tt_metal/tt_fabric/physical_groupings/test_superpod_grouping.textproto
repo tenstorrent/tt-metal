@@ -1,0 +1,252 @@
+# Test PGD file with SUPERPOD level grouping and higher layer graph matching tests
+# This file combines groupings for multiple test cases
+
+# Required TRAY groupings
+groupings {
+  name: "tray_1"
+  preset_type: TRAY_1
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+groupings {
+  name: "tray_2"
+  preset_type: TRAY_2
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+groupings {
+  name: "tray_3"
+  preset_type: TRAY_3
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+groupings {
+  name: "tray_4"
+  preset_type: TRAY_4
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# Required HOSTS grouping
+groupings {
+  name: "hosts_custom"
+  custom_type: "hosts"
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_1 } }
+  ]
+}
+
+# Required MESHES grouping for GetValidGroupingsForMGD test
+groupings {
+  name: "meshes"
+  custom_type: "meshes"
+  instances: [
+    { id: 0 grouping_ref { preset_type: MESH } }
+  ]
+}
+
+# Rectangular groupings for mesh matching tests
+groupings {
+  name: "rect_2x4"
+  custom_type: "rect_2x4"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+groupings {
+  name: "rect_4x2"
+  custom_type: "rect_4x2"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 5 asic_location: ASIC_LOCATION_6 },
+    { id: 6 asic_location: ASIC_LOCATION_7 },
+    { id: 7 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [4, 2]
+  }
+}
+
+# MESH level groupings
+groupings {
+  name: "mesh_2x4"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "rect_2x4" } }
+  ]
+}
+
+groupings {
+  name: "mesh_4x2"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "rect_4x2" } }
+  ]
+}
+
+# Test mesh grouping (for POD/SUPERPOD tests)
+groupings {
+  name: "test_mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_1 } }
+  ]
+}
+
+# POD level groupings
+groupings {
+  name: "pods"
+  custom_type: "pods"
+  instances: [
+    { id: 0 grouping_ref { preset_type: MESH } }
+  ]
+}
+
+groupings {
+  name: "dual_mesh_row"
+  custom_type: "pods"
+  instances: [
+    { id: 10 grouping_ref { preset_type: MESH } },
+    { id: 11 grouping_ref { preset_type: MESH } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
+  name: "dual_mesh_all_to_all"
+  custom_type: "pods"
+  instances: [
+    { id: 20 grouping_ref { preset_type: MESH } },
+    { id: 21 grouping_ref { preset_type: MESH } }
+  ]
+  all_to_all {}
+}
+
+groupings {
+  name: "quad_mesh_pod"
+  custom_type: "pods"
+  instances: [
+    { id: 60 grouping_ref { preset_type: MESH } },
+    { id: 61 grouping_ref { preset_type: MESH } },
+    { id: 62 grouping_ref { preset_type: MESH } },
+    { id: 63 grouping_ref { preset_type: MESH } }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "quad_mesh_all_to_all"
+  custom_type: "pods"
+  instances: [
+    { id: 64 grouping_ref { preset_type: MESH } },
+    { id: 65 grouping_ref { preset_type: MESH } },
+    { id: 66 grouping_ref { preset_type: MESH } },
+    { id: 67 grouping_ref { preset_type: MESH } }
+  ]
+  all_to_all {}
+}
+
+# SUPERPOD level groupings
+groupings {
+  name: "superpods"
+  custom_type: "superpods"
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_1 } },
+    { id: 1 grouping_ref { preset_type: TRAY_2 } },
+    { id: 2 grouping_ref { preset_type: TRAY_3 } },
+    { id: 3 grouping_ref { preset_type: TRAY_4 } }
+  ]
+  all_to_all {}
+}
+
+groupings {
+  name: "super_pod_4_mesh"
+  custom_type: "super_pods"
+  instances: [
+    { id: 45 grouping_ref { custom_type: "pods" } },
+    { id: 46 grouping_ref { custom_type: "pods" } },
+    { id: 47 grouping_ref { custom_type: "pods" } },
+    { id: 48 grouping_ref { custom_type: "pods" } }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "super_pod_4_all_to_all"
+  custom_type: "super_pods"
+  instances: [
+    { id: 53 grouping_ref { custom_type: "pods" } },
+    { id: 54 grouping_ref { custom_type: "pods" } },
+    { id: 55 grouping_ref { custom_type: "pods" } },
+    { id: 56 grouping_ref { custom_type: "pods" } }
+  ]
+  all_to_all {}
+}

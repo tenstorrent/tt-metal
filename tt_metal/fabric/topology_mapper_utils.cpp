@@ -18,7 +18,6 @@
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -385,12 +384,11 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     return logical_multi_mesh_graph;
 }
 
-namespace {
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
  *
- * Private helper that builds a complete flat adjacency map including all connections
- * (both intra-mesh and intermesh), with multiple entries per channel.
+ * Builds a complete flat adjacency map including all connections (both intra-mesh and intermesh),
+ * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
  */
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -399,8 +397,16 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 
     // Build a set of all ASIC IDs for quick lookup
     std::unordered_set<tt::tt_metal::AsicID> all_asics;
-    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
-        for (const auto& [asic_id, _] : asic_map) {
+    if (!asic_id_to_mesh_rank.empty()) {
+        // Filter to only ASICs in the mesh assignment
+        for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+            for (const auto& [asic_id, _] : asic_map) {
+                all_asics.insert(asic_id);
+            }
+        }
+    } else {
+        // Include all ASICs from PSD
+        for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
             all_asics.insert(asic_id);
         }
     }
@@ -436,8 +442,6 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 
     return flat_adj;
 }
-
-}  // namespace
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
