@@ -20,7 +20,7 @@ UNDEFINED = 0;
  * LOADER_INIT regions are defined for every core, as the data segment resides in LOCAL_MEM.
  * LOADER_CODE regions are undefined for all cores.
  * GCOV region is left undefined for obvious reasons.
- * BRISC and NCRISC dont exist on Quasar so all their regions are undefined.
+ * BRISC and NCRISC don't exist on Quasar so all their regions are undefined.
  */
 MEMORY
 {

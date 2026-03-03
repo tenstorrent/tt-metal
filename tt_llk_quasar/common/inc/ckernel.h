@@ -351,7 +351,7 @@ __attribute__((always_inline)) inline void enable_gathering()
 // Pass a lambda function (or a regular function pointer) that takes void,
 // returns void, and issues the instructions you want to load into the
 // replay buffer. start, len, and exec_while_loading have the same meaning
-// as they do for the REPLAY instruction, as descired in assembly.yaml.
+// as they do for the REPLAY instruction, as described in assembly.yaml.
 template <std::uint32_t start, std::uint32_t len, bool exec_while_loading = false, std::uint32_t set_mutex = 0, std::uint32_t last = 0, typename F>
 __attribute__((always_inline)) inline void load_replay_buf(F fn)
 {

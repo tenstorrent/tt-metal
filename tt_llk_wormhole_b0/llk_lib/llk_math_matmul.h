@@ -311,7 +311,7 @@ inline void matmul_configure_mop(
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    // Col major layout in dest only impacs destination address increment
+    // Col major layout in dest only impacts destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
 
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
@@ -604,7 +604,7 @@ inline void matmul_configure_mop_throttled(
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    // Col major layout in dest only impacs destination address increment
+    // Col major layout in dest only impacts destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
