@@ -45,6 +45,7 @@
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
+#include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
