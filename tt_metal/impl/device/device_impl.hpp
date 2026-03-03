@@ -136,7 +136,7 @@ public:
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
-    bool compile_fabric() override;
+    bool compile_fabric(const std::vector<IDevice*>& all_devices = {}) override;
     void configure_fabric() override;
     // Puts device into reset
     bool close() override;

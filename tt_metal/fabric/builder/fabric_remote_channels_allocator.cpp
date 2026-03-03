@@ -6,21 +6,20 @@
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_router_recipe.hpp"  // for FabricChannelPoolType
+#include "tt_metal/fabric/fabric_builder_context.hpp"  // for PublishedAllocatorState
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric {
 
-FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
-    const FabricStaticSizedChannelsAllocator& static_allocator) :
-    FabricChannelAllocator(static_allocator.topology_, static_allocator.options_, static_allocator.memory_regions_) {
-    // Extract remote receiver channel information from the static allocator for all VCs
+FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(const PublishedAllocatorState& peer_state) :
+    FabricChannelAllocator(peer_state.topology, peer_state.options, peer_state.memory_regions) {
+    // Populate from the peer's published receiver channel data.
+    // A sender on this device needs to know the receiver layout on the peer device.
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        this->num_used_receiver_channels_per_vc_[vc] = static_allocator.num_used_receiver_channels_per_vc[vc];
-        for (size_t i = 0; i < static_allocator.num_used_receiver_channels_per_vc[vc]; i++) {
-            this->remote_receiver_channels_base_address_[vc][i] =
-                static_allocator.remote_receiver_channels_base_address[vc][i];
-            this->remote_receiver_channels_num_buffers_[vc][i] =
-                static_allocator.remote_receiver_channels_num_buffers[vc][i];
+        this->num_used_receiver_channels_per_vc_[vc] = peer_state.num_used_receiver_channels_per_vc[vc];
+        for (size_t i = 0; i < peer_state.num_used_receiver_channels_per_vc[vc]; i++) {
+            this->remote_receiver_channels_base_address_[vc][i] = peer_state.receiver_channels_base_address[vc][i];
+            this->remote_receiver_channels_num_buffers_[vc][i] = peer_state.receiver_channels_num_buffers[vc][i];
         }
     }
 }

@@ -153,8 +153,10 @@ public:
     virtual void init_command_queue_device() = 0;
 
     // return false if compile fails (mainly come from Nebula on TG)
+    // When all_devices is non-empty, uses a two-phase build with an internal barrier
+    // to coordinate allocator state exchange across all devices before compilation.
     [[deprecated("This is an internal function. It will be removed.")]]
-    virtual bool compile_fabric() = 0;
+    virtual bool compile_fabric(const std::vector<IDevice*>& all_devices = {}) = 0;
     [[deprecated("This is an internal function. It will be removed.")]]
     virtual void configure_fabric() = 0;
     // Puts device into reset

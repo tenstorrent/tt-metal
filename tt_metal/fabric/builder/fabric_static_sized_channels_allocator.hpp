@@ -15,6 +15,8 @@
 
 namespace tt::tt_fabric {
 
+struct PublishedAllocatorState;
+
 /**
  * Static-sized channels allocator implementation.
  * The `FabricStaticSizedChannelsAllocator` allocates memory for statically sized sender(outbound)
@@ -28,6 +30,16 @@ namespace tt::tt_fabric {
  */
 class FabricStaticSizedChannelsAllocator : public FabricChannelAllocator {
 public:
+    /**
+     * Construct allocator with per-channel servicing flags.
+     * Skips L1 allocation for channels marked as not serviced.
+     * A channel is "serviced" if ANY RISC services it (collapsed from per-RISC flags).
+     * Unserviced channels get size_bytes=0, num_buffers=0, and don't advance the buffer pointer.
+     * By default all channels are serviced.
+     *
+     * @param sender_channel_serviced Per-channel flat flags (across all VCs) for sender channels
+     * @param receiver_channel_serviced Per-channel flat flags (across all VCs) for receiver channels
+     */
     FabricStaticSizedChannelsAllocator(
         tt::tt_fabric::Topology topology,
         const FabricEriscDatamoverOptions& options,
@@ -35,7 +47,9 @@ public:
         const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
         size_t channel_buffer_size_bytes,
         size_t available_channel_buffering_space,
-        const std::vector<MemoryRegion>& memory_regions);
+        const std::vector<MemoryRegion>& memory_regions,
+        const std::array<bool, builder_config::num_max_sender_channels>& sender_channel_serviced = all_channels_serviced_sender_,
+        const std::array<bool, builder_config::num_max_receiver_channels>& receiver_channel_serviced = all_channels_serviced_receiver_);
 
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
@@ -103,11 +117,16 @@ public:
         return num_used_receiver_channels_per_vc[0] + num_used_receiver_channels_per_vc[1];
     }
 
+    /**
+     * Extract a PublishedAllocatorState representing this allocator's layout.
+     * Used to construct a FabricRemoteChannelsAllocator from peer state.
+     */
+    PublishedAllocatorState to_published_state() const;
+
     // Override virtual print method from base class
     void print(std::ostream& os) const override;
 
 private:
-    friend class FabricRemoteChannelsAllocator;
     /*
      * Helper function that decides the number of buffer slots for each channel per VC.
      */
@@ -138,6 +157,18 @@ private:
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =
         builder_config::num_sender_channels_with_tensix_config;
+
+    // Default servicing flags (all channels serviced)
+    static inline const std::array<bool, builder_config::num_max_sender_channels> all_channels_serviced_sender_ = [] {
+        std::array<bool, builder_config::num_max_sender_channels> a;
+        a.fill(true);
+        return a;
+    }();
+    static inline const std::array<bool, builder_config::num_max_receiver_channels> all_channels_serviced_receiver_ = [] {
+        std::array<bool, builder_config::num_max_receiver_channels> a;
+        a.fill(true);
+        return a;
+    }();
 
     // Channel size and buffer information per VC (VC × channel)
     std::array<std::array<std::size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>

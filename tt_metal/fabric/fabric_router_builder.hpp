@@ -17,6 +17,8 @@ class Program;
 
 namespace tt::tt_fabric {
 
+struct PublishedAllocatorState;
+
 // ============ Router Location ============
 
 /**
@@ -124,6 +126,22 @@ public:
     RoutingDirection get_routing_direction() const { return location_.direction; }
     bool is_dispatch_link() const { return location_.is_dispatch_link; }
     const RouterLocation& get_location() const { return location_; }
+
+    // ============ Allocator State ============
+
+    /**
+     * Get the published allocator state for this router.
+     * Used for collecting per-router state after phase 1 for peer exchange.
+     */
+    virtual PublishedAllocatorState get_published_allocator_state() const = 0;
+
+    /**
+     * Update the remote allocator from a peer's published state.
+     * Called in phase 2 after peer state has been published to FabricBuilderContext.
+     *
+     * @param peer_state The peer's published allocator state
+     */
+    virtual void update_remote_allocator(const PublishedAllocatorState& peer_state) = 0;
 
     // ============ Build Methods ============
 

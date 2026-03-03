@@ -140,11 +140,13 @@ void FabricFirmwareInitializer::post_teardown() {
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_; }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
+    std::vector<tt::tt_metal::IDevice*> idevices(devices_.begin(), devices_.end());
+
     std::vector<std::shared_future<Device*>> events;
     events.reserve(devices_.size());
     for (auto* dev : devices_) {
-        events.emplace_back(detail::async([dev]() {
-            if (dev->compile_fabric()) {
+        events.emplace_back(detail::async([dev, &idevices]() {
+            if (dev->compile_fabric(idevices)) {
                 return dev;
             }
             // Compile failure mostly comes from Nebula (TG)

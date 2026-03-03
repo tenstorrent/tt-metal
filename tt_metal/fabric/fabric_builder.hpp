@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
@@ -64,6 +65,19 @@ public:
      * Create the main ERISC router kernels.
      */
     void create_kernels();
+
+    /**
+     * Update remote allocators from peer state published in FabricBuilderContext.
+     * Called in phase 2 after the barrier and MPI exchange.
+     */
+    void update_remote_allocators();
+
+    /**
+     * Collect published allocator state from all router builders on this device.
+     * Returns a map of (chip_id, eth_chan) -> PublishedAllocatorState.
+     * Called on the main thread after phase 1 completes.
+     */
+    std::vector<std::pair<AllocatorStateKey, PublishedAllocatorState>> collect_published_allocator_state() const;
 
     /**
      * Check if any routers were created.

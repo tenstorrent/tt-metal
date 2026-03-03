@@ -16,7 +16,6 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_align.hpp"
 #include <bit>
@@ -463,12 +462,23 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     const auto& fabric_router_config =
         fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config);
 
-    auto* channel_allocator = fabric_router_config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-
-    fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
+    // Resolve (fabric_node_id, routing_plane_id) → (chip_id, eth_channel) to look up
+    // per-router PublishedAllocatorState for the sender channel num buffers.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    ChipId chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+    auto routing_direction = control_plane.eth_direction_to_routing_direction(direction);
+    auto eth_channels = control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, routing_direction);
+    TT_FATAL(
+        routing_plane_id < eth_channels.size(),
+        "routing_plane_id {} exceeds available eth channels {} for fabric_node_id M={},D={} direction {}",
+        routing_plane_id,
+        eth_channels.size(),
+        fabric_node_id.mesh_id,
+        fabric_node_id.chip_id,
+        static_cast<int>(direction));
+    chan_id_t eth_channel = eth_channels[routing_plane_id];
+    const auto& pub_state = fabric_context.get_builder_context().get_published_allocator_state(chip_id, eth_channel);
+    fabric_endpoint_channel_num_buffers_ = pub_state.sender_channels_num_buffers[0][0];
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
     wait_for_fabric_endpoint_ready_ = true;
 
