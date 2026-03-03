@@ -11,14 +11,19 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
 from conftest import bh_2d_mesh_device_context
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.runner import GenerationResult, run_generation
-from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    WeightProvider,
+    create_fabric_router_config,
+    create_pipeline_configuration_from_num_procs,
+)
+from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -29,27 +34,41 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_lm_head_weights,
     load_moe_decoder_layer,
     load_moe_routed_experts,
+    prepare_embedding_weights,
+    prepare_lm_head_weights,
 )
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
 FIRST_K_DENSE_REPLACE = 3
 
-EXPECTED_PIPELINE_STAGE_MESH_SHAPE = (4, 2)
+
+def _fabric_config_for_num_procs(num_procs: int):
+    """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
+    if num_procs == 4:
+        return ttnn.FabricConfig.FABRIC_2D
+    if num_procs == 16:
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4 or 16)")
 
 
 @contextlib.contextmanager
 def open_mesh_device():
-    """Open mesh device using bh_2d_mesh_device_context."""
+    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+    num_procs = int(ttnn.distributed_context_get_size())
+    device_params = {
+        "fabric_config": _fabric_config_for_num_procs(num_procs),
+        "fabric_router_config": create_fabric_router_config(15232),
+        "trace_region_size": 573440,
+    }
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
-        mesh_shape = (mesh_device.shape[0], mesh_device.shape[1])
-        assert (
-            mesh_shape == EXPECTED_PIPELINE_STAGE_MESH_SHAPE
-        ), f"Demo requires a {EXPECTED_PIPELINE_STAGE_MESH_SHAPE[0]}x{EXPECTED_PIPELINE_STAGE_MESH_SHAPE[1]} mesh; got {mesh_shape[0]}x{mesh_shape[1]}"
-        logger.info(f"Mesh device opened (id={mesh_device.get_system_mesh_id()}, shape={mesh_device.shape})")
+        logger.info(
+            "Mesh device opened (id={}, shape={})",
+            mesh_device.get_system_mesh_id(),
+            mesh_device.shape,
+        )
         yield mesh_device
 
 
@@ -64,6 +83,40 @@ def decoder_layer_id_from_mesh_id(mesh_id: int) -> int:
 
 SYSTEM_MESH_ID_EMBEDDING = 0
 SYSTEM_MESH_ID_LM_HEAD = 62
+
+
+class CacheWeightProvider:
+    """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
+
+    def __init__(self, cache_path: Path) -> None:
+        self._path = cache_path
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        return load_embedding_weights(self._path, device)
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        return load_lm_head_weights(self._path, device)
+
+
+class SyntheticWeightProvider:
+    """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        emb_w = torch.zeros((129280, 7168), dtype=torch.bfloat16)
+        emb_w[torch.arange(129280), torch.arange(129280, dtype=torch.int64) % 7168] = 1
+        return prepare_embedding_weights({"model.embed_tokens.weight": emb_w}, device, move_to_device=True)
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        lm_w = torch.full((129280, 7168), -1.0, dtype=torch.bfloat16)
+        lm_w[torch.arange(7168, dtype=torch.int64) % 16160, torch.arange(7168)] = 1
+        return prepare_lm_head_weights(
+            {
+                "lm_head.weight": lm_w,
+                "model.norm.weight": torch.ones(7168, dtype=torch.bfloat16),
+            },
+            device,
+            move_to_device=True,
+        )
 
 
 def load_weights_from_cache(
@@ -96,9 +149,14 @@ def load_weights_from_cache(
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN")
-    parser.add_argument("--prompt", type=str, default="", help="Prompt text")
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Number of decode steps to run")
+    parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN (pod pipeline)")
+    parser.add_argument("--prompt", type=str, default="", help="Prompt text (for future real decode loop)")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=128,
+        help="Number of pipeline token iterations",
+    )
     parser.add_argument(
         "--tokenizer",
         type=str,
@@ -106,22 +164,28 @@ def create_parser() -> argparse.ArgumentParser:
         help="HF tokenizer id or local tokenizer path",
     )
     parser.add_argument(
-        "--loopback-mode",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use HostInterface loopback path (recommended for current B1 bring-up)",
-    )
-    parser.add_argument(
         "--cache-path",
         type=Path,
         required=True,
-        help="Path to the weight cache directory (contains layer_NNN/ subdirs)",
+        help="Path to the weight cache directory (for future real weights)",
     )
     parser.add_argument(
         "--layer-id-offset",
         type=int,
         default=0,
-        help="Layer ID offset (default 0)",
+        help="Layer ID offset (for future multi-pod offset)",
+    )
+    parser.add_argument(
+        "--fp32",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use FP32 destination accumulator for LMHead sampling",
+    )
+    parser.add_argument(
+        "--persistent-mode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use persistent mode for LMHead sampling kernel",
     )
     return parser
 
@@ -135,62 +199,69 @@ def run_demo(
     prompt: str,
     max_new_tokens: int,
     tokenizer_name_or_path: str,
-    loopback_mode: bool,
     cache_path: Path,
     layer_id_offset: int = 0,
+    fp32: bool = True,
+    persistent_mode: bool = True,
     output_stream: TextIO,
-) -> GenerationResult:
+) -> None:
+    """Run the pod pipeline (synthetic weights). Requires 4 or 16 distributed processes."""
+    iterations = max_new_tokens
     logger.info(
-        "Starting DeepSeek V3 B1 demo (max_new_tokens={}, loopback_mode={}, layer_id_offset={})",
-        max_new_tokens,
-        loopback_mode,
+        "Starting DeepSeek V3 B1 demo pod pipeline (iterations={}, layer_id_offset={}, fp32={}, persistent_mode={})",
+        iterations,
         layer_id_offset,
+        fp32,
+        persistent_mode,
     )
     if not is_slow_dispatch():
         raise RuntimeError(
             "DeepSeek V3 B1 demo requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
         )
 
-    logger.info("Loading tokenizer: {}", tokenizer_name_or_path)
-    tokenizer = load_tokenizer(tokenizer_name_or_path)
-    token_codec = TokenCodec(batch_size=1)
-    is_first_decode_chunk = True
-
-    def write_text(text: str) -> None:
-        nonlocal is_first_decode_chunk
-        if is_first_decode_chunk:
-            if prompt:
-                output_stream.write(prompt)
-            is_first_decode_chunk = False
-        output_stream.write(text)
-        output_stream.flush()
-
     with open_mesh_device() as mesh_device:
-        weights = load_weights_from_cache(cache_path, mesh_device, layer_id_offset)
-        logger.info("Weights loaded!")
-        return None
+        num_procs = int(ttnn.distributed_context_get_size())
+        if num_procs not in (4, 16):
+            raise RuntimeError(f"Pod pipeline requires 4 or 16 distributed processes; got {num_procs}")
+        ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
-        logger.info("Creating DeepSeekV3 model")
-        model = create_model(mesh_device=mesh_device, batch_size=1, loopback_mode=loopback_mode)
-        logger.info("Running prefill + decode")
-        result = run_generation(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=prompt,
-            max_new_tokens=max_new_tokens,
-            make_input_tensor=token_codec.make_input,
-            extract_token_id=token_codec.extract_token_id,
-            write_text=write_text,
+        # Each host loads/creates only the weights for its stage via the provider.
+        provider: WeightProvider = SyntheticWeightProvider()
+        config = create_pipeline_configuration_from_num_procs(
+            num_procs,
+            provider,
+            fp32_dest_acc_en=fp32,
+            persistent_mode=persistent_mode,
         )
-        logger.info(
-            "Generation complete (prompt_tokens={}, generated_tokens={})",
-            len(result.prompt_token_ids),
-            len(result.generated_token_ids),
-        )
-        return result
+
+        logger.info(f"Building pipeline")
+        pipeline = config.build_pipeline(mesh_device)
+
+        logger.info(f"Setting up and running pipeline")
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id == 0:
+            for iteration in range(iterations):
+                logger.info(f"Writing token for iteration {iteration}")
+                torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+                torch_token[0, 0] = iteration
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                pipeline.write_token(token_tensor)
+                pipeline.read_output(output_tensor)
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+                logger.info("Iteration {} output token: {}", iteration, got.item())
+
+        pipeline.barrier()
+    logger.info("Pod pipeline complete")
 
 
 def main(argv: list[str] | None = None) -> int:
+    ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
 
@@ -198,9 +269,10 @@ def main(argv: list[str] | None = None) -> int:
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
-        loopback_mode=args.loopback_mode,
         cache_path=args.cache_path,
         layer_id_offset=args.layer_id_offset,
+        fp32=args.fp32,
+        persistent_mode=args.persistent_mode,
         output_stream=sys.stdout,
     )
     print(file=sys.stdout, flush=True)
