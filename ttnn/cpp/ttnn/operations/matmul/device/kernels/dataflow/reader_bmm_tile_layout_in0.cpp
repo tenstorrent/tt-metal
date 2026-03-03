@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
