@@ -9,7 +9,7 @@ Stage kinds (Embedding, LMHead, Passthrough) live in stage.py.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Protocol
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
@@ -24,6 +24,16 @@ from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBloc
 from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 
 
+class WeightProvider(Protocol):
+    """Provides embedding and LM head weights on demand; each host loads only what its stage needs."""
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        ...
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        ...
+
+
 def create_fabric_router_config(max_payload_size: int) -> Any:
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
@@ -31,67 +41,78 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
 
 
 def create_single_galaxy_pipeline_configuration(
+    weight_provider: WeightProvider,
     *,
-    embedding_weights: DeepSeekV3EmbeddingLayerWeights,
-    lm_head_weights: DeepSeekV3LMHeadWeights,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(weight_provider.load_embedding(device))
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return LMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
     return PipelineConfiguration(
         {
-            0: EmbeddingStage(embedding_weights),
-            1: LMHeadStage(
-                weights=lm_head_weights,
-                fp32_dest_acc_en=fp32_dest_acc_en,
-                persistent_mode=persistent_mode,
-            ),
-            2: PassthroughStage(PassthroughPayload.TOKEN),
-            3: PassthroughStage(PassthroughPayload.TOKEN),
+            0: stage_0,
+            1: stage_1,
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
         }
     )
 
 
 def create_single_pod_pipeline_configuration(
+    weight_provider: WeightProvider,
     *,
-    embedding_weights: DeepSeekV3EmbeddingLayerWeights,
-    lm_head_weights: DeepSeekV3LMHeadWeights,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """16-stage single-pod: Embed -> 13x Activation fwd -> LMHead -> Token fwd."""
-    stages: dict[int, StageKind] = {0: EmbeddingStage(embedding_weights)}
-    for i in range(1, 14):
-        stages[i] = PassthroughStage(PassthroughPayload.ACTIVATION)
-    stages[14] = LMHeadStage(
-        weights=lm_head_weights,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        persistent_mode=persistent_mode,
-    )
-    stages[15] = PassthroughStage(PassthroughPayload.TOKEN)
-    return PipelineConfiguration(stages)
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(weight_provider.load_embedding(device))
+
+    def stage_14(device: ttnn.MeshDevice) -> StageKind:
+        return LMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
+    passthrough_activation = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
+        0: stage_0,
+        **{i: passthrough_activation for i in range(1, 14)},
+        14: stage_14,
+        15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+    }
+    return PipelineConfiguration(stage_factories)
 
 
 def create_pipeline_configuration_from_num_procs(
     num_procs: int,
+    weight_provider: WeightProvider,
     *,
-    embedding_weights: DeepSeekV3EmbeddingLayerWeights,
-    lm_head_weights: DeepSeekV3LMHeadWeights,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod)."""
     if num_procs == 4:
         return create_single_galaxy_pipeline_configuration(
-            embedding_weights=embedding_weights,
-            lm_head_weights=lm_head_weights,
+            weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
     if num_procs == 16:
         return create_single_pod_pipeline_configuration(
-            embedding_weights=embedding_weights,
-            lm_head_weights=lm_head_weights,
+            weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
@@ -99,22 +120,23 @@ def create_pipeline_configuration_from_num_procs(
 
 
 class PipelineConfiguration:
-    """Maps stage IDs to StageKinds. The full pipeline definition."""
+    """Maps stage IDs to stage factories. Each host builds only its stage (lazy weights)."""
 
-    def __init__(self, stages: dict[int, StageKind]) -> None:
-        self._stages = stages
+    def __init__(
+        self,
+        stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]],
+    ) -> None:
+        self._stage_factories = stage_factories
 
     @property
     def num_stages(self) -> int:
-        return len(self._stages)
-
-    def __getitem__(self, stage_id: int) -> StageKind:
-        return self._stages[stage_id]
+        return len(self._stage_factories)
 
     def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
         """Create a Pipeline for this process's stage (determined by mesh_id)."""
         my_mesh_id = mesh_device.get_system_mesh_id()
-        return Pipeline(mesh_device, self._stages[my_mesh_id])
+        stage = self._stage_factories[my_mesh_id](mesh_device)
+        return Pipeline(mesh_device, stage)
 
 
 class Pipeline:

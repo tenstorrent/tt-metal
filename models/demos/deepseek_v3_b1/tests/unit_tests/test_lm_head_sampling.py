@@ -41,36 +41,33 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-# Synthetic embedding: build state dict and use prepare_embedding_weights so layout stays single path.
+# Synthetic weight provider: same layout as prepare_* (state dict + move_to_device); used for pipeline tests.
 _VOCAB_SIZE = 129280
 _EMBED_HIDDEN = 7168
-
-
-def _synthetic_embedding_weights(device, iterations: int):
-    """Synthetic embedding via state dict: one-hot row i at i % hidden_size, full (vocab_size, hidden_size)."""
-    w = torch.zeros((_VOCAB_SIZE, _EMBED_HIDDEN), dtype=torch.bfloat16)
-    w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % _EMBED_HIDDEN] = 1
-    return prepare_embedding_weights({"model.embed_tokens.weight": w}, device, move_to_device=True)
-
-
-# Synthetic LM head: same pattern as embedding — state dict + prepare_lm_head_weights (deterministic winner_per_row).
 _LM_HEAD_N_SYNTHETIC = 101 * 160  # 16160
 
 
-def _synthetic_lm_head_weights(device, iterations: int):
-    """Synthetic LM head via state dict: winner_per_row j at j % 16160, full (129280, 7168); norm ones."""
-    lm_w = torch.full((_VOCAB_SIZE, _EMBED_HIDDEN), -1.0, dtype=torch.bfloat16)
-    lm_w[torch.arange(_EMBED_HIDDEN, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(_EMBED_HIDDEN)] = 1
-    return prepare_lm_head_weights(
-        {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)},
-        device,
-        move_to_device=True,
-    )
+class _SyntheticWeightProvider:
+    """Provider that creates deterministic synthetic embedding and LM head weights (one-hot / winner_per_row)."""
+
+    def load_embedding(self, device):
+        w = torch.zeros((_VOCAB_SIZE, _EMBED_HIDDEN), dtype=torch.bfloat16)
+        w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % _EMBED_HIDDEN] = 1
+        return prepare_embedding_weights({"model.embed_tokens.weight": w}, device, move_to_device=True)
+
+    def load_lm_head(self, device):
+        lm_w = torch.full((_VOCAB_SIZE, _EMBED_HIDDEN), -1.0, dtype=torch.bfloat16)
+        lm_w[torch.arange(_EMBED_HIDDEN, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(_EMBED_HIDDEN)] = 1
+        return prepare_lm_head_weights(
+            {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)},
+            device,
+            move_to_device=True,
+        )
 
 
-# Golden helper: same deterministic formula as create_synthetic_* in prepare_weights (one-hot embedding, winner_per_row).
+# Golden helper: same deterministic formula as _SyntheticWeightProvider (one-hot embedding, winner_per_row).
 def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor:
-    """Compute expected output indices for synthetic weights. Same math as _synthetic_lm_head_weights."""
+    """Compute expected output indices for synthetic weights. Same math as _SyntheticWeightProvider."""
     K = 7168
     n_total = 101 * 160
     torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
@@ -1901,14 +1898,11 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    embedding_weights = _synthetic_embedding_weights(mesh_device, 1)
-    lm_head_weights = _synthetic_lm_head_weights(mesh_device, 1)
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
     torch_expected_idx = torch_expected_indices[0]
 
     config = create_single_galaxy_pipeline_configuration(
-        embedding_weights=embedding_weights,
-        lm_head_weights=lm_head_weights,
+        _SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
         persistent_mode=False,
     )
@@ -1969,12 +1963,9 @@ def test_persistent_mode(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
-    embedding_weights = _synthetic_embedding_weights(mesh_device, iterations)
-    lm_head_weights = _synthetic_lm_head_weights(mesh_device, iterations)
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_galaxy_pipeline_configuration(
-        embedding_weights=embedding_weights,
-        lm_head_weights=lm_head_weights,
+        _SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
@@ -2037,12 +2028,9 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
 
     iterations = 100
-    embedding_weights = _synthetic_embedding_weights(mesh_device, iterations)
-    lm_head_weights = _synthetic_lm_head_weights(mesh_device, iterations)
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_pod_pipeline_configuration(
-        embedding_weights=embedding_weights,
-        lm_head_weights=lm_head_weights,
+        _SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
