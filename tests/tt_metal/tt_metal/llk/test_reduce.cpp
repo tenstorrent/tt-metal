@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -405,6 +406,7 @@ void run_single_core_reduce_program(
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     // The kernel will view the input as TILED_NFACES
     std::vector<uint32_t> result_vec;

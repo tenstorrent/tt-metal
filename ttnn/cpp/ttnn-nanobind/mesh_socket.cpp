@@ -92,12 +92,12 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::distributed::SocketConfig* config,
-               std::vector<tt::tt_metal::distributed::SocketConnection> connections,
-               tt::tt_metal::distributed::SocketMemoryConfig memory_config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
                std::optional<int> sender_rank,
                std::optional<int> receiver_rank) {
                 new (config) tt::tt_metal::distributed::SocketConfig();
-                config->socket_connection_config = std::move(connections);
+                config->socket_connection_config = connections;
                 config->socket_mem_config = memory_config;
                 if (sender_rank.has_value()) {
                     config->sender_rank = tt::tt_metal::distributed::multihost::Rank(sender_rank.value());
@@ -118,6 +118,32 @@ void py_module_types(nb::module_& mod) {
                     memory_config (SocketMemoryConfig): The memory config of the socket
                     sender_rank (int, optional): The rank of the sender host in a multi-host context
                     receiver_rank (int, optional): The rank of the receiver host in a multi-host context
+            )doc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::distributed::SocketConfig* config,
+               const std::vector<tt::tt_metal::distributed::SocketConnection>& connections,
+               const tt::tt_metal::distributed::SocketMemoryConfig& memory_config,
+               uint32_t sender_mesh_id,
+               uint32_t receiver_mesh_id) {
+                new (config) tt::tt_metal::distributed::SocketConfig(
+                    connections,
+                    memory_config,
+                    tt::tt_fabric::MeshId(sender_mesh_id),
+                    tt::tt_fabric::MeshId(receiver_mesh_id));
+            },
+            nb::arg("connections"),
+            nb::arg("memory_config"),
+            nb::arg("sender_mesh_id"),
+            nb::arg("receiver_mesh_id"),
+            R"doc(
+                Initialize a SocketConfig with connections, memory config, and mesh IDs.
+
+                Args:
+                    connections (List[SocketConnection]): The connections of the socket
+                    memory_config (SocketMemoryConfig): The memory config of the socket
+                    sender_mesh_id (int): The system mesh ID of the sender mesh
+                    receiver_mesh_id (int): The system mesh ID of the receiver mesh
             )doc");
     nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket")
         .def(

@@ -5,12 +5,14 @@
 #pragma once
 
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 #include <llrt/rtoptions.hpp>
 
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/llrt/hal.hpp"
+namespace tt {
+class Cluster;
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -22,6 +24,7 @@ enum class InitializerKey {
     CommandQueue,
     Fabric,
     Dispatch,
+    Risc,
 };
 
 class FirmwareInitializer {
@@ -35,12 +38,13 @@ public:
     FirmwareInitializer(FirmwareInitializer&&) = delete;
     FirmwareInitializer& operator=(FirmwareInitializer&&) = delete;
 
+    // This is called after Devices have been activated
     virtual void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) = 0;
 
     // This is called after all init calls have completed
     virtual void configure() = 0;
 
-    virtual void teardown() = 0;
+    virtual void teardown(std::unordered_set<InitializerKey>& init_done) = 0;
 
     // This is called after all teardown calls have completed and devices have been closed
     virtual void post_teardown();

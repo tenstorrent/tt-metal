@@ -47,6 +47,7 @@ set(SOURCES
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
+    ops/distributed/ring_sdpa_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
@@ -55,6 +56,7 @@ set(SOURCES
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
+    ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
