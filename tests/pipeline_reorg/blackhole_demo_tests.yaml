@@ -225,7 +225,7 @@
   team: models
   model-name: llama3.3-70b
 
-- name: qwen3-32b performance batch-32 performance
+- name: qwen3-32b performance batch-32
   cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768 --timeout=600
   skus:
     bh_llmbox:
