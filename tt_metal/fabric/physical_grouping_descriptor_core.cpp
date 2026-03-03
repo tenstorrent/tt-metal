@@ -170,7 +170,6 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(cons
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(const std::string& grouping_type) const {
     std::vector<GroupingInfo> result;
-    // Search through all names to find groupings with the specified type
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto type_it = type_map.find(grouping_type);
         if (type_it != type_map.end()) {

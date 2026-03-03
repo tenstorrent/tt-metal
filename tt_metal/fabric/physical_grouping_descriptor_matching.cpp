@@ -580,7 +580,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
     // ===== PHASE 1: Build flattened adjacency graphs for all mesh group infos =====
-    std::vector<GroupingInfo> mesh_flat_groupings;
+    // Map from grouping name to vector of flattened GroupingInfo (supports multiple definitions with same name)
+    std::unordered_map<std::string, std::vector<GroupingInfo>> mesh_flat_groupings;
+    // Find MESH type groupings across all names
     bool found_mesh = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto mesh_it = type_map.find("MESH");
@@ -588,8 +590,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             found_mesh = true;
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
-                for (auto& m : meshes) {
-                    mesh_flat_groupings.push_back(std::move(m));
+                for (auto& meshe : meshes) {
+                    mesh_flat_groupings[mesh_group_info.name].push_back(std::move(meshe));
                 }
             }
         }
@@ -609,21 +611,24 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
         // Group valid candidates by node difference (map is ordered by key ascending)
-        std::map<size_t, std::vector<size_t>> candidates_by_diff;
-        for (size_t i = 0; i < mesh_flat_groupings.size(); ++i) {
-            const auto& grouping_info = mesh_flat_groupings[i];
-            size_t n = grouping_info.adjacency_graph.get_nodes().size();
-            if (n >= required_nodes) {
-                candidates_by_diff[n - required_nodes].push_back(i);
+        // Store (name, index) pairs to handle multiple groupings with same name
+        std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
+        for (const auto& [name, grouping_infos] : mesh_flat_groupings) {
+            for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
+                const auto& grouping_info = grouping_infos[idx];
+                size_t n = grouping_info.adjacency_graph.get_nodes().size();
+                if (n >= required_nodes) {
+                    candidates_by_diff[n - required_nodes].emplace_back(name, idx);
+                }
             }
         }
 
         // Process difference levels from closest to farthest; stop at first level with any match
-        std::vector<size_t> best_matches;
-        for (const auto& [node_diff, indices] : candidates_by_diff) {
+        std::vector<std::pair<std::string, size_t>> best_matches;
+        for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
             (void)node_diff;
-            for (size_t i : indices) {
-                const auto& grouping_info = mesh_flat_groupings[i];
+            for (const auto& [name, idx] : name_idx_pairs) {
+                const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
                 // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
                     mgd_grouping_info.adjacency_graph,
@@ -632,7 +637,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
-                    best_matches.push_back(i);
+                    best_matches.emplace_back(name, idx);
                 }
             }
             if (!best_matches.empty()) {
@@ -640,13 +645,19 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
         }
 
-        // Store all best matches
+        // Store all best matches (add all entries that are possible)
         if (best_matches.empty()) {
             // No match found - use the MGD grouping info itself
             result[instance_type][instance_name].push_back(mgd_grouping_info);
         } else {
-            for (size_t i : best_matches) {
-                result[instance_type][instance_name].push_back(mesh_flat_groupings[i]);
+            for (const auto& [match_name, match_idx] : best_matches) {
+                // Look up the flattened GroupingInfo from lookup map (already contains flattened adjacency graphs)
+                auto lookup_it = mesh_flat_groupings.find(match_name);
+                if (lookup_it != mesh_flat_groupings.end() && match_idx < lookup_it->second.size()) {
+                    // Return the flattened GroupingInfo (not the original)
+                    const GroupingInfo& flattened_grouping = lookup_it->second[match_idx];
+                    result[instance_type][instance_name].push_back(flattened_grouping);
+                }
             }
         }
     }

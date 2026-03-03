@@ -436,7 +436,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     TT_ASSERT(
         valid_groupings_map.at("MESH").size() > 0,
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
-
     // Collect all mesh groupings from all instances into a single vector
     std::vector<GroupingInfo> all_mesh_grouping_infos;
     for (const auto& [instance_name, groupings] : valid_groupings_map.at("MESH")) {
