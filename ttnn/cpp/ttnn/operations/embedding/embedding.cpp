@@ -54,9 +54,16 @@ ttnn::Tensor EmbeddingOperation::invoke(
 
     if (input_tensor.logical_shape().size() == 4 && input_tensor.logical_shape()[1] == 1 &&
         input_tensor.logical_shape()[2] == 1) {
-        // ttml::ops::embedding_op and model implementations(falcon 40B) rely on the following shapes
-        // For input shape:          (batch_size, 1, 1, sentence_size)
-        // Expected embedding shape: (batch_size, sentence_size, embedding_dim)
+        // Although the output shape is expected to match the input shape
+        // with an additional (last_dim,) appended from the weight tensor,
+        // the current implementation returns 3D shape when given a 4D input.
+        //
+        // To maintain compatibility with the existing behavior, the following reshape
+        // logic is preserved.
+        //
+        // Example:
+        // Input shape:      (batch_size, 1, 1, sequence_length)
+        // Output shape:     (batch_size, sequence_length, embedding_dim)
         embeddings = ttnn::reshape(
             embeddings,
             ttnn::Shape(
