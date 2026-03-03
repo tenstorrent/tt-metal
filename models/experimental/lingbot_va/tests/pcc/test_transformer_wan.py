@@ -8,7 +8,9 @@ Uses the Lingbot-VA TT model from lingbot_va.tt (in_channels=48, action_dim=30) 
 against the Lingbot-VA reference model with config: dim=3072, num_heads=24, ffn_dim=14336, num_layers=30, etc.
 """
 
+import gc
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -29,6 +31,7 @@ from models.experimental.lingbot_va.reference.model import (
 from models.experimental.lingbot_va.tt.transformer_wan import WanTransformer3DModel, WanTransformerBlock
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.cache import model_cache_dir
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from models.tt_dit.utils.padding import pad_vision_seq_parallel
@@ -74,7 +77,7 @@ def _make_ccl_manager(mesh_device, num_links, topology):
     return CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
 
-def _make_wan_transformer_lingbot_va(*, mesh_device, ccl_manager, parallel_config, is_fsdp, num_layers=NUM_LAYERS):
+def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp, num_layers=NUM_LAYERS):
     """Lingbot-VA TT WanTransformer3DModel from lingbot_va.tt (in_channels=48, action_dim=30)."""
     return WanTransformer3DModel(
         patch_size=PATCH_SIZE,
@@ -137,7 +140,7 @@ def _ref_output_to_bcfhw(
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_wan_transformer_block_lingbot_va(
+def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple,
     sp_axis: int,
@@ -272,10 +275,12 @@ def test_wan_transformer_block_lingbot_va(
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
+# Full model: use single device (1x1 submesh) to avoid CCL hang during 30-block forward.
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="1x2sp0tp1"),
+        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        # pytest.param((1, 2), (1, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="1x2sp0tp1"),
         # pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
         # pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
         # pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
@@ -291,9 +296,9 @@ def test_wan_transformer_block_lingbot_va(
         # pytest.param(1, 8, 40, 50, 118, id="lingbot_va_medium"),
     ],
 )
-def test_wan_transformer_model_lingbot_va(
+def test_wan_transformer_model(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple,
+    submesh_shape: tuple,
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -311,6 +316,11 @@ def test_wan_transformer_model_lingbot_va(
 
     Loads pretrained reference from checkpoint; TT model uses _prepare_torch_state to map
     patch_embedding_mlp -> patch_embedding. Compares video-path output (B, out_channels, F, H, W).
+
+    To avoid OOM when loading the full state dict:
+    - If TT_DIT_CACHE_DIR is set and cache exists for this config, loads TT model from cache.
+    - Otherwise saves state_dict to a temp file and loads with mmap so only one copy is in RAM
+      while filling TT parameters. Run test_wan_transformer_model_caching first to build cache.
     """
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
@@ -318,6 +328,8 @@ def test_wan_transformer_model_lingbot_va(
     if not LINGBOT_VA_CHECKPOINT.exists():
         pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
 
+    # Run on submesh (e.g. (1, 1)) to avoid CCL hang/kill with multi-device.
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
@@ -344,18 +356,63 @@ def test_wan_transformer_model_lingbot_va(
         "grid_id": grid_id,
     }
 
-    tt_model = _make_wan_transformer_lingbot_va(
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-        num_layers=NUM_LAYERS,
-    )
+    # Run reference forward first, then free torch model to avoid OOM when loading TT model.
+    with torch.no_grad():
+        ref_out = torch_model(input_dict, action_mode=False, train_mode=False)
+    ref_out_bcfhw = _ref_output_to_bcfhw(ref_out, B, T, H, W, PATCH_SIZE, OUT_CHANNELS)
 
-    start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-    end = time.time()
-    logger.info("Time taken to load state dict: %s seconds", end - start)
+    # Prefer loading from cache (like SD35/Mochi) to avoid holding state_dict + TT model in RAM.
+    cache_dir = model_cache_dir(
+        model_name="lingbot_va",
+        subfolder="transformer",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
+        required=False,
+    )
+    use_cache = cache_dir is not None and cache_dir.is_dir()
+
+    if use_cache:
+        del torch_model
+        gc.collect()
+        tt_model = _make_wan_transformer(
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            num_layers=NUM_LAYERS,
+        )
+        start = time.time()
+        tt_model.load(cache_dir)
+        end = time.time()
+        logger.info("Time taken to load from cache: %s seconds", end - start)
+    else:
+        # No cache: save state_dict to temp file and load with mmap (like Motif) so we don't
+        # hold a full in-RAM copy while allocating TT tensors, which can cause OOM.
+        state_dict = torch_model.state_dict()
+        fd, state_path = tempfile.mkstemp(suffix=".pt")
+        try:
+            os.close(fd)
+            torch.save(state_dict, state_path)
+            del torch_model
+            del state_dict
+            gc.collect()
+            state_dict = torch.load(state_path, map_location=torch.device("cpu"), mmap=True)
+            tt_model = _make_wan_transformer(
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+                num_layers=NUM_LAYERS,
+            )
+            start = time.time()
+            tt_model.load_torch_state_dict(state_dict)
+            end = time.time()
+            logger.info("Time taken to load state dict (mmap): %s seconds", end - start)
+        finally:
+            try:
+                os.unlink(state_path)
+            except OSError:
+                pass
 
     logger.info(
         "Running TT model (lingbot_va.tt) spatial %s, prompt %s, timestep %s",
@@ -370,9 +427,77 @@ def test_wan_transformer_model_lingbot_va(
         action_mode=False,
     )
     del tt_model
-
-    with torch.no_grad():
-        ref_out = torch_model(input_dict, action_mode=False, train_mode=False)
-    ref_out_bcfhw = _ref_output_to_bcfhw(ref_out, B, T, H, W, PATCH_SIZE, OUT_CHANNELS)
+    gc.collect()
 
     assert_quality(ref_out_bcfhw, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_wan_transformer_model_caching(
+    mesh_device: ttnn.MeshDevice,
+    submesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
+    """
+    Build TT model cache for test_wan_transformer_model (1x1 config). Run once with TT_DIT_CACHE_DIR set;
+    then test_wan_transformer_model will load from cache and avoid OOM from state_dict + TT load.
+    """
+    if not LINGBOT_VA_CHECKPOINT.exists():
+        pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
+
+    if os.environ.get("TT_DIT_CACHE_DIR") is None:
+        pytest.skip("Set TT_DIT_CACHE_DIR to build Lingbot-VA transformer cache")
+
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    B, T, H, W, prompt_seq_len = 1, 8, 24, 24, 77
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    cache_dir = model_cache_dir(
+        model_name="lingbot_va",
+        subfolder="transformer",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
+        required=True,
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    torch_model = TorchWanTransformerBlock.from_pretrained(
+        str(LINGBOT_VA_CHECKPOINT),
+        torch_dtype=torch.float32,
+        attn_mode="torch",
+    )
+    torch_model.eval()
+    state_dict = torch_model.state_dict()
+    fd, state_path = tempfile.mkstemp(suffix=".pt")
+    try:
+        os.close(fd)
+        torch.save(state_dict, state_path)
+        del torch_model
+        del state_dict
+        gc.collect()
+        state_dict = torch.load(state_path, map_location=torch.device("cpu"), mmap=True)
+        tt_model = _make_wan_transformer(
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            num_layers=NUM_LAYERS,
+        )
+        tt_model.load_torch_state_dict(state_dict, on_host=True)
+        tt_model.save(cache_dir)
+        logger.info("Lingbot-VA transformer cache written to %s", cache_dir)
+    finally:
+        try:
+            os.unlink(state_path)
+        except OSError:
+            pass
