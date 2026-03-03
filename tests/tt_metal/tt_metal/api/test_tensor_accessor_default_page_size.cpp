@@ -152,11 +152,7 @@ NdShardedBufferResult create_nd_sharded_buffer(
     CoreRangeSet core_range(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
     auto buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
-        std::move(tensor_shape),
-        std::move(shard_shape),
-        std::move(page_shape),
-        core_range,
-        ShardOrientation::ROW_MAJOR);
+        std::move(tensor_shape), std::move(shard_shape), page_shape, core_range, ShardOrientation::ROW_MAJOR);
 
     distributed::DeviceLocalBufferConfig device_local_config{
         .page_size = page_size,
