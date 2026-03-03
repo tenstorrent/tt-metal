@@ -138,7 +138,6 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      use-artifacts-from-run: 22641927712
   blackhole-demo-tests:
     needs: [build-artifact, generate-card-matrix]
     secrets: inherit
