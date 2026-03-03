@@ -137,7 +137,7 @@ ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
           EltwiseBinaryType::ELWSUB,
           BroadcastType::COL,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
 }
@@ -150,7 +150,7 @@ ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
           EltwiseBinaryType::ELWSUB,
           BroadcastType::SCALAR,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
@@ -262,8 +262,21 @@ Internal helper function for all broadcast ops
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
-    MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst, true)));
+    if constexpr (tBcastOp == ELWMUL) {
+        MATH((llk_math_eltwise_binary<
+              tBcastOp,
+              tBcastDim,
+              DST_ACCUM_MODE,
+              MATH_FIDELITY,
+              EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+    } else {
+        MATH((llk_math_eltwise_binary<
+              tBcastOp,
+              tBcastDim,
+              DST_ACCUM_MODE,
+              MathFidelity::LoFi,
+              EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+    }
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1, bcast_row_idx)));
 }
 
