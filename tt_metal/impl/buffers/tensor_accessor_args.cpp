@@ -41,7 +41,7 @@ void append_sharded_args(
 
     if (!is_runtime) {
         args.push_back(args_config.raw());
-        args.push_back(buffer.aligned_page_size());
+        args.push_back(static_cast<uint32_t>(buffer.aligned_page_size()));
     }
 
     if (add_rank) {
@@ -150,7 +150,7 @@ void TensorAccessorArgs::append_to(
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     } else {
         compile_time_args.push_back(args_config_.raw());
-        compile_time_args.push_back(buffer_ ? buffer_->aligned_page_size() : 0);
+        compile_time_args.push_back(buffer_ ? static_cast<uint32_t>(buffer_->aligned_page_size()) : 0);
     }
 }
 
@@ -173,7 +173,7 @@ std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
-        compile_time_args.push_back(buffer_ ? buffer_->aligned_page_size() : 0);
+        compile_time_args.push_back(buffer_ ? static_cast<uint32_t>(buffer_->aligned_page_size()) : 0);
     }
     return compile_time_args;
 }
