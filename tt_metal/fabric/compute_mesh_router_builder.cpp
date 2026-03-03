@@ -664,10 +664,10 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
 
         const auto is_master_risc_core = (eth_chan == ctx.master_router_chan) && (risc_id == 0);
-        ct_args.push_back(is_master_risc_core);
-        ct_args.push_back(ctx.master_router_chan);
-        ct_args.push_back(ctx.num_local_fabric_routers);
-        ct_args.push_back(ctx.router_channels_mask);
+        named_ct_args["IS_LOCAL_HANDSHAKE_MASTER"] = is_master_risc_core;
+        named_ct_args["LOCAL_HANDSHAKE_MASTER_ETH_CHAN"] = ctx.master_router_chan;
+        named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
+        named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
 
         // Determine processor
         auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
