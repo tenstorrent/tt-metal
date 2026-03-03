@@ -8,6 +8,8 @@ target_link_libraries(
         pthread
 )
 
+target_precompile_headers(distributed_trace_and_events REUSE_FROM TT::CommonPCH)
+
 target_include_directories(distributed_trace_and_events PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 set_target_properties(

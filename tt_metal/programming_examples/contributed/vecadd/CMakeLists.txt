@@ -6,3 +6,4 @@ target_sources(metal_example_vecadd PRIVATE vecadd.cpp)
 
 find_package(TT-Metalium REQUIRED)
 target_link_libraries(metal_example_vecadd PUBLIC TT::Metalium)
+target_precompile_headers(metal_example_vecadd REUSE_FROM TT::CommonPCH)

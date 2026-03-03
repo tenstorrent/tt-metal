@@ -15,13 +15,16 @@ target_link_libraries(
         TT::Metalium
         protobuf::libprotobuf
 )
+target_precompile_headers(package_integration_test REUSE_FROM TT::CommonPCH)
 
 add_executable(out_of_tree_test)
 target_sources(out_of_tree_test PRIVATE out_of_tree_test.cpp)
 target_link_libraries(out_of_tree_test PUBLIC TT::Metalium)
+target_precompile_headers(out_of_tree_test REUSE_FROM TT::CommonPCH)
 
 add_executable(mesh_device_test)
 target_sources(mesh_device_test PRIVATE mesh_device_test.cpp)
 target_link_libraries(mesh_device_test PUBLIC TT::Metalium)
+target_precompile_headers(mesh_device_test REUSE_FROM TT::CommonPCH)
 
 # Any other integration tests should be added here
