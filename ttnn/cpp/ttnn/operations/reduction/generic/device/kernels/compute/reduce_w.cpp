@@ -7,7 +7,6 @@
 #ifndef REDUCE_ROW_SUM_VIA_MM
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #else
 #include "api/compute/matmul.h"
 #endif
@@ -49,9 +48,9 @@ void kernel_main() {
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                cb_wait_front(tt::CBIndex::c_0, onetile);
+                cb0.wait_front(onetile);
                 matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0);
-                cb_pop_front(tt::CBIndex::c_0, onetile);
+                cb0.pop_front(onetile);
             }
 
             cb3.reserve_back(onetile);
