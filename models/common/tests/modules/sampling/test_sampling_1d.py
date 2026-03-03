@@ -606,9 +606,15 @@ def test_sampling1d_topk1_vs_argmax(
     tokens_tt, _ = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
     tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B]
 
-    expected = logits_host.float().argmax(dim=-1).flatten()[:B]
+    # Naive fp32 reference — shows how many index disagreements arise from bfloat16 precision.
+    # These are NOT correctness failures; they demonstrate why the bf16-sharded reference below
+    # is necessary. All fp32 mismatches should be tie-breaks (same bf16 value, different index).
+    fp32_expected = logits_host.float().argmax(dim=-1).flatten()[:B]
+    fp32_mismatches = (tokens_host.long() != fp32_expected.long()).sum().item()
+    mesh_label = tuple(ttnn_mesh_device.shape)
+    print(f"\n  fp32 argmax mismatches: {fp32_mismatches}/{B} (V={vocab_size}, mesh={mesh_label})")
 
-    # Compute a bfloat16-aware sharded reference: shard the vocab the same way the device does,
+    # Bfloat16-aware sharded reference: shard the vocab the same way the device does,
     # find top-1 per shard, then pick the global winner. This accounts for bfloat16 precision
     # loss at shard boundaries that torch.argmax on float32 doesn't see.
     num_devices = max(ttnn_mesh_device.shape)
@@ -636,7 +642,7 @@ def test_sampling1d_topk1_vs_argmax(
         tokens_host.long(),
         bf16_expected,
         logits_bf16,
-        test_label=f"top-k=1 vs argmax (V={vocab_size}, mesh={tuple(ttnn_mesh_device.shape)})",
+        test_label=f"top-k=1 vs bf16-sharded argmax (V={vocab_size}, mesh={mesh_label})",
     )
 
 
@@ -1327,7 +1333,8 @@ def test_ttnn_topk_correctness(ttnn_mesh_device, input_width, dtype):
     quant_tolerance = 0.032 if dtype == ttnn.bfloat8_b else 0.0
 
     # Print additional top-K diagnostics before the shared assertion prints its report
-    print(f"\n  top-K set mismatches:   {set_mismatches}/{B}")
+    print(f"\n  top-1 index mismatches: {top1_mismatches}/{B}")
+    print(f"  top-K set mismatches:   {set_mismatches}/{B}")
     print(f"  top-1 value mismatches: {val_mismatches}/{B}")
 
     _assert_no_true_mismatches(
