@@ -2664,8 +2664,8 @@ class ModelArgs:
         chunk_size_fallback = self.image_size if self.image_size != -1 else vision_config.get("image_size", -1)
         self.vision_chunk_size = vision_config.get("vision_chunk_size", chunk_size_fallback)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
-        self.vision_num_cross_attention_layers = (
-            len(config["cross_attention_layers"]) if "cross_attention_layers" in config else None
+        self.vision_num_cross_attention_layers = len(
+            config["cross_attention_layers"] if "cross_attention_layers" in config else None
         )
 
         # Common vision parameters for all models
