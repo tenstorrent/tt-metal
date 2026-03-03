@@ -49,6 +49,18 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
 
+// Saved upper bits of NOC addresses from set_state calls.
+// On Wormhole with coordinate virtualization, hardware may translate coordinates
+// in the cmd buf register after a transaction is submitted, so we save the
+// original coordinates here for the WITH_STATE sanitizer macros to use.
+static uint32_t debug_sanitize_read_noc_addr_hi[NUM_NOCS];
+static uint32_t debug_sanitize_write_noc_addr_hi[NUM_NOCS];
+
+#define DEBUG_SANITIZE_SAVE_NOC_READ_STATE(noc_id, noc_addr) \
+    debug_sanitize_read_noc_addr_hi[noc_id] = (uint32_t)((noc_addr) >> NOC_ADDR_COORD_SHIFT)
+#define DEBUG_SANITIZE_SAVE_NOC_WRITE_STATE(noc_id, noc_addr) \
+    debug_sanitize_write_noc_addr_hi[noc_id] = (uint32_t)((noc_addr) >> NOC_ADDR_COORD_SHIFT)
+
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
@@ -763,6 +775,8 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
 #else  // !WATCHER_ENABLED
 
+#define DEBUG_SANITIZE_SAVE_NOC_READ_STATE(noc_id, noc_addr)
+#define DEBUG_SANITIZE_SAVE_NOC_WRITE_STATE(noc_id, noc_addr)
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_id, noc_a, worker_a, l, multicast, dir) LOG_LEN(l)
