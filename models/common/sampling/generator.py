@@ -543,13 +543,16 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 
 
 class SeedManager:
-    """Manages per-user RNG seeds for on-device sampling.
+    """Manage per-user RNG state and writes to the on-device seed tensor.
 
     Tracks which users have explicit seeds set (``_seed_active``) and avoids
     unnecessary host-to-device copies during decode when no seeds are active.
     On the first call after a reset with no active seeds, pushes MAX_UINT32
     (SKIP) values so the device skips ``rand_tile_init``, then skips all
     subsequent decode pushes until the next ``reset_seed``.
+
+    `reset_seed` updates host RNGs only. `get_new_values` advances RNGs and
+    writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
     def __init__(self, tt_sampling, max_batch_size=32):
@@ -621,6 +624,22 @@ class SeedManager:
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
+    def write_device_seed_values(self, seed_values):
+        if len(seed_values) != self.max_batch_size:
+            raise ValueError(f"Expected {self.max_batch_size} seed values, got {len(seed_values)}")
+        try:
+            wrapped = [int(seed) & 0xFFFFFFFF for seed in seed_values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("seed_values must contain integer-like values") from exc
+
+        seed_tt = ttnn.from_torch(
+            torch.tensor(wrapped, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._seed_mapper,
+        )
+        ttnn.copy_host_to_device_tensor(seed_tt, self.tt_sampling.seeds_tt_tensor)
+
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         """Generate and push new seed values to the device.
 
@@ -680,8 +699,5 @@ class SeedManager:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
 
-        new_seed_tt = ttnn.from_torch(
-            torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
-        )
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        self.write_device_seed_values(new_seeds)
         self._reseted = False
