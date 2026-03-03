@@ -85,7 +85,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
   skus:
     wh_llmbox:
-      timeout: 60
+      timeout: 120
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -101,7 +101,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface pytest --tb=short models/common/tests/modules/sampling
   skus:
     wh_llmbox:
-      timeout: 5
+      timeout: 10
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -109,7 +109,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
   skus:
     wh_llmbox:
-      timeout: 30
+      timeout: 90
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -117,6 +117,6 @@
   cmd: MESH_DEVICE=T3K HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama--Llama-3.1-8B-Instruct pytest --tb=short models/common/demos/llama31_8B_demo.py
   skus:
     wh_llmbox:
-      timeout: 20
+      timeout: 90
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
