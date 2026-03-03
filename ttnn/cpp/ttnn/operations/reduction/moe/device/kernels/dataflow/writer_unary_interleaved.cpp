@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
@@ -27,16 +30,22 @@ void kernel_main() {
 
     const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0, tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out(out_cb_index);
+
     uint32_t tile_id = 0;
-    cb_wait_front(out_cb_index, Ht * Kt);
-    uint32_t l1_read_addr = get_read_ptr(out_cb_index);
+    cb_out.wait_front(Ht * Kt);
     for (uint32_t j = 0; j < Ht; ++j) {
         for (uint32_t i = 0; i < Kt; ++i) {
-            noc_async_write_tile(tile_id, interleaved_accessor0, l1_read_addr);
-            l1_read_addr += tile_bytes;
+            noc.async_write(
+                cb_out,
+                interleaved_accessor0,
+                tile_bytes,
+                {.offset_bytes = tile_id * tile_bytes},
+                {.page_id = tile_id});
             tile_id++;
         }
     }
-    noc_async_write_barrier();
-    cb_pop_front(out_cb_index, Ht * Kt);
+    noc.async_write_barrier();
+    cb_out.pop_front(Ht * Kt);
 }
