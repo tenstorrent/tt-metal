@@ -178,7 +178,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;  // ?
     tt::DataFormat gamma_cb_data_format = gamma.has_value()
                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
                                               : tt::DataFormat::Float16_b;
@@ -268,6 +268,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
 
+    // TT_FATAL(fp32_dest_acc_en, "DEBUG: Force enable fp32 acc");
+
     bool large_tensor_needed = false;
     // The following constants were chosen empirically to
     // maximize the buffer size while still fitting the
@@ -275,8 +277,16 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // There is room for optimization here based on different
     // conditions (like what buffers are actually used),
     // but having two constants for all cases is simpler.
-    constexpr uint32_t with_weights_max_size = 56;
-    constexpr uint32_t without_weights_max_size = 112;
+    //
+    // The base values (56 / 112) are calibrated for bfloat16 intermediate tiles.
+    // When fp32_dest_acc_en is true, cb_data_format is Float32 so single_tile_size
+    // doubles (4096 B vs 2048 B). All intermediate CBs (im0_t, im3_t, im5_t, …) use
+    // single_tile_size, so the same number of tiles takes 2x the L1 space.  Scaling
+    // by bfloat16_tile_size / single_tile_size keeps the total intermediate CB
+    // footprint within the empirically validated L1 budget regardless of the
+    // accumulation data format.
+    const uint32_t with_weights_max_size = 56 * bfloat16_tile_size / single_tile_size;
+    const uint32_t without_weights_max_size = 112 * bfloat16_tile_size / single_tile_size;
     // cb_in_rm (CB 27) holds `block_size` tiles of row-major input for in-flight tilization.
     // Only allocated when input_is_row_major; always a small buffer (block_size * tile_size).
     const uint32_t in_rm_size = input_is_row_major ? block_size * in_single_tile_size : 0;
@@ -327,6 +337,16 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             out0_t = Wt_next_block_up;  // keep in sync with capped value
         }
     }
+
+    // DEBUG:
+    // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
+    // fp32_dest_acc_en=True.  Without it, UNPACK's SRCA register file is 16-bit and
+    // silently truncates every float32 value to bfloat16 before it reaches DST, producing
+    // wrong tilized tiles and effectively garbage output.
+    TT_FATAL(
+        !(input_is_row_major && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "ROW_MAJOR float32 input requires fp32_dest_acc_en=True in the compute kernel config "
+        "(SRCA is 16-bit when fp32_dest_acc_en=False, silently truncating float32 to bfloat16 during tilize)");
 
     TT_FATAL(in0_t % block_size == 0, "Buffer size in0_t ({}) must be divisible by block_size ({})", in0_t, block_size);
     TT_FATAL(in1_t % block_size == 0, "Buffer size in1_t ({}) must be divisible by block_size ({})", in1_t, block_size);

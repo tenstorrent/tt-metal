@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from scripts.debug.save_tensor_csv import save_tensor_csv
 
 
 def assert_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
@@ -156,6 +157,9 @@ def run_dit_rms_norm_unary_fused_test(
     # save_tensor_csv(tt_output_torch, "output/tt_output_torch.csv")
     # save_tensor_csv(torch_expected, "output/torch_expected.csv")
 
+    # print(f"tt_output_torch: \n{tt_output_torch}")
+    # print(f"torch_expected: \n{torch_expected}")
+
     return assert_quality(torch_expected, tt_output_torch)
 
 
@@ -195,27 +199,27 @@ def test_dit_rms_norm_unary_fused_basic_shapes(device, h, w, name):
     assert check_result["relative_rmse"] < 0.03, f"[{name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
-# @pytest.mark.parametrize(
-#     "h, w, config_name",
-#     [
-#         (9472, 5120, "wan2.2_14b-720p-full"),
-#         (2368, 5120, "wan2.2_14b-720p-single"),
-#     ],
-#     ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
-# )
-# def test_dit_rms_norm_unary_fused_wan2_shapes(device, h, w, config_name):
-#     """Test with actual Wan2.2 transformer shapes."""
-#     check_result = run_dit_rms_norm_unary_fused_test(
-#         device=device,
-#         h=h,
-#         w=w,
-#         activation="silu",
-#         dtype=ttnn.bfloat16,
-#     )
-#     assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
-#     assert (
-#         check_result["relative_rmse"] < 0.04
-#     ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
+@pytest.mark.parametrize(
+    "h, w, config_name",
+    [
+        (9472, 5120, "wan2.2_14b-720p-full"),
+        (2368, 5120, "wan2.2_14b-720p-single"),
+    ],
+    ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
+)
+def test_dit_rms_norm_unary_fused_wan2_shapes(device, h, w, config_name):
+    """Test with actual Wan2.2 transformer shapes."""
+    check_result = run_dit_rms_norm_unary_fused_test(
+        device=device,
+        h=h,
+        w=w,
+        activation="silu",
+        dtype=ttnn.bfloat16,
+    )
+    assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
+    assert (
+        check_result["relative_rmse"] < 0.04
+    ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
@@ -314,10 +318,17 @@ def test_dit_rms_norm_unary_fused_row_major_basic_shapes(device, h, w, name):
 @pytest.mark.parametrize(
     "h, w, config_name",
     [
-        (9472, 5120, "wan2.2_14b-720p-full"),
+        (1584, 5120, "wan2.2_14b-480p-single"),
+        (6336, 5120, "wan2.2_14b-480p-full"),
         (2368, 5120, "wan2.2_14b-720p-single"),
+        (9472, 5120, "wan2.2_14b-720p-full"),
     ],
-    ids=["wan2.2_14b-720p-full", "wan2.2_14b-720p-single"],
+    ids=[
+        "wan2.2_14b-480p-single",
+        "wan2.2_14b-480p-full",
+        "wan2.2_14b-720p-single",
+        "wan2.2_14b-720p-full",
+    ],
 )
 def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, h, w, config_name):
     """ROW_MAJOR input with Wan2.2 shapes (triggers large-tensor kernel path)."""
@@ -329,6 +340,8 @@ def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, h, w, config_nam
         dtype=ttnn.bfloat16,
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+
+    print(f"[{config_name}] PCC: {check_result['pcc']}, Relative RMSE: {check_result['relative_rmse']}")
     assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
     assert (
         check_result["relative_rmse"] < 0.04
@@ -337,24 +350,27 @@ def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, h, w, config_nam
 
 @pytest.mark.parametrize(
     "use_weight, use_bias",
-    [(True, False), (False, True), (True, True)],
-    ids=["weight_only", "bias_only", "weight_and_bias"],
+    [(False, False), (True, False), (False, True), (True, True)],
+    ids=["no_weight_no_bias", "weight_only", "bias_only", "weight_and_bias"],
 )
 @pytest.mark.parametrize(
     "activation",
     ["silu", None],
     ids=["silu", "no_activation"],
 )
-def test_dit_rms_norm_unary_fused_row_major_with_tile_weights(device, use_weight, use_bias, activation):
+@pytest.mark.parametrize("shape", [(64, 512), (512, 4096)], ids=["small", "large"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_dit_rms_norm_unary_fused_row_major_with_tile_weights(device, use_weight, use_bias, activation, shape, dtype):
     """ROW_MAJOR input with TILE-layout gamma and/or beta."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
-        h=64,
-        w=512,
+        h=shape[0],
+        w=shape[1],
         use_weight=use_weight,
         use_bias=use_bias,
         activation=activation,
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
     )
     assert (
         check_result["pcc"] > 0.9995
@@ -362,6 +378,23 @@ def test_dit_rms_norm_unary_fused_row_major_with_tile_weights(device, use_weight
     assert (
         check_result["relative_rmse"] < 0.03
     ), f"[rm/w={use_weight},b={use_bias},{activation}] Relative RMSE too high: {check_result['relative_rmse']}"
+
+
+def test_dit_rms_one_block_bug(device):
+    check_result = run_dit_rms_norm_unary_fused_test(
+        device=device,
+        h=32,
+        w=256,
+        use_weight=True,
+        use_bias=False,
+        activation=None,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    assert check_result["pcc"] > 0.9995, f"[rm/w=True,b=False,None] PCC too low: {check_result['pcc']}"
+    assert (
+        check_result["relative_rmse"] < 0.03
+    ), f"[rm/w=True,b=False,None] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 def test_dit_rms_norm_unary_fused_row_major_sharded_fatal(device):
