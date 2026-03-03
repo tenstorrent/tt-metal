@@ -210,6 +210,17 @@ def set_tensor_id(tensor, force=False):
         raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
 
 
+def set_output_tensor_id_decorator(function):
+    @wraps(function)
+    def call_wrapper(*function_args, **function_kwargs):
+        output = function(*function_args, **function_kwargs)
+        output_tensors = get_all_tensors(output)
+        set_tensor_id(output_tensors, force=True)
+        return output
+
+    return call_wrapper
+
+
 OPERATION_CALL_STACK = []
 
 
@@ -439,6 +450,11 @@ class FastOperation:
         if tracking:
             ttnn.graph.track_function_start(self.python_fully_qualified_name)
 
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
         try:
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
@@ -453,6 +469,16 @@ class FastOperation:
         finally:
             if tracking:
                 ttnn.graph.track_function_end()
+
+        if tracking:
+            output_tensors = get_all_tensors(result)
+            set_tensor_id(output_tensors, force=True)
+            output_tensor_ids = []
+            for t in output_tensors:
+                tid = getattr(t, "tensor_id", None)
+                if tid is not None:
+                    output_tensor_ids.append(int(tid))
+            ttnn.graph.store_output_tensor_ids(output_tensor_ids)
 
         return result
 
@@ -505,17 +531,6 @@ class Operation:
         self.postprocess_golden_function_outputs = (
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
-
-        def set_output_tensor_id_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                output = function(*function_args, **function_kwargs)
-                output_tensors = get_all_tensors(output)
-                # Set new tensor id to store the outputs of in-place operations correctly
-                set_tensor_id(output_tensors, force=True)
-                return output
-
-            return call_wrapper
 
         def comparison_decorator(function):
             @wraps(function)
