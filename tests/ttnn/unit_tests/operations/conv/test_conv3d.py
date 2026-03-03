@@ -142,11 +142,11 @@ def run_conv3d_test(
     # Prepare weights and bias for TTNN
 
     w = conv3d_module.weight.data
-    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_weight = ttnn.from_torch(w, dtype=dtype, pad_value=0)
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
         device=device,
-        dtype=ttnn.DataType.BFLOAT16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
     )
