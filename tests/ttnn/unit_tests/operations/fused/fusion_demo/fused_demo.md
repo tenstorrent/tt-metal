@@ -4,12 +4,14 @@ Eight demos showcasing different fusion capabilities on Tenstorrent Wormhole har
 
 **Test file:** `tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py`
 
+Perf tests are parametrized by `perf_mode`: `cold_start`, `e2e`, or `device_fw`. Run subsets with `-k`:
+
 ```bash
-# Run all tests:
+# Run all tests (all perf_modes):
 python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs
 
-# Run perf demos only:
-python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs -k TestPerfDemos
+# Run perf demos only, one mode:
+python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs -k "TestPerfDemos and e2e"
 
 # Run with Tracy device profiler (device_fw mode, skip GlobalCB demo):
 export TT_METAL_DEVICE_PROFILER=1
@@ -18,13 +20,19 @@ python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/
 
 All timing measured on Wormhole n150, BF16.
 
-## How Timing Was Measured
+## Perf Modes
 
-**Device FW / kernel** come from Tracy's profiler CSV (`DEVICE FW DURATION [ns]` and `DEVICE KERNEL DURATION [ns]`), run with `perf_mode=device_fw` (one dispatch per op, no timing loops). FW includes firmware setup + kernel + teardown (~0.7 us overhead). Kernel is pure Tensix execution time. Fused ops appear as a single `GenericOpDeviceOperation` row; unfused ops appear as one row per `ttnn.*` dispatch. Device FW totals for unfused are the sum of all per-op FW durations.
+### `device_fw` — What does the hardware actually cost?
 
-**E2E steady state** is measured with `_time_steady_state()`: 5 warmup iterations followed by 100 timed iterations, all with JIT caches populated. This captures the full host-to-device-to-host round-trip per iteration.
+Single dispatch, no timing loops. Designed for Tracy device profiling (`TT_METAL_DEVICE_PROFILER=1`). Tracy's CSV reports `DEVICE FW DURATION [ns]` (firmware setup + kernel + teardown) and `DEVICE KERNEL DURATION [ns]` (pure Tensix execution). Fused ops appear as one `GenericOpDeviceOperation` row; unfused ops appear as one row per `ttnn.*` dispatch (sum for total). This is the ground truth for whether fusion saves device cycles — it strips away all host overhead.
 
-**Cold start** is measured with `_time_fused()` / `_time_cold_warm()`: all caches cleared (JIT disk + in-memory + program + fusion build), then `build() + launch() + synchronize()`. This measures end-to-end cold dispatch including JIT compilation of the kernel binary.
+### `e2e` — What does the user see in steady state?
+
+Measured by `_time_e2e()`: 5 warmup iterations (discarded), then 100 timed iterations, all caches warm. Reports `total_ms / 100`. This captures the full host→device→host round-trip per iteration, including host dispatch overhead, `generic_op` argument setup, and NOC transfers. This measures the op's total time in a pipelined environment.
+
+### `cold_start` — How long until first output?
+
+All caches cleared (JIT disk + in-memory + program + fusion build), then one full execution including JIT compilation. For fused tests this is `build() + launch() + synchronize()`; for unfused tests it's the ttnn op calls which trigger JIT internally. This matters for model loading and first-inference latency — fusion JIT-compiles one kernel instead of N.
 
 ### Apples-to-apples configs
 
@@ -43,7 +51,7 @@ Basic sequential chaining of heterogeneous ops (norm + matmul + norm) into a sin
 
 **API:**
 ```python
-Sequential(rms1, matmul, rms2).build(device)
+Sequential(rms1, matmul, rms2).build()
 ```
 
 **Setup (parameterized on H):**
@@ -67,7 +75,7 @@ Unfused breakdown: RMS #1 FW=8.0 us + matmul FW=8.7 us + RMS #2 FW=7.9 us = 24.6
 | E2E steady state | 0.043 ms | 0.067 ms | **1.56x** |
 | Cold start | 1714 ms | 2136 ms | **1.25x** |
 
-At H=128, each op takes 7-8 us. The fused kernel is ~3 us slower than the unfused sum due to inter-phase barrier overhead. The **1.56x E2E speedup** comes from eliminating host dispatch gaps between ops.
+At H=128, each op takes 7-8 us. The fused kernel is ~3 us slower than the unfused sum due to inter-phase barrier overhead. The **1.56x E2E speedup** comes from reducing per-op overhead: each unfused dispatch has device firmware setup/teardown and host-side RT arg prep that fast dispatch can't fully hide when ops are this short.
 
 ### H=1536 (compute-dominated)
 
@@ -97,7 +105,7 @@ Fusion with block-sharded memory layout. The CB allocator detects pinned buffer 
 
 **API:**
 ```python
-Sequential(rms, ln).build(device)
+Sequential(rms, ln).build()
 ```
 
 **Setup (parameterized on H):**
@@ -132,7 +140,7 @@ Unfused breakdown: RMS FW=39.7 us + LN FW=63.6 us = 103.3 us.
 | E2E steady state | 0.121 ms | 0.104 ms | 0.86x |
 | Cold start | 1676 ms | 2645 ms | **1.58x** |
 
-The fused kernel is ~5 us slower than the unfused kernel sum (~107 vs ~103 us) — inter-phase barrier overhead. E2E is 0.86x for the same reason as H=128: `generic_op` dispatch overhead exceeds the saved dispatch gap.
+The fused kernel is ~5 us slower than the unfused kernel sum (~107 vs ~103 us) — inter-phase barrier overhead. E2E is 0.86x for the same reason as H=128: `generic_op`'s per-launch cost exceeds the per-op overhead that fusion eliminates.
 
 **PCC:** 1.000000 (both H values)
 
@@ -153,7 +161,7 @@ Two independent 2-op chains running on disjoint 1x8 core columns within a single
 Parallel(
     Sequential(ln_a, mm_a),
     Sequential(rms_b, mm_b),
-).build(device)
+).build()
 ```
 
 **Setup:**
@@ -174,7 +182,7 @@ Unfused breakdown: LN FW=44.8 us + matmul FW=18.2 us + RMS FW=26.8 us + matmul F
 | E2E steady state | 0.077 ms | 0.141 ms | **1.83x** |
 | Cold start | 1613 ms | 3517 ms | **2.18x** |
 
-The **1.54x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM ~ 45+18 us) and Chain B (RMS+MM ~ 27+18 us) run simultaneously, so fused time ~ `max(63, 45)` = 63 us. The **1.83x E2E speedup** additionally benefits from host dispatch elimination (4 dispatches -> 1).
+The **1.54x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM = 44.8+18.2 = 63 us) and Chain B (RMS+MM = 26.8+18.0 = 45 us) run simultaneously, so fused time ~ `max(63, 45)` + barriers = 70 us. The **1.83x E2E speedup** additionally saves per-dispatch overhead (4 dispatches → 1), which adds up when each op is only 18-45 us.
 
 **PCC:** Chain A = 1.0000, Chain B = 1.0000
 
@@ -209,7 +217,7 @@ Sequential(
         Sequential(sl_top, mm_left, Parallel(Sequential(sl_tl, ln_ll), Sequential(sl_bl, ln_lr))),
         Sequential(sl_bot, mm_right, Parallel(Sequential(sl_tr, ln_rl), Sequential(sl_br, ln_rr))),
     ),
-).build(device)
+).build()
 ```
 
 **Setup:**
@@ -229,7 +237,7 @@ Unfused breakdown (13 dispatches): ln_stem FW=42.6 us + 2 slices FW=11.9 us + 2 
 | E2E steady state | 0.195 ms | 0.452 ms | **2.32x** |
 | Cold start | 1917 ms | 5035 ms | **2.63x** |
 
-The **1.66x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **2.32x E2E speedup** additionally eliminates 12 host dispatch gaps. The **2.63x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
+The **1.66x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **2.32x E2E speedup** additionally saves per-dispatch overhead across 12 eliminated dispatches. The **2.63x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
 
 **PCC:** 0.993 (leaf LN output vs unfused reference)
 
@@ -260,7 +268,7 @@ Sequential(
         Sequential(sl_left, rms1, rms2),
         Sequential(sl_right, ln_right),
     ),
-).build(device)
+).build()
 ```
 
 **Setup:**
@@ -301,23 +309,22 @@ Data exfiltration from the middle of a fused kernel via `GlobalCircularBuffer`. 
 Parallel(
     Sequential(gcb_sender, identity_phase1),
     gcb_consumer,
-).build(device)
+).build()
 ```
 
-| Metric | Value |
-|--------|------:|
-| Cold start | 930 ms |
-| Warm dispatch | 0.14 ms |
+All three ops use hand-written SOURCE_CODE kernels (not ttnn ops):
 
-No unfused comparison (GlobalCB mid-kernel write has no unfused equivalent). No Tracy profiling (GlobalCB is incompatible with device profiler).
+- **`gcb_sender`** (core 0,0): Reader loads tiles from DRAM into a local CB. Compute copies tiles from the input CB to an output CB (tile copy via `copy_tile`/`pack_tile`). Writer pushes tiles from the output CB into the `GlobalCircularBuffer`, which transfers them to the receiver core over NOC.
+- **`identity_phase1`** (core 0,0): A standard DRAM-to-DRAM identity op (read tiles from DRAM tensor B, tile-copy through compute, write back to DRAM output_b). This runs as the sender's second phase, demonstrating that the sender core continues executing after the GlobalCB push.
+- **`gcb_consumer`** (core 1,0): Reader waits for tiles to arrive via the `GlobalCircularBuffer` and makes them available in a local CB. Writer drains the local CB to DRAM. No compute kernel — data passes through unmodified.
 
-**PCC:** Receiver=1.000000, Phase 1=1.000000
+This is a proof of concept demonstrating how producer and consumer ops can run in parallel, with the producer sending data to the consumer mid-kernel via GlobalCB.
 
 ---
 
 ## Demo 7: Non-Contiguous Core Grid ("Swiss Cheese")
 
-Validates that the unicast barrier release works correctly on a `CoreRangeSet` with gaps. The stem op runs on rows 0-1, 3, and 5 (24 cores, skipping rows 2 and 4). Data flows into two parallel branches.
+Validates that the unicast barrier release works correctly on a `CoreRangeSet` with gaps. The stem op runs on rows 0-1, 3, and 5 (24 cores, skipping rows 2 and 4). Data flows into two parallel branches. This mimics core patterns like DRAM-sharded matmul, where the compute cores are spread throughout the device.
 
 ```
       col0  col1  col2  col3  col4  col5
@@ -331,17 +338,11 @@ row5   X     X     X     X     X     X    <- branch B (6 cores)
 
 **API:**
 ```python
-Sequential(stem, Parallel(op_a, op_b)).build(device)
+Sequential(stem, Parallel(op_a, op_b)).build()
 ```
 
-| Metric | Value |
-|--------|------:|
-| Cold start | 910 ms |
-| E2E steady state | 0.034 ms |
+All three ops are hand-written DRAM-to-DRAM identity ops (same `_build_identity_op` helper used by the barrier benchmark). Each op has three kernels: reader loads tiles from a DRAM tensor into a local CB, compute does a tile copy (`copy_tile`/`pack_tile`) from input CB to output CB, and writer drains the output CB back to DRAM. The data content is trivial — the point is exercising the barrier and core-grid mechanics, not the compute.
 
-No unfused comparison (custom `SOURCE_CODE` identity ops). No Tracy profiling (identity ops have no `ttnn.*` equivalent for comparison).
-
-**PCC:** A=1.0000, B=1.0000 (identity ops -- exact copy)
 
 ---
 
@@ -355,7 +356,7 @@ Measures pure barrier mechanism cost by chaining N no-op phases (empty `kernel_m
 
 **API:**
 ```python
-Sequential(*[noop_op for _ in range(N)]).build(device)
+Sequential(*[noop_op for _ in range(N)]).build()
 ```
 
 **Setup:**
@@ -364,9 +365,9 @@ Sequential(*[noop_op for _ in range(N)]).build(device)
 - A single dummy DRAM tensor satisfies the `generic_op` tensor requirement
 - Parametrized over `num_phases` (2-6) and `num_cores` (1, 8, 16, 64)
 
-**Methodology:** Per-barrier cost = `(fused_N - fused_1) / (N - 1)`, where `fused_1` is a 1-phase baseline that captures fixed kernel launch overhead. At low N the baseline noise is a large fraction of the total, so per-barrier appears inflated; at high N (5-6) it converges to the true mechanism cost.
+**Methodology:** All numbers are E2E steady-state (`_time_e2e`: 5 warmup + 100 timed iterations, host-side wall clock including dispatch and device sync). Per-barrier cost = `(fused_N - fused_1) / (N - 1)`, where `fused_1` is a 1-phase baseline that captures fixed kernel launch overhead. At low N the baseline noise is a large fraction of the total, so per-barrier appears inflated; at high N (5-6) it converges to the true mechanism cost.
 
-**Results (Wormhole n150, unicast barrier release):**
+**Per-barrier results (Wormhole n150, unicast barrier release):**
 
 | Cores | Grid | 2 phases | 3 phases | 4 phases | 5 phases | 6 phases | Converged |
 |------:|:-----|-------:|-------:|-------:|-------:|-------:|----------:|
@@ -380,65 +381,6 @@ Sequential(*[noop_op for _ in range(N)]).build(device)
 - **`local::sync()`** -- per-core 3-RISC rendezvous via L1 semaphores (compute_done, writer_done, reset_done). Coordinator (NCRISC) waits for followers, resets CB state, signals reset_done.
 - **`group::sync()`** -- cross-core synchronization. Each core sends `noc_semaphore_inc` to core 0; core 0 waits for all arrivals, then unicast-releases each core individually.
 
-At 64 cores the unicast release loop sends 63 individual `noc_async_write` packets, yet converged cost is only ~0.2 us more than 1 core. The NOC writes are pipelined and the per-write cost is ~30 ns.
+At 64 cores the unicast release loop sends 63 individual `noc_async_write` packets, yet converged cost is only ~0.2 us more than 1 core.
 
 **Multicast was benchmarked and removed.** Replacing the unicast release loop with a single `noc_async_write_multicast` for rectangular grids showed no measurable improvement (64-core 6-phase: 1.7 us unicast vs 1.5 us multicast -- within noise). The release loop was never the bottleneck. Unicast is kept because it works with non-contiguous core grids (e.g., DRAM-sharded matmul's scattered cores) without special-casing.
-
-**Dispatch overhead comparison** (fused vs unfused, 6 phases):
-
-| Cores | Fused | Unfused | Per-dispatch overhead |
-|------:|------:|--------:|---------------------:|
-| 1 | 21.7 us | 77.9 us | ~11.2 us |
-| 8 | 21.6 us | 92.1 us | ~14.1 us |
-| 16 | 24.5 us | 100.5 us | ~15.2 us |
-| 64 | 36.2 us | 168.5 us | ~26.4 us |
-
-Fusion eliminates ~11-26 us of host dispatch overhead per op (scales with core count due to RT arg setup).
-
----
-
-## Summary
-
-### Device-level timing (Tracy)
-
-| Demo | Ops | Fused FW | Unfused FW | FW speedup | Source of speedup |
-|------|----:|---------:|-----------:|--------:|:-----------------|
-| 1 (H=128): Linear chain | 3 | 27.1 us | 24.6 us | 0.91x | No device speedup (linear chain) |
-| 1 (H=1536): Linear chain | 3 | 993.4 us | 1008.4 us (K) | 1.02x | No device speedup (compute-dominated) |
-| 2 (H=128): Sharded chain | 2 | 22.1 us | 22.3 us | 1.01x | No device speedup (linear chain) |
-| 2 (H=1536): Sharded chain | 2 | 107.5 us | 103.3 us | 0.96x | No device speedup (compute-dominated) |
-| 3: Parallel chains | 4 | 70.0 us | 107.9 us | **1.54x** | Parallelism (2 chains overlap) |
-| 4: Sharded tree | 13 | 120.9 us | 200.8 us | **1.66x** | Branch parallelism (5-level tree) |
-| 5: Asymmetric branches | 6 | 120.8 us | 147.6 us | **1.22x** | Branch parallelism (asymmetric) |
-
-### Host-level timing (E2E steady state + cold start)
-
-| Demo | Fused E2E | Unfused E2E | E2E speedup | Fused cold | Unfused cold |
-|------|----------:|------------:|--------:|-----------:|-------------:|
-| 1 (H=128) | 0.043 ms | 0.067 ms | **1.56x** | 1714 ms | 2136 ms |
-| 1 (H=1536) | 0.998 ms | 1.005 ms | 1.01x | 1758 ms | 2192 ms |
-| 2 (H=128) | 0.088 ms | 0.060 ms | 0.68x | 1699 ms | 2654 ms |
-| 2 (H=1536) | 0.121 ms | 0.104 ms | 0.86x | 1676 ms | 2645 ms |
-| 3 | 0.077 ms | 0.141 ms | **1.83x** | 1613 ms | 3517 ms |
-| 4 | 0.195 ms | 0.452 ms | **2.32x** | 1917 ms | 5035 ms |
-| 5 | 0.187 ms | 0.213 ms | **1.14x** | 1998 ms | 4778 ms |
-
-**Key takeaways:**
-- **Barrier overhead is ~1.5 us per transition** (demo 8), independent of core count (1-64 cores). Multicast release provides no measurable benefit over unicast.
-- **Linear chains** (demos 1, 2): No device speedup -- fused FW ~ sum of unfused kernels + barrier overhead. Demo 1 gets E2E speedup from eliminating 2 dispatch roundtrips; demo 2 is slower fused because `generic_op` dispatch overhead exceeds the single saved dispatch gap.
-- **Branching topologies** (demos 3, 4, 5): Device speedup from overlapping independent branches on disjoint core subsets. Demo 3 (1.54x) from 2 parallel chains; demo 4 (1.66x) from a full binary tree; demo 5 (1.22x) from asymmetric branches with a large serial stem.
-- **Dispatch overhead is ~11-26 us per op** (demo 8), scaling with core count. Fusion eliminates this for all but the first dispatch.
-- **Cold start** (including JIT compilation): Fused is **1.25-2.63x faster** because it JIT-compiles 1 fused kernel instead of N individual kernels. The advantage grows with op count: demo 4 (13 ops) sees 2.63x, demo 1 (3 ops) sees 1.25x. JIT compilation dominates cold start cost (~1-2s fused vs 2-5s unfused).
-
----
-
-## Implementation Notes
-
-1. **Compute configs must match across all phases.** `fp32_dest_acc_en`, `math_approx_mode`, and `math_fidelity` must be identical. Default configs differ by op type:
-   - RMS norm: `fp32=False`, `math_approx=True`, `HiFi4`
-   - Layer norm: `fp32=True`, `math_approx=True`, `HiFi4`
-   - Matmul: `fp32=False`, `math_approx=False`, `LoFi`
-
-   Pass explicit `WormholeComputeKernelConfig` to ensure consistency.
-
-2. **Branching output order** depends on Python set hashing of core coordinates. Reference outputs through the original op descriptors (`op.output_tensors[0]`) rather than relying on positional indexing in `fused.output_tensors`.
