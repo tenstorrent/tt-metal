@@ -251,10 +251,21 @@ struct WorkerToFabricEdmSenderImpl {
             sync_noc_cmd_buf);
     }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED = true>
+    FORCE_INLINE void worker_invalidate_l1_cache() const {
+        if constexpr (RISC_CPU_DATA_CACHE_ENABLED) {
+            invalidate_l1_cache();
+        }
+    }
+
     // templatized num_slots to let callers implement bubble flow control without runtime overheads.
-    template <size_t num_slots = 1>
+    // template enable_l1_dcache to conditionally invalidate l1 cache without runtime overhead 
+    // Usually BRSIC does not use data cache, but default `enable_l1_dcache` to true so its opt-in for non-l1 invalidation optimization and its not a correctness bug 
+    template <size_t num_slots = 1, bool enable_l1_dcache = true>
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        // invalidate_l1_cache();
+        // Workers (BRISC) don't have dcache enabled by default fence is usually unnecessary
+        worker_invalidate_l1_cache<enable_l1_dcache>();
+
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
             if constexpr (num_slots == 1) {
@@ -267,9 +278,10 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
+    template <bool enable_l1_dcache = true>
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet<1>());
+        while (!this->edm_has_space_for_packet<1, enable_l1_dcache>());
         WAYPOINT("FWSD");
     }
 
@@ -608,6 +620,8 @@ private:
         post_send_payload_increment_pointers();
     }
 };
+
+
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 
