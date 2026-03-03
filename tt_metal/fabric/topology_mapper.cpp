@@ -509,6 +509,25 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             asic_id_to_mesh_rank,
             fabric_node_id_to_mesh_rank);
 
+        // If STRICT mode fails, retry with RELAXED validation for all meshes.
+        // This handles cases where physical links are DOWN but the topology is still usable.
+        if (!mapping_result.success) {
+            log_warning(
+                tt::LogFabric,
+                "Topology mapping failed with STRICT validation: {}. Retrying with RELAXED mode.",
+                mapping_result.error_message);
+            for (auto& [mesh_id, mode] : config.mesh_validation_modes) {
+                mode = ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+            }
+            config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+            mapping_result = ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
+                adjacency_map_logical_multi_mesh,
+                adjacency_map_physical_multi_mesh,
+                config,
+                asic_id_to_mesh_rank,
+                fabric_node_id_to_mesh_rank);
+        }
+
         // Check if mapping succeeded
         TT_FATAL(
             mapping_result.success,
