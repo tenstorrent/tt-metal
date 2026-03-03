@@ -107,9 +107,9 @@ void kernel_main() {
             // Mcast (receiver)
             using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
             deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
-                get_named_compile_time_arg_val("mcast_dst_cb"),
-                get_named_compile_time_arg_val("mcast_dst_num_pages"),
+                get_named_compile_time_arg_val("moe_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("moe_mcast_dst_cb"),
+                get_named_compile_time_arg_val("moe_mcast_dst_num_pages"),
             };
 
 #ifdef ENABLE_ROUTING
@@ -326,8 +326,8 @@ void kernel_main() {
     auto setup_all_sharded_buffers = [&]() {
         if constexpr (Core::is_sender_core) {
             unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("rmsnorm_gamma_num_pages"));
+                get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
+                get_named_compile_time_arg_val("moe_rmsnorm_gamma_num_pages"));
 #ifdef ENABLE_ROUTING
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_bias_cb"), 1);
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_input_indices_cb"), 1);
@@ -372,21 +372,21 @@ void kernel_main() {
         struct Routed {
             // Mcast (sender)
             using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-                get_named_compile_time_arg_val("mcast_num_cores"),
-                get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
+                get_named_compile_time_arg_val("moe_mcast_num_cores"),
+                get_named_compile_time_arg_val("moe_mcast_is_part_of_receiver_grid"),
                 Core::is_sender_core && Core::is_mcast_grid_core>;
             deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
-                get_named_compile_time_arg_val("mcast_data_size_bytes"),
-                get_named_compile_time_arg_val("mcast_src_cb"),
-                get_named_compile_time_arg_val("mcast_src_num_pages"),
-                get_read_ptr(get_named_compile_time_arg_val("mcast_src_cb")),
-                get_write_ptr(get_named_compile_time_arg_val("mcast_dst_cb")),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("moe_mcast_data_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("moe_mcast_data_size_bytes"),
+                get_named_compile_time_arg_val("moe_mcast_src_cb"),
+                get_named_compile_time_arg_val("moe_mcast_src_num_pages"),
+                get_read_ptr(get_named_compile_time_arg_val("moe_mcast_src_cb")),
+                get_write_ptr(get_named_compile_time_arg_val("moe_mcast_dst_cb")),
             };
 
 #ifdef ENABLE_ROUTING
@@ -418,10 +418,10 @@ void kernel_main() {
 
             // Index Mcast (sender)
             deepseek_b1_ops::Mcast::SenderArgs index_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("index_mcast_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("index_mcast_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
@@ -433,10 +433,10 @@ void kernel_main() {
 
             // Expert Scale Mcast (sender)
             deepseek_b1_ops::Mcast::SenderArgs expert_scale_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
@@ -480,10 +480,10 @@ void kernel_main() {
 
             // down_proj Mcast (sender)
             deepseek_b1_ops::Mcast::SenderArgs down_proj_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
@@ -502,10 +502,10 @@ void kernel_main() {
             // Residual Mcast — sender (input from sender → residual CB, pop_src=false)
             using ResidualMcastCTArgs = McastCTArgs;
             deepseek_b1_ops::Mcast::SenderArgs residual_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_residual_mcast_data_size_bytes"),
@@ -590,10 +590,10 @@ void kernel_main() {
             // Down Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
             using DownMcastCTArgs = Routed::McastCTArgs;
             deepseek_b1_ops::Mcast::SenderArgs down_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_down_mcast_data_size_bytes"),
@@ -631,10 +631,10 @@ void kernel_main() {
             // Output Mcast — sender (sender core → 130 cores)
             using OutputMcastCTArgs = Routed::McastCTArgs;
             deepseek_b1_ops::Mcast::SenderArgs output_mcast_args{
-                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
                 get_named_compile_time_arg_val("shared_output_mcast_data_sender_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_output_mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("shared_output_mcast_data_size_bytes"),
@@ -783,15 +783,16 @@ void kernel_main() {
             // RMSNorm (compute — sender core only)
             // Input: residual_mcast_src_cb (raw activation), Output: rmsnorm_output_cb
             using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
-                get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
-                get_named_compile_time_arg_val("rmsnorm_num_tiles"),
-                get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
-                get_named_compile_time_arg_val("rmsnorm_input_cb"),  // residual_mcast_src_cb
-                get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("rmsnorm_output_cb")>;  // rmsnorm_output_cb
+                get_named_compile_time_arg_val("moe_rmsnorm_fp32_acc") == 1,
+                get_named_compile_time_arg_val("moe_rmsnorm_num_tiles"),
+                get_named_compile_time_arg_val("moe_rmsnorm_rsqrt_fast_approx") == 1,
+                get_named_compile_time_arg_val("moe_rmsnorm_input_cb"),  // residual_mcast_src_cb
+                get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
+                get_named_compile_time_arg_val("moe_rmsnorm_output_cb")>;  // rmsnorm_output_cb
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-                get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 0),
-                get_common_arg_val<float>(get_named_compile_time_arg_val("rmsnorm_trisc_common_rt_arg_base") + 1),
+                get_common_arg_val<uint32_t>(
+                    get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 0),
+                get_common_arg_val<float>(get_named_compile_time_arg_val("moe_rmsnorm_trisc_common_rt_arg_base") + 1),
             };
 
 #ifdef ENABLE_REDUCE_TO_ONE
