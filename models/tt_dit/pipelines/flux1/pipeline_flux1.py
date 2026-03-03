@@ -973,7 +973,6 @@ def _get_clip_prompt_embeds(
 
         tt_prompt_embeds, tt_pooled_prompt_embeds = text_encoder(
             prompt_tokenized=tt_tokens,
-            mesh_device=mesh_device,
         )
         tt_prompt_embeds = tt_prompt_embeds[-(clip_skip + 2)]
 

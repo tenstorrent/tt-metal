@@ -55,7 +55,9 @@ def _make_ccl_manager(mesh_device, num_links, topology):
     return CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
 
-def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp, num_layers=NUM_LAYERS):
+def _make_wan_transformer(
+    *, mesh_device, ccl_manager, parallel_config, is_fsdp, num_layers=NUM_LAYERS
+) -> WanTransformer3DModel:
     return WanTransformer3DModel(
         patch_size=PATCH_SIZE,
         num_heads=NUM_HEADS,
@@ -178,7 +180,7 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-    tt_spatial_out = tt_model(
+    tt_spatial_out = tt_model.forward(
         spatial_1BND=tt_spatial,
         prompt_1BLP=tt_prompt,
         temb_1BTD=tt_temb,
@@ -293,7 +295,7 @@ def test_wan_transformer_model(
     logger.info(
         f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
     )
-    tt_spatial_out = tt_model(
+    tt_spatial_out = tt_model.forward(
         spatial=spatial_input,
         prompt=tt_prompt,
         timestep=timestep_input,
@@ -380,14 +382,15 @@ def test_wan_transformer_inner_step(
 
     # Run TT inner_step (returns on-device tensor)
     logger.info(f"Running TT inner_step with spatial_host shape {spatial_host.shape}, N={N}")
+    spatial_1BNI = bf16_tensor(
+        spatial_host,
+        device=mesh_device,
+        mesh_axis=parallel_config.sequence_parallel.mesh_axis,
+        shard_dim=-2,
+    )
+    temb_11BD, timestep_proj_1BTD = tt_model.prepare_timestep_conditioning(timestep_input)
     tt_output_1BNI_tt = tt_model.inner_step(
-        spatial_1BNI_torch=spatial_host,
-        prompt_1BLP=prompt_1BLP,
-        rope_cos_1HND=rope_cos_1HND,
-        rope_sin_1HND=rope_sin_1HND,
-        trans_mat=trans_mat,
-        N=N,
-        timestep_torch=timestep_input,
+        spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, temb_11BD, timestep_proj_1BTD
     )
     tt_output_1BNI = tt_model.device_to_host(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)

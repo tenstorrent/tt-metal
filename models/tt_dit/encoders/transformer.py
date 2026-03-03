@@ -807,13 +807,13 @@ def _prepare_attn_bias(mask: ttnn.Tensor, *, query_length: int, query_pos: int) 
     mask = mask.reshape([batch_size, 1, 1, kv_length])
     mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
     mask = ttnn.expand(mask, [batch_size, 1, query_length, kv_length])
-    mask = ttnn.tril(mask, diagonal=query_pos)
+    mask = tensor.tril(mask, diagonal=query_pos)
 
     return (mask - 1.0) * math.inf
 
 
 def _make_positions(*, start: int, sequence_length: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
-    pos = ttnn.arange(start, start + sequence_length, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    pos = tensor.arange(start, start + sequence_length, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     return ttnn.unsqueeze(pos, 0)
 
     # If the attention mask had holes, i.e., contained zeros between ones, this would have to be

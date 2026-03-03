@@ -11,6 +11,7 @@ from typing import Any
 import ttnn
 
 from ..layers.module import Module
+from ..utils import tensor
 
 
 @dataclass
@@ -42,7 +43,9 @@ class RotaryEmbedding(Module):
         theta = self.config.theta
 
         # https://github.com/huggingface/transformers/blob/6d00f6b0a5679c36510f203e4226e36f517c3032/src/transformers/models/llama/modeling_llama.py#L73
-        k = ttnn.pow(theta, ttnn.arange(0, size, 2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) / -size)
+        k = ttnn.pow(
+            theta, tensor.arange(0, size, 2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) / -size
+        )
 
         if self.config.mrope_section is not None:
             warnings.warn("mrope_section is not implemented yet", stacklevel=2)

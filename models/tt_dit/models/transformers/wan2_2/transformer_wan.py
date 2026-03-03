@@ -19,6 +19,7 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import tensor
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
@@ -362,13 +363,15 @@ class WanTransformer3DModel(Module):
         # Torch fallbacks
         self.rope.load_state_dict(pop_substate(state, "rope"))
 
-    def get_rope_features(self, hidden_states):
+    def get_rope_features(self, hidden_states: torch.Tensor, *, on_host: bool = False):
         if tuple(hidden_states.shape) not in self.cached_rope_features:
             rope_features = self.prepare_rope_features(hidden_states)
-            self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
-        return self.cached_rope_features[tuple(hidden_states.shape)]
+            self.cached_rope_features[(tuple(hidden_states.shape), on_host)] = rope_features
+        return self.cached_rope_features[(tuple(hidden_states.shape), on_host)]
 
-    def prepare_rope_features(self, hidden_states):
+    def prepare_rope_features(
+        self, hidden_states: torch.Tensor, *, on_host: bool = False
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         Given video input, compute RoPE features.
         Return tensors on device.
@@ -395,14 +398,16 @@ class WanTransformer3DModel(Module):
             device=self.mesh_device,
             dtype=ttnn.float32,
             mesh_axes=[..., sp_axis, None],
+            on_host=on_host,
         )
         tt_rope_sin_1HND = from_torch(
             rope_sin_1HND,
             device=self.mesh_device,
             dtype=ttnn.float32,
             mesh_axes=[..., sp_axis, None],
+            on_host=on_host,
         )
-        tt_trans_mat = bf16_tensor(trans_mat, device=self.mesh_device)
+        tt_trans_mat = from_torch(trans_mat, device=self.mesh_device, on_host=on_host)
 
         logger.info(f"TT rope cos shape: {tt_rope_cos_1HND.shape}")
         logger.info(f"TT rope sin shape: {tt_rope_sin_1HND.shape}")
@@ -574,7 +579,9 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI_torch, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep_torch):
+    def inner_step(
+        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, temb_11BD, timestep_proj_1BTD
+    ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -583,19 +590,9 @@ class WanTransformer3DModel(Module):
             - trans_mat
             - N
 
-        Spatial input is a torch tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
-        Spatial output is an fp32 ttnn.Tensor on device with same layout.
+        Spatial input is a TT-NN tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
+        Spatial output is a TT-NN tensor with same layout.
         """
-
-        # Push spatial input to device
-        spatial_1BNI = bf16_tensor(
-            spatial_1BNI_torch,
-            device=self.mesh_device,
-            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-            shard_dim=-2,
-        )
-        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep_torch)
-
         spatial_1BND = self.patch_embedding(spatial_1BNI)
 
         for idx, block in enumerate(self.blocks):

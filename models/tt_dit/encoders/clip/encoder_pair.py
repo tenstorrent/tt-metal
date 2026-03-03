@@ -144,11 +144,11 @@ def _get_clip_prompt_embeds(
             mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
 
-        tt_prompt_embeds, tt_pooled_prompt_embeds, tt_normalized = text_encoder(
+        tt_prompt_embeds, tt_normalized = text_encoder.forward(
             prompt_tokenized=tt_tokens,
-            mesh_device=mesh_device,
-            return_normalized_state=True,
+            skip_pooling=True,
         )
+        tt_pooled_prompt_embeds = text_encoder.pooled_output(tt_tokens, tt_normalized)
         tt_prompt_embeds = tt_prompt_embeds[-(true_clip_skip + 1)] if skip_norm else tt_normalized
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])

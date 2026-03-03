@@ -1017,7 +1017,6 @@ def _get_clip_prompt_embeds(
     # Call the new CLIPEncoder with projection enabled
     encoder_output, projected_output = text_encoder(
         prompt_tokenized=tt_text_input_ids,
-        mesh_device=ttnn_device,
     )
 
     # Handle clip_skip by selecting the appropriate hidden state layer

@@ -381,7 +381,7 @@ def test_mochi_transformer_model(
     logger.info(
         f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
     )
-    tt_spatial_out = tt_model(
+    tt_spatial_out = tt_model.forward_full(
         spatial=spatial_input,
         prompt=prompt_input,
         timestep=timestep_input,

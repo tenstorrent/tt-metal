@@ -827,13 +827,13 @@ class MochiPipeline(DiffusionPipeline):
                 print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
                 print(f"attention_kwargs: {attention_kwargs}")
 
-                noise_pred_uncond = self.transformer(
+                noise_pred_uncond = self.transformer.forward_full(
                     spatial=latent_model_input[:1],
                     prompt=prompt_embeds[:1],
                     timestep=timestep[:1],
                     prompt_attention_mask=prompt_attention_mask[:1],
                 )
-                noise_pred_text = self.transformer(
+                noise_pred_text = self.transformer.forward_full(
                     spatial=latent_model_input[1:],
                     prompt=prompt_embeds[1:],
                     timestep=timestep[1:],

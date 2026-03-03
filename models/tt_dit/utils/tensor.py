@@ -268,3 +268,104 @@ def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
     else:
         new_shape[dim : dim + 1] = sizes
     return ttnn.reshape(x, new_shape)
+
+
+def full(
+    size: ttnn.Shape | Sequence[int],
+    fill_value: float,
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device: ttnn.MeshDevice,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.full` that supports tracing."""
+    if not isinstance(size, ttnn.Shape):
+        size = ttnn.Shape(size)
+
+    result = ttnn.allocate_tensor_on_device(size, dtype, layout, device, memory_config)
+    ttnn.fill(result, fill_value, output_tensor=result)
+    return result
+
+
+def arange(
+    start: float,
+    end: float,
+    step: float = 1.0,
+    *,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device: ttnn.MeshDevice,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.arange` that supports tracing."""
+    x = full(
+        [math.ceil((end - start) / step)],
+        fill_value=step,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    return ttnn.cumsum(x, 0) + (start - step)
+
+
+_tril_cache: dict[tuple, ttnn.Tensor] = {}
+_triu_cache: dict[tuple, ttnn.Tensor] = {}
+
+
+def tril(
+    x: ttnn.Tensor,
+    /,
+    diagonal: int = 0,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    output_tensor: ttnn.Tensor | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.tril` that supports tracing."""
+    device = x.device()
+
+    if device is None:
+        msg = "tril is not supported for host tensors"
+        raise ValueError(msg)
+
+    mask_shape = tuple(x.shape)[-2:]
+
+    cache_key = (mask_shape, device.id(), diagonal)
+    if cache_key in _tril_cache:
+        mask = _tril_cache[cache_key]
+    else:
+        mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        mask = ttnn.tril(mask, diagonal=diagonal)
+        _tril_cache[cache_key] = mask
+
+    return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
+
+
+def triu(
+    x: ttnn.Tensor,
+    /,
+    diagonal: int = 0,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    output_tensor: ttnn.Tensor | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.triu` that supports tracing."""
+    device = x.device()
+
+    if device is None:
+        msg = "triu is not supported for host tensors"
+        raise ValueError(msg)
+
+    mask_shape = tuple(x.shape)[-2:]
+
+    cache_key = (mask_shape, device.id(), diagonal)
+    if cache_key in _triu_cache:
+        mask = _triu_cache[cache_key]
+    else:
+        mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        mask = ttnn.triu(mask, diagonal=diagonal)
+        _triu_cache[cache_key] = mask
+
+    return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)

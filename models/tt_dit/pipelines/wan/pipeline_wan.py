@@ -31,7 +31,7 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import typed_tensor_2dshard
 
@@ -912,20 +912,29 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 permuted_model_input = self.get_model_input(permuted_latent, cond_latents)
 
+                permuted_model_input_tt = tensor.from_torch(
+                    permuted_model_input,
+                    device=self.mesh_device,
+                    mesh_axes=[None, None, self.parallel_config.sequence_parallel.mesh_axis, None],
+                )
+                temb_11BD, timestep_proj_1BTD = current_model.prepare_timestep_conditioning(timestep)
+
                 permuted_noise_pred_tt = current_model.inner_step(
-                    spatial_1BNI_torch=permuted_model_input,
+                    spatial_1BNI=permuted_model_input_tt,
                     prompt_1BLP=prompt_embeds_map[current_model_name],
                     N=patchified_seqlen,
-                    timestep_torch=timestep,
+                    temb_11BD=temb_11BD,
+                    timestep_proj_1BTD=timestep_proj_1BTD,
                     **rope_args,
                 )
 
                 if self.do_classifier_free_guidance:
                     permuted_noise_uncond_tt = current_model.inner_step(
-                        spatial_1BNI_torch=permuted_model_input,
+                        spatial_1BNI=permuted_model_input_tt,
                         prompt_1BLP=negative_prompt_embeds_map[current_model_name],
                         N=patchified_seqlen,
-                        timestep_torch=timestep,
+                        temb_11BD=temb_11BD,
+                        timestep_proj_1BTD=timestep_proj_1BTD,
                         **rope_args,
                     )
                     # On-device CFG with high precision fp32 lerp: uncond + scale * (cond - uncond)
