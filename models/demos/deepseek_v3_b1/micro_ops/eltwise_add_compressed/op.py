@@ -31,7 +31,9 @@ class EltwiseAddCompressed:
         cb_in1 = 1
         cb_out = 2
 
-        num_tiles = ct.num_tiles
+        # Per-shard tile count (for multi-core, each core processes its shard)
+        a_shard_shape = a_tensor.memory_config().shard_spec.shape
+        num_tiles = (a_shard_shape[0] // 32) * (a_shard_shape[1] // 32)
 
         # CB0: A tensor — standard
         cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
