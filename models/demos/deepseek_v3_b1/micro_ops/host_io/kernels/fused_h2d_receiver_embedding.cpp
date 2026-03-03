@@ -128,7 +128,6 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
-    DPRINT << "start of h2d fused kernel\n";
     size_t rt_args_idx = 0;
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
@@ -198,7 +197,6 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
-        DPRINT << "Waiting for data on receiver socket\n";
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
@@ -235,7 +233,6 @@ void kernel_main() {
         } else {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-            DPRINT << "Data received on receiver socket, sending to sender socket\n";
             socket_reserve_pages(sender_socket, 1);
             send_pages_over_socket(
                 sender_socket,
@@ -247,7 +244,6 @@ void kernel_main() {
                 l1_read_addr,
                 dst_addr);
         }
-        DPRINT << "Popped pages from receiver socket\n";
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
@@ -261,11 +257,8 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    DPRINT << "H2D fused kernel complete\n";
-    DPRINT << "use fabric: " << (uint32_t)use_fabric << "\n";
     if constexpr (use_fabric) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
-    DPRINT << "end of h2d fused kernel\n";
 }
