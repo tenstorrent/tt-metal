@@ -12,7 +12,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
-from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _get_element_size_bytes, _round_up
+from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
     get_max_page_size_and_num_pages,
@@ -3166,6 +3166,31 @@ class AttentionBlock:
                     + post_sdpa_trisc_named_compile_time_args
                 )
 
+                if coord == ttnn.MeshCoordinate(0, 0):
+                    core_grids = {
+                        "is_input_core": rmsnorm_core,
+                        "is_matmul_core": matmul_weights_core_grid,
+                        "is_matmul2_core": matmul2_weights_core_grid,
+                        "is_qnope_core": qnope_grid,
+                        "is_qrope_core": qrope_grid,
+                        "is_sdpa_input_core": sdpa_input_grid,
+                        "is_dkv_matmul_core": dkv_matmul_weights_core_grid,
+                        "is_kv_rmsnorm_core": dkv_rmsnorm_grid,
+                        "is_knope_core": dkv_gather_sender_grid,
+                        "is_krope_core": krope_grid,
+                        "is_mla_core": mla_core_grid,
+                        "is_sdpa_worker_core": sdpa_worker_grid,
+                        "is_sdpa_forwarder_core": sdpa_forwarder_grid,
+                        "is_matmul4_core": matmul4_core_grid,
+                        "is_gather_receiver_core": gather_core_grid,
+                        "is_matmul5_core": matmul5_active_core_grid,
+                        "is_mcast3_receiver_core": mcast3_core_grid,
+                        "is_ccl_sender_core": ccl_sender_core_grid,
+                        "is_ccl_receiver_core": gather_core_grid,
+                    }
+                    for name, grid in core_grids.items():
+                        print(f"  {name}: {grid}")
+
                 unified_compile_time_core_descriptors = [
                     UnifiedCompileTimeCoreDescriptor(
                         named_compile_time_arg="is_input_core",
@@ -3759,9 +3784,9 @@ class AttentionBlock:
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for ctx in attention_block_per_device_contexts:
-            if ctx["coord"] == ttnn.MeshCoordinate(0, 0):
-                for key, value in ctx.items():
-                    print(f"  {key}: {value}")
+            #          if ctx["coord"] == ttnn.MeshCoordinate(0, 0):
+            #               for key, value in ctx.items():
+            #                    print(f"  {key}: {value}")
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/attention_block/kernels/attention_block_kernel.cpp",
                 core_ranges=full_device_grid,
@@ -3789,10 +3814,11 @@ class AttentionBlock:
                 noc_mode=noc_mode,
             )
 
+            kernel_result = unified_kernel.get_kernel_descriptors()
             program = ttnn.ProgramDescriptor(
-                kernels=unified_kernel.get_kernel_descriptors().kernels,
+                kernels=kernel_result.kernels,
                 cbs=[ctx["input_cb_descriptor"], *ctx["cbs_list"], ctx["output_cb_descriptor"]],
-                semaphores=[],
+                semaphores=ctx["semaphore_list"],
             )
 
             coord = ctx["coord"]
@@ -3814,6 +3840,127 @@ class AttentionBlock:
                         writer_rt_args_ref.extend(fabric_args)
                         break
 
+            if ctx["ccl"]:
+                ccl = ctx["ccl"]
+                ccl_sender_core = ctx["ccl_sender_core"]
+                gather_core = ctx["gather_core"]
+
+                ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
+                ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
+
+                ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
+                ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl["sender_ncrisc_common_rt_args"]
+                ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
+                ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl["sender_brisc_common_rt_args"]
+                ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
+                ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = ccl["receiver_ncrisc_common_rt_args"]
+
+                program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
+                program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
+                program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
+
+                fabric_node_id = ccl["fabric_node_id"]
+                neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
+
+                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
+                sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
+                    ccl_sender_core.y
+                ]
+                sender_fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_node_id,
+                    [neighbor_fabric_node_id],
+                    [ccl["sender_link"]],
+                    program,
+                    sender_brisc_kernel_idx,
+                    ccl_sender_core,
+                )
+                sender_brisc_rt_args_ref.extend(sender_fabric_args)
+
+                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
+                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
+                    gather_core.y
+                ]
+                receiver_fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_node_id,
+                    [neighbor_fabric_node_id],
+                    [ccl["receiver_link"]],
+                    program,
+                    receiver_ncrisc_kernel_idx,
+                    gather_core,
+                )
+                receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
+
+            # ==================================================================
+            # SDPA runtime args and fabric connection setup
+            # ==================================================================
+            if ctx["sdpa"]:
+                sdpa = ctx["sdpa"]
+                sdpa_forwarder_cores = ctx["sdpa_forwarder_cores"]
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
+                        crs = group.core_range_set
+                        _extend_runtime_args(
+                            program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa["worker_ncrisc_rt_args"], crs
+                        )
+                        _extend_runtime_args(
+                            program.kernels[group.brisc_kernel_index].runtime_args, sdpa["worker_brisc_rt_args"], crs
+                        )
+                        if sdpa["worker_trisc_rt_args"] is not None:
+                            _extend_runtime_args(
+                                program.kernels[group.trisc_kernel_index].runtime_args,
+                                sdpa["worker_trisc_rt_args"],
+                                crs,
+                            )
+
+                sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
+                sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
+
+                for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_brisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    brisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["fwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
+
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_ncrisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    ncrisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["bwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
+                        crs = group.core_range_set
+                        _extend_runtime_args(
+                            program.kernels[group.brisc_kernel_index].runtime_args, sdpa_forwarder_brisc_rt_args, crs
+                        )
+                        _extend_runtime_args(
+                            program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa_forwarder_ncrisc_rt_args, crs
+                        )
+            """
+            if coord == ttnn.MeshCoordinate(0, 0):
+                for group in kernel_result.groups:
+                    crs = group.core_range_set
+                    for c, args in program.kernels[group.ncrisc_kernel_index].runtime_args:
+                        print(f"NCRISC ({c.x},{c.y}): {args}")
+                    for c, args in program.kernels[group.brisc_kernel_index].runtime_args:
+                        print(f"BRISC ({c.x},{c.y}): {args}")
+                    for c, args in program.kernels[group.trisc_kernel_index].runtime_args:
+                        print(f"TRISC ({c.x},{c.y}): {args}")
+            """
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)

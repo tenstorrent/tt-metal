@@ -73,6 +73,18 @@ def _filter_runtime_args(rt_args, core_range_set):
     return filtered
 
 
+def _extend_runtime_args(existing_rt_args, rt_args, core_range_set):
+    """Extend existing per-core runtime args with additional args for cores in core_range_set.
+
+    For cores that already have runtime args (e.g., MLA args), appends the new args
+    (e.g., SDPA args) so the kernel can read them sequentially.
+    For cores without existing args, sets them to the new args.
+    """
+    for coord, args in rt_args:
+        if core_range_set.contains(coord):
+            existing_rt_args[coord.x][coord.y].extend(list(args))
+
+
 class PostSDPA:
     """
     Post SDPA fused operation implementation using ttnn.generic_op.

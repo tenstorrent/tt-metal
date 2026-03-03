@@ -427,6 +427,25 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
+
+    // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
+    using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+    // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
+    using DummyComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
+    deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
+    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
+
+    if constexpr (Core::is_ccl_sender_core) {
+        ccl_sender_args = {
+            .tensor_address = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
+        };
+    }
+
+    if constexpr (Core::is_ccl_receiver_core) {
+        ccl_receiver_args = {
+            .sender_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
+        };
+    }
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -772,6 +791,17 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
         get_named_compile_time_arg_val("ccl_sender_num_connections")>;
 
+    // Dummy ReaderCTArgs - not used by BRISC but needed for Op template
+    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
+    deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
+    if constexpr (Core::is_ccl_sender_core) {
+        ccl_sender_args = {
+            .receiver_base_address = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .receive_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .fabric_args_start_index = per_core_rta_arg_idx,
+        };
+    }
+
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
@@ -1054,6 +1084,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
 
+    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+    // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
+    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
+
     deepseek_compute_kernel_init();
 #endif
 
@@ -1174,6 +1208,8 @@ void kernel_main() {
         matmul(matmul_args);
     }
 
+    DPRINT << " DONE MATMUL" << ENDL();
+
     // ========================================================================
     // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
     // NCRISC sends from matmul cores, BRISC receives on input core, TRISC reduces CB7 += CB8
@@ -1186,6 +1222,7 @@ void kernel_main() {
         gather_reduce(gather_reduce_args);
     }
 
+    DPRINT << " DONE GATHER REDUCE" << ENDL();
     // ========================================================================
     // RMSNorm2: Apply RMSNorm to the gathered data (1536 elements = 3 tiles of 16x32)
     // Gather writes directly to rmsnorm2_input_cb (3 tiles of 16x32)
@@ -1200,6 +1237,8 @@ void kernel_main() {
         deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
         rmsnorm2(rmsnorm2_args);
     }
+
+    DPRINT << " DONE RMSNORM2" << ENDL();
 
     // ========================================================================
     // Mcast2: Broadcast rmsnorm2 output from input core to all matmul2 cores
@@ -1216,6 +1255,7 @@ void kernel_main() {
     }
     mcast.teardown();
 
+    DPRINT << " DONE MCAST2" << ENDL();
     // ========================================================================
     // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
     // N = 12288 for P150 (96 cores * 4 tiles * 32) or 11264 for non-P150
@@ -1323,6 +1363,7 @@ void kernel_main() {
             kv_cache_update(kv_cache_update_args);
         }
 
+        DPRINT << " DONE KV CACHE UPDATE" << ENDL();
         // ========================================================================
         // Flash MLA: Compute
         // ========================================================================
@@ -1355,11 +1396,14 @@ void kernel_main() {
                         get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
                     volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
+                    DPRINT << " wait for scatter arrival semaphore" << ENDL();
                     noc_semaphore_wait(scatter_arrival_sem_addr, 1);
                     noc_semaphore_set(scatter_arrival_sem_addr, 0);
+                    DPRINT << " scatter arrival semaphore waited" << ENDL();
                 }
 #endif
             }
+            DPRINT << " DONE POST_SDPA" << ENDL();
             // ========================================================================
             // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
             // ========================================================================
@@ -1417,8 +1461,8 @@ void kernel_main() {
                 deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
                 gather3(gather3_args);
             }
+            DPRINT << " DONE GATHER3" << ENDL();
 
-#ifndef SKIP_CCL
 #if defined(COMPILE_FOR_BRISC)
             // Signal CCL sender that gather3 is complete (gather receiver only)
             if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
@@ -1454,63 +1498,35 @@ void kernel_main() {
                 noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
                 noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
-                // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-                using DummyWriterCTArgs =
-                    deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
-                deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
-                ccl_sender_args.tensor_address = get_common_arg_val<uint32_t>(0);
-                size_t fabric_arg_idx = 0;
-
                 deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
-                ccl_sender_reader(ccl_sender_args, fabric_arg_idx);
+                ccl_sender_reader(ccl_sender_args);
             }
 
             if constexpr (Core::is_ccl_receiver_core) {
                 DeviceZoneScopedN("CCL_RECEIVER_WAIT");
-                // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
-                using DummyComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
-
-                deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
-                ccl_receiver_args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
-                size_t fabric_arg_idx = 0;
 
                 deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
-                ccl_receiver_reader(ccl_receiver_args, fabric_arg_idx);
+                ccl_receiver_reader(ccl_receiver_args);
             }
 
 #elif defined(COMPILE_FOR_BRISC)
             if constexpr (Core::is_ccl_sender_core) {
                 DeviceZoneScopedN("CCL_SENDER_SEND");
-                // Dummy ReaderCTArgs - not used by BRISC but needed for Op template
-                using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
-
-                deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
-                ccl_sender_args.receiver_base_address = get_common_arg_val<uint32_t>(0);
-                ccl_sender_args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
-                size_t fabric_arg_idx = 0;
 
                 deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-                ccl_sender_writer(ccl_sender_args, fabric_arg_idx);
+                ccl_sender_writer(ccl_sender_args);
             }
             // CCL Receiver BRISC is no-op
 
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (Core::is_ccl_receiver_core) {
                 DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
-                // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-                using DummyReaderCTArgs =
-                    deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
-                deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
-                size_t fabric_arg_idx = 0;
 
                 deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
                     ccl_receiver_compute;
-                ccl_receiver_compute(ccl_receiver_args, fabric_arg_idx);
+                ccl_receiver_compute(ccl_receiver_args);
             }
             // CCL Sender TRISC is no-op
 #endif
-#endif  // SKIP_CCL
     }
 }
