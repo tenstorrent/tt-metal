@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "api/debug/dprint.h"
+
 /**
  * LOOP_COUNT and LOOP_SIZE provide the ability to decide how many cycles this kernel takes.
  * With a large enough LOOP_COUNT and a LOOP_SIZEs within icache size, cycle count will be
@@ -20,6 +22,7 @@
  */
 
 void kernel_main() {
+    DPRINT << get_timestamp() << ENDL();
     for (int i = 0; i < LOOP_COUNT; i++) {
 // Max unroll size
 #pragma GCC unroll 65534

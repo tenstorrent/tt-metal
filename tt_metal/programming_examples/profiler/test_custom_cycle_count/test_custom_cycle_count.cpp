@@ -42,21 +42,21 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
 
-    tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .defines = kernel_defines});
+    // tt_metal::CreateKernel(
+    // program,
+    //"tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
+    // all_cores,
+    // tt_metal::DataMovementConfig{
+    //.processor = tt_metal::DataMovementProcessor::RISCV_1,
+    //.noc = tt_metal::NOC::RISCV_1_default,
+    //.defines = kernel_defines});
 
-    std::vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
+    // std::vector<uint32_t> trisc_kernel_args = {};
+    // tt_metal::CreateKernel(
+    // program,
+    //"tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp",
+    // all_cores,
+    // tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     // Enqueue mesh workload (non-blocking) then read profiler results from the mesh device
     workload.add_program(device_range, std::move(program));
