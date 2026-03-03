@@ -445,7 +445,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
 
         passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), d2h_valid.flatten(), 0.95)
         logger.info(f"Pipeline Stage 0 D2H Reduce PCC: {pcc_msg}")
-        # assert passing, f"Pipeline Stage 0 D2H PCC check failed: {pcc_msg}"
+        assert passing, f"Pipeline Stage 0 D2H PCC check failed: {pcc_msg}"
 
     ttnn.distributed_context_barrier()
 
@@ -453,69 +453,5 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
     logger.info(f"[rank={my_mesh_id}] waiting for pipeline block termination")
     pipeline_block.terminate()
     logger.info(f"[rank={my_mesh_id}] programs terminated")
-
-    # ── Stage 1: validate MoE golden ─────────────────────────────────────────
-    if is_stage1:
-        mesh_rows, mesh_cols = mesh_device.shape
-        K_down = s["K_down"]
-
-        torch_input_row = torch_embedding[0, 0, token_id : token_id + 1, :]
-
-        device_gate_indices = ttnn.to_torch(result_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        device_gate_scores = ttnn.to_torch(result_scores, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-
-        # Validate reduce output (sum of all per-device MoE outputs)
-        reduce_output_torch = ttnn.to_torch(
-            result_output,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        )
-        root_device_idx = reduce_root_coord[0] * mesh_cols + reduce_root_coord[1]
-
-        expected_final_outputs = []
-        for dev_idx in range(mesh_rows * mesh_cols):
-            dev_row = dev_idx // mesh_cols
-            dev_col = dev_idx % mesh_cols
-
-            actual_expert_idx = dev_idx
-            actual_expert_scale = device_gate_scores[0].flatten()[dev_idx].float()
-
-            shared_gate_shard = s["torch_gate_weights"][:, dev_idx * K_down : (dev_idx + 1) * K_down]
-            shared_up_shard = s["torch_up_weights"][:, dev_idx * K_down : (dev_idx + 1) * K_down]
-            shared_down_shard = s["torch_down_weights"][dev_idx * K_down : (dev_idx + 1) * K_down, :]
-
-            _, _, expected_final = MoeOp.golden(
-                torch_input_row,
-                shared_gate_weights=shared_gate_shard,
-                shared_up_weights=shared_up_shard,
-                shared_down_weights=shared_down_shard,
-                gate_proj_weights_dict=r["expert_weights_dict"],
-                up_proj_weights_dict=r["up_proj_weights_dict"],
-                down_proj_weights_dict=r["down_proj_weights_dict"],
-                routing_weights_tensor=r["torch_gate_mm_weights"],
-                bias_tensor=r["torch_bias"],
-                eps=r["gate_eps"],
-                scaling_factor=r["gate_scaling_factor"],
-                use_hardcoded_expert_index=True,
-                hardcoded_expert_index=actual_expert_idx,
-                explicit_expert_scale=actual_expert_scale,
-                rmsnorm_gamma=r["torch_rmsnorm_gamma"],
-                rmsnorm_epsilon=1e-6,
-            )
-            expected_final_outputs.append(expected_final)
-
-        expected_reduce_output = sum(expected_final_outputs)
-
-        reduce_output_root = reduce_output_torch[root_device_idx]
-        reduce_output_valid = extract_routed_expert_output(
-            reduce_output_root.unsqueeze(0),
-            r["num_gate_proj_cores"],
-            r["final_output_width_per_core"],
-            r["per_core_down_proj_N"],
-        )
-
-        passing, pcc_msg = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
-        logger.info(f"Pipeline Stage 1 Reduce PCC: {pcc_msg}")
-        logger.info(f"[rank=1] expected first 5 values: {reduce_output_valid.flatten()[:5]}")
-        assert passing, f"Pipeline Stage 1 Reduce PCC check failed: {pcc_msg}"
 
     logger.info(f"[rank={my_mesh_id}] test PASSED")

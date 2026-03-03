@@ -50,7 +50,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("output_core_noc_y"),
         get_named_compile_time_arg_val("num_workers"),
         get_named_compile_time_arg_val("slot_size_bytes"),
-        get_named_compile_time_arg_val("is_fabric_core")>;
+        get_named_compile_time_arg_val("is_fabric_core"),
+        0,  // fabricRtArgBase (default)
+        get_named_compile_time_arg_val("total_num_workers"),
+        get_named_compile_time_arg_val("agg_output_size_bytes")>;
 
     // Writer runtime args for worker cores only (from per-core args)
     // Fabric cores have different args (sem IDs + fabric connection) read inside the op
@@ -66,7 +69,15 @@ void kernel_main() {
             get_arg_val<uint32_t>(6),  // output_base_addr
             get_arg_val<uint32_t>(7),  // shard_idx
             get_arg_val<uint32_t>(8),  // socket_config_addr
+            0,
+            0,
+            0,
         };
+        if constexpr (CTArgs::total_num_workers > 0) {
+            rt_args.agg_sem_l1_addr = get_arg_val<uint32_t>(9);
+            rt_args.agg_core_noc_x = get_arg_val<uint32_t>(10);
+            rt_args.agg_core_noc_y = get_arg_val<uint32_t>(11);
+        }
     }
 
 #elif defined(COMPILE_FOR_TRISC)
