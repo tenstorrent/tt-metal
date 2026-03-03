@@ -437,6 +437,7 @@ def import_graph(
     errors_batch = []
     edges_batch = []
     captured_graph_batch = []
+    pyid_to_cpp_tensor = {}
 
     # Build device bank info for per-bank buffer size computation
     device_bank_info = {}
@@ -707,10 +708,21 @@ def import_graph(
             output_idx = 0
 
             if py_io and py_io.get("output_tensor_ids"):
-                for tid in py_io["output_tensor_ids"]:
+                cpp_output_nodes = []
+                for conn_id in node.get("connections", []):
+                    if conn_id < len(graph):
+                        cn = graph[conn_id]
+                        if cn.get("node_type") == "tensor":
+                            cpp_output_nodes.append(cn)
+                if not cpp_output_nodes and nested_output_tensor_nodes:
+                    cpp_output_nodes = nested_output_tensor_nodes
+
+                for i, tid in enumerate(py_io["output_tensor_ids"]):
                     output_tensors_batch.append((operation_id, output_idx, int(tid)))
                     emitted_output_tids.add(int(tid))
                     output_idx += 1
+                    if i < len(cpp_output_nodes):
+                        pyid_to_cpp_tensor[int(tid)] = cpp_output_nodes[i]
             else:
                 connections = node.get("connections", [])
                 for conn_id in connections:
@@ -790,16 +802,13 @@ def import_graph(
             )
             if real_bufs is not None:
                 for buf in real_bufs:
-                    bt = buf.get("buffer_type", 0)
-                    if bt == 3:  # L1_SMALL → L1
-                        bt = 1
                     buffers_batch.append(
                         (
                             operation_id,
                             buf.get("device_id", 0),
                             buf.get("address", 0),
                             buf.get("max_size_per_bank", 0),
-                            bt,
+                            buf.get("buffer_type", 0),
                             buf.get("buffer_layout", 0),
                         )
                     )
@@ -848,7 +857,7 @@ def import_graph(
             page_size = int(params.get("page_size", 0))
             num_cores = int(params.get("num_cores", 0))
             _buffer_type_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
-            buffer_type_str = params.get("type", "DRAM")
+            buffer_type_str = params.get("exact_buffer_type") or params.get("type", "DRAM")
             buffer_type = _buffer_type_map.get(buffer_type_str, 0)
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
@@ -977,6 +986,21 @@ def import_graph(
             if addr is not None and addr in addr_to_tensor:
                 _, shape, dtype, layout, mem_cfg, dev_id, _, bt = addr_to_tensor[addr]
                 tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt))
+            elif mtid in pyid_to_cpp_tensor:
+                cpp_node = pyid_to_cpp_tensor[mtid]
+                p = cpp_node.get("params", {})
+                tensors_batch.append(
+                    (
+                        mtid,
+                        str(p.get("shape", "")),
+                        str(p.get("dtype", "")),
+                        str(p.get("layout", "")),
+                        str(p.get("memory_config", "")),
+                        p.get("device_id"),
+                        p.get("address"),
+                        p.get("buffer_type", 0),
+                    )
+                )
 
     kept_tensor_ids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
 
