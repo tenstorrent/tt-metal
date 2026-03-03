@@ -86,12 +86,16 @@ def recurrent_delta_rule_step_ttnn(
     *,
     memory_config=None,
     compute_kernel_config=None,
+    force_l1_matmul=False,
 ):
     """
     Single recurrent step of the gated delta rule using TTNN ops.
 
     Uses ttnn.matmul for K-dimension reductions to leverage hardware
     float32 accumulation when compute_kernel_config has fp32_dest_acc_en.
+
+    When force_l1_matmul is True, matmul outputs use L1 interleaved (caller must
+    set this only when state fits in L1, so the outer product [B,H,K,V] does not overflow).
 
     Args:
         q_t: [B, H, K] query for this timestep
@@ -100,8 +104,9 @@ def recurrent_delta_rule_step_ttnn(
         beta_t: [B, H] write strength
         g_t: [B, H] log-space decay
         h: [B, H, K, V] recurrent state
-        memory_config: optional ttnn.MemoryConfig for matmul/add outputs (e.g. L1 or height-sharded)
+        memory_config: for state update (h = h + outer); must match h
         compute_kernel_config: optional config with fp32_dest_acc_en for critical matmuls
+        force_l1_matmul: if True, use ttnn.L1_MEMORY_CONFIG for all matmuls (safe only when state fits in L1)
 
     Returns:
         o_t: [B, H, V] output
@@ -112,9 +117,13 @@ def recurrent_delta_rule_step_ttnn(
     K = q_t.shape[2]
     V = v_t.shape[2]
 
+    # Force L1 interleaved for matmuls when caller allows (state fits in L1)
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
+    matmul_mem = l1_memory_config if force_l1_matmul else memory_config
+
     matmul_kw = {}
-    if memory_config is not None:
-        matmul_kw["memory_config"] = memory_config
+    if matmul_mem is not None:
+        matmul_kw["memory_config"] = matmul_mem
     if compute_kernel_config is not None:
         matmul_kw["compute_kernel_config"] = compute_kernel_config
 
@@ -218,6 +227,12 @@ def recurrent_gated_delta_rule_ttnn(
     state_memory_config = _get_recurrent_state_memory_config(device, B, H, K, V)
     compute_kernel_config = _get_recurrent_compute_kernel_config(device)
 
+    # Force L1 interleaved for matmuls only when state fits in L1 (same threshold as above)
+    # so the outer product [B,H,K,V] does not overflow L1 and cause PCC drop
+    _l1_size_per_core = 1024 * 1024
+    _state_size_bytes = B * H * K * V * 4
+    force_l1_matmul = device is not None and _state_size_bytes <= _l1_size_per_core * 0.5
+
     # Initialize state in float32; use L1 or height-sharded when device is set
     if initial_state is not None:
         h = ttnn.typecast(initial_state, ttnn.float32)
@@ -233,6 +248,7 @@ def recurrent_gated_delta_rule_ttnn(
         step_kw["memory_config"] = state_memory_config
     if compute_kernel_config is not None:
         step_kw["compute_kernel_config"] = compute_kernel_config
+    step_kw["force_l1_matmul"] = force_l1_matmul
 
     outputs = []
     for i in range(T):
