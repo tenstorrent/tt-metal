@@ -330,7 +330,10 @@ void kernel_main() {
         start_reader_idx = reader_idx;
         if constexpr (split_reader_enabled) {
             // Increment reader index for the next number of segments (number of segments for other reader)
-            start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+            // Only read reader indices on cores that have sharded input (is_sender_core).
+            if (is_sender_core) {
+                start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+            }
         }
     }
 

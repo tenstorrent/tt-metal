@@ -10,6 +10,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -372,6 +373,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (rms_norm) {
         reader_defines.emplace_back("RMSNORM", "1");
         compute_defines.emplace_back("RMSNORM", "1");
+    }
+
+    if (operation_attributes.fused_activation.has_value()) {
+        const auto& act = operation_attributes.fused_activation.value();
+        auto act_defines =
+            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output.dtype());
+        for (auto& [key, val] : act_defines) {
+            compute_defines.emplace_back(key, val);
+        }
     }
 
     // Select reader kernel path

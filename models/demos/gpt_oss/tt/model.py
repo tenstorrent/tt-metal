@@ -756,8 +756,13 @@ class Model:
                 torch_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
         else:
             torch_out = self.concat_device_output(tt_out)
-        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, vocab_size]
-        return torch_out.view(B, S, -1)
+        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, padded_vocab_size]
+        torch_out = torch_out.view(B, S, -1)
+        # Truncate to vocab_size — lm_head is padded to padded_vocab_size for
+        # on-device sampling (pow2 topk), but callers expect vocab_size width.
+        if torch_out.shape[-1] > self.vocab_size:
+            torch_out = torch_out[:, :, : self.vocab_size]
+        return torch_out
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""

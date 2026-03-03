@@ -924,10 +924,10 @@ class MoeRoutedExpert:
         mcast_data_sender_semaphore_id = 0
         mcast_data_receiver_semaphore_id = 1
 
-        gate_proj_fp32_dest_acc_en = 1
-        up_proj_fp32_dest_acc_en = 1
-        mul_fp32_dest_acc_en = 1
-        down_proj_fp32_dest_acc_en = 1
+        gate_proj_fp32_dest_acc_en = 0
+        up_proj_fp32_dest_acc_en = 0
+        mul_fp32_dest_acc_en = 0
+        down_proj_fp32_dest_acc_en = 0
         dst_full_sync_en = False
 
         # CB indices

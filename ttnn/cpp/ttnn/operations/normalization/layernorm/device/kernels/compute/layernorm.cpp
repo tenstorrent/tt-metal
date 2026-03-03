@@ -18,6 +18,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -216,6 +217,15 @@ void kernel_main() {
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (auto i : block.local()) {
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);  // tile *= 1/(sum(exp(x)))
+#ifdef SFPU_OP_INIT_ACTIVATION
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
+                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
                 pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             cb_push_back(
@@ -243,6 +253,15 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    // Activation must be applied last. If do_beta != 0 then
+                    // activation will be applied after the beta addition.
+                    // Otherwise, we can apply the activation here.
+                    if constexpr (!(do_beta == 1)) {
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+#endif
                     pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
                 cb_pop_front(cb_fusion, block.full_block_size());
@@ -266,6 +285,10 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                     pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
                 cb_pop_front(cb_fusion, block.full_block_size());
