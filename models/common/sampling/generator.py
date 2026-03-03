@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -15,13 +14,6 @@ import ttnn
 
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
-
-# --- Test case collection instrumentation (TTTv2 Phase A) ---
-# Collects unique parameter combinations from TTTv1 model runs.
-# Remove this block after test cases are hardcoded in pytest (Phase D).
-_config_collected = set()
-_params_collected = set()
-_prompt_collected = set()
 
 
 @dataclass(frozen=True)
@@ -71,38 +63,6 @@ class SamplingGenerator:
         self._trace_states: dict[_TraceKey, dict] = {}
         self.seed_manager = SeedManager(self.tt_sampling)
 
-        # --- Test case collection: config CSV (Phase A) ---
-        _csv_file = "sampling_generator_config_collected.csv"
-        _s = self.tt_sampling
-        _hf_model_name = getattr(args, "model_name", "unknown")
-        _entry = (
-            f"{_s.cluster_shape[0]},{_s.cluster_shape[1]},"
-            f"{_s.padded_vocab_size},{_s.max_batch_size},{_s.max_top_k},"
-            f"{_s.num_gather_links},{_s._allow_force_argmax_sampling},"
-            f"{_s.num_argmax_gather_links},{_s.ag_topology},"
-            f"{_s.sampling_memory_config},"
-            f"{_s.sub_core_grids is not None},{getattr(_s, 'sub_core_grid_topk', None) is not None},"
-            f"{getattr(_s, 'sampling_all_gather_axis', 0)},"
-            f"{_hf_model_name}"
-        )
-        if _entry not in _config_collected:
-            _config_collected.add(_entry)
-            _file_exists = os.path.exists(_csv_file)
-            with open(_csv_file, "a") as f:
-                if not _file_exists:
-                    f.write(
-                        "cluster_shape_x,cluster_shape_y,"
-                        "padded_vocab_size,max_batch_size,max_top_k,"
-                        "num_gather_links,allow_force_argmax,"
-                        "num_argmax_gather_links,ag_topology,"
-                        "sampling_memory_config,"
-                        "sub_core_grids_present,sub_core_grid_topk_present,"
-                        "sampling_all_gather_axis,"
-                        "hf_model_name\n"
-                    )
-                f.write(f"{_entry}\n")
-        self._hf_model_name = _hf_model_name  # stash for reset_sampling_params collector
-
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
@@ -133,35 +93,6 @@ class SamplingGenerator:
         return all(value == default for value in values)
 
     def reset_prompt_tokens(self, prompt_tokens):
-        # --- Test case collection: prompt tokens CSV (Phase A) ---
-        # Captures prompt_tokens shape for the prefill penalty path.
-        # This runs BEFORE the _penalties_active guard so we can see which
-        # models would exercise this path if penalties were enabled.
-        _csv_file = "penalties_prompt_tokens_collected.csv"
-        _cs = self.tt_sampling.cluster_shape
-        _vocab = self.tt_penalties.vocab_size
-        _shape = tuple(prompt_tokens.shape) if hasattr(prompt_tokens, "shape") else ("unknown",)
-        _seq_len = _shape[-1] if len(_shape) >= 2 else _shape[0]
-        _batch = _shape[0] if len(_shape) >= 2 else 1
-        _entry = (
-            f"{_cs[0]},{_cs[1]},{_vocab},"
-            f"{_batch},{_seq_len},"
-            f"{self._penalties_active},"
-            f"{getattr(self, '_hf_model_name', 'unknown')}"
-        )
-        if _entry not in _prompt_collected:
-            _prompt_collected.add(_entry)
-            _file_exists = os.path.exists(_csv_file)
-            with open(_csv_file, "a") as f:
-                if not _file_exists:
-                    f.write(
-                        "cluster_shape_x,cluster_shape_y,vocab_size,"
-                        "batch_size,seq_len,"
-                        "penalties_active,"
-                        "hf_model_name\n"
-                    )
-                f.write(f"{_entry}\n")
-
         if not self._penalties_active:
             return
         self.tt_penalties.reset_prompt_tokens(prompt_tokens)
@@ -200,54 +131,6 @@ class SamplingGenerator:
                 sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
             )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
-
-        # --- Test case collection: params CSV (Phase A) ---
-        _csv_file = "sampling_generator_params_collected.csv"
-        _cs = self.tt_sampling.cluster_shape
-        _vocab = self.tt_sampling.padded_vocab_size
-        # Extract first element as representative (demos typically use uniform params)
-        _k_first = sampling_params.top_k[0] if isinstance(sampling_params.top_k, list) else sampling_params.top_k
-        _p_first = sampling_params.top_p[0] if isinstance(sampling_params.top_p, list) else sampling_params.top_p
-        _t_first = (
-            sampling_params.temperature[0]
-            if isinstance(sampling_params.temperature, list)
-            else sampling_params.temperature
-        )
-        _pres = (
-            sampling_params.presence_penalty[0]
-            if isinstance(sampling_params.presence_penalty, list)
-            else getattr(sampling_params, "presence_penalty", 0.0)
-        )
-        _freq = (
-            sampling_params.frequency_penalty[0]
-            if isinstance(sampling_params.frequency_penalty, list)
-            else getattr(sampling_params, "frequency_penalty", 0.0)
-        )
-        _rep = (
-            sampling_params.repetition_penalty[0]
-            if isinstance(sampling_params.repetition_penalty, list)
-            else getattr(sampling_params, "repetition_penalty", 1.0)
-        )
-        _entry = (
-            f"{_cs[0]},{_cs[1]},{_vocab},"
-            f"{_k_first},{_p_first},{_t_first},"
-            f"{_pres},{_freq},{_rep},"
-            f"{self._penalties_active},{self.tt_sampling._force_argmax_sampling},"
-            f"{getattr(self, '_hf_model_name', 'unknown')}"
-        )
-        if _entry not in _params_collected:
-            _params_collected.add(_entry)
-            _file_exists = os.path.exists(_csv_file)
-            with open(_csv_file, "a") as f:
-                if not _file_exists:
-                    f.write(
-                        "cluster_shape_x,cluster_shape_y,padded_vocab_size,"
-                        "k_first,p_first,temp_first,"
-                        "presence_first,frequency_first,repetition_first,"
-                        "penalties_active,force_argmax,"
-                        "hf_model_name\n"
-                    )
-                f.write(f"{_entry}\n")
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
