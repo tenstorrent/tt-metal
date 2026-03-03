@@ -56,9 +56,17 @@ def scale_tiles_for_mixed_formats(b_torch, formats):
 
 
 def _run_eltwise_add_compressed(
-    device, M, N, formats, threshold=0.993, pcc_threshold=0.98, num_cores_h=1, num_cores_w=1
+    device,
+    M,
+    N,
+    formats,
+    threshold=0.993,
+    pcc_threshold=0.98,
+    num_cores_h=1,
+    num_cores_w=1,
+    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
 ):
-    """Helper: run A (bf16) + decompress(B_compressed) = C (bf16) on single core."""
+    """Helper: run A (bf16) + decompress(B_compressed) = C (bf16)."""
     torch.manual_seed(42)
 
     a_torch = torch.randn(1, 1, M, N).bfloat16().float()
@@ -70,9 +78,7 @@ def _run_eltwise_add_compressed(
     )
 
     assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats)
-    b_mem_config = _make_sharded_mem_config(
-        (M, N), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, core_grid
-    )
+    b_mem_config = _make_sharded_mem_config((M, N), shard_layout, ttnn.BufferType.L1, core_grid)
     ct = CompressedTensor.from_torch(b_torch, assigner, device=device, memory_config=b_mem_config)
 
     logger.info(f"Compressed B: {ct}")
@@ -87,9 +93,7 @@ def _run_eltwise_add_compressed(
     golden = a_torch + b_torch.unsqueeze(0).unsqueeze(0)
 
     # A tensor on device
-    a_mem_config = _make_sharded_mem_config(
-        (M, N), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, core_grid
-    )
+    a_mem_config = _make_sharded_mem_config((M, N), shard_layout, ttnn.BufferType.L1, core_grid)
     a_t = ttnn.from_torch(
         a_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=a_mem_config
     )
@@ -213,4 +217,131 @@ def test_eltwise_add_compressed_5core_uneven(device):
     """192/5 -> div_up=39 -> align to 64. Last cores get padded."""
     _run_eltwise_add_compressed(
         device, 192, 32, formats=["bfp8", "bfp4", "bfp2"], num_cores_h=5, threshold=0.994, pcc_threshold=0.997
+    )
+
+
+# --- WIDTH_SHARDED tests ---
+
+
+def test_eltwise_add_compressed_2core_width(device):
+    """2 cores width-sharded, 32x64 (1 tile/core), bfp8."""
+    _run_eltwise_add_compressed(
+        device,
+        32,
+        64,
+        formats=["bfp8"],
+        num_cores_w=2,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    )
+
+
+def test_eltwise_add_compressed_4core_width_mixed(device):
+    """4 cores width-sharded, 64x128 (2 tiles/core), mixed bfp4 + bfp8."""
+    _run_eltwise_add_compressed(
+        device,
+        64,
+        128,
+        formats=["bfp8", "bfp4"],
+        num_cores_w=4,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    )
+
+
+def test_eltwise_add_compressed_3core_width_uneven(device):
+    """3 cores width-sharded, 64x96, uneven. div_up(96,3)=32."""
+    _run_eltwise_add_compressed(
+        device,
+        64,
+        96,
+        formats=["bfp8", "bfp4"],
+        num_cores_w=3,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    )
+
+
+def test_eltwise_add_compressed_4core_width_all_formats(device):
+    """4 cores width-sharded, 64x128, all formats."""
+    _run_eltwise_add_compressed(
+        device,
+        64,
+        128,
+        formats=["bfp8", "bfp4", "bfp2"],
+        num_cores_w=4,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        threshold=0.994,
+        pcc_threshold=0.997,
+    )
+
+
+# --- BLOCK_SHARDED tests ---
+
+
+def test_eltwise_add_compressed_2x2_block(device):
+    """2x2 block-sharded, 64x64 (1 tile/core), bfp8."""
+    _run_eltwise_add_compressed(
+        device,
+        64,
+        64,
+        formats=["bfp8"],
+        num_cores_h=2,
+        num_cores_w=2,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    )
+
+
+def test_eltwise_add_compressed_2x2_block_mixed(device):
+    """2x2 block-sharded, 128x128 (4 tiles/core), mixed bfp4 + bfp8."""
+    _run_eltwise_add_compressed(
+        device,
+        128,
+        128,
+        formats=["bfp8", "bfp4"],
+        num_cores_h=2,
+        num_cores_w=2,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    )
+
+
+def test_eltwise_add_compressed_2x2_block_all_formats(device):
+    """2x2 block-sharded, 128x128 (4 tiles/core), all formats."""
+    _run_eltwise_add_compressed(
+        device,
+        128,
+        128,
+        formats=["bfp8", "bfp4", "bfp2"],
+        num_cores_h=2,
+        num_cores_w=2,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        threshold=0.994,
+        pcc_threshold=0.997,
+    )
+
+
+def test_eltwise_add_compressed_2x3_block_uneven(device):
+    """2x3 block-sharded, 64x128, uneven width. div_up(128,3)=43 -> align 64."""
+    _run_eltwise_add_compressed(
+        device,
+        64,
+        128,
+        formats=["bfp8", "bfp4", "bfp2"],
+        num_cores_h=2,
+        num_cores_w=3,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        threshold=0.994,
+        pcc_threshold=0.997,
+    )
+
+
+def test_eltwise_add_compressed_3x2_block_uneven(device):
+    """3x2 block-sharded, 128x64, uneven height. div_up(128,3)=43 -> align 64."""
+    _run_eltwise_add_compressed(
+        device,
+        128,
+        64,
+        formats=["bfp8", "bfp4", "bfp2"],
+        num_cores_h=3,
+        num_cores_w=2,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        threshold=0.994,
+        pcc_threshold=0.997,
     )
