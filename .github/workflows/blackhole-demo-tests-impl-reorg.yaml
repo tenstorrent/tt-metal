@@ -115,6 +115,8 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        # Skip this on single-card systems
+        if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
         timeout-minutes: 10
         with:
           runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
