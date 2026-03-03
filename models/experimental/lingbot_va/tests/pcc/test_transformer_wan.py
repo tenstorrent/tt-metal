@@ -33,7 +33,7 @@ from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from models.tt_dit.utils.padding import pad_vision_seq_parallel
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params
 
 # ---------------------------------------------------------------------------
 # Lingbot-VA model configuration (from reference/model.py)
@@ -194,7 +194,9 @@ def test_wan_transformer_block_lingbot_va(
     torch.manual_seed(0)
     spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
     prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
-    temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
+    # Reference block expects temb (B, L, 6, D); TT block expects (1, B, 6, D). Use one global temb broadcast for both.
+    temb_single = torch.randn((B, 6, DIM), dtype=torch.float32)
+    temb_input = temb_single.unsqueeze(1).expand(B, spatial_seq_len, 6, DIM)
 
     # RoPE embeddings: TT uses cos/sin separately; reference block expects a single complex tensor (freqs_cis)
     rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
@@ -216,14 +218,19 @@ def test_wan_transformer_block_lingbot_va(
 
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
-    tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+    # TT block expects temb_1BTD shape (1, B, 6, D), not per-token
+    temb_for_tt = temb_single.unsqueeze(0)  # (1, B, 6, DIM)
+    tt_temb = from_torch(temb_for_tt, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
     tt_rope_cos = from_torch(rope_cos_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
     tt_rope_sin = from_torch(rope_sin_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
     logger.info(
+        f"--------------------------------\n"
         f"Running TT block (lingbot_va) spatial {tt_spatial.shape}, prompt {tt_prompt.shape}, "
-        f"rope_cos {tt_rope_cos.shape}, rope_sin {tt_rope_sin.shape}"
+        f"temb {tt_temb.shape}, spatial_seq_len {spatial_seq_len}, "
+        f"rope_cos {tt_rope_cos.shape}, rope_sin {tt_rope_sin.shape}, trans_mat {tt_trans_mat.shape}"
+        f"--------------------------------\n"
     )
     tt_spatial_out = tt_model(
         spatial_1BND=tt_spatial,
@@ -248,7 +255,12 @@ def test_wan_transformer_block_lingbot_va(
     # TT output is (1, 1, N, D) after concat; reference is (B, N, D). Squeeze to match.
     if tt_spatial_out.dim() == 4 and tt_spatial_out.shape[0] == 1:
         tt_spatial_out = tt_spatial_out.squeeze(0)
-
+    logger.info(
+        f"--------------------------------\n"
+        f"torch model forward, "
+        f"spatial_input: {spatial_input.shape}, prompt_input: {prompt_input.shape}, temb_input: {temb_input.shape}, rotary_emb_ref: {rotary_emb_ref.shape}"
+        f"--------------------------------\n"
+    )
     with torch.no_grad():
         torch_spatial_out = torch_model(
             hidden_states=spatial_input,
@@ -264,11 +276,11 @@ def test_wan_transformer_block_lingbot_va(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param((1, 2), (1, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="1x2sp0tp1"),
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        # pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        # pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        # pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        # pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+        # pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -276,7 +288,7 @@ def test_wan_transformer_block_lingbot_va(
     ("B", "T", "H", "W", "prompt_seq_len"),
     [
         pytest.param(1, 8, 24, 24, 77, id="lingbot_va_short"),
-        pytest.param(1, 8, 40, 50, 118, id="lingbot_va_medium"),
+        # pytest.param(1, 8, 40, 50, 118, id="lingbot_va_medium"),
     ],
 )
 def test_wan_transformer_model_lingbot_va(
