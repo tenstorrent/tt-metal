@@ -4,38 +4,45 @@
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/socket_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
+#include <unistd.h>
 
 namespace tt::tt_metal::distributed {
+
+static std::string generate_d2h_shm_name(const std::string& prefix) {
+    static std::atomic<uint32_t> counter{0};
+    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
+}
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
-    uint32_t pcie_alignment) {
-    // Use mmap to ensure page-aligned allocation that won't share pages with other PinnedMemory objects.
-    // This prevents failures when multiple sockets try to pin overlapping page regions to the NOC, since
-    // the driver does not allow this.
+    uint32_t pcie_alignment,
+    const std::string& shm_name) {
     // Buffer layout: [data_region (fifo_size bytes)][bytes_sent (4 bytes)]
     uint32_t total_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
     uint32_t total_buffer_size_words = total_buffer_size_bytes / sizeof(uint32_t);
-    size_t page_size = sysconf(_SC_PAGESIZE);  // OS Specified Page Size
-    // Round up to page boundary
+    size_t page_size = sysconf(_SC_PAGESIZE);
     size_t alloc_size = align(total_buffer_size_bytes, page_size);
-    void* aligned_ptr = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    TT_FATAL(aligned_ptr != MAP_FAILED, "Failed to allocate page-aligned memory for D2H socket buffer.");
+
+    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
-    std::memset(aligned_ptr, 0, total_buffer_size_bytes);
-    host_buffer_ = std::shared_ptr<uint32_t[]>(
-        static_cast<uint32_t*>(aligned_ptr), [alloc_size](uint32_t* p) { munmap(p, alloc_size); });
+    // NamedShm::create zero-initializes the region; no explicit memset needed.
+    // No-op deleter: NamedShm owns the memory.
+    host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
@@ -102,45 +109,51 @@ void D2HSocket::write_socket_metadata(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
 }
 
-void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) {
-    const auto& cluster = MetalContext::instance().get_cluster();
-    auto sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
-    auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
+void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id) {
+    TT_FATAL(mesh_device || device_id.has_value(), "Either mesh_device or device_id must be provided.");
 
-    sender_core_tlb_ = cluster.get_driver()
-                           ->get_chip(sender_device_id)
-                           ->get_tlb_manager()
-                           ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+    uint32_t sender_device_id;
+    CoreCoord sender_virtual_core;
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+
+    if (mesh_device) {
+        sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
+        sender_core_tlb_ = cluster.get_driver()
+                               ->get_chip(sender_device_id)
+                               ->get_tlb_manager()
+                               ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+    } else {
+        sender_device_id = device_id.value();
+        sender_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            sender_device_id, sender_core_.core_coord, CoreType::TENSIX);
+    }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE) {
-        // Entire device address space for Blackhole is statically mapped.
-        // Safe to use static TLBs without requiring the driver to do a reconfig.
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
-    } else if (arch == tt::ARCH::WORMHOLE_B0) {
-        // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
-        // since the device address space is not statically mapped.
+    } else {
         pcie_writer_ = [sender_device_id, sender_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
         };
-    } else {
-        TT_THROW("Unsupported architecture: {}", arch);
     }
 }
 
 D2HSocket::D2HSocket(
     const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
-    sender_core_(sender_core), fifo_size_(fifo_size) {
+    sender_core_(sender_core), fifo_size_(fifo_size), mesh_device_(mesh_device.get()), is_owner_(true) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
     const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    PinnedBufferInfo data_info = init_host_buffer(mesh_device, sender_device_range_set, pcie_alignment);
+    std::string shm_name = generate_d2h_shm_name("d2h");
+    PinnedBufferInfo data_info = init_host_buffer(mesh_device, sender_device_range_set, pcie_alignment, shm_name);
 
     // bytes_sent is located at the end of the data buffer in the same pinned memory
     PinnedBufferInfo bytes_sent_info = data_info;
@@ -151,17 +164,23 @@ D2HSocket::D2HSocket(
     init_config_buffer(mesh_device);
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
     init_sender_tlb(mesh_device);
+
+    config_buffer_address_ = config_buffer_->address();
 }
 
 D2HSocket::~D2HSocket() noexcept {
-    // Wait for 1000ms for the device to acknowledge all data over the socket.
-    // This may need to be tuned in future, depending on the application and
-    // the amount of data being sent.
-    // Realistically a hang should not be seen here since most user workloads
-    // synchronize with the device before the application exits and destructors are called.
-    barrier(1000);
-    // Release pinned memory before the underlying buffer is freed
-    pinned_memory_.reset();
+    if (!exported_) {
+        barrier(1000);
+    }
+    if (is_owner_) {
+        pinned_memory_.reset();
+        if (shm_) {
+            shm_->unlink();
+        }
+        if (!descriptor_path_.empty()) {
+            std::remove(descriptor_path_.c_str());
+        }
+    }
 }
 
 void D2HSocket::set_page_size(uint32_t page_size) {
@@ -215,7 +234,7 @@ void D2HSocket::pop_bytes(uint32_t num_bytes) {
 
 void D2HSocket::notify_sender() {
     const SocketSenderSize sender_size;
-    uint32_t bytes_acked_addr = config_buffer_->address() + sender_size.md_size_bytes;
+    uint32_t bytes_acked_addr = config_buffer_address_ + sender_size.md_size_bytes;
     pcie_writer_(&bytes_acked_, sizeof(bytes_acked_), bytes_acked_addr);
     tt_driver_atomics::sfence();
 }
@@ -261,6 +280,64 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
 
 std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_core_}; }
 
-MeshDevice* D2HSocket::get_mesh_device() const { return config_buffer_->device(); }
+MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }
+
+std::string D2HSocket::export_descriptor(const std::string& socket_id) {
+    TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
+    TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
+
+    auto device_id = mesh_device_->get_device(sender_core_.device_coord)->id();
+
+    SocketDescriptor desc;
+    desc.socket_type = "d2h";
+    desc.shm_name = shm_->name();
+    desc.shm_size = shm_->size();
+    desc.data_offset = 0;
+    desc.bytes_sent_offset = fifo_size_;
+    desc.bytes_acked_offset = 0;
+    desc.fifo_size = fifo_size_;
+    desc.h2d_mode = 0;
+    desc.config_buffer_address = config_buffer_address_;
+    desc.aligned_data_buf_start = 0;
+    desc.device_id = static_cast<uint32_t>(device_id);
+    desc.core_x = sender_core_.core_coord.x;
+    desc.core_y = sender_core_.core_coord.y;
+
+    descriptor_path_ = fmt::format("/dev/shm/tt_d2h_{}.json", socket_id);
+    desc.write_to_file(descriptor_path_);
+    exported_ = true;
+    return descriptor_path_;
+}
+
+std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id) {
+    auto descriptor_path = fmt::format("/dev/shm/tt_d2h_{}.json", socket_id);
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (!std::filesystem::exists(descriptor_path)) {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::high_resolution_clock::now() - start_time)
+                              .count();
+        if (elapsed_ms > 10000) {
+            TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    auto desc = SocketDescriptor::read_from_file(descriptor_path);
+    TT_FATAL(desc.socket_type == "d2h", "Descriptor type mismatch: expected 'd2h', got '{}'", desc.socket_type);
+
+    auto socket = std::unique_ptr<D2HSocket>(new D2HSocket());
+    socket->is_owner_ = false;
+    socket->fifo_size_ = desc.fifo_size;
+    socket->config_buffer_address_ = desc.config_buffer_address;
+    socket->sender_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
+
+    socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
+    socket->host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(socket->shm_->ptr()), [](uint32_t*) {});
+    socket->bytes_sent_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr()) + (desc.bytes_sent_offset / sizeof(uint32_t));
+
+    socket->init_sender_tlb(nullptr, desc.device_id);
+
+    return socket;
+}
 
 }  // namespace tt::tt_metal::distributed

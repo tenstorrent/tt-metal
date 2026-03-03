@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <memory>
 #include <utility>
 
 namespace tt::umd {
@@ -13,6 +14,8 @@ class TlbWindow;
 }
 
 namespace tt::tt_metal::distributed {
+
+class NamedShm;
 
 /**
  * @brief A socket for streaming data from a device core to the host.
@@ -72,11 +75,35 @@ public:
     D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
 
     /**
+     * @brief Connects to an existing D2HSocket from another process via a descriptor file.
+     *
+     * Opens the named shared memory created by the owner process and sets up TLB access
+     * to the same device core. The returned socket is fully functional for read() and
+     * barrier() operations.
+     *
+     * @param socket_id The identifier used when the owner called export_descriptor().
+     * @return A connected D2HSocket ready for data transfer.
+     */
+    static std::unique_ptr<D2HSocket> connect(const std::string& socket_id);
+
+    /**
+     * @brief Exports a descriptor file for cross-process socket attachment.
+     *
+     * Writes a JSON file to /dev/shm/ containing all metadata needed for a remote
+     * process to connect: shared memory name, buffer layout, device addresses, and
+     * core coordinates.
+     *
+     * @param socket_id A user-provided identifier used in the descriptor filename.
+     * @return The full path to the written descriptor file.
+     */
+    std::string export_descriptor(const std::string& socket_id);
+
+    /**
      * @brief Destroys the D2HSocket.
      *
-     * Releases pinned memory mappings before freeing the underlying host buffers.
-     * This ensures the DMA mappings are properly cleaned up to avoid "File exists"
-     * errors when re-pinning memory at the same virtual address.
+     * Owner: waits for device acknowledgement, unpins memory, unlinks shared memory,
+     * removes descriptor file.
+     * Connector: unmaps shared memory via NamedShm destructor.
      */
     ~D2HSocket() noexcept;
 
@@ -95,7 +122,7 @@ public:
      *
      * @return The L1 address of the configuration buffer.
      */
-    uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
+    uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
     /**
      * @brief Sets the page size for subsequent read operations.
@@ -147,24 +174,28 @@ public:
     MeshDevice* get_mesh_device() const;
 
 private:
-    // Helper struct for pinned buffer NOC address info
+    D2HSocket() = default;
+    D2HSocket(const D2HSocket&) = delete;
+    D2HSocket& operator=(const D2HSocket&) = delete;
+
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
         uint32_t addr_lo = 0;
         uint32_t addr_hi = 0;
     };
 
-    // Initialization helpers
     PinnedBufferInfo init_host_buffer(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoordinateRangeSet& device_range,
-        uint32_t pcie_alignment);
+        uint32_t pcie_alignment,
+        const std::string& shm_name);
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
         const PinnedBufferInfo& bytes_sent_info);
-    void init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_sender_tlb(
+        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
     void wait_for_bytes(uint32_t num_bytes);
     void pop_bytes(uint32_t num_bytes);
@@ -178,11 +209,17 @@ private:
     uint32_t bytes_sent_ = 0;
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
+    uint32_t config_buffer_address_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
+    std::unique_ptr<NamedShm> shm_;
+    MeshDevice* mesh_device_ = nullptr;
+    bool is_owner_ = true;
+    std::string descriptor_path_;
+    bool exported_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed
