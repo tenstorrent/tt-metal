@@ -10,6 +10,9 @@
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -154,6 +157,7 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_repack_tiled = get_compile_time_arg_val(27);
 
     constexpr uint32_t patch_tiles = matmul_M_t * matmul_K_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -196,6 +200,15 @@ void kernel_main() {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             // Tilize row-major patches
                             uint32_t patch_rows_left = num_patches;
+                            if constexpr (cb_repack_tiled < 32) {
+                                // Full packer HW reconfig to bf16 before tilize.
+                                // mm_init (initial or post-tilize) sets packer HW for fp32
+                                // (strides, tile size via llk_pack_hw_configure). tilize_init's
+                                // llk_pack_init alone cannot override these — it only reads
+                                // format tables. This causes bf16 tilize to write corrupted tiles
+                                // when packer strides are still set for fp32.
+                                mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_vol2col_tiled);
+                            }
                             tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
                             for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
                                 // Reader produces row pages, which may not be tile aligned. Wait on the correct number
@@ -210,7 +223,16 @@ void kernel_main() {
                                 cb_pop_front(cb_vol2col_rm, current_patch_rows);
                                 patch_rows_left -= current_patch_rows;
                             }
-                            tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
+                            // When using fp32 intermediates, pass cb_matmul_interm_tiled
+                            // to tilize_uninit so the packer resets directly to fp32.
+                            // mm_init after tilize_uninit(bf16_cb) cannot reliably transition
+                            // the packer from bf16 to fp32 on Blackhole.
+                            if constexpr (cb_repack_tiled < 32) {
+                                tilize_uninit(cb_vol2col_rm, cb_matmul_interm_tiled);
+                                mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+                            } else {
+                                tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
+                            }
 
                             // Apply matmul blocks
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
@@ -249,6 +271,11 @@ void kernel_main() {
                             } else {
                                 // We are a reducer core. Note that num_workers can be 0, in which case there is no
                                 // reduction.
+                                if constexpr (cb_repack_tiled < 32) {
+                                    // After matmul, unpackers are configured for bf16 inputs.
+                                    // Reconfigure for fp32 intermediates before reduction.
+                                    reconfig_data_format(cb_matmul_interm_tiled, cb_reduction_tiled);
+                                }
                                 for (uint32_t i = 0; i < num_workers; i++) {
                                     // Wait for writer to populate reduction buffer
                                     cb_wait_front(cb_reduction_tiled, output_tiles);
@@ -262,12 +289,23 @@ void kernel_main() {
 
                                 // Apply bias only if we are a reducer, and do it after reduction
                                 if constexpr (use_bias) {
+                                    if constexpr (cb_repack_tiled < 32) {
+                                        // Reconfigure unpackers: SRCA fp32 interm, SRCB bf16 bias
+                                        reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+                                    }
                                     add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                 }
 
-                                // After reduction (if any), untilize result
                                 cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-                                untilize_init(cb_matmul_interm_tiled);
+
+                                // Full packer reinit for bf16 output — pack_reconfig_data_format
+                                // only changes the format register, not page size/pipeline state.
+                                // mm_init does llk_pack_hw_configure + llk_pack_init for the output CB.
+                                if constexpr (cb_repack_tiled < 32) {
+                                    mm_init(cb_matmul_interm_tiled, cb_matmul_interm_tiled, cb_matmul_result_rm);
+                                }
+
+                                untilize_init(cb_matmul_interm_tiled, cb_matmul_result_rm);
                                 for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
                                     cb_reserve_back(cb_matmul_result_rm, matmul_N_t);
                                     untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);

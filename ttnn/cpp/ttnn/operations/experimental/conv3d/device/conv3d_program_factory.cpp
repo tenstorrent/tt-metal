@@ -50,6 +50,13 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     auto dtype_bytes = input_tensor.element_size();
     auto tile_size = tt::tile_size(data_format);
 
+    // When C_in is split into multiple blocks, partial matmul results are accumulated via
+    // add_block_inplace in the compute kernel.  Each round-trip through a bf16 CB loses precision.
+    // Use fp32 intermediate CBs to keep full accuracy during the reduction.
+    // Set conditionally after C_in_num_blocks is computed below.
+    auto interm_data_format = data_format;
+    auto interm_tile_size = tile_size;
+
     bool use_bias = bias_tensor.has_value();
 
     /* Shapes/sizes needed in the kernel
@@ -80,6 +87,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
     TT_FATAL(C_in_num_blocks * C_in_block == C_in, "C_in_num_blocks * C_in_block must equal C_in");
+
+    if (C_in_num_blocks > 1) {
+        interm_data_format = tt::DataFormat::Float32;
+        interm_tile_size = tt::tile_size(interm_data_format);
+    }
+
     uint32_t C_out_num_blocks = tt::div_up(padded_C_out, C_out_block);
     TT_FATAL(
         C_out_num_blocks * C_out_block == padded_C_out,
@@ -143,7 +156,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(
-        cb_matmul_interm_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
+        cb_matmul_interm_tiled_id, program, core_grid, interm_tile_size, matmul_M_t * matmul_N_t, interm_data_format);
 
     // NOTE: Most kernels create RM CB with tile_size pages and num_tile number of pages.
     // Using stick pages led to PCC issues.
@@ -156,6 +169,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         matmul_M_t * matmul_N_t,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
         data_format);
 
+    uint32_t cb_repack_tiled_id =
+        32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     uint32_t cb_reduction_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     uint32_t cb_worker_ack_back_id =
@@ -164,10 +179,16 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         // Implies reduction step
         cb_reduction_tiled_id = next_cb_index++;
         tt::tt_metal::create_cb(
-            cb_reduction_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
+            cb_reduction_tiled_id, program, core_grid, interm_tile_size, matmul_M_t * matmul_N_t, interm_data_format);
 
         cb_worker_ack_back_id = next_cb_index++;
         tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
+
+        // Repack CB: converts fp32 intermediate tiles back to native format before untilize,
+        // since untilize_block may not handle cross-format conversion.
+        cb_repack_tiled_id = next_cb_index++;
+        tt::tt_metal::create_cb(
+            cb_repack_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
     }
 
     uint32_t cb_bias_tiled_id =
@@ -181,7 +202,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
-        tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
+        tt::LogOp,
+        "CB matmul_interm_tiled: page_size={} bytes, num_pages={}",
+        interm_tile_size,
+        matmul_M_t * matmul_N_t);
     log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
@@ -195,14 +219,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
     const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
-    uint32_t other_cbs_bytes = (patch_size_bytes * vol2col_rm_pages) +  // vol2col_rm
-                               (tile_size * matmul_M_t * matmul_K_t) +  // vol2col_tiled
-                               (tile_size * matmul_K_t * matmul_N_t) +  // weight_tiled
-                               (tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm
-                               (tile_size * matmul_M_t * matmul_N_t);   // matmul_result_rm
+    uint32_t other_cbs_bytes = (patch_size_bytes * vol2col_rm_pages) +         // vol2col_rm
+                               (tile_size * matmul_M_t * matmul_K_t) +         // vol2col_tiled
+                               (tile_size * matmul_K_t * matmul_N_t) +         // weight_tiled
+                               (interm_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm
+                               (tile_size * matmul_M_t * matmul_N_t);          // matmul_result_rm
     if (C_in_num_blocks > 1) {
-        other_cbs_bytes += tile_size * matmul_M_t * matmul_N_t;  // reduction
-        other_cbs_bytes += tile_size;                            // worker_ack
+        other_cbs_bytes += interm_tile_size * matmul_M_t * matmul_N_t;  // reduction (fp32)
+        other_cbs_bytes += tile_size;                                   // worker_ack
+        other_cbs_bytes += tile_size * matmul_M_t * matmul_N_t;         // repack
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
@@ -401,7 +426,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
-        semaphore_id};
+        semaphore_id,
+        cb_repack_tiled_id};
 
     auto compute_kernels_id = CreateKernel(
         program,

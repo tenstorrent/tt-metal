@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(0);
@@ -59,6 +60,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t* worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
+    constexpr uint32_t interm_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
     constexpr auto out_args = TensorAccessorArgs<22>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
@@ -143,6 +145,15 @@ void kernel_main() {
                                 // Reset our semaphore
                                 *local_semaphore_addr_ptr = 0;
 
+                                // Debug: reducer's own matmul output (compute is blocked on cb_reduction_tiled)
+                                if (c_out_block == c_out_block_start && t_block == t_out_start &&
+                                    h_block == h_out_start && w_block == w_out_start) {
+                                    volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                        get_read_ptr(cb_matmul_interm_tiled));
+                                    DPRINT << "REDUCER_MM: " << dbg[0] << " " << dbg[1] << " " << dbg[2] << " "
+                                           << dbg[3] << ENDL();
+                                }
+
                                 const uint32_t worker_output_read_ptr = get_read_ptr(cb_matmul_interm_tiled);
                                 for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
                                     // Read data from worker into reduction buffer
@@ -152,9 +163,9 @@ void kernel_main() {
                                     uint64_t worker_output_read_addr = get_noc_addr(
                                         worker_core_xs[worker_idx], worker_core_ys[worker_idx], worker_output_read_ptr);
                                     for (uint32_t tile = 0; tile < output_tiles; tile++) {
-                                        noc_async_read(worker_output_read_addr, reduction_write_ptr, tile_bytes);
-                                        worker_output_read_addr += tile_bytes;
-                                        reduction_write_ptr += tile_bytes;
+                                        noc_async_read(worker_output_read_addr, reduction_write_ptr, interm_tile_bytes);
+                                        worker_output_read_addr += interm_tile_bytes;
+                                        reduction_write_ptr += interm_tile_bytes;
                                     }
                                     noc_async_read_barrier();
                                     cb_push_back(cb_reduction_tiled, output_tiles);
@@ -165,6 +176,16 @@ void kernel_main() {
                                 }
 
                                 cb_wait_front(cb_matmul_result_rm, output_tiles);
+
+                                // Debug: final untilized RM output
+                                if (c_out_block == c_out_block_start && t_block == t_out_start &&
+                                    h_block == h_out_start && w_block == w_out_start) {
+                                    volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                        get_read_ptr(cb_matmul_result_rm));
+                                    DPRINT << "RM_OUT: " << dbg[0] << " " << dbg[1] << " " << dbg[2] << " " << dbg[3]
+                                           << ENDL();
+                                }
+
                                 uint32_t cb_read_ptr = get_read_ptr(cb_matmul_result_rm);
 
                                 for (uint32_t t = t_block; t < t_block_end; ++t) {
