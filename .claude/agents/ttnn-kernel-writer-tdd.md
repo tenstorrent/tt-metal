@@ -317,6 +317,38 @@ Read the specific headers referenced in your op_design.md. The code has Doxygen 
 
 ---
 
+## DPRINT — KERNEL DEBUG PRINTING
+
+DPRINT lets you print values from inside kernels running on the device. It can print scalars, strings, and — most usefully — **slices of CB data via `TSLICE`**. Full documentation: `docs/source/tt-metalium/tools/kernel_print.rst`.
+
+**When to use it:**
+- Debugging numerical mismatches — print the actual CB contents at a specific phase to see where values diverge from expectations
+- Verifying intermediate results that don't pass through the output tensor (e.g., a reduction result in a 1-tile CB)
+- Understanding data layout issues — print a tile slice to see how data is arranged after tilize/untilize
+
+**Quick reference:**
+```cpp
+#include "api/debug/dprint.h"
+
+// Print a scalar
+DPRINT << "mean scaler = " << my_float_val << ENDL();
+
+// Print a 2x2 sample from tile 0 in cb_mean (between cb_wait_front and cb_pop_front)
+DPRINT << TSLICE(cb_mean, 0, SliceRange::hw0_32_16()) << ENDL();
+
+// Print only from a specific RISC
+DPRINT_PACK(DPRINT << "pack: tile value = " << my_val << ENDL());
+```
+
+**Enable on host side** (env vars, set before running the test):
+```bash
+TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=BR,TR0 ./tt-test.sh --dev <test_file>
+```
+
+**Important**: TSLICE must be called between `cb_wait_front` and `cb_pop_front` (or between `cb_reserve_back` and `cb_push_back` for output CBs). Remove DPRINT calls before committing a passing stage.
+
+---
+
 ## CRITICAL ANTI-PATTERNS
 
 | Anti-Pattern | Why It Causes Bugs | Correct Approach |
