@@ -630,6 +630,11 @@ class Operation:
                         self.python_fully_qualified_name, decorated_function
                     )
 
+                # Record Python I/O BEFORE set_tensor_id mutates tensor IDs.
+                # This ensures input_tensor_ids match the previous op's output_tensor_ids.
+                if ttnn.graph.is_graph_capture_active():
+                    ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
                     set_tensor_id(input_tensors)
@@ -695,11 +700,17 @@ class Operation:
                             ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
 
                 finally:
-                    # C++ graph capture handles: duration, devices, buffers, tensors, graph trace
-                    # Use offline import for visualization:
-                    #   ttnn.graph.end_graph_capture_to_file("report.json")
-                    #   python -m ttnn.graph_report report.json ./visualizer_db/
                     captured_graph = ttnn.graph.end_graph_capture()
+
+                if ttnn.graph.is_graph_capture_active():
+                    output_tensors = get_all_tensors(output)
+                    output_tensor_ids = []
+                    for t in output_tensors:
+                        tid = getattr(t, "tensor_id", None)
+                        if tid is not None:
+                            output_tensor_ids.append(int(tid))
+                    ttnn.graph.store_output_tensor_ids(output_tensor_ids)
+                    ttnn.graph.store_captured_graph(captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
