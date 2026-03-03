@@ -39,7 +39,7 @@
 #define DEVICE_PRINT_PACK(format, ...)
 #endif
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_DM)
 #define DEVICE_PRINT_DATA0(format, ...)    \
     if (noc_index == 0) {                  \
         DEVICE_PRINT(format, __VA_ARGS__); \
