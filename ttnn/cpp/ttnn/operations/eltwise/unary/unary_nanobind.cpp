@@ -2114,7 +2114,7 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|swish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation_subcoregrids(
         mod,
         ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
