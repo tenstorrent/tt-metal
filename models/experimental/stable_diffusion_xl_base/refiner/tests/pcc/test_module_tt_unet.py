@@ -76,6 +76,7 @@ def run_refiner_unet_model(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    pcc,
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
@@ -156,7 +157,7 @@ def run_refiner_unet_model(
 
     ttnn.ReadDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):
@@ -191,10 +192,12 @@ def run_refiner_unet_model(
 
 
 @pytest.mark.parametrize(
-    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5)),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
+        # 512x512 image resolution
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 1280), (1, 1280), (1, 5), 0.997),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -206,16 +209,13 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    pcc,
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
     model_location_generator,
     reset_seeds,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     run_refiner_unet_model(
         device,
         image_resolution,
@@ -224,6 +224,7 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        pcc,
         debug_mode,
         is_ci_env,
         is_ci_v2_env,

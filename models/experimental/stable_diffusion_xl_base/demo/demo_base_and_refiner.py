@@ -320,10 +320,6 @@ def test_demo_base_and_refiner(
     timesteps,
     sigmas,
 ):
-    # Skip unsupported image resolutions
-    if image_resolution != (1024, 1024):
-        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
-
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
