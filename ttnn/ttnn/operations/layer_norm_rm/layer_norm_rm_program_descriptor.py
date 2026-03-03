@@ -358,6 +358,7 @@ def create_program_descriptor(
     # ========== 5. RUNTIME ARGS ==========
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
+    compute_rt_args = ttnn.RuntimeArgs()
 
     # Scaler for reduce: 1/W packed as bfloat16
     scaler_value = _float_to_bfloat16_packed(1.0 / W)
@@ -422,10 +423,17 @@ def create_program_descriptor(
                     num_sticks,
                     start_stick_id,
                 ]
+
+                # Compute runtime args:
+                #   [0] num_rows_per_core: tile-rows this core processes
+                compute_rt_args[x][y] = [
+                    num_tile_rows_this_core,
+                ]
             else:
                 # MUST set empty args for idle cores
                 reader_rt_args[x][y] = []
                 writer_rt_args[x][y] = []
+                compute_rt_args[x][y] = []
 
     # ========== 6. KERNEL DESCRIPTORS ==========
 
@@ -449,7 +457,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
-        runtime_args=[],
+        runtime_args=compute_rt_args,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=False,
