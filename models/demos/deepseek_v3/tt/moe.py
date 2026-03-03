@@ -9,7 +9,9 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
-from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate
+
+# from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
@@ -307,6 +309,9 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
+
+        topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, ttnn.L1_MEMORY_CONFIG)
+        topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.L1_MEMORY_CONFIG)
 
         # Repeat + Permute Expert weights
 

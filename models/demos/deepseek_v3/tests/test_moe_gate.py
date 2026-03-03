@@ -11,7 +11,9 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate
+
+# from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -63,7 +65,7 @@ def test_forward_pass(
         mesh_device,
         force_recalculate=False,
         # test_name="test_new_moe_gate",
-        # real_weights=False,
+        real_weights=True,
     )
 
     # Generate appropriate config using utility function
