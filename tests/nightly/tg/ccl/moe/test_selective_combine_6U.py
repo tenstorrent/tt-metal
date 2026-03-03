@@ -5,10 +5,28 @@
 
 from loguru import logger
 import math
+import os
 
 import pytest
 import torch
 import ttnn
+
+# Mesh graph descriptor paths for different mesh configurations
+MESH_GRAPH_DESC_16x1 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_1x16 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_1x8 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
+)
+
+
+def is_mesh_graph_descriptor_set(expected_path):
+    """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
+    return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
+
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     get_batch_cluster_idxr,
@@ -645,9 +663,31 @@ def _run_test(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape",
+    [
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
+    ],
+    indirect=["mesh_device"],
+)
 @pytest.mark.parametrize("batch", [512])
-@pytest.mark.parametrize("experts", [32])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
@@ -661,8 +701,8 @@ def _run_test(
 @pytest.mark.parametrize("num_inner_iters", [1])
 def test_decode(
     mesh_device,
+    mesh_shape,
     batch,
-    experts,
     select_experts_k,
     hidden_size,
     seq,
@@ -675,6 +715,7 @@ def test_decode(
     num_test_iters,
     num_inner_iters,
 ):
+    experts = 2 * mesh_shape[1]  # 2 * 8 for 1x8 mesh, 2 * 16 for 1x16 mesh
     mesh_device.disable_and_clear_program_cache()
 
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
