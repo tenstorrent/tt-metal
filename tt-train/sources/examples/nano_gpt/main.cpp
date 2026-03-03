@@ -389,10 +389,6 @@ int main(int argc, char **argv) {
     auto model_config_path = ttml::utils::resolve_config_path(training_config.model_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path.string()));
 
-    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
-    // of model that doesn't fit in the memory of the device.
-    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
-
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         auto resolved_multihost_config = ttml::utils::resolve_multihost_config(multihost_config_name);
