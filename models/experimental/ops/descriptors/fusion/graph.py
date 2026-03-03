@@ -32,18 +32,22 @@ from models.experimental.ops.descriptors.fusion.common import (
     BarrierSegment,
     MultiBarrierSpec,
     _BuildResult,
+    _NOOP_OP,
     _core_range_set_to_coords,
     _core_ranges_key,
     _coords_to_core_range_set,
-    _get_node_allowed_coords,
     _get_node_core_range,
 )
 from models.experimental.ops.descriptors.fusion.cb_allocator import (
+    PhaseInfo,
     _save_cb_state,
     _restore_cb_state,
     _verify_cb_restore,
 )
 
+
+# No-op phases have no entry in the global CB pool
+NOOP_PHASE_INDEX = None
 
 # =============================================================================
 # Data Structures
@@ -65,7 +69,6 @@ class OpNode:
 
     op: OpDescriptor
     children: List["OpNode"] = field(default_factory=list)
-    allowed_core_range: Optional[Any] = field(default=None, repr=False)
 
 
 @dataclass
@@ -175,6 +178,8 @@ def _project_pools_for_groups(
     for group in groups:
         slots: Set[int] = set()
         for global_idx in group.phase_op_indices:
+            if global_idx is NOOP_PHASE_INDEX:
+                continue  # No-op phases have no CB allocation
             remap = global_pool.phase_remaps[global_idx]
             slots.update(remap.values())
         per_group_slots.append(slots)
@@ -192,10 +197,20 @@ def _project_pools_for_groups(
         max_shared = max(shared_slots)
         padding_slots = {s for s in global_pool.get_all_slot_indices() if s <= max_shared}
 
-    # Project each group
+    # Project each group — filter out no-op phases for CB pool projection,
+    # then re-insert empty remaps at no-op positions so phase_remaps aligns
+    # with group.phases (builder indexes by phase position).
     projected: List["CBPoolAllocator"] = []
     for group in groups:
-        proj = global_pool.project_to_group(group.phase_op_indices, padding_slots)
+        real_indices = [idx for idx in group.phase_op_indices if idx is not NOOP_PHASE_INDEX]
+        proj = global_pool.project_to_group(real_indices, padding_slots)
+
+        # Re-insert empty remaps for no-op phases at the correct positions
+        noop_positions = [i for i, idx in enumerate(group.phase_op_indices) if idx is NOOP_PHASE_INDEX]
+        if noop_positions:
+            for pos in noop_positions:
+                proj.phase_remaps.insert(pos, {})
+
         projected.append(proj)
 
     return projected
@@ -454,13 +469,21 @@ class OpGraphBuilder:
             eff_coords = self._effective_leaf_range(node)
             eff_range = _coords_to_core_range_set(eff_coords)
             node_coords = _core_range_set_to_coords(_get_node_core_range(node))
+
+            # Real phase entries for cores in this node
             for coord in node_coords:
                 per_core[coord].append((node.op, eff_range))
-            # Register unique op
+
+            # No-op entries for cores in descendants but not this node
+            for coord in eff_coords - node_coords:
+                per_core[coord].append((_NOOP_OP, eff_range))
+
+            # Register unique op (real ops only — noop is not a unique op)
             op_id = id(node.op)
             if op_id not in op_id_to_index:
                 op_id_to_index[op_id] = len(unique_ops)
                 unique_ops.append(node.op)
+
             for child in node.children:
                 _walk(child)
 
@@ -479,7 +502,7 @@ class OpGraphBuilder:
             core_range = _coords_to_core_range_set(coords)
             phases = [op for op, _ in representative]
             barrier_scopes = [eff_range for _, eff_range in representative[:-1]]
-            phase_op_indices = [op_id_to_index[id(op)] for op in phases]
+            phase_op_indices = [op_id_to_index[id(op)] if op is not _NOOP_OP else NOOP_PHASE_INDEX for op in phases]
             result.append(
                 CoreGroup(
                     core_range=core_range,
@@ -535,8 +558,13 @@ class OpGraphBuilder:
             _sem_refs=list(shared_sem_refs),
         )
 
-        # Build PhaseInfo list and call _build_fused_descriptor
-        phase_infos = [_create_phase_info(op, i) for i, op in enumerate(group.phases)]
+        # Build PhaseInfo list — no-op phases get empty cb_info
+        phase_infos = []
+        for i, op in enumerate(group.phases):
+            if op is _NOOP_OP:
+                phase_infos.append(PhaseInfo(phase_idx=i, op_descriptor=op, cb_info={}))
+            else:
+                phase_infos.append(_create_phase_info(op, i))
 
         # Only set target_core_range for branching trees where phases may
         # have different native core ranges than the group's core range.
@@ -603,98 +631,37 @@ class OpGraphBuilder:
         _collect_leaves(self._root)
         return _coords_to_core_range_set(all_coords)
 
-    @staticmethod
-    def _propagate_allowed_ranges(root: OpNode) -> None:
-        """Propagate allowed_core_range bottom-up through the tree.
-
-        Post-order traversal:
-        1. If ``node.op.allowed_core_range`` is set, use it.
-        2. Else if leaf, default to actual core range.
-        3. Else, union of own actual range + children's allowed ranges.
-
-        After this, every node has ``allowed_core_range`` set.
-        """
-
-        def _propagate(node: OpNode):
-            # Recurse children first (post-order)
-            for child in node.children:
-                _propagate(child)
-
-            if node.op.allowed_core_range is not None:
-                node.allowed_core_range = node.op.allowed_core_range
-            elif not node.children:
-                # Leaf: default to actual core range
-                node.allowed_core_range = _get_node_core_range(node)
-            else:
-                # Internal node: union of own actual range + children's allowed ranges.
-                # Including the actual range ensures partial coverage is valid
-                # (parent may use more cores than children collectively cover).
-                all_coords: Set[Tuple[int, int]] = _core_range_set_to_coords(_get_node_core_range(node))
-                for child in node.children:
-                    all_coords |= _core_range_set_to_coords(child.allowed_core_range)
-                node.allowed_core_range = _coords_to_core_range_set(all_coords)
-
-        _propagate(root)
-
     def _validate_topology(self) -> None:
-        """Validate the tree topology using allowed core ranges.
+        """Validate the tree topology.
 
-        First propagates ``allowed_core_range`` on all nodes, then checks:
-
-        1. **Actual subset of allowed**: Each node's actual core range is a
-           subset of its allowed range.
-        2. **Child allowed subset of parent allowed**: Each child's allowed
-           range is a subset of its parent's allowed range.
-        3. **Sibling disjointness**: Siblings' allowed ranges are pairwise
-           disjoint.
+        Checks sibling disjointness: siblings' actual core ranges must be
+        pairwise disjoint.  Child ranges may be wider or narrower than their
+        parent (narrow→wide is supported via no-op phase entries).
 
         Raises:
             ValueError: On any topology violation.
         """
-        # Propagate allowed ranges before validation
-        self._propagate_allowed_ranges(self._root)
 
-        def _validate_node(node: OpNode, parent_allowed_coords: Set[Tuple[int, int]], depth: int):
-            # Check actual ⊆ allowed for this node
-            actual_coords = _core_range_set_to_coords(_get_node_core_range(node))
-            allowed_coords = _get_node_allowed_coords(node)
-            if not actual_coords.issubset(allowed_coords):
-                extra = sorted(actual_coords - allowed_coords)
-                raise ValueError(
-                    f"OpGraph topology error: node at depth {depth} "
-                    f"has actual cores {extra} outside its allowed range "
-                    f"{sorted(allowed_coords)}"
-                )
-
+        def _validate_node(node: OpNode, depth: int):
             if not node.children:
                 return
 
-            # Check sibling disjointness (using allowed ranges)
+            # Check sibling disjointness (using actual core ranges)
             seen_coords: Set[Tuple[int, int]] = set()
             for child in node.children:
-                child_allowed = _get_node_allowed_coords(child)
-                overlap = seen_coords & child_allowed
+                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
+                overlap = seen_coords & child_coords
                 if overlap:
                     raise ValueError(
                         f"OpGraph topology error: sibling nodes at depth {depth + 1} "
                         f"have overlapping cores {sorted(overlap)}"
                     )
-                seen_coords |= child_allowed
+                seen_coords |= child_coords
 
-            # Check each child's allowed ⊆ parent's allowed, then recurse
             for child in node.children:
-                child_allowed = _get_node_allowed_coords(child)
-                if not child_allowed.issubset(allowed_coords):
-                    extra = sorted(child_allowed - allowed_coords)
-                    raise ValueError(
-                        f"OpGraph topology error: node at depth {depth + 1} "
-                        f"(cores {sorted(child_allowed)}) has cores {extra} "
-                        f"outside parent range {sorted(allowed_coords)}"
-                    )
-                _validate_node(child, allowed_coords, depth + 1)
+                _validate_node(child, depth + 1)
 
-        root_allowed = _get_node_allowed_coords(self._root)
-        _validate_node(self._root, root_allowed, depth=0)
+        _validate_node(self._root, depth=0)
 
     @staticmethod
     def _effective_leaf_range(node: OpNode) -> Set[Tuple[int, int]]:

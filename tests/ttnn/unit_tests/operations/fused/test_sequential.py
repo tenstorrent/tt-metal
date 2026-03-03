@@ -4676,12 +4676,11 @@ class TestOpGraphExecution:
             passing, pcc = comp_pcc(golden, result, pcc=0.98)
             assert passing, f"Branch {label} PCC: {pcc}"
 
-    def test_child_outside_parent_rejected(self, device, opgraph_tensors):
-        """Child core range extending beyond parent should be rejected.
+    def test_child_wider_than_parent_accepted(self, device, opgraph_tensors):
+        """Child core range extending beyond parent is accepted (narrow->wide).
 
-        The root op is on cores 0-3 but one branch extends to core 5,
-        which is outside the parent range.  _validate_topology rejects
-        this because child cores must be a subset of parent cores.
+        The root op is on cores 0-3 but one branch extends to core 5.
+        This is now valid — cores 4-5 get no-op entries at the root position.
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
@@ -4690,7 +4689,7 @@ class TestOpGraphExecution:
         # Root on 4 cores, branch B extends beyond
         root_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
         branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
-        # Branch B extends to core 5, which is outside root_range (0-3)
+        # Branch B extends to core 5, beyond root_range (0-3) — now valid
         branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 0))})
 
         root_op = rms_norm.rms_norm(t["tt_input"], core_range_set=root_range, weight=t["tt_weights"][0], epsilon=1e-5)
@@ -4701,15 +4700,16 @@ class TestOpGraphExecution:
             root_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
         )
 
-        with pytest.raises(ValueError, match="outside parent range"):
-            build_op_graph(
-                root_phases=[root_op],
-                children=[
-                    OpNode(branch_a_op),
-                    OpNode(branch_b_op),
-                ],
-                device=device,
-            )
+        # Should not raise — narrow->wide is now valid
+        fused = build_op_graph(
+            root_phases=[root_op],
+            children=[
+                OpNode(branch_a_op),
+                OpNode(branch_b_op),
+            ],
+            device=device,
+        )
+        assert fused is not None
 
     def test_invalid_topology_overlapping_branches(self, device, opgraph_tensors):
         """Overlapping branch core ranges should raise ValueError before touching device."""
