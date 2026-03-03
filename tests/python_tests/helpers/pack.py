@@ -30,7 +30,14 @@ def pack_fp32(torch_tensor):
 
 
 def pack_int32(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.int32).tobytes()
+    # INT32 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 31 = sign, bits 30:0 = magnitude
+    # Sign-magnitude INT32 cannot represent -2147483648, so clip to [-2147483647, 2147483647]
+    array = torch_tensor.cpu().numpy()
+    clipped = np.clip(array, -2147483647, 2147483647).astype(np.int32)
+    sign = clipped.view(np.uint32) & 0x80000000
+    magnitude = np.abs(clipped).astype(np.uint32)
+    return (sign | magnitude).tobytes()
 
 
 def pack_uint32(torch_tensor):
@@ -42,7 +49,14 @@ def pack_uint16(torch_tensor):
 
 
 def pack_int8(torch_tensor):
-    return torch_tensor.cpu().numpy().astype(np.int8).tobytes()
+    # INT8 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 7 = sign, bits 6:0 = magnitude
+    # Sign-magnitude INT8 cannot represent -128, so clip to [-127, 127]
+    array = torch_tensor.cpu().numpy()
+    clipped = np.clip(array, -127, 127).astype(np.int8)
+    sign = clipped.view(np.uint8) & 0x80
+    magnitude = np.abs(clipped).astype(np.uint8)
+    return (sign | magnitude).tobytes()
 
 
 def pack_uint8(torch_tensor):
