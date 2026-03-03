@@ -528,7 +528,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Run the forward pass
         output = cls.forward(x, cfg)
 
-        # Handle sum_experts annd reduce_scatter if tensor parallel is enabled
+        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
             tp_size = cfg["mesh_device"].shape[1]
