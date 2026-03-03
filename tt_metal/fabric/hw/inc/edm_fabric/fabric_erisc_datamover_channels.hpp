@@ -718,7 +718,8 @@ struct StaticSizedSenderChannelWorkerInterface
         ConnectionSemaphorePtrType
     >;
 
-    static constexpr uint8_t num_buffers = NUM_BUFFERS;
+    static constexpr bool const is_tt_l1_ptr = std::is_same_v<std::remove_const_t<ConnectionSemaphorePtrType>, volatile tt_l1_ptr uint32_t*>;
+    static constexpr uint8_t const num_buffers = NUM_BUFFERS;
 
     StaticSizedSenderChannelWorkerInterface() : Base(), read_counter_update_src_address(0) {}
 
@@ -748,7 +749,7 @@ struct StaticSizedSenderChannelWorkerInterface
 
     template <bool enable_noc_flush = true>
     FORCE_INLINE void notify_worker_of_read_counter_update_impl() {
-        if constexpr(std::is_same_v<std::remove_const_t<ConnectionSemaphorePtrType>, volatile tt_l1_ptr uint32_t*>) {
+        if constexpr(is_tt_l1_ptr) {
             // For L1, we need to flush the updated read counter to ensure visibility to the worker
             noc_inline_dw_write<InlineWriteDst::L1, true>(
                 this->cached_worker_semaphore_address,
@@ -773,7 +774,7 @@ struct StaticSizedSenderChannelWorkerInterface
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
-        if constexpr(std::is_same_v<std::remove_const_t<ConnectionSemaphorePtrType>, volatile tt_l1_ptr uint32_t*>) {
+        if constexpr(is_tt_l1_ptr) {
             noc_inline_dw_write<InlineWriteDst::L1, true>(
                 this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
         }
