@@ -124,6 +124,7 @@ bool SimpleTiledL1WriteCBRead(
 
     writeL1Backdoor(mesh_device, core, input_local_address, inputs);
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     readL1Backdoor(mesh_device, core, input_local_address, byte_size, outputs);
     log_debug(tt::LogTest, "input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
     readL1Backdoor(mesh_device, core, output_local_address, byte_size, outputs);
