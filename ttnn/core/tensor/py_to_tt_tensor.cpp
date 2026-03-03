@@ -8,7 +8,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 
 #include <tracy/Tracy.hpp>
 
