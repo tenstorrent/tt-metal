@@ -320,14 +320,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr), sbh=1 only.
-    // Mask stays Bfp4_b — streaming path only reads -inf tiles (skips zero tiles to avoid
-    // Bfp4_b→Float16_b round-trip artifacts in L1 accumulate).
+    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
+    // Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
     // fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
-    // sbh=2 is disabled: reduce_block_max_row omits ZEROACC (unlike reduce_tile), so stale
-    // DST values from the preceding matmul corrupt the GMPOOL MAX accumulation when SBH>1.
-    // Additionally, the sub_exp pack_tile<true> write-back through cb_push_back_hold_wr_ptr
-    // may have L1 coherency issues with subsequent UNPACK reads from the same addresses.
     // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
     // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
     const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
@@ -335,7 +330,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                        sliding_window_size.value_or(0) == 0 && !is_chunked && !fp32_dest_acc_en &&
                                        qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 &&
                                        !streaming_mask_unsupported;
-    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+    log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -543,7 +538,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat mask_df =
         attn_mask.has_value()
             ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
-            : tt::DataFormat::Bfp4_b;  // Bfp4_b is fine; streaming path only L1-accumulates -inf tiles
+            : (use_streaming_compute ? tt::DataFormat::Float16_b  // streaming path L1-accumulates -inf; Float16_b
+                                                                  // avoids Bfp4_b precision loss
+                                     : tt::DataFormat::Bfp4_b);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
