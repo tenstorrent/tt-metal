@@ -38,7 +38,12 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import build_cb_reconfig_tensor, float_to_uint32, record_cb_metadata
+from models.demos.deepseek_v3_b1.utils import (
+    build_cb_reconfig_tensor,
+    cb_descriptor_from_overlapped_tensor,
+    float_to_uint32,
+    record_cb_metadata,
+)
 
 
 class MoeCB:
@@ -417,7 +422,7 @@ class MoeRoutedExpertOp:
         core_ranges=None,
         cb_in1_index=None,
         cb_out_index=None,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         num_subblocks_k=4,
     ):
         """
@@ -752,8 +757,8 @@ class MoeRoutedExpertOp:
         if enable_routing:
             from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-            # 1. Routing matmul + sigmoid
-            logits = input_tensor.float() @ routing_weights_tensor.float()
+            # 1. Routing matmul + sigmoid (truncate to bfloat16 to approximate device accumulation)
+            logits = (input_tensor.bfloat16().float() @ routing_weights_tensor.bfloat16().float()).bfloat16().float()
             scores = torch.sigmoid(logits)
 
             # 2. Gate: top-8 selection with normalized scores
@@ -983,7 +988,10 @@ class MoeRoutedExpertOp:
         rmsnorm_output_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
 
-        rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(rmsnorm_gamma_cb, rmsnorm_gamma_tensor)
+        rmsnorm_gamma_fused_device0 = ttnn.get_device_tensors(rmsnorm_gamma_tensor.fused_tensor)[0]
+        rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+            rmsnorm_gamma_cb, rmsnorm_gamma_tensor, rmsnorm_gamma_fused_device0
+        )
         rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm_tile_descriptor
         rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm_cb_page_size
 
@@ -1035,7 +1043,7 @@ class MoeRoutedExpertOp:
                 in0_cb=gate_mm_input_cb,
                 in1_cb=gate_mm_weights_cb,
                 out_cb=gate_mm_output_cb,
-                weights_tensor=gate_mm_weights_tensor,
+                weights_overlapped=gate_mm_weights_tensor,
                 k_num_tiles=num_tiles_k,
                 fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
             )
@@ -1097,7 +1105,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=4,
         )
 
@@ -1110,7 +1118,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=4,
         )
 
@@ -1178,7 +1186,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=2,
         )
 
@@ -1466,11 +1474,11 @@ class MoeRoutedExpertOp:
 
         ncrisc_named_compile_time_args = [
             # Input mcast (sender sharded buffer + receiver)
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
+            ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+            ("moe_mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+            ("moe_mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
+            ("moe_mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+            ("moe_mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
             # Residual mcast source (setup_sharded_buffer on sender core)
             ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
             ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
@@ -1479,8 +1487,8 @@ class MoeRoutedExpertOp:
             ("shared_residual_cb", ctx.residual_mcast_dst_cb),
             ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
             # RMSNorm (setup_sharded_buffer for gamma on sender core)
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
+            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+            ("moe_rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
             # Gate matmul reader (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1590,18 +1598,18 @@ class MoeRoutedExpertOp:
 
         brisc_named_compile_time_args = [
             # Input mcast sender
-            ("mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
-            ("mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
-            ("mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
-            ("mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
-            ("mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
-            ("mcast_data_sender_semaphore_addr", ctx.rmsnorm_mcast_params["sender_semaphore_addr"]),
-            ("mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
-            ("mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
+            ("moe_mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
+            ("moe_mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
+            ("moe_mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
+            ("moe_mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
+            ("moe_mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
+            ("moe_mcast_data_sender_semaphore_addr", ctx.rmsnorm_mcast_params["sender_semaphore_addr"]),
+            ("moe_mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
+            ("moe_mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
+            ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+            ("moe_mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+            ("moe_mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+            ("moe_mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
             # Residual mcast sender (input from sender → residual CB on mcast grid)
             ("shared_residual_mcast_data_sender_semaphore_addr", ctx.mcast_data_sender_semaphore_addr),
             ("shared_residual_mcast_data_receiver_semaphore_addr", ctx.residual_mcast_receiver_semaphore_addr),
@@ -1687,13 +1695,13 @@ class MoeRoutedExpertOp:
 
         trisc_named_compile_time_args = [
             # RMSNorm compute (sender core only)
-            ("rmsnorm_input_cb", ctx.residual_mcast_src_cb),
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_output_cb", ctx.rmsnorm_output_cb),
-            ("rmsnorm_fp32_acc", 0),
-            ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
-            ("rmsnorm_rsqrt_fast_approx", 0),
-            ("rmsnorm_trisc_common_rt_arg_base", 0),
+            ("moe_rmsnorm_input_cb", ctx.residual_mcast_src_cb),
+            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+            ("moe_rmsnorm_output_cb", ctx.rmsnorm_output_cb),
+            ("moe_rmsnorm_fp32_acc", 0),
+            ("moe_rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
+            ("moe_rmsnorm_rsqrt_fast_approx", 0),
+            ("moe_rmsnorm_trisc_common_rt_arg_base", 0),
             # Gate matmul compute (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1720,7 +1728,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
             ("gate_proj_fuse_silu", 1),
-            ("gate_proj_fp32_dest_acc_en", 1),
+            ("gate_proj_fp32_dest_acc_en", 0),
             # up_proj compute
             ("up_proj_cb_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else ctx.gate_mm_input_cb),
             ("up_proj_cb_in1", ctx.up_proj_cb_in1),
@@ -1730,7 +1738,7 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
             ("up_proj_fuse_silu", 0),
-            ("up_proj_fp32_dest_acc_en", 1),
+            ("up_proj_fp32_dest_acc_en", 0),
             ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
@@ -1738,7 +1746,7 @@ class MoeRoutedExpertOp:
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
             ("mul_cb_scalar", ctx.mul_cb_scalar),
-            ("mul_fp32_dest_acc_en", 1),
+            ("mul_fp32_dest_acc_en", 0),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             # down_proj compute
             ("down_proj_cb_in0", ctx.down_proj_mcast_dst_cb),
@@ -1750,7 +1758,7 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),
-            ("down_proj_fp32_dest_acc_en", 1),
+            ("down_proj_fp32_dest_acc_en", 0),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -2387,7 +2395,7 @@ class MoeSharedExpertOp:
             in0_cb=shared_down_mcast_dst_cb,
             in1_cb=shared_down_matmul_in1_cb,
             out_cb=shared_down_matmul_out_cb,
-            weights_tensor=shared_down_weights_tensor,
+            weights_overlapped=shared_down_weights_tensor,
             k_num_tiles=n_parallel,
         )
 
@@ -2933,7 +2941,7 @@ class MoeOp:
         in0_cb,
         in1_cb,
         out_cb,
-        weights_tensor,
+        weights_overlapped,
         output_tensor=None,
         k_num_tiles=0,
         fused_activation=0,
@@ -2948,7 +2956,7 @@ class MoeOp:
             in0_cb: Input CB index (receives mcasted input)
             in1_cb: Weights CB index
             out_cb: Output CB index
-            weights_tensor: Weight tensor (WIDTH_SHARDED in L1)
+            weights_overlapped: OverlappedTensor or plain ttnn.Tensor (WIDTH_SHARDED in L1)
             output_tensor: Output tensor (WIDTH_SHARDED in L1), or None if CB descriptor
                            will be created by the overlap function.
             k_num_tiles: K dimension in tiles
@@ -2957,14 +2965,21 @@ class MoeOp:
         Returns:
             Dictionary with matmul parameters and CB descriptors
         """
-        weights_tile = weights_tensor.get_tile()
-        weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
-        weights_shard_width = weights_shard_shape[1]
-        out_w = weights_shard_width // weights_tile.tile_shape[1]
+        if hasattr(weights_overlapped, "fused_tensor"):
+            fused_tensor_device0 = ttnn.get_device_tensors(weights_overlapped.fused_tensor)[0]
+            out_w = weights_overlapped.shard_shape[1] // weights_overlapped.tile_shape[1]
+            core_grid = weights_overlapped.core_range_set
+            weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                in1_cb, weights_overlapped, fused_tensor_device0
+            )
+        else:
+            weights_device0 = ttnn.get_device_tensors(weights_overlapped)[0]
+            tile = weights_device0.get_tile()
+            shard_shape = weights_overlapped.memory_config().shard_spec.shape
+            out_w = shard_shape[1] // tile.tile_shape[1]
+            core_grid = weights_overlapped.memory_config().shard_spec.grid
+            weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_device0)
 
-        core_grid = weights_tensor.memory_config().shard_spec.grid
-
-        weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_tensor)
         output_cb_descriptor = None
         if output_tensor is not None:
             output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
@@ -4197,8 +4212,9 @@ class MoeOp:
         ctx = self.ctx
         io_tensors = []
         if ctx.enable_routing:
+            gate_mm_backing = getattr(ctx.gate_mm_weights_tensor, "fused_tensor", ctx.gate_mm_weights_tensor)
             io_tensors += [
-                ctx.gate_mm_weights_tensor,
+                gate_mm_backing,
                 ctx.gate_bias_tensor,
                 ctx.gate_indices_tensor,
                 ctx.gate_output_scores_tensor,
@@ -4208,7 +4224,7 @@ class MoeOp:
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [
-            ctx.rmsnorm_gamma_tensor,
+            ctx.rmsnorm_gamma_tensor.fused_tensor,
             ctx.shared_residual_mcast_src_tensor,
             ctx.shared_gate_weights_fused_tensor,
             ctx.shared_down_weights_tensor,
