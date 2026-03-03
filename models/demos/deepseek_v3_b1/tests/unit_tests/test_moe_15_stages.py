@@ -24,6 +24,8 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
+    ROUTED_EXPERT_LAYER_IDX,
+    RoutedExpert,
     create_routed_expert_tensors,
     create_shared_expert_tensors,
 )
@@ -74,7 +76,10 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
-def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, token_id, device_params):
+@pytest.mark.timeout(1200)
+def test_bcast_moe_two_stage_pipeline(
+    mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict
+):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -175,11 +180,34 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
     r = None
     s = None
 
-    # if is_stage0 or is_stage1:
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
+    )
+
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    r = create_routed_expert_tensors(mesh_device, use_hardcoded_expert_index=True, mesh_mapper=mesh_mapper)
+    r = create_routed_expert_tensors(
+        mesh_device,
+        use_hardcoded_expert_index=True,
+        mesh_mapper=mesh_mapper,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
     mcast_grid = moe_worker_core_grid
-    s = create_shared_expert_tensors(mesh_device, M, K, mcast_grid, mesh_mapper=mesh_mapper)
+    s = create_shared_expert_tensors(
+        mesh_device,
+        M,
+        K,
+        mcast_grid,
+        mesh_mapper=mesh_mapper,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
     logger.info(f"[rank={my_mesh_id}] MoE tensors created")
 
     if my_mesh_id >= 1:
@@ -222,7 +250,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         logger.info(f"[rank={my_mesh_id}] SDPA buffers created")
 
         tile_1x32 = ttnn.Tile([1, 32])
-        final_output_total_width = r["final_output_total_width"]
+        final_output_total_width = r.final_output_total_width
 
         # ── Reduce-to-one tensors (follows test_moe_mlp.py pattern) ──────────
         reduce_mesh_mapper_config = ttnn.MeshMapperConfig(
@@ -230,7 +258,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         )
         reduce_mesh_mapper = ttnn.create_mesh_mapper(mesh_device, reduce_mesh_mapper_config)
 
-        final_output_mem_config = r["final_output_mem_config"]
+        final_output_mem_config = r.final_output_mem_config
         reduce_intermediate_tensors = []
         for _ in range(3):
             intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
@@ -283,7 +311,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         logger.info(f"[rank={my_mesh_id}] bcast + moe semaphores created")
 
         # Bcast tensors
-        input_core_grid = r["ttnn_residual_mcast_src"].memory_config().shard_spec.grid
+        input_core_grid = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid
         bcast_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
         bcast_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bcast_shard_spec
@@ -297,7 +325,7 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
             tile=tile_1x32,
             mesh_mapper=mesh_mapper,
         )
-        bcast_intermediate_tensor = r["ttnn_residual_mcast_src"]
+        bcast_intermediate_tensor = r.ttnn_residual_mcast_src
 
         # recv_socket: the downstream socket of the entry node
         recv_socket = pipeline_block.get_downstream_socket()
@@ -328,22 +356,22 @@ def test_bcast_moe_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, to
         logger.info(f"[rank={my_mesh_id}] launching MoE bcast + reduce (num_iterations=1)")
         stage_downstream_socket = downstream_socket
         result_scores, result_indices, result_output = MoeOp.op(
-            r["ttnn_residual_mcast_src"],
-            gate_mm_weights_tensor=r["ttnn_gate_mm_weights"],
-            gate_bias_tensor=r["ttnn_gate_bias"],
-            gate_indices_tensor=r["ttnn_gate_indices"],
-            gate_output_scores_tensor=r["gate_output_scores_tensor"],
-            gate_output_indices_tensor=r["gate_output_indices_tensor"],
-            gate_proj_weights_tensor=r["gate_proj_weights"],
-            up_proj_weights_tensor=r["up_proj_weights"],
-            down_proj_weights_tensor=r["down_proj_weights"],
-            final_output_tensor=r["final_output_tensor"],
-            rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
-            shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
-            shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
-            shared_down_weights_tensor=s["ttnn_down_weights"],
-            shared_k_parallel=s["k_parallel"],
-            shared_n_parallel=s["n_parallel"],
+            r.ttnn_residual_mcast_src,
+            gate_mm_weights_tensor=r.ttnn_gate_mm_weights,
+            gate_bias_tensor=r.ttnn_gate_bias,
+            gate_indices_tensor=r.ttnn_gate_indices,
+            gate_output_scores_tensor=r.gate_output_scores_tensor,
+            gate_output_indices_tensor=r.gate_output_indices_tensor,
+            gate_proj_weights_tensor=r.gate_proj_weights,
+            up_proj_weights_tensor=r.up_proj_weights,
+            down_proj_weights_tensor=r.down_proj_weights,
+            final_output_tensor=r.final_output_tensor,
+            rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
+            shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
+            shared_up_weights_overlapped=s.shared_up_weights_overlapped,
+            shared_down_weights_tensor=s.ttnn_down_weights,
+            shared_k_parallel=s.k_parallel,
+            shared_n_parallel=s.n_parallel,
             use_hardcoded_expert_index=True,
             sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer=sdpa_out_interm_buffer,
