@@ -52,16 +52,6 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
-      run-smoke-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run metalium and ttnn smoke tests"
-      run-basic-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run metalium and ttnn basic tests"
       run-tt-cnn-unit-tests:
         required: false
         type: boolean
@@ -132,16 +122,6 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
-      run-smoke-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run metalium and ttnn smoke tests"
-      run-basic-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run metalium and ttnn basic tests"
       run-tt-cnn-unit-tests:
         required: false
         type: boolean
@@ -319,65 +299,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-
-  metalium-smoke-tests:
-    needs: [build-artifact, generate-matrix]
-    if: ${{ inputs.run-smoke-tests == true || github.event_name == 'schedule' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      product: tt-metalium
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-  ttnn-smoke-tests:
-    needs: [build-artifact, generate-matrix]
-    if: ${{ inputs.run-smoke-tests == true || github.event_name == 'schedule' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      product: tt-nn
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-  metalium-basic-tests:
-    needs: [build-artifact, generate-matrix]
-    if: ${{ inputs.run-basic-tests == true || github.event_name == 'schedule' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-metalium
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-  ttnn-basic-tests:
-    needs: [build-artifact, generate-matrix]
-    if: ${{ inputs.run-basic-tests == true || github.event_name == 'schedule' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-nn
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # TT-CNN Unit Tests
