@@ -7,33 +7,6 @@
 
 namespace detail {
 
-inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
-
-// this algorithm matches the current implementation in MoE compute
-template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
-[[maybe_unused]] void token_work_split_simple(
-    const uint32_t token_parallel_core_id,
-    volatile tt_l1_ptr uint32_t* dense_token_counts_ptr,
-    uint32_t* token_split_counts,
-    uint32_t* token_split_offsets) {
-    for (uint32_t e = 0; e < NumLocalExperts; ++e) {
-        token_split_offsets[e] = 0;
-        const uint32_t chunk = div_up(dense_token_counts_ptr[e], NumTokenParallelCores);
-        const uint32_t rem = dense_token_counts_ptr[e] - (NumTokenParallelCores - 1) * chunk;
-
-        for (uint32_t c = 0; c < NumTokenParallelCores; ++c) {
-            const uint32_t count = (c == NumTokenParallelCores - 1) ? rem : chunk;
-
-            if (c == token_parallel_core_id) {
-                token_split_counts[e] = count;
-                break;
-            }
-
-            token_split_offsets[e] += count;
-        }
-    }
-}
-
 template <uint32_t NumLocalExperts, uint32_t NumTokenParallelCores>
 void token_work_split_even(
     const uint32_t token_parallel_core_id,
@@ -41,13 +14,12 @@ void token_work_split_even(
     uint32_t* token_split_counts,
     uint32_t* token_split_offsets) {
     for (uint32_t e = 0; e < NumLocalExperts; ++e) {
+        token_split_counts[e] = 0;
         token_split_offsets[e] = 0;
+        const uint32_t chunk = dense_token_counts_ptr[e] / NumTokenParallelCores;
+        const uint32_t rem = dense_token_counts_ptr[e] % NumTokenParallelCores;
         for (uint32_t c = 0; c < NumTokenParallelCores; ++c) {
-            uint32_t count = dense_token_counts_ptr[e] / NumTokenParallelCores;
-
-            if (c < dense_token_counts_ptr[e] % NumTokenParallelCores) {
-                ++count;
-            }
+            const auto count = (c < rem) ? chunk + 1 : chunk;
 
             if (c == token_parallel_core_id) {
                 token_split_counts[e] = count;
@@ -61,10 +33,15 @@ void token_work_split_even(
 template <uint32_t NumLocalExperts, uint32_t ActivationStride, uint32_t MapStride, uint32_t GlobalNumTokens>
 void get_token_activation_offsets(
     const uint32_t* token_split_offsets,
+    const uint32_t* token_split_counts,
     volatile tt_l1_ptr uint32_t* dense_token_maps_ptr,
     volatile tt_l1_ptr uint32_t* token_activations_ptr,
     uint32_t* token_activation_offsets) {
     for (uint32_t e = 0; e < NumLocalExperts; ++e) {
+        if (token_split_counts[e] == 0) {
+            continue;
+        }
+
         const auto token_split_offset = token_split_offsets[e];
         auto* expert_token_activations_ptr = token_activations_ptr + token_split_offset * ActivationStride;
         const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offset) * MapStride];
@@ -159,7 +136,11 @@ void kernel_main() {
         activations_stride_elm,
         dense_token_maps_stride_elm,
         global_num_tokens>(
-        token_split_offsets, dense_token_maps_l1_ptr, token_activations_ptr, token_activation_offsets);
+        token_split_offsets,
+        token_split_counts,
+        dense_token_maps_l1_ptr,
+        token_activations_ptr,
+        token_activation_offsets);
 
     // stash the work split counts, offsets at the end of the token counts
     for (uint32_t e = 0; e < num_local_experts; ++e) {
