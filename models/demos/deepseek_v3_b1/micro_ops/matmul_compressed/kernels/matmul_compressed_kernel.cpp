@@ -99,28 +99,8 @@ void kernel_main() {
 
     for (uint32_t k = 0; k < num_tiles_k; k++) {
         for (uint32_t w = 0; w < out_w; w++, tile_idx++) {
-            uint32_t fmt = compressed::get_tile_format(assign_ptr, tile_idx);
-
-            if (fmt == compressed::FMT_BFP0) {
-                continue;
-            }
-
-            compressed::reconfig_unpack_srca(fmt);
-
-            uint32_t tile_size = compressed::TILE_SIZES[fmt] >> cb_addr_shift;
-
-            UNPACK((_llk_unpack_AB_matmul_(
-                addr_in0,       // base_address_a (in0 → srcB)
-                b_addr,         // base_address_b (in1 → srcA)
-                k,              // tile_index_a
-                0,              // tile_index_b (b_addr already points to tile)
-                in0_page_size,  // tile_size_a
-                tile_size,      // tile_size_b
-                partial_face_a,
-                partial_face_b)));
-            MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(w)));
-
-            b_addr += tile_size;
+            b_addr += compressed::matmul_tiles_in1_compressed(
+                assign_ptr, tile_idx, addr_in0, b_addr, k, in0_page_size, partial_face_a, partial_face_b, w);
         }
     }
 
