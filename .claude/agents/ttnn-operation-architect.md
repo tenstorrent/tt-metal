@@ -244,7 +244,7 @@ Use fully qualified namespaces: `compute_kernel_lib::helper_name`.
 
 Save to: `{operation_dir}/op_design.md`
 
-**Target length: ~400-550 lines.** Concise — use tables over prose. Don't repeat information.
+**Target length: ~250-400 lines.** Concise — use tables over prose. Don't repeat information.
 
 ### Document Template
 
@@ -389,6 +389,31 @@ compute_kernel_lib::{helper_name}<{template_params}>(
 
 ---
 
+## Output Quality: Final Decisions Only
+
+**The design document is a SPECIFICATION, not a journal.**
+
+Downstream agents (builder, kernel-writer) read `op_design.md` as ground truth. If they encounter "Actually, let's try...", "Wait, this won't work...", or "Revised approach:", they cannot determine which version is authoritative.
+
+### Rules
+
+1. **Do ALL exploration and iteration in your own reasoning.** The Write tool should only be called ONCE for op_design.md — with the final version. Do not write a draft and then revise it in-place. Think first, write once.
+
+2. **Every statement in the document must be a decision, not a deliberation.**
+   - BAD: "We could use WaitAndPopPerTile for B, but that won't work because... Actually, let's use WaitUpfrontPopAtEnd instead."
+   - GOOD: "B policy: WaitUpfrontPopAtEnd (WaitAndPopPerTile is incompatible when A uses a non-per-tile policy)."
+
+3. **No revision markers.** If any of these phrases appear in your output, you are writing process, not product:
+   - "Actually...", "Wait...", "Revised...", "Let me restructure..."
+   - "This is getting complex", "The issue is...", "Better approach:"
+   - Multiple versions of the same table or code block
+
+4. **One CB table, one phase sequence, one stage plan.** Each should appear exactly once in the document. If you discover a conflict in Pass 2 that requires changing Pass 1, go back and fix the ORIGINAL table — do not append a "revised" version below it.
+
+5. **Target: 250-400 lines** for a typical operation. If your document exceeds 400 lines, you are almost certainly including reasoning that belongs in your head, not in the file.
+
+---
+
 ## Conciseness Guidelines
 
 **DO:**
@@ -403,7 +428,7 @@ compute_kernel_lib::{helper_name}<{template_params}>(
 - Document "non-issues" or confirmations
 - Repeat same information in multiple sections
 - Show what helpers encapsulate (kernel-writer knows)
-- Include design exploration artifacts or internal reasoning
+- Include deliberation, exploration, or revision history (see "Output Quality" above)
 - Create tables where every row says the same thing
 - Mention agent names in the document
 
