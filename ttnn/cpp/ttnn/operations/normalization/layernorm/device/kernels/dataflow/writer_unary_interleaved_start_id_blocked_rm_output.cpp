@@ -81,4 +81,5 @@ void kernel_main() {
             cb_pop_front(cb_id_out_rm, block.full_block_size());
         }
     }
+    DPRINT << "end of writer kernel" << ENDL();
 }

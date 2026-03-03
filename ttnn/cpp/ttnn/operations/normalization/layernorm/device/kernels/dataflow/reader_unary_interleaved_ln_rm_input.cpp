@@ -112,36 +112,53 @@ void kernel_main() {
 
         // Push one column block of ROW_MAJOR input into cb_in_rm per iteration.
         // The compute kernel tilizes each block before the existing computation.
-        for (auto block : generic::blocks(Wt, blk)) {
-            const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
-            const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
+        layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
+            cb_id_in_rm, src_a, Wt, blk, abs_tile_row, elem_size_bytes, full_row_stride);
+        // for (auto block : generic::blocks(Wt, blk)) {
+        //     const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
+        //     const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
 
-            cb_reserve_back(cb_id_in_rm, block.full_block_size());
-            const uint32_t l1_base = get_write_ptr(cb_id_in_rm);
-            uint32_t l1_ptr = l1_base;
+        //     cb_reserve_back(cb_id_in_rm, block.full_block_size());
+        //     const uint32_t l1_base = get_write_ptr(cb_id_in_rm);
+        //     uint32_t l1_ptr = l1_base;
 
-            for (uint32_t row = 0; row < TILE_H; ++row) {
-                const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
-                noc_async_read(noc_addr, l1_ptr, row_read_bytes);
-                l1_ptr += full_row_stride;  // advance by full blk-wide row slot
-            }
-            noc_async_read_barrier();
+        //     for (uint32_t row = 0; row < TILE_H; ++row) {
+        //         const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
+        //         noc_async_read(noc_addr, l1_ptr, row_read_bytes);
+        //         l1_ptr += full_row_stride;  // advance by full blk-wide row slot
+        //     }
+        //     noc_async_read_barrier();
 
-            // DPRINT: show what was read for first block of first ncht, to diagnose data corruption.
-            // Enable by running with TT_METAL_DPRINT_CORES=0,0
-            if (ncht == 0 && block.is_first()) {
-                DPRINT << "[rm_reader] src_addr=" << src_addr << " abs_tile_row=" << abs_tile_row
-                       << " col_byte_off=" << col_byte_offset << " row_read_bytes=" << row_read_bytes
-                       << " full_row_stride=" << full_row_stride << " l1_base=" << l1_base << ENDL();
-                // Print first 4 BF16 values (first 2 rows, 2 elements each)
-                volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_base);
-                DPRINT << "[rm_reader] row0[0]=" << BF16(d[0]) << " row0[1]=" << BF16(d[1])
-                       << " row1[0]=" << BF16(d[full_row_stride / elem_size_bytes])
-                       << " row1[1]=" << BF16(d[full_row_stride / elem_size_bytes + 1]) << ENDL();
-            }
+        //     // DPRINT: show what was read for first block of first ncht, to diagnose data corruption.
+        //     // Enable by running with TT_METAL_DPRINT_CORES=0,0
+        //     if (ncht == 0 && block.is_first()) {
+        //         DPRINT << "blocks characterstics, start =  " << block.start() << ", size =  "
+        //             << block.size() << ", full_block_size =  " << block.full_block_size() << ENDL();
 
-            cb_push_back(cb_id_in_rm, block.full_block_size());
-        }
+        //         // DPRINT << "[rm_reader] src_addr=" << src_addr << " abs_tile_row=" << abs_tile_row
+        //         //        << " col_byte_off=" << col_byte_offset << " row_read_bytes=" << row_read_bytes
+        //         //        << " full_row_stride=" << full_row_stride << " l1_base=" << l1_base << ENDL();
+        //         // // Print first 4 BF16 values (first 2 rows, 2 elements each)
+        //         // volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_base);
+        //         // DPRINT << "[rm_reader] row0[0]=" << BF16(d[0]) << " row0[1]=" << BF16(d[1])
+        //         //        << " row1[0]=" << BF16(d[full_row_stride / elem_size_bytes])
+        //         //        << " row1[1]=" << BF16(d[full_row_stride / elem_size_bytes + 1]) << ENDL();
+        //     }
+
+        //     cb_push_back(cb_id_in_rm, block.full_block_size());
+
+        //     // // DEBUG: AFTER
+        //     // cb_reserve_back(cb_id_in_rm, block.full_block_size());
+        //     // uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
+
+        //     // for (auto r : block.local()) {
+        //     //     noc_async_read_tile(offs + block.start() + r + tile_offset, src_a, l1_ptr);
+        //     //     l1_ptr += src0_tile_bytes;
+        //     // }
+        //     // noc_async_read_barrier();
+        //     // cb_push_back(cb_id_in_rm, block.full_block_size());
+
+        // }
 
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, blk)) {

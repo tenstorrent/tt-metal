@@ -12,6 +12,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
+
 namespace norm::layernorm::device::kernels::dataflow {
 
 using NumNocAddrs = uint32_t;
@@ -175,6 +178,58 @@ inline void read_block_to_cb(
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, block.full_block_size());
+}
+
+/*
+ * @brief Read a block of 32x32 tiles from remote memory to L1 for an input CB. Reserves space for a full
+ *
+ * Since input is row-major, we load partial sticks at a time.
+ * For instance, for block size 4 and TILE_W = 32, we load 4x32 = 128 elements at a time from each stick
+ * This means that, after tilizing in compute kerel, block.size() tiles will be processed.
+ */
+template <typename T, uint32_t TILE_W, uint32_t TILE_H>
+void push_row_major_blocks_to_cb(
+    const uint32_t cb_id_in_rm,
+    const T& src_a,
+    const uint32_t Wt,
+    const uint32_t block_size,
+    const uint32_t abs_tile_row,
+    const uint32_t elem_size_bytes,
+    const uint32_t full_row_stride) {
+    for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
+        const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
+        const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
+        DPRINT << "[rm_reader] pushing row-major block to cb_in_rm, block.start=" << block.start() << ENDL();
+
+        cb_reserve_back(cb_id_in_rm, block.full_block_size());  // DEADLOCK HERE
+        uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
+
+        for (uint32_t row = 0; row < TILE_H; ++row) {
+            // DPRINT << "[rm_reader] reading row " << row << " of block " << block.start() << ENDL();
+
+            const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
+            noc_async_read(noc_addr, l1_ptr, row_read_bytes);
+            l1_ptr += full_row_stride;
+        }
+        noc_async_read_barrier();
+
+        // DPRINT: show what was read for first block of first ncht, to diagnose data corruption.
+        // Enable by running with TT_METAL_DPRINT_CORES=0,0
+        // if (ncht == 0 && block.is_first()) {
+        //     DPRINT << "[rm_reader] src_addr=" << src_addr << " abs_tile_row=" << abs_tile_row
+        //            << " col_byte_off=" << col_byte_offset << " row_read_bytes=" << row_read_bytes
+        //            << " full_row_stride=" << full_row_stride << " l1_base=" << l1_base << ENDL();
+        //     // Print first 4 BF16 values (first 2 rows, 2 elements each)
+        //     volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_base);
+        //     DPRINT << "[rm_reader] row0[0]=" << BF16(d[0]) << " row0[1]=" << BF16(d[1])
+        //            << " row1[0]=" << BF16(d[full_row_stride / elem_size_bytes])
+        //            << " row1[1]=" << BF16(d[full_row_stride / elem_size_bytes + 1]) << ENDL();
+        // }
+        DPRINT << "[rm_reader] pushed row-major block to cb_in_rm, block.start=" << block.start() << ENDL();
+
+        cb_push_back(cb_id_in_rm, block.full_block_size());
+    }
+    DPRINT << "[rm_reader] done pushing row-major blocks to cb_in_rm" << ENDL();
 }
 
 }  // namespace norm::layernorm::device::kernels::dataflow
