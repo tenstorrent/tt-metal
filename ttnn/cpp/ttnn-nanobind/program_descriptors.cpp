@@ -271,9 +271,20 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     tile: Tile object to create descriptor from
             )pbdoc")
+        .def(
+            nb::init<const tt::tt_metal::TileDescriptor&>(),
+            nb::arg("other"),
+            R"pbdoc(
+                Copy constructor for TileDescriptor.
+
+                Args:
+                    other: TileDescriptor to copy from
+            )pbdoc")
         .def_rw("height", &tt::tt_metal::TileDescriptor::height, "Height of the tile in elements")
         .def_rw("width", &tt::tt_metal::TileDescriptor::width, "Width of the tile in elements")
-        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed");
+        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     // Bind CBDescriptor and related types
     nb::class_<tt::tt_metal::CBFormatDescriptor>(mod, "CBFormatDescriptor", R"pbdoc(
