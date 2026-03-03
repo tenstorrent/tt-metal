@@ -41,8 +41,8 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         distributed_context,
         &tt::tt_metal::MetalContext::instance().hal(),
         rtoptions.get_target_device(),
-        true,
-        true);
+        /*run_global_discovery*/ true,
+        /*run_live_discovery*/ true);
     physical_system_desc.merge(std::move(new_psd));
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
@@ -343,9 +343,9 @@ TEST(PhysicalMappingGeneration, GeneratePCIeToLogicalMapping) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto physical_system_desc = run_physical_system_discovery(
+        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
     auto my_host = physical_system_desc.my_host_name();
 
     // Build PCI device ID -> logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs.

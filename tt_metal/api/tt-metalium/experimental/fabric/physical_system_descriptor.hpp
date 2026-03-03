@@ -16,7 +16,6 @@
 #include <umd/device/utils/semver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
-#include <tt_stl/reflection.hpp>
 
 namespace YAML {
 class Node;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,11 @@ namespace tt::tt_metal {
 
 namespace {
 
-// get_host_name() is defined in physical_system_descriptor.cpp
-// Forward declare to avoid redefinition in unity builds
-std::string get_host_name();
+std::string get_host_name() {
+    char hostname[HOST_NAME_MAX + 1];
+    gethostname(hostname, sizeof(hostname));
+    return std::string(hostname);
+}
 
 std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
