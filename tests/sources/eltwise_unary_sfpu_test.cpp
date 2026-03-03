@@ -28,16 +28,13 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
-    const int MAX_TILES_DEST =
-        is_fp32_dest_acc_en ? (BIT32_DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM)) : (DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM));
-
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 
     _llk_unpack_A_init_<BroadcastType::NONE, false /* is_fp32_dest_acc_en - why true does not work? */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_A_src, formats.unpack_A_dst);
 
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (int i = 0; i < params->NUM_BLOCKS * params->NUM_TILES_IN_BLOCK; ++i)
     {
         _llk_unpack_A_<BroadcastType::NONE, false /* is_fp32_dest_acc_en - why true does not work? */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params->buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
@@ -64,9 +61,6 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
-    const int MAX_TILES_DEST =
-        is_fp32_dest_acc_en ? (BIT32_DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM)) : (DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM));
-
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
@@ -78,15 +72,15 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
 
-    for (int block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+    LLK_ASSERT(
+        (params->NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "NUM_TILES_IN_BLOCK exceeds max dest tiles");
+
+    for (int block_start = 0; block_start < params->NUM_BLOCKS; block_start++)
     {
-        int block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
-
         _llk_math_wait_for_dest_available_<DST_SYNC>();
-        for (int block_tile = 0; block_tile < block_tiles; ++block_tile)
+        for (int block_tile = 0; block_tile < params->NUM_TILES_IN_BLOCK; ++block_tile)
         {
-            LLK_ASSERT((block_tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
-
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 block_tile, formats.math, formats.math);
 
@@ -116,9 +110,6 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
-    const int MAX_TILES_DEST =
-        is_fp32_dest_acc_en ? (BIT32_DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM)) : (DEST_REGISTER_HALF_SIZE / (TILE_NUM_FACES * FACE_R_DIM));
-
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
     _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
@@ -128,17 +119,17 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en, false>();
 #endif
+    LLK_ASSERT(
+        (params->NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "NUM_TILES_IN_BLOCK exceeds max dest tiles");
 
-    for (int block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+    for (int block_start = 0; block_start < params->NUM_BLOCKS; block_start++)
     {
-        int block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
-
         _llk_packer_wait_for_math_done_();
-        for (int block_tile = 0; block_tile < block_tiles; ++block_tile)
+        for (int block_tile = 0; block_tile < params->NUM_TILES_IN_BLOCK; ++block_tile)
         {
-            LLK_ASSERT((block_tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
-
-            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, /* untilize */ false>(block_tile, L1_ADDRESS(params->buffer_Res[block_start + block_tile]));
+            _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, /* untilize */ false>(
+                block_tile, L1_ADDRESS(params->buffer_Res[block_start * params->NUM_TILES_IN_BLOCK + block_tile]));
         }
         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

@@ -5,12 +5,23 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
-    get_valid_dest_indices,
 )
 from helpers.format_config import DataFormat
-from helpers.golden_generators import DataCopyGolden, TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, Tilize, format_dict
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    DataCopyGolden,
+    TilizeGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    Tilize,
+    format_dict,
+)
 from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
@@ -19,7 +30,9 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TILIZE,
     generate_input_dim,
@@ -76,15 +89,11 @@ def get_valid_num_faces_datacopy(tilize):
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
     tilize=lambda formats: get_valid_tilize_datacopy(formats),
-    dest_index=lambda dest_acc: get_valid_dest_indices(
-        dest_sync=DestSync.Half, dest_acc=dest_acc, tile_count=4
-    ),
+    input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy(
-    formats, dest_acc, num_faces, tilize, dest_index, workers_tensix_coordinates
+    formats, dest_acc, num_faces, tilize, input_dimensions, workers_tensix_coordinates
 ):
-
-    input_dimensions = [64, 64]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -108,6 +117,20 @@ def test_unary_datacopy(
         else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
+    blocks_calculation_algorithm = (
+        BlocksCalculationAlgorithm.Standard
+        if tilize == Tilize.No
+        else BlocksCalculationAlgorithm.Tilize
+    )
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        blocks_calculation_algorithm,
+    )
+
     configuration = TestConfig(
         "sources/eltwise_unary_datacopy_test.cpp",
         formats,
@@ -115,7 +138,13 @@ def test_unary_datacopy(
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(tilize),
         ],
-        runtimes=[DEST_INDEX(dest_index), TILE_COUNT(tile_cnt_A), NUM_FACES(num_faces)],
+        runtimes=[
+            DEST_INDEX(0),
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
