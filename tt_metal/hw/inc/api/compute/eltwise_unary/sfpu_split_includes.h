@@ -124,6 +124,10 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_XIELU_INCLUDE
+#include "api/compute/eltwise_unary/xielu.h"
+#endif
+
 #if SFPU_OP_LOGSIGMOID_INCLUDE
 #include "api/compute/logsigmoid.h"
 #endif

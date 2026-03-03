@@ -152,4 +152,5 @@ enum class SfpuType {
     unary_min_uint32,
     addcdiv,
     lerp,
+    xielu,
 };
