@@ -4157,7 +4157,7 @@ class MoeOp:
                 backward_coord = ttnn.MeshCoordinate((row - 1 + mesh_rows) % mesh_rows, col)
             self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
         if bcast_has_secondary_target:
-            secondary_coord = ttnn.MeshCoordinate(row, 1)
+            secondary_coord = ttnn.MeshCoordinate(row, 1 - sender_col)
             self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
         bcast_num_connections = len(self.bcast_dst_nodes)
         bcast_ncrisc_common_rt_args[-1] = int(bcast_num_connections)
