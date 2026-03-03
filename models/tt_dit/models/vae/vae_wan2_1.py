@@ -357,7 +357,7 @@ class WanCausalConv3d(Module):
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
                 neighbor_sems.append(
-                    self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)[0]
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
             if w_pad_needed:
@@ -366,7 +366,7 @@ class WanCausalConv3d(Module):
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
                 neighbor_sems.append(
-                    self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)[0]
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
@@ -756,7 +756,7 @@ class WanConv2d(Module):
                 pad_right.append(self.external_padding[1])
                 axes.append(self.parallel_config.height_parallel.mesh_axis)
                 neighbor_sems.append(
-                    self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)[0]
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.height_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2))
             if w_pad_needed:
@@ -765,7 +765,7 @@ class WanConv2d(Module):
                 pad_right.append(self.external_padding[2])
                 axes.append(self.parallel_config.width_parallel.mesh_axis)
                 neighbor_sems.append(
-                    self.ccl_manager.get_ag_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)[0]
+                    self.ccl_manager.get_np_ping_pong_semaphore(self.parallel_config.width_parallel.mesh_axis)
                 )
                 links.append(get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
