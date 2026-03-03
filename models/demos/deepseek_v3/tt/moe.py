@@ -178,27 +178,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 use_height_and_width_as_shard_shape=True,
             )
 
-            NUM_DECODE_RS_SHARD_CORES = 7
-            ring_sum_experts_output_memory_config = ttnn.MemoryConfig(
-                ttnn.BufferType.L1,
-                ttnn.NdShardSpec(
-                    ttnn.Shape([1, 1, USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE // NUM_DECODE_RS_SHARD_CORES]),
-                    ttnn.CoreRangeSet(
-                        [
-                            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
-                            ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                        ]
-                    ),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-                ),
-            )
-
             # Construct the config
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
@@ -225,7 +204,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                     dim=3,
                     memory_config=input_output_memory_config,
                 ),
-                "ring_sum_experts_output_memory_config": ring_sum_experts_output_memory_config,
+                "ring_sum_experts_output_memory_config": DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
+                    USERS_PER_ROW, HIDDEN_SIZE, TP_SIZE
+                ),
                 "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
                     dim=3,
