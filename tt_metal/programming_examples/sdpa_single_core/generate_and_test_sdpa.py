@@ -228,6 +228,7 @@ def run_sdpa_single_core_test(
     exp_approx_mode=EXP_APPROX_MODE,
     pcc_threshold=PCC_THRESHOLD,
     padded_k_tiles=0,
+    kv_bf8b=False,
 ):
     torch.manual_seed(SEED)
 
@@ -247,10 +248,15 @@ def run_sdpa_single_core_test(
     else:
         K, V = K_valid, V_valid
 
-    # Truncate to bf16 precision for reference (use unpadded K/V)
+    # Truncate to device precision for reference (use unpadded K/V)
     Q_ref = Q.to(torch.bfloat16).float()
-    K_ref = K_valid.to(torch.bfloat16).float()
-    V_ref = V_valid.to(torch.bfloat16).float()
+    if kv_bf8b:
+        # bfloat8_b truncation: round-trip through float8_e4m3 approximates bfp8_b precision
+        K_ref = K_valid.to(torch.float8_e4m3fn).float()
+        V_ref = V_valid.to(torch.float8_e4m3fn).float()
+    else:
+        K_ref = K_valid.to(torch.bfloat16).float()
+        V_ref = V_valid.to(torch.bfloat16).float()
 
     # --- PyTorch reference (uses unpadded K/V) ---
     scale = 1.0 / (d**0.5)
@@ -318,6 +324,8 @@ def run_sdpa_single_core_test(
             str(int(exp_approx_mode)),
             "--padded_k_tiles",
             str(padded_k_tiles),
+            "--kv_bf8b",
+            str(int(kv_bf8b)),
         ]
 
         logger.info(f"Running: {' '.join(cmd)}")
@@ -616,3 +624,85 @@ def test_padding_pcc_correlation():
         logger.warning(
             f"Significant negative correlation ({corr:.4f}) detected: " f"PCC degrades as padding increases."
         )
+
+
+# ---------------------------------------------------------------------------
+# MLA-like configs (from test_flash_mla_prefill v2 path validation)
+# Single-core uses head_dim_t for both K and V, so head_dim_t=vDHt.
+# ---------------------------------------------------------------------------
+
+
+def test_mla_vDHt16(request):
+    """MLA Call 1 equivalent: head_dim_t=16 exercises DST batching in
+    normalize_row_streaming and mul_block_bcast_cols_acc.
+    Uses kv_bf8b=True to fit in L1 (matches MLA prefill's bfloat8_b KV).
+    Maps to vDHt=16, Sq_chunk_t=4, Sk_chunk_t=8, sbh=2."""
+    run_sdpa_single_core_test(
+        "mla_vDHt16",
+        num_q_chunks=2,
+        num_k_chunks=4,
+        data_mode="random",
+        save_inputs_only=request.config.getoption("--save-inputs", default=False),
+        sq_chunk_t=4,
+        sk_chunk_t=8,
+        head_dim_t=16,
+        subblock_h=2,
+        kv_bf8b=True,
+    )
+
+
+def test_mla_vDHt4(request):
+    """MLA Call 2 equivalent: head_dim_t=4, Sq_chunk_t=4, Sk_chunk_t=8, sbh=2."""
+    run_sdpa_single_core_test(
+        "mla_vDHt4",
+        num_q_chunks=2,
+        num_k_chunks=4,
+        data_mode="random",
+        save_inputs_only=request.config.getoption("--save-inputs", default=False),
+        sq_chunk_t=4,
+        sk_chunk_t=8,
+        head_dim_t=4,
+        subblock_h=2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Padded configs that fail in sdpa_standard_v2 (from test_sdpa_tt_padded)
+# d128-s160-nkv1-nh8-noncausal-k512-q128: Sk=160 padded to 512 (11 padded tiles)
+# Single-core Sq = num_q_chunks * sq_chunk_t * 32 = 256 (no Q padding),
+# but the K padding (11/16 tiles) is the root cause of the v2 failure.
+# b1 and b2 variants have identical per-head config; single-core is single-batch.
+# ---------------------------------------------------------------------------
+
+
+def test_padded_s160_k512_sbh2(request):
+    """Reproduces d128-s160-k512-q128-noncausal failure: Sq_chunk_t=4, Sk_chunk_t=16,
+    sbh=2, 11 padded K tiles out of 16 (Sk=160 padded to 512)."""
+    run_sdpa_single_core_test(
+        "padded_s160_k512_sbh2",
+        num_q_chunks=2,
+        num_k_chunks=1,
+        data_mode="random",
+        save_inputs_only=request.config.getoption("--save-inputs", default=False),
+        sq_chunk_t=4,
+        sk_chunk_t=16,
+        head_dim_t=4,
+        subblock_h=2,
+        padded_k_tiles=11,
+    )
+
+
+def test_padded_s160_k512_sbh1(request):
+    """Same padded config with sbh=1 (Sq_chunk_t=7) to isolate sbh from the mask issue."""
+    run_sdpa_single_core_test(
+        "padded_s160_k512_sbh1",
+        num_q_chunks=2,
+        num_k_chunks=1,
+        data_mode="random",
+        save_inputs_only=request.config.getoption("--save-inputs", default=False),
+        sq_chunk_t=7,
+        sk_chunk_t=16,
+        head_dim_t=4,
+        subblock_h=1,
+        padded_k_tiles=11,
+    )

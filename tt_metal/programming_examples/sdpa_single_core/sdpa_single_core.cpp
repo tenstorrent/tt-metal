@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/device.hpp>
@@ -82,6 +83,7 @@ void sdpa_single_core(
     const uint32_t mm_throttle_level = 0,
     const bool exp_approx_mode = false,
     const uint32_t padded_k_tiles = 0,
+    const bool kv_bf8b = false,
     const std::string& test_dir = "") {
     const bool test_mode = !test_dir.empty();
 
@@ -89,7 +91,7 @@ void sdpa_single_core(
     TT_FATAL(mm_throttle_level <= 5, "mm_throttle_level must be 0-5. Got {}.", mm_throttle_level);
     TT_FATAL(
         Sq_chunk_t % subblock_h == 0, "Sq_chunk_t ({}) must be divisible by subblock_h ({}).", Sq_chunk_t, subblock_h);
-    TT_FATAL(head_dim_t <= 8, "head_dim_t ({}) must fit in DST (max 8 tiles with fp16b double-buffer).", head_dim_t);
+    // head_dim_t > 8 is supported via DST batching in normalize_row_streaming and mul_block_bcast_cols_acc.
     TT_FATAL(
         padded_k_tiles < Sk_chunk_t,
         "padded_k_tiles ({}) must be less than Sk_chunk_t ({}).",
@@ -104,8 +106,10 @@ void sdpa_single_core(
     CoreCoord core({0, 0});
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat kv_data_format = kv_bf8b ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
     const MathFidelity math_fidelity = MathFidelity::HiFi2;
-    const uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t kv_tile_size = tt::tile_size(kv_data_format);
 
     // ---- Tile counts ----
     const uint32_t q_chunk_tiles = Sq_chunk_t * head_dim_t;
@@ -121,23 +125,25 @@ void sdpa_single_core(
     // ---- DRAM buffers ----
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig kv_dram_config{
+        .page_size = kv_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    auto make_dram_buf = [&](uint32_t num_tiles) {
-        return distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = num_tiles * single_tile_size}, dram_config, mesh_device.get());
-    };
-    auto q_dram_buffer = make_dram_buf(q_num_tiles);
-    auto k_dram_buffer = make_dram_buf(k_num_tiles);
-    auto v_dram_buffer = make_dram_buf(v_num_tiles);
-    auto out_dram_buffer = make_dram_buf(out_num_tiles);
+    auto q_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = q_num_tiles * single_tile_size}, dram_config, mesh_device.get());
+    auto k_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = k_num_tiles * kv_tile_size}, kv_dram_config, mesh_device.get());
+    auto v_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = v_num_tiles * kv_tile_size}, kv_dram_config, mesh_device.get());
+    auto out_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_num_tiles * single_tile_size}, dram_config, mesh_device.get());
 
     // ---- Circular buffers ----
     const uint32_t qkt_tiles = Sq_chunk_t * Sk_chunk_t;
 
     create_cb(program, core, CBIndex::c_0, 2 * q_chunk_tiles, single_tile_size, cb_data_format);  // Q (double-buf)
-    create_cb(program, core, CBIndex::c_1, 2 * k_chunk_tiles, single_tile_size, cb_data_format);  // KT (double-buf)
+    create_cb(program, core, CBIndex::c_1, 2 * k_chunk_tiles, kv_tile_size, kv_data_format);      // KT (double-buf)
     create_cb(program, core, CBIndex::c_2, qkt_tiles, single_tile_size, cb_data_format);          // QKT
-    create_cb(program, core, CBIndex::c_3, 2 * v_chunk_tiles, single_tile_size, cb_data_format);  // V (double-buf)
+    create_cb(program, core, CBIndex::c_3, 2 * v_chunk_tiles, kv_tile_size, kv_data_format);      // V (double-buf)
     create_cb(program, core, CBIndex::c_5, 1, single_tile_size, cb_data_format);                  // identity_scalar
     if (padded_k_tiles > 0) {
         create_cb(program, core, CBIndex::c_7, 1, single_tile_size, cb_data_format);  // neginf tile for padded mask
@@ -276,8 +282,18 @@ void sdpa_single_core(
     v_data = tilize_nfaces(v_data, v_rows, v_cols);
 
     distributed::EnqueueWriteMeshBuffer(cq, q_dram_buffer, q_data, false);
-    distributed::EnqueueWriteMeshBuffer(cq, k_dram_buffer, k_data, false);
-    distributed::EnqueueWriteMeshBuffer(cq, v_dram_buffer, v_data, false);
+    if (kv_bf8b) {
+        // Pack tilized bf16 K/V data into bfp8_b format before uploading
+        auto k_packed =
+            pack_as_bfp8_tiles(tt::stl::Span<const bfloat16>(k_data), /*row_major_input=*/false, /*is_exp_a=*/false);
+        auto v_packed =
+            pack_as_bfp8_tiles(tt::stl::Span<const bfloat16>(v_data), /*row_major_input=*/false, /*is_exp_a=*/false);
+        distributed::EnqueueWriteMeshBuffer(cq, k_dram_buffer, k_packed, false);
+        distributed::EnqueueWriteMeshBuffer(cq, v_dram_buffer, v_packed, false);
+    } else {
+        distributed::EnqueueWriteMeshBuffer(cq, k_dram_buffer, k_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, v_dram_buffer, v_data, false);
+    }
 
     // ---- Execute ----
     workload.add_program(device_range, std::move(program));
@@ -337,13 +353,14 @@ int main(int argc, char* argv[]) {
         uint32_t mm_throttle_level = get_arg_uint(argc, argv, "--mm_throttle_level", 0);
         bool exp_approx_mode = get_arg_uint(argc, argv, "--exp_approx_mode", 0) != 0;
         uint32_t padded_k_tiles = get_arg_uint(argc, argv, "--padded_k_tiles", 0);
+        bool kv_bf8b = get_arg_uint(argc, argv, "--kv_bf8b", 0) != 0;
         uint32_t Sv_chunk_t = Sk_chunk_t;  // Always equal
 
         if (!test_dir.empty()) {
             fmt::print(
                 "Test mode: dir={}, Sq_chunk_t={}, Sk_chunk_t={}, head_dim_t={}, "
                 "num_q_chunks={}, num_k_chunks={}, subblock_h={}, mm_throttle={}, exp_approx_mode={}, "
-                "padded_k_tiles={}\n",
+                "padded_k_tiles={}, kv_bf8b={}\n",
                 test_dir,
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -353,7 +370,8 @@ int main(int argc, char* argv[]) {
                 subblock_h,
                 mm_throttle_level,
                 exp_approx_mode,
-                padded_k_tiles);
+                padded_k_tiles,
+                kv_bf8b);
         }
 
         sdpa_single_core(
@@ -368,6 +386,7 @@ int main(int argc, char* argv[]) {
             mm_throttle_level,
             exp_approx_mode,
             padded_k_tiles,
+            kv_bf8b,
             test_dir);
 
         pass &= mesh_device->close();

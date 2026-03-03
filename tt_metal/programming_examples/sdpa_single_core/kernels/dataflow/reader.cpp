@@ -21,11 +21,12 @@ void kernel_main() {
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
     const uint32_t v_addr = get_arg_val<uint32_t>(2);
 
-    const uint32_t tile_size_bytes = get_tile_size(tt::CBIndex::c_0);
+    const uint32_t q_tile_size_bytes = get_tile_size(tt::CBIndex::c_0);
+    const uint32_t kv_tile_size_bytes = get_tile_size(tt::CBIndex::c_1);
 
-    const auto q_accessor = TensorAccessor(q_args, q_addr, tile_size_bytes);
-    const auto k_accessor = TensorAccessor(k_args, k_addr, tile_size_bytes);
-    const auto v_accessor = TensorAccessor(v_args, v_addr, tile_size_bytes);
+    const auto q_accessor = TensorAccessor(q_args, q_addr, q_tile_size_bytes);
+    const auto k_accessor = TensorAccessor(k_args, k_addr, kv_tile_size_bytes);
+    const auto v_accessor = TensorAccessor(v_args, v_addr, kv_tile_size_bytes);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_kt_in = tt::CBIndex::c_1;
@@ -42,7 +43,7 @@ void kernel_main() {
         uint32_t q_tile_offset = q * num_q_tiles;
         for (uint32_t t = 0; t < num_q_tiles; t++) {
             noc_async_read_tile(q_tile_offset + t, q_accessor, q_l1_addr);
-            q_l1_addr += tile_size_bytes;
+            q_l1_addr += q_tile_size_bytes;
         }
         noc_async_read_barrier();
         cb_push_back(cb_q_in, num_q_tiles);
@@ -56,10 +57,10 @@ void kernel_main() {
             uint32_t base_kt_l1_addr = get_write_ptr(cb_kt_in);
             uint32_t k_tile_id = k * num_kt_tiles;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                uint32_t write_ptr = base_kt_l1_addr + row * tile_size_bytes;
+                uint32_t write_ptr = base_kt_l1_addr + row * kv_tile_size_bytes;
                 for (uint32_t col = 0; col < head_dim_t; ++col) {
                     noc_async_read_tile(k_tile_id++, k_accessor, write_ptr);
-                    write_ptr += tile_size_bytes * Sk_chunk_t;
+                    write_ptr += kv_tile_size_bytes * Sk_chunk_t;
                 }
             }
             noc_async_read_barrier();
@@ -71,7 +72,7 @@ void kernel_main() {
             uint32_t v_tile_offset = k * num_v_tiles;
             for (uint32_t t = 0; t < num_v_tiles; t++) {
                 noc_async_read_tile(v_tile_offset + t, v_accessor, v_l1_addr);
-                v_l1_addr += tile_size_bytes;
+                v_l1_addr += kv_tile_size_bytes;
             }
             noc_async_read_barrier();
             cb_push_back(cb_v_in, num_v_tiles);
