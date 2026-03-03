@@ -8,7 +8,7 @@ target_link_libraries(
         pthread
 )
 
-if (TARGET TT::CommonPCH)
+if(TARGET TT::CommonPCH)
     target_precompile_headers(distributed_trace_and_events REUSE_FROM TT::CommonPCH)
 endif()
 
