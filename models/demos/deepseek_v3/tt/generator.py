@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -26,6 +27,7 @@ from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 MAX_SEQ_LEN = 32768
+KVDBG_CHECK_EVERY_BLOCKS = 32
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -90,6 +92,14 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
+
+        # KV cache debug (host-side integrity checks)
+        self.kv_cache_debug = bool(int(os.getenv("DEEPSEEK_KV_CACHE_CHECK", "0")))
+        self.kv_cache_debug_identity_page_table = bool(int(os.getenv("DEEPSEEK_KV_CACHE_IDENTITY_PAGE_TABLE", "0")))
+        self._kv_cache_debug_prev_snapshot: list[torch.Tensor] | None = None
+        self._kv_cache_debug_prev_positions: torch.Tensor | None = None
+        self._kv_cache_debug_corruption_detected = False
+        self._kv_cache_debug_mesh_composer: ttnn.CppMeshToTensor | None = None
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -162,6 +172,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.info(f"Enable trace: {self.enable_trace}")
         if self.profile_decode:
             logger.info("profile_decode=True: Prefill skipped, decode runs only 1st dense layer + 1st MoE layer")
+        if self.kv_cache_debug:
+            logger.warning(
+                "KVDBG enabled: host-side KV cache checks every {} blocks.",
+                KVDBG_CHECK_EVERY_BLOCKS,
+            )
+            if self.kv_cache_debug_identity_page_table:
+                logger.warning("KVDBG identity page table enabled.")
 
         # Initialize rope_setup once
         self.rope_setup = RotarySetup(
@@ -464,7 +481,8 @@ class DeepseekGenerator(WarmupForwardMixin):
             MLA2D.create_page_table(
                 paged_config=self.paged_config,
                 mesh_device=self.mesh_device,
-                batch_size=self.batch_size_per_row,
+                batch_size_per_row=self.batch_size_per_row,
+                identity=self.kv_cache_debug_identity_page_table,
             )
             for _ in range(self.hf_config.num_hidden_layers)
         )
@@ -625,6 +643,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         pre_tokenized: List[List[int]] | None = None,
         stop_at_eos: bool = True,
         on_user_finished=None,
+        on_partial_state=None,
+        partial_interval: int | None = None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -637,6 +657,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         stop_at_eos: If True, stop recording output tokens for a user once an EOS/stop token is generated.
         on_user_finished: Optional callback invoked once per user when an EOS/stop token is generated.
                           Signature: (user_index: int, output_tokens: list[int]) -> None
+        on_partial_state: Optional callback invoked every N generated tokens with current state.
+                          Signature: (generations: list[list[int]], finished: list[bool] | None, generated_tokens: int) -> None
+        partial_interval: Token interval for on_partial_state. Disabled if <= 0 or None.
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
@@ -703,11 +726,17 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.warning("stop_at_eos enabled but no EOS/stop token ids found; generating full length.")
             effective_stop_at_eos = False
 
+        partial_interval = int(partial_interval) if partial_interval is not None else 0
+        if partial_interval <= 0:
+            partial_interval = 0
+
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
                 teacher_forcing.reset()
+            if self.kv_cache_debug:
+                self._kv_cache_debug_reset()
 
             # Prefill (can be skipped for decode-only profiling)
             num_of_users = tokens_batched.shape[0]
@@ -763,6 +792,28 @@ class DeepseekGenerator(WarmupForwardMixin):
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
             finished: list[bool] | None = [False] * num_of_prompts if effective_stop_at_eos else None
             notified: list[bool] | None = [False] * num_of_prompts if effective_stop_at_eos else None
+            last_partial_step = 0
+
+            def _maybe_emit_partial() -> None:
+                nonlocal last_partial_step
+                if on_partial_state is None or not partial_interval:
+                    return
+                generated_tokens = 0
+                for gen in generations:
+                    if len(gen) > generated_tokens:
+                        generated_tokens = len(gen)
+                if generated_tokens == 0:
+                    return
+                if generated_tokens % partial_interval != 0:
+                    return
+                if generated_tokens == last_partial_step:
+                    return
+                last_partial_step = generated_tokens
+                try:
+                    on_partial_state(generations, finished, generated_tokens)
+                except Exception as exc:
+                    logger.warning(f"on_partial_state callback failed: {exc}")
+
             if max_new_tokens <= 0:
                 logger.info("max_new_tokens <= 0, skipping decode loop.")
             else:
@@ -785,6 +836,10 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                 # Positions for the first generated token are the prompt lengths
                 positions = lengths.clone()
+                if self.kv_cache_debug:
+                    ttnn.synchronize_device(self.mesh_device)
+                    self._kv_cache_debug_prev_snapshot = self._kv_cache_debug_snapshot()
+                    self._kv_cache_debug_prev_positions = positions.clone()
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -806,10 +861,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                             print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
                         else:
                             print(f"{token_value} ", end="", flush=True)
+                _maybe_emit_partial()
 
                 # Generate remaining tokens with decode (each decode call produces the next token)
                 decode_steps = max_new_tokens - 1
                 profiler.start("inference_decode")
+                kvdbg_check_stride = None
+                if self.kv_cache_debug:
+                    kvdbg_check_stride = int(self.paged_config.block_size) * KVDBG_CHECK_EVERY_BLOCKS
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
@@ -832,6 +891,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                         pred_tokens[0] = int(forced)
                     next_tokens = pred_tokens
                     positions += 1
+                    if (
+                        self.kv_cache_debug
+                        and kvdbg_check_stride is not None
+                        and (gen_idx + 1) % kvdbg_check_stride == 0
+                    ):
+                        ttnn.synchronize_device(self.mesh_device)
+                        curr_snapshot = self._kv_cache_debug_snapshot()
+                        self._kv_cache_debug_compare_and_update(curr_snapshot, positions, gen_idx)
 
                     for i in range(num_of_prompts):
                         if finished is not None and finished[i]:
@@ -852,6 +919,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
                             else:
                                 print(f"{token_value} ", end="", flush=True)
+                    _maybe_emit_partial()
 
                 profiler.end("inference_decode")
 
@@ -1215,6 +1283,215 @@ class DeepseekGenerator(WarmupForwardMixin):
                 f"set_kv_cache: More kv_cache entries provided ({len(kv_cache_list)}) than decoder blocks ({cache_idx})"
             )
 
+    def _kv_cache_debug_reset(self) -> None:
+        self._kv_cache_debug_prev_snapshot = None
+        self._kv_cache_debug_prev_positions = None
+        self._kv_cache_debug_corruption_detected = False
+
+    def _kv_cache_debug_snapshot(self) -> list[torch.Tensor]:
+        assert self.mesh_device is not None, "Mesh device is not initialized"
+        kv_cache_list = self.get_kv_cache()
+        if self._kv_cache_debug_mesh_composer is None:
+            self._kv_cache_debug_mesh_composer = ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, dims=(0, 1), mesh_shape=self.mesh_device.shape
+            )
+        snapshots: list[torch.Tensor] = []
+        for cache_idx, kv_cache in enumerate(kv_cache_list):
+            try:
+                torch_cache = ttnn.to_torch(kv_cache, mesh_composer=self._kv_cache_debug_mesh_composer)
+            except Exception as exc:
+                logger.warning(f"KVDBG: to_torch with mesh_composer failed on cache[{cache_idx}]: {exc}")
+                torch_cache = ttnn.to_torch(kv_cache)
+            snapshots.append(torch_cache.contiguous())
+        return snapshots
+
+    def _kv_cache_debug_compare_and_update(
+        self, curr_snapshot: list[torch.Tensor], curr_positions: torch.Tensor, gen_idx: int
+    ) -> None:
+        if self._kv_cache_debug_prev_snapshot is None or self._kv_cache_debug_prev_positions is None:
+            self._kv_cache_debug_prev_snapshot = curr_snapshot
+            self._kv_cache_debug_prev_positions = curr_positions.clone()
+            return
+        prev_snapshot = self._kv_cache_debug_prev_snapshot
+        prev_positions = self._kv_cache_debug_prev_positions
+        corrupted = self._kv_cache_debug_compare(prev_snapshot, curr_snapshot, prev_positions, curr_positions, gen_idx)
+        if corrupted:
+            self._kv_cache_debug_corruption_detected = True
+        else:
+            self._kv_cache_debug_prev_snapshot = curr_snapshot
+            self._kv_cache_debug_prev_positions = curr_positions.clone()
+
+    def _kv_cache_debug_reshape_snapshot(
+        self, snapshot: torch.Tensor, rows: int, cols: int, max_num_blocks: int, block_size: int
+    ) -> torch.Tensor | None:
+        if snapshot.dim() != 4:
+            logger.warning(f"KVDBG: unexpected snapshot rank {snapshot.dim()} (expected 4). Skipping check.")
+            return None
+        if snapshot.shape[2] != block_size:
+            logger.warning(f"KVDBG: snapshot block_size mismatch {snapshot.shape[2]} != {block_size}. Skipping check.")
+            return None
+        kv_dim = snapshot.shape[3]
+        expected_dim0 = max_num_blocks * rows
+        expected_dim1 = cols
+        if snapshot.shape[0] == expected_dim0 and snapshot.shape[1] == expected_dim1:
+            return snapshot.reshape(rows, max_num_blocks, cols, 1, block_size, kv_dim)
+        if rows == 1 and cols == 1 and snapshot.shape[0] == max_num_blocks and snapshot.shape[1] == 1:
+            return snapshot.reshape(1, max_num_blocks, 1, 1, block_size, kv_dim)
+        logger.warning(
+            "KVDBG: snapshot shape unexpected (got {}, expected [{}, {}, {}, *]). Skipping check.",
+            snapshot.shape,
+            expected_dim0,
+            expected_dim1,
+            block_size,
+        )
+        return None
+
+    def _kv_cache_debug_compare(
+        self,
+        prev_snapshot: list[torch.Tensor],
+        curr_snapshot: list[torch.Tensor],
+        prev_positions: torch.Tensor,
+        curr_positions: torch.Tensor,
+        gen_idx: int,
+    ) -> bool:
+        assert self.paged_config is not None, "Paged config not initialized"
+        if len(prev_snapshot) != len(curr_snapshot):
+            logger.warning("KVDBG: snapshot layer count changed; skipping check.")
+            return False
+        rows, cols = self.mesh_device.shape
+        users_per_row = USERS_PER_ROW
+        if users_per_row % cols != 0:
+            logger.warning(
+                "KVDBG: USERS_PER_ROW {} not divisible by dp_factor {}. Skipping check.",
+                users_per_row,
+                cols,
+            )
+            return False
+        batch_per_shard = even_int_div(users_per_row, cols)
+        max_num_blocks = int(self.paged_config.max_num_blocks)
+        block_size = int(self.paged_config.block_size)
+        blocks_per_user = even_int_div(max_num_blocks, batch_per_shard)
+
+        expected_users = rows * users_per_row
+        if prev_positions.numel() < expected_users or curr_positions.numel() < expected_users:
+            logger.warning(
+                "KVDBG: positions length mismatch (prev={}, curr={}, expected={}); skipping check.",
+                prev_positions.numel(),
+                curr_positions.numel(),
+                expected_users,
+            )
+            return False
+        prev_pos_list = [int(x) for x in prev_positions[:expected_users].tolist()]
+        curr_pos_list = [int(x) for x in curr_positions[:expected_users].tolist()]
+        for user_id in range(expected_users):
+            prev_pos = prev_pos_list[user_id]
+            curr_pos = curr_pos_list[user_id]
+            row_id = user_id // users_per_row
+            local_user = user_id % users_per_row
+            col_id = local_user // batch_per_shard
+            local_user_in_col = local_user % batch_per_shard
+            logger.info(
+                "KVDBG: compare gen_idx {} user {} (r={}, c={}, lu={}) exclude [{}:{})",
+                gen_idx,
+                user_id,
+                row_id,
+                col_id,
+                local_user_in_col,
+                prev_pos,
+                curr_pos,
+            )
+
+        for layer_idx, (prev_layer_raw, curr_layer_raw) in enumerate(zip(prev_snapshot, curr_snapshot)):
+            if prev_layer_raw.shape != curr_layer_raw.shape:
+                logger.warning("KVDBG: layer {} shape mismatch; skipping check.", layer_idx)
+                return False
+            prev_layer = self._kv_cache_debug_reshape_snapshot(prev_layer_raw, rows, cols, max_num_blocks, block_size)
+            curr_layer = self._kv_cache_debug_reshape_snapshot(curr_layer_raw, rows, cols, max_num_blocks, block_size)
+            if prev_layer is None or curr_layer is None:
+                return False
+
+            for r in range(rows):
+                row_user_base = r * users_per_row
+                for c in range(cols):
+                    # Build allowed row ranges for this device
+                    allowed_by_block: dict[int, list[tuple[int, int, int]]] = {}
+                    local_user_start = c * batch_per_shard
+                    local_user_end = local_user_start + batch_per_shard
+                    for local_user in range(local_user_start, local_user_end):
+                        local_user_in_col = local_user - local_user_start
+                        user_id = row_user_base + local_user
+                        prev_pos = prev_pos_list[user_id]
+                        curr_pos = curr_pos_list[user_id]
+                        if curr_pos < prev_pos:
+                            logger.error(
+                                "KVDBG: positions went backwards for user {} (prev={}, curr={}) at gen_idx {}",
+                                user_id,
+                                prev_pos,
+                                curr_pos,
+                                gen_idx,
+                            )
+                            return True
+                        start = prev_pos
+                        end = curr_pos
+                        while start < end:
+                            virt_block = start // block_size
+                            if virt_block >= blocks_per_user:
+                                logger.error(
+                                    "KVDBG: user {} position {} exceeds cache capacity (blocks_per_user={})",
+                                    user_id,
+                                    start,
+                                    blocks_per_user,
+                                )
+                                return True
+                            row_start = start % block_size
+                            block_end = (virt_block + 1) * block_size
+                            row_end = min(block_size, end - virt_block * block_size)
+                            phys_block = local_user_in_col * blocks_per_user + virt_block
+                            allowed_by_block.setdefault(phys_block, []).append((row_start, row_end, user_id))
+                            start = block_end
+
+                    prev_dev = prev_layer[r, :, c, 0]
+                    curr_dev = curr_layer[r, :, c, 0]
+                    for block_idx in range(max_num_blocks):
+                        block_prev = prev_dev[block_idx]
+                        block_curr = curr_dev[block_idx]
+                        ranges = allowed_by_block.get(block_idx)
+                        if not ranges:
+                            if not torch.equal(block_prev, block_curr):
+                                diff_rows = (block_prev != block_curr).any(dim=-1)
+                                bad_row = int(diff_rows.nonzero()[0].item()) if diff_rows.any() else -1
+                                logger.error(
+                                    "KVDBG corruption detected at layer={}, device=({}, {}), block={}, row={} (unexpected change)",
+                                    layer_idx,
+                                    r,
+                                    c,
+                                    block_idx,
+                                    bad_row,
+                                )
+                                return True
+                        else:
+                            mask = torch.ones((block_size,), dtype=torch.bool)
+                            for row_start, row_end, _ in ranges:
+                                mask[row_start:row_end] = False
+                            if mask.any():
+                                if not torch.equal(block_prev[mask], block_curr[mask]):
+                                    diff_rows = (block_prev != block_curr).any(dim=-1)
+                                    bad_rows = diff_rows & mask
+                                    bad_row = int(bad_rows.nonzero()[0].item()) if bad_rows.any() else -1
+                                    user_id = ranges[0][2]
+                                    logger.error(
+                                        "KVDBG corruption detected at layer={}, device=({}, {}), block={}, row={} (user={}, gen_idx={})",
+                                        layer_idx,
+                                        r,
+                                        c,
+                                        block_idx,
+                                        bad_row,
+                                        user_id,
+                                        gen_idx,
+                                    )
+                                    return True
+        return False
+
     def _convert_vllm_page_table_for_user(
         self, page_table: torch.Tensor, user_id: int, local_user_id: int | None = None
     ) -> tuple[ttnn.Tensor, ...]:
@@ -1268,7 +1545,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             paged_config=self.paged_config,
             mesh_device=self.mesh_device,
             page_table=full_page_table,
-            batch_size=self.batch_size_per_row,
+            batch_size_per_row=self.batch_size_per_row,
         )
 
         num_layers = self.hf_config.num_hidden_layers

@@ -105,6 +105,23 @@ class MLA2D(MLA1D):
         }
 
     @classmethod
+    def create_page_table(
+        cls,
+        paged_config: PagedAttentionConfig,
+        mesh_device: ttnn.MeshDevice,
+        page_table: torch.Tensor | None = None,
+        batch_size_per_row: int = USERS_PER_ROW,
+        identity: bool = False,
+    ) -> ttnn.Tensor:
+        return super().create_page_table(
+            paged_config=paged_config,
+            mesh_device=mesh_device,
+            page_table=page_table,
+            batch_size=batch_size_per_row,
+            identity=identity,
+        )
+
+    @classmethod
     def create_state(
         cls,
         hf_config: PretrainedConfig,

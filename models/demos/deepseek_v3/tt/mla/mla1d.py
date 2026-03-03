@@ -1237,6 +1237,7 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         page_table: torch.Tensor | None = None,
         batch_size: int = USERS_PER_ROW,
+        identity: bool = False,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -1254,13 +1255,18 @@ class MLA1D(AbstractModule):
         Returns:
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
+        max_num_blocks = paged_config.max_num_blocks
+        _, dp_factor = mesh_device.shape
+        batch_per_shard = even_int_div(batch_size, dp_factor)
+        blocks_per_user = even_int_div(max_num_blocks, batch_per_shard)
         if page_table is None:
-            max_num_blocks = paged_config.max_num_blocks
-            _, dp_factor = mesh_device.shape
-            batch_per_shard = even_int_div(batch_size, dp_factor)
-
-            page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
-            page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+            if identity:
+                # Identity mapping: user u gets contiguous blocks [u*blocks_per_user, (u+1)*blocks_per_user)
+                page_table = torch.arange(max_num_blocks, dtype=torch.int32)
+            else:
+                # Randperm not necessary, but more rigorous
+                page_table = torch.randperm(max_num_blocks, dtype=torch.int32)
+            page_table = page_table.reshape(batch_per_shard, blocks_per_user)
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(

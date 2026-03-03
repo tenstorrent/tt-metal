@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 from glob import glob
 from pathlib import Path
 
+import numpy as np
+import torch
 from loguru import logger
 
 import ttnn
@@ -20,6 +23,18 @@ from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 optimal_topology = (
     ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
 )
+
+
+def _get_world_rank() -> tuple[str | None, int]:
+    for key in ("OMPI_COMM_WORLD_RANK", "WORLD_RANK", "RANK", "TT_MESH_HOST_RANK"):
+        value = os.getenv(key)
+        if value is None:
+            continue
+        try:
+            return key, int(value)
+        except ValueError:
+            continue
+    return None, 0
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -70,6 +85,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Optional JSONL path to append partial results as each user hits EOS. Useful for partial eval if a run hangs.",
     )
     p.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=0,
+        help="Optional token interval for writing a full-state checkpoint file (requires --checkpoint-jsonl).",
+    )
+    p.add_argument(
         "--model-path",
         type=str,
         required=True,
@@ -97,6 +118,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--sampling-top-k",
         type=int,
         help="Top-k cutoff. Default when --sampling is enabled: 0 (disabled).",
+    )
+    p.add_argument(
+        "--sampling-seed",
+        type=int,
+        help="Optional RNG seed for sampling reproducibility (enables deterministic algorithms).",
     )
     p.add_argument(
         "--stop-at-eos",
@@ -182,6 +208,18 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
+    )
+    p.add_argument(
+        "--kv-cache-debug",
+        action="store_true",
+        default=False,
+        help="Enable host-side KV cache integrity checks (expensive).",
+    )
+    p.add_argument(
+        "--kv-cache-debug-identity-page-table",
+        action="store_true",
+        default=False,
+        help="Force identity page table for KV cache debug (recommended with --kv-cache-debug).",
     )
     return p
 
@@ -305,8 +343,10 @@ def run_demo(
     sampling_temperature: float | None = None,
     sampling_top_p: float | None = None,
     sampling_top_k: int | None = None,
+    sampling_seed: int | None = None,
     stop_at_eos: bool = True,
     checkpoint_jsonl: str | Path | None = None,
+    checkpoint_interval: int = 0,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -375,6 +415,14 @@ def run_demo(
             raise SystemExit(
                 "--single-layer=moe not supported by Model1D-based demo. Use --single-layer=mlp or drop --random-weights."
             )
+
+        if sampling_seed is not None:
+            sampling_seed = int(sampling_seed)
+            random.seed(sampling_seed)
+            np.random.seed(sampling_seed)
+            torch.manual_seed(sampling_seed)
+            torch.use_deterministic_algorithms(True)
+            logger.warning("Sampling seed set to {} (deterministic algorithms enabled).", sampling_seed)
 
         token_acc = None
         if token_accuracy:
@@ -459,7 +507,65 @@ def run_demo(
         checkpoint_fh = None
         checkpoint_written: set[int] = set()
         checkpoint_path = Path(checkpoint_jsonl) if checkpoint_jsonl else None
-        if checkpoint_path is not None:
+        checkpoint_interval = int(checkpoint_interval)
+        if checkpoint_interval < 0:
+            raise SystemExit("--checkpoint-interval must be >= 0.")
+        rank_key, world_rank = _get_world_rank()
+        if world_rank != 0:
+            if checkpoint_path is not None or checkpoint_interval > 0:
+                logger.info(
+                    "Checkpointing disabled on non-zero rank ({}={}).",
+                    rank_key or "RANK",
+                    world_rank,
+                )
+            checkpoint_path = None
+            checkpoint_interval = 0
+        if checkpoint_interval > 0 and checkpoint_path is None:
+            raise SystemExit("--checkpoint-interval requires --checkpoint-jsonl.")
+
+        def _write_checkpoint_state(
+            generations: list[list[int]],
+            finished: list[bool] | None,
+            event: str | None,
+        ) -> None:
+            assert checkpoint_path is not None
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                for i, token_ids in enumerate(generations):
+                    text = None
+                    if gen.tokenizer is not None:
+                        text = gen.tokenizer.decode(token_ids, skip_special_tokens=True)
+                    record = {
+                        "index": i + 1,
+                        "prompt": prompt_list[i] if i < len(prompt_list) else "",
+                        "text": text,
+                        "tokens": len(token_ids),
+                    }
+                    if finished is not None:
+                        record["finished"] = bool(finished[i])
+                    if event:
+                        record["event"] = event
+                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, checkpoint_path)
+
+        on_partial_state = None
+        last_finished: list[bool] | None = None
+        if checkpoint_interval > 0:
+
+            def _checkpoint_state(
+                generations: list[list[int]],
+                finished: list[bool] | None,
+                generated_tokens: int,
+            ) -> None:
+                nonlocal last_finished
+                last_finished = finished[:] if finished is not None else None
+                _write_checkpoint_state(generations, finished, event="partial")
+
+            on_partial_state = _checkpoint_state
+        elif checkpoint_path is not None:
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             checkpoint_fh = open(checkpoint_path, "w", encoding="utf-8")
 
@@ -489,6 +595,8 @@ def run_demo(
             pre_tokenized=pre_tokenized_prompts,
             stop_at_eos=stop_at_eos,
             on_user_finished=_checkpoint_user if checkpoint_fh is not None else None,
+            on_partial_state=on_partial_state,
+            partial_interval=checkpoint_interval,
         )
 
         # Process all generations
@@ -512,7 +620,9 @@ def run_demo(
             results.append(result)
 
         # If checkpointing is enabled, write any users that never hit EOS.
-        if checkpoint_fh is not None:
+        if checkpoint_interval > 0 and checkpoint_path is not None:
+            _write_checkpoint_state(generations, last_finished, event="final")
+        elif checkpoint_fh is not None:
             for i, result in enumerate(results):
                 if i in checkpoint_written:
                     continue
@@ -548,6 +658,14 @@ def run_demo(
 
 def main() -> None:
     args = create_parser().parse_args()
+
+    if args.kv_cache_debug_identity_page_table:
+        os.environ["DEEPSEEK_KV_CACHE_IDENTITY_PAGE_TABLE"] = "1"
+        os.environ["DEEPSEEK_KV_CACHE_CHECK"] = "1"
+        logger.warning("KVDBG: identity page table enabled via CLI.")
+    elif args.kv_cache_debug:
+        os.environ["DEEPSEEK_KV_CACHE_CHECK"] = "1"
+        logger.warning("KVDBG: KV cache checks enabled via CLI.")
 
     # Load prompts from JSON file if provided
     prompts_file_path = None
@@ -586,8 +704,10 @@ def main() -> None:
         sampling_temperature=args.sampling_temperature,
         sampling_top_p=args.sampling_top_p,
         sampling_top_k=args.sampling_top_k,
+        sampling_seed=args.sampling_seed,
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
+        checkpoint_interval=args.checkpoint_interval,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
