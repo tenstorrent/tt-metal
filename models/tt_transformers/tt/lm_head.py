@@ -40,7 +40,9 @@ class LMHead(LightweightModule):
         # 2. size_per_device is also tile-aligned after dividing by num_devices
         # This ensures TILE concat doesn't have padding in the middle
         tile_size = 32
-        self.padded_vocab_size = math.ceil(self.padded_vocab_size / (tile_size)) * (tile_size)
+        self.padded_vocab_size = math.ceil(self.padded_vocab_size / (tile_size * self.num_devices)) * (
+            tile_size * self.num_devices
+        )
         size_per_device = self.padded_vocab_size // self.num_devices
 
         max_columns_per_device_ring_mm = math.ceil((max_columns_per_device) / tile_size) * tile_size
