@@ -88,6 +88,7 @@ fi
 
 # --- Setup results directory ---
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+TIMESTAMP_SHORT="$(date +%m%d_%H%M)"
 BRANCH_SLUG="$(echo "$BRANCH" | tr '/' '_')"
 RESULTS_DIR="${BASE_DIR}/eval_results/${BRANCH_SLUG}_${TIMESTAMP}"
 mkdir -p "$RESULTS_DIR"
@@ -109,7 +110,9 @@ run_single() {
     local run_id="$2"
     local prompt_name
     prompt_name="$(basename "$prompt_file" .txt)"
-    local run_tag="${BRANCH_SLUG}_${TIMESTAMP}_${prompt_name}_run${run_id}_$$_${RANDOM}"
+    local short_hash
+    short_hash="$(printf '%04x' $(( ($$*31 + RANDOM) % 65536 )) )"
+    local run_tag="${prompt_name}_r${run_id}_${TIMESTAMP_SHORT}_${short_hash}"
     local clone_dir="${BASE_DIR}/eval_${run_tag}/tt-metal"
     local log_dir="${RESULTS_DIR}/${prompt_name}/run_${run_id}"
     mkdir -p "$log_dir"
@@ -122,7 +125,7 @@ run_single() {
     echo "[${prompt_name}:${run_id}] Starting..."
 
     # 1. Clone and create a unique branch from the source branch
-    local run_branch="eval/${prompt_name}_run${run_id}_${TIMESTAMP}"
+    local run_branch="eval/${prompt_name}_r${run_id}_${TIMESTAMP_SHORT}"
     echo "[${prompt_name}:${run_id}] Cloning ${BRANCH} -> ${run_branch}"
     git clone --branch "$BRANCH" "$REPO_URL" "$clone_dir" \
         > "${log_dir}/clone.log" 2>&1
