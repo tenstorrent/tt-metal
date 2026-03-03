@@ -104,13 +104,13 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 (1xP150)", "runner-label": "P150", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
-            {"name": "P150 (1xP150)", "runner-label": "P150", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
-            {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
-            {"name": "DeskBox (2xP150)", "runner-label": "BH-DeskBox", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
-            {"name": "LoudBox (8xP150)", "runner-label": "BH-LoudBox", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
-            {"name": "P300 (1xP300)", "runner-label": "P300-viommu", "weights-cache-mode": "lfc", "num_devices": 2, "sku": "bh_p300"},
-            {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
+            {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
+            {"name": "P150 (1xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
+            {"name": "Quietbox (4xP150)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
+            {"name": "DeskBox (2xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
+            {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
+            {"name": "P300 (1xP300)", "weights-cache-mode": "lfc", "num_devices": 2, "sku": "bh_p300"},
+            {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="${{ inputs.system-type || 'all' }}"
