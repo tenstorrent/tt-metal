@@ -99,7 +99,7 @@ class Conv1x1(Module):
         """
         # Convert to tile layout for efficient computation
         x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(x_NTHWC)
+        del x_NTHWC
 
         # Apply linear transformation
         x_tile_NTHWO = ttnn.linear(
