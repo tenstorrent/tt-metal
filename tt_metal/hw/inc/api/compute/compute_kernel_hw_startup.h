@@ -71,4 +71,48 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
 #endif  // TODO: AM; add Quasar implementation
 }
 
+// clang-format off
+/**
+ * Enables FP32 accumulation in the destination register (ALU and SFPU).
+ *
+ * This is a lightweight, standalone reconfiguration that only toggles the
+ * ALU_ACC_CTRL Fp32_enabled and SFPU_Fp32_enabled bits. It does not touch
+ * any unpacker or packer configuration, making it safe to call mid-kernel
+ * without re-running compute_kernel_hw_startup.
+ *
+ * Must be paired with math_disable_fp32_dest_acc() when switching back to
+ * BF16 accumulation mode within the same kernel.
+ *
+ * Only available on Wormhole and Blackhole (no-op on Quasar).
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void math_enable_fp32_dest_acc() {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_set_fp32_dest_acc(true)));
+#endif
+}
+
+// clang-format off
+/**
+ * Disables FP32 accumulation in the destination register (ALU and SFPU),
+ * reverting to BF16 accumulation mode.
+ *
+ * This is a lightweight, standalone reconfiguration that only toggles the
+ * ALU_ACC_CTRL Fp32_enabled and SFPU_Fp32_enabled bits. It does not touch
+ * any unpacker or packer configuration, making it safe to call mid-kernel
+ * without re-running compute_kernel_hw_startup.
+ *
+ * Only available on Wormhole and Blackhole (no-op on Quasar).
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void math_disable_fp32_dest_acc() {
+#ifndef ARCH_QUASAR
+    MATH((llk_math_set_fp32_dest_acc(false)));
+#endif
+}
+
 }  // namespace ckernel
