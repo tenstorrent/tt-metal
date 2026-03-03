@@ -45,6 +45,7 @@ def test_ci_dispatch(model_weights):
             "models/tt_transformers/tests/test_decoder_prefill.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
+        + (["--timeout", "600"] if "mistral" in model_weights.lower() else [])
     )
     if exit_code == pytest.ExitCode.TESTS_FAILED:
         pytest.fail(

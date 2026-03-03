@@ -175,7 +175,12 @@ def run(args, context) -> InspectorData:
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
     if not os.path.exists(log_directory):
-        raise ValueError(f"Log directory {log_directory} does not exist. Please provide a valid path.")
+        raise ValueError(
+            f"\n\tLog directory {log_directory} does not exist."
+            f"\n\tMetal runtime is not running. Do not kill host process, but open triage in parallel."
+            f"\n\tIf you have generated inspector logs, you can load them with --inspector-log-path"
+            f"\n\tor defining TT_METAL_LOGS_PATH environment variable."
+        )
 
     # Try to load serialized RPC data
     try:

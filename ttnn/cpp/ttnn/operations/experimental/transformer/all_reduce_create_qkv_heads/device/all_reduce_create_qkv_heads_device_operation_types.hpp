@@ -8,8 +8,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt_stl/reflection.hpp>
-
 #include <cstdint>
 #include <optional>
 #include <vector>

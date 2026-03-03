@@ -23,6 +23,7 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/hw_thread.h"
 #include "dev_mem_map.h"
 #include "noc_overlay_parameters.h"
 
@@ -429,6 +430,7 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+
             uint32_t enables = launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables &
@@ -437,7 +439,7 @@ int main() {
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
+                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, internal_::get_hw_thread_idx());
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -480,6 +482,14 @@ int main() {
             if (enables & (1u << index)) {
                 // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
                 // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_CB_SANITIZE)
+                // Zero all CB interfaces so stale entries from previous programs
+                // don't cause false positives in the CB sanitize check.
+                for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+                    get_local_cb_interface(i).fifo_size = 0;
+                }
+#endif
                 uint64_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
                 uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
                 setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);

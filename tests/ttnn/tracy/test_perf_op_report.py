@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import pandas as pd
 
@@ -281,6 +283,41 @@ class TestOpSupportCount:
         assert (
             actual_count == expected_count
         ), f"Expected to detect {expected_count} ops, but detected {actual_count} ops"
+
+
+slow_dispatch_test = {
+    "name": "SlowDispatch",
+    "command": "pytest tests/ttnn/tracy/test_profiler_sync.py::test_with_ops",
+}
+
+
+@pytest.fixture(scope="class")
+def run_slow_dispatch_test(request):
+    assert "command" in request.param, "Bad test setup, command not found in test setup dict"
+    assert "name" in request.param, "Bad test setup, name not found in test setup dict"
+    prev_value = os.environ.get("TT_METAL_SLOW_DISPATCH_MODE")
+    os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+    try:
+        run_device_profiler(request.param["command"], request.param["name"])
+    finally:
+        if prev_value is None:
+            os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        else:
+            os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = prev_value
+    return request.param
+
+
+@pytest.mark.parametrize(
+    "run_slow_dispatch_test",
+    [pytest.param(slow_dispatch_test, id=slow_dispatch_test["name"])],
+    indirect=True,
+)
+class TestSlowDispatch:
+    def test_slow_dispatch_profiling(self, run_slow_dispatch_test):
+        name = run_slow_dispatch_test["name"]
+        filename = get_latest_ops_log_filename(name)
+        df = pd.read_csv(filename)
+        assert len(df) > 0, "Expected at least one op in the slow dispatch profiler output"
 
 
 op_support_count_with_sum_profiling_enabled_test = {
