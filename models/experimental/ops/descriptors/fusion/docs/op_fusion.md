@@ -98,8 +98,9 @@ The rest of this document provides implementation details for the various compon
 Sequential fusion combines multiple operations into a single fused kernel that
 runs as one program dispatch. Instead of launching each op as a separate
 host-to-device round-trip, all ops execute back-to-back within a single
-long-running kernel on each core. Intermediate results stay in L1 circular
-buffers (CBs) -- no DRAM round-trips between fused phases.
+long-running kernel on each core. Each phase runs independently — it reads its
+own input tensors and writes its own output tensors, with CB state fully reset
+between phases.
 
 The fusion tree is a standard tree of `OpNode` objects. Each node holds one
 operation (`OpDescriptor`). Parent-to-child edges encode sequential ordering
@@ -232,17 +233,21 @@ mis-compilation or a device hang.
    will read the wrong phase's arguments.  The same applies to common
    runtime args (`get_common_arg_val` / `get_common_arg_addr`).
 
-4. **All phases must use the same `fp32_dest_acc_en` setting.**
-   `DST_ACCUM_MODE` is a compile-time constant generated once per kernel
-   binary.  Mixing fp32 and fp16 destination accumulation modes across
-   phases is impossible — the builder validates this and raises an error
-   on mismatch.
+4. **All phases must use the same compute config.**
+   `fp32_dest_acc_en`, `math_approx_mode`, `math_fidelity`,
+   `dst_full_sync_en`, and `bfp8_pack_precise` are compile-time constants
+   generated once per kernel binary — they cannot change between phases.
+   The builder validates that all five fields match across phases and
+   raises an error on any mismatch.  Pass an explicit
+   compute config to every op descriptor to ensure
+   consistency (defaults differ by op type).
 
-5. **Rectangular core grids only.**  The fusion system partitions cores
-   into groups by `(op_id, kernel_variant_key)` tuples and builds each
-   group independently.  Non-rectangular core grids (L-shapes, sparse
-   selections) break the column/row-based grouping logic.  The builder
-   validates grid rectangularity and raises an error otherwise.
+5. **Each op's core range must be expressible as a `CoreRangeSet`.**
+   Non-contiguous grids (e.g., rows 0-1 + row 3 + row 5, skipping rows
+   2 and 4) are supported — topology validation, barrier release, and CB
+   allocation all operate on coordinate sets, not rectangular bounding
+   boxes.  The barrier coordinator unicasts the release signal to each
+   core individually, so gaps in the grid are handled naturally.
 
 
 ## Representing Fused Op Structure
@@ -306,23 +311,25 @@ just a tree with branching factor 1.
 
 ### Topology Rules
 
-- **Fan-out only**: The tree can only diverge, never reconverge. Once
-  execution splits into parallel branches, those branches run independently
-  to completion. There is no way to merge branches back into a single
-  stream. `_resolve()` enforces this — items after a `Parallel` in a
-  `Sequential` raise an error at build time. Example of what's prohibited:
+- **No items after a `Parallel`**: Once a `Sequential` diverges via
+  `Parallel`, no further items can follow in that `Sequential`.
+  `_resolve()` enforces this — items after a `Parallel` raise an error
+  at build time:
 
   ```python
-  # ERROR: RMS follows a Parallel — this would require merging branches
+  # ERROR: RMS follows a Parallel
   Sequential(LN, Parallel(GeLU_A, GeLU_B), RMS)
+  # OK: place the trailing op inside each branch instead
+  Sequential(LN, Parallel(Sequential(GeLU_A, RMS), Sequential(GeLU_B, RMS)))
   ```
 
-  This restriction follows from a core invariant: **no data moves between
-  cores between phases**.  A phase's output CB is on the same core as the
-  next phase's input CB.  The entire stack — CB pool allocator, barrier,
-  codegen, argument concatenation — relies on this.  Fan-in would require
-  cross-core data redistribution between phases, which none of these layers
-  support today.
+  This is an implementation constraint, not a fundamental one.  Since
+  each phase independently reads its own input tensors (no inter-phase
+  dataflow), reconvergence is conceptually possible — it would just
+  require changing the graph from a tree to a DAG and updating core
+  group computation and barrier generation to handle it.  The current
+  `_resolve()` builds a tree, so a post-`Parallel` node would need two
+  parents, which trees don't support.
 - **Sibling disjointness**: Children of the same parent must have
   non-overlapping core ranges. Each core runs exactly one kernel binary.
 - **Widening and narrowing allowed**: A child's core range can be a subset
@@ -503,11 +510,11 @@ binary.
 
 Each group's fused kernel binary contains three RISC-specific source files:
 
-- **RISCV_0 (Reader/BRISC)**: Reads data from DRAM/L1 into input CBs.
+- **RISCV_1 (Reader/NCRISC)**: Reads data from DRAM/L1 into input CBs.
   Coordinates all inter-phase barrier logic (CB reset, rebind, cross-core
   sync).
 - **Compute (TRISC)**: Processes tiles from input CBs, writes to output CBs.
-- **RISCV_1 (Writer/NCRISC)**: Writes output CB data to DRAM/L1.
+- **RISCV_0 (Writer/BRISC)**: Writes output CB data to DRAM/L1.
 
 All three run concurrently on each core. Each contains all phases for the
 group, with barrier synchronization between phases:
@@ -598,6 +605,7 @@ class MultiBarrierSpec:
     segments: List[BarrierSegment]       # ordered segment list for this kernel
     compute_done_addr: int               # shared GlobalSemaphore L1 address
     writer_done_addr: int                # shared GlobalSemaphore L1 address
+    reset_done_addr: int                 # shared GlobalSemaphore L1 address
     transition_map: Dict[int, Tuple[int, int]]  # transition_idx → (seg_idx, call_idx)
     _sem_refs: List[Any]                 # prevent GC of GlobalSemaphore objects
 ```
@@ -641,9 +649,9 @@ namespace barrier {
     namespace local {
         void sync() {
             done++;
-            // BRISC: drain NOC, wait followers, reset op sems, reset_cbs, rebind
-            // Followers: signal done, wait for BRISC reset_done
-            *reset_done = done;  // BRISC only
+            // NCRISC (coordinator): drain NOC, wait followers, reset op sems, reset_cbs, rebind
+            // Followers: signal done, wait for coordinator reset_done
+            *reset_done = done;  // coordinator only
         }
     }
     namespace group {
@@ -707,8 +715,8 @@ converge on a single barrier despite running two different kernel binaries.
 
 Phase synchronization uses a two-level protocol:
 
-1. **Local RISC sync** (per-core, L1 flags): Reader waits for compute and
-   writer to finish the current phase before resetting CBs.
+1. **Local RISC sync** (per-core, L1 flags): Coordinator (NCRISC/Reader) waits
+   for compute and writer to finish the current phase before resetting CBs.
 2. **Cross-core NOC barrier** (across cores, GlobalSemaphore): All cores in the
    barrier scope must complete before any core proceeds to the next phase.
 
@@ -721,15 +729,16 @@ State variables live at `namespace barrier` scope, accessible by both
 ```c++
 namespace barrier {
     uint32_t done;                                  // monotonic counter, incremented each transition
-    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore) — BRISC + compute
-    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore) — BRISC + writer
+    volatile tt_l1_ptr uint32_t* compute_done;      // L1 ptr (GlobalSemaphore) — coordinator + compute
+    volatile tt_l1_ptr uint32_t* writer_done;       // L1 ptr (GlobalSemaphore) — coordinator + writer
     volatile tt_l1_ptr uint32_t* reset_done;        // L1 ptr (GlobalSemaphore) — all RISCs
     ...
 }
 ```
 
-**BRISC `local::sync()`** — drain NOC, wait followers, reset op sems + CBs,
-rebind, then signal `*reset_done = done` so followers know it's safe to proceed:
+**NCRISC `local::sync()` (coordinator)** — drain NOC, wait followers, reset op
+sems + CBs, rebind, then signal `*reset_done = done` so followers know it's
+safe to proceed:
 
 ```c++
 namespace local {
@@ -745,7 +754,7 @@ namespace local {
 }
 ```
 
-**BRISC `group::sync()`** — per-transition cross-core segment barrier:
+**NCRISC `group::sync()` (coordinator)** — per-transition cross-core segment barrier:
 
 ```c++
 namespace group {
@@ -756,14 +765,14 @@ namespace group {
 }
 ```
 
-**Compute `local::sync()`** — signal `compute_done`, wait for BRISC reset:
+**Compute `local::sync()`** — signal `compute_done`, wait for coordinator reset:
 
 ```c++
 namespace local {
     void sync() {
         done++;
-        *compute_done = done;                       // signal BRISC
-        while (*reset_done < done) {}               // wait for BRISC to finish reset
+        *compute_done = done;                       // signal coordinator
+        while (*reset_done < done) {}               // wait for coordinator to finish reset
     }
 }
 ```
@@ -784,7 +793,7 @@ namespace group {
 }
 ```
 
-**Writer (NCRISC)** — same structure as compute, but drains NOC writes
+**Writer (BRISC)** — same structure as compute, but drains NOC writes
 before signaling `writer_done`:
 
 ```c++
@@ -792,8 +801,8 @@ namespace local {
     void sync() {
         done++;
         noc_async_write_barrier();                  // drain outstanding writes first
-        *writer_done = done;                        // signal BRISC
-        while (*reset_done < done) {}               // wait for BRISC to finish reset
+        *writer_done = done;                        // signal coordinator
+        while (*reset_done < done) {}               // wait for coordinator to finish reset
     }
 }
 ```
@@ -805,8 +814,8 @@ void sync() { local::sync(); group::sync(); }
 ```
 
 The `reset_done` semaphore is critical for correctness: without it, a fast
-follower can start the next phase's NOC multicast while a slow core's BRISC
-hasn't finished resetting op semaphores, clobbering in-flight
+follower can start the next phase's NOC multicast while a slow core's
+coordinator hasn't finished resetting op semaphores, clobbering in-flight
 `noc_semaphore_inc` operations.
 
 ### Cross-Core NOC Barrier
@@ -828,7 +837,7 @@ phase (N atomic increments serialized at core 0) and spin-wait polling.
 Measured barrier latency is ~1.5 us regardless of release method.
 
 ```c++
-// barrier::segment_N — BRISC side (coordinator)
+// barrier::segment_N — NCRISC side (coordinator)
 namespace segment_N {
     uint32_t call_count;
     volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
@@ -1578,19 +1587,20 @@ After each phase, all CB state must be reset to empty before the next phase can
 use them. This is complex because four RISC processors independently track CB
 state:
 
-| RISC | Tracks | Reset Action |
-|------|--------|-------------|
-| BRISC | `tiles_acked`, `tiles_received` (via stream registers), `fifo_rd_ptr`, `fifo_wr_ptr` | Direct-assign `acked = received` (guarded by `if received != acked`), reset pointers to CB start |
-| TRISC0 (unpack) | `tiles_acked` (local copy), `fifo_rd_ptr` | Sync from stream register via `reg_read`, reset pointer |
-| TRISC2 (pack) | `tiles_received` (local copy), `fifo_wr_ptr`, `fifo_wr_tile_ptr` | Sync from stream register via `reg_read`, reset pointer and tile pointer |
-| NCRISC | `fifo_rd_ptr`, `fifo_wr_ptr` | Reset pointers to CB start |
+| RISC | Role | Tracks | Reset Action |
+|------|------|--------|-------------|
+| NCRISC (riscv_1) | Coordinator | `tiles_acked`, `tiles_received` (via stream registers), `fifo_rd_ptr`, `fifo_wr_ptr` | Direct-assign `acked = received` (guarded by `if received != acked`), reset pointers to CB start |
+| TRISC0 (unpack) | Follower | `tiles_acked` (local copy), `fifo_rd_ptr` | Sync from stream register via `reg_read`, reset pointer |
+| TRISC2 (pack) | Follower | `tiles_received` (local copy), `fifo_wr_ptr`, `fifo_wr_tile_ptr` | Sync from stream register via `reg_read`, reset pointer and tile pointer |
+| BRISC (riscv_0) | Follower | `fifo_rd_ptr`, `fifo_wr_ptr` | Reset pointers to CB start |
 
-**Ordering**: BRISC reset runs first (equalizes stream registers and resets
-FIFO pointers). Then the cross-core barrier fires. After the barrier, compute
-and writer resync their local copies from the (now-equalized) stream registers.
+**Ordering**: Coordinator (NCRISC) reset runs first (equalizes stream registers
+and resets FIFO pointers). Then the cross-core barrier fires. After the barrier,
+compute and writer resync their local copies from the (now-equalized) stream
+registers.
 
-**Stream register writes**: BRISC equalizes by directly assigning `*acked_ptr =
-received`. The write is guarded by `if (received != acked)` — writing the same
+**Stream register writes**: The coordinator equalizes by directly assigning
+`*acked_ptr = received`. The write is guarded by `if (received != acked)` — writing the same
 value back to a stream register (a no-op write) causes hardware side-effects
 that hang the device. Only `acked` is written toward `received` (not the
 reverse), because after a completed phase the consumer has acked all tiles the
@@ -1615,20 +1625,20 @@ after CB state reset/resync, so it overwrites the pointers that reset just
 set to the old CB start. The per-RISC ordering across `barrier::local::sync()`
 and `barrier::group::sync()` is:
 
-| Step | BRISC `local::sync()` | Follower `local::sync()` |
-|------|-----------------------|--------------------------|
+| Step | Coordinator (NCRISC) `local::sync()` | Follower `local::sync()` |
+|------|--------------------------------------|--------------------------|
 | 1 | `reset_cbs()` — equalize stream registers, reset FIFO ptrs | signal `*done_signal = done` |
 | 2 | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address | wait `*reset_done >= done` |
 | 3 | `*reset_done = done` — signal followers | *(proceed to `group::sync()`)* |
 
-| Step | BRISC `group::sync()` | Follower `group::sync()` |
-|------|-----------------------|--------------------------|
+| Step | Coordinator (NCRISC) `group::sync()` | Follower `group::sync()` |
+|------|--------------------------------------|--------------------------|
 | 1 | `seg_N::sync()` — cross-core barrier | `seg_N::sync()` — wait for cross-core barrier |
 | 2 | *(done)* | `resync_cbs()` — sync local copies from stream registers |
 | 3 | *(done)* | `rebind_cbs()` — overwrite FIFO ptrs with new L1 address |
 
-BRISC prepares everything (reset + rebind) in `local::sync()` before signaling
-`reset_done`. Followers wait for `reset_done`, then cross-core sync in
+The coordinator prepares everything (reset + rebind) in `local::sync()` before
+signaling `reset_done`. Followers wait for `reset_done`, then cross-core sync in
 `group::sync()`, resync their local CB state, and rebind.
 On compute, rebinding is guarded by `#ifndef TRISC_MATH` — only TRISC0
 (unpack) and TRISC2 (pack) access CB memory; TRISC1 (math) does not.
@@ -1771,13 +1781,16 @@ namespace phase_1 {
 Each phase's runtime args are concatenated per-core into a single flat array.
 Redirecting uses a **wrapper function + `#define`** pattern:
 
-**Step 1**: Wrapper emitted at file scope (before any `#define` redirect is
-active), so its body references the real `get_arg_val`:
+**Step 1**: Wrappers emitted at file scope (before any `#define` redirect is
+active), so their bodies reference the real `get_arg_val` / `get_arg_addr`:
 
 ```c++
 template <typename T>
 FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 5);
+}
+FORCE_INLINE uint32_t phase_1_get_arg_addr(int arg_idx) {
+    return get_arg_addr(arg_idx + 5);
 }
 ```
 
@@ -1785,17 +1798,27 @@ FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
 
 ```c++
 #define get_arg_val phase_1_get_arg_val
+#define get_arg_addr phase_1_get_arg_addr
 namespace phase_1 {
     // get_arg_val<uint32_t>(0)  →  phase_1_get_arg_val<uint32_t>(0)
     //                           →  reads arg[5]
+    // get_arg_addr(3)           →  phase_1_get_arg_addr(3)
+    //                           →  returns L1 pointer to arg[8]
 }
 #undef get_arg_val
+#undef get_arg_addr
 ```
 
-This catches ALL `get_arg_val` calls in scope — helper functions, inlined
-header code, variable indices like `get_arg_val<uint32_t>(idx++)`, and macro
-expansions. The wrapper is `FORCE_INLINE` with a constant offset, so it
-compiles to a single add-immediate instruction.
+This catches ALL `get_arg_val` / `get_arg_addr` calls in scope — helper
+functions, inlined header code, variable indices like
+`get_arg_val<uint32_t>(idx++)`, and macro expansions. The wrappers are
+`FORCE_INLINE` with a constant offset, so they compile to a single
+add-immediate instruction.
+
+`get_arg_addr` is critical for kernels that use `get_arg_addr(N)` to obtain
+L1 pointers into the runtime arg array (e.g., LayerNorm's NOC coordinate
+arrays).  Without the redirect, a later phase's `get_arg_addr(N)` would
+return a pointer into phase 0's arg slice.
 
 ALL phases get wrappers (including phase 0) for uniform treatment.
 
@@ -1850,13 +1873,22 @@ template <typename T>
 FORCE_INLINE T phase_0_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 0);
 }
+FORCE_INLINE uint32_t phase_0_get_arg_addr(int arg_idx) {
+    return get_arg_addr(arg_idx + 0);
+}
 template <typename T>
 FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 5);
 }
+FORCE_INLINE uint32_t phase_1_get_arg_addr(int arg_idx) {
+    return get_arg_addr(arg_idx + 5);
+}
 template <typename T>
 FORCE_INLINE T phase_2_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 11);
+}
+FORCE_INLINE uint32_t phase_2_get_arg_addr(int arg_idx) {
+    return get_arg_addr(arg_idx + 11);
 }
 
 
@@ -1868,6 +1900,7 @@ FORCE_INLINE T phase_2_get_arg_val(int arg_idx) {
 // ============ Phase 0: LayerNorm ============
 #define SOME_FLAG 1                              // varying define
 #define get_arg_val phase_0_get_arg_val          // RT arg redirect
+#define get_arg_addr phase_0_get_arg_addr
 namespace phase_0 {
 
 // (entire original source, minus #include lines, with kernel_main → run)
@@ -1886,10 +1919,12 @@ __attribute__((noinline)) void run() {
 
 } // namespace phase_0
 #undef get_arg_val
+#undef get_arg_addr
 #undef SOME_FLAG
 
 // ============ Phase 1: Slice ============
 #define get_arg_val phase_1_get_arg_val
+#define get_arg_addr phase_1_get_arg_addr
 #define get_named_compile_time_arg_val(name) \
     get_named_ct_arg("phase_1_" name)
 namespace phase_1 {
@@ -1903,6 +1938,7 @@ __attribute__((noinline)) void run() {
 } // namespace phase_1
 #undef get_named_compile_time_arg_val
 #undef get_arg_val
+#undef get_arg_addr
 
 // ============ Phase 2: Matmul ============
 // (same pattern)
@@ -1976,8 +2012,8 @@ constexpr std::array<uint32_t, 2> phase_1_cbs = {2, 4};
 
 // State variables (done counter, semaphore pointers)
 uint32_t done;
-volatile tt_l1_ptr uint32_t* compute_done;  // BRISC + compute
-volatile tt_l1_ptr uint32_t* writer_done;   // BRISC + writer
+volatile tt_l1_ptr uint32_t* compute_done;  // coordinator + compute
+volatile tt_l1_ptr uint32_t* writer_done;   // coordinator + writer
 volatile tt_l1_ptr uint32_t* reset_done;    // all RISCs
 
 // namespace local { void sync(); }   — per-core phase sync
@@ -2013,8 +2049,8 @@ namespace are:
   See **CB Pool Allocator — CB Address Rebinding** for the concept.
 - **`init()`**: Called once at the top of `kernel_main()`. Reads semaphore
   L1 addresses from runtime args. Each RISC resets only **its own**
-  semaphore — BRISC does NOT reset `compute_done` or `writer_done` because
-  a fast compute/writer could signal before BRISC's init runs.
+  semaphore — the coordinator does NOT reset `compute_done` or `writer_done`
+  because a fast compute/writer could signal before the coordinator's init runs.
 
 
 ### Code Generation Pipeline Summary
@@ -2085,17 +2121,18 @@ After phase concatenation, two suffixes are appended uniformly to every core:
 **Barrier suffix.**  The L1 addresses of the phase-sync semaphores, selected
 by RISC type:
 
-| RISC     | Barrier args appended                                 |
-|----------|-------------------------------------------------------|
-| riscv_0  | `[compute_done, writer_done]` + per-segment `[arrive, release]` |
-| riscv_1  | `[writer_done]` + per-segment `[release]`             |
-| compute  | `[compute_done]` + per-segment `[release]`            |
+| RISC     | Role        | Barrier args appended                                                     |
+|----------|-------------|---------------------------------------------------------------------------|
+| riscv_1  | Coordinator | `[compute_done, writer_done, reset_done]` + per-segment `[arrive, release]` |
+| riscv_0  | Follower    | `[writer_done, reset_done]` + per-segment `[release]`                      |
+| compute  | Follower    | `[compute_done, reset_done]` + per-segment `[release]`                     |
 
-BRISC (riscv_0) is the coordinator — it receives both local semaphore
+NCRISC (riscv_1) is the coordinator — it receives all local semaphore
 addresses plus the full `arrive`/`release` pair for each segment, since it
 runs the unicast release protocol.  Followers only need their own signaling
-semaphore and each segment's `release` address to spin on.  The starting index of the barrier suffix is
-recorded as the named CT arg `barrier_rt_offset`.
+semaphore, `reset_done` to spin on, and each segment's `release` address.
+The starting index of the barrier suffix is recorded as the named CT arg
+`barrier_rt_offset`.
 
 **Rebind suffix.**  For sharded CBs whose L1 buffer addresses change between
 phases, the builder appends `[addr, size]` pairs in sorted phase order.  The
@@ -2246,11 +2283,13 @@ development or when switching between different device configurations.
 
 ## Constraints and Limitations
 
-- **Fan-out only (no reconvergence)**: Once execution splits via `Parallel`,
-  branches cannot merge back. Ops after a `Parallel` inside a `Sequential`
-  are rejected at build time (see [Topology Rules](#topology-rules)).
-- **fp32_dest_acc_en must match across all phases**: `DST_ACCUM_MODE` is a
-  compile-time constant. Cannot change mid-kernel.
+- **No items after a `Parallel`**: Once a `Sequential` diverges via
+  `Parallel`, no further items can follow. This is an implementation
+  constraint (tree, not DAG) — see [Topology Rules](#topology-rules).
+- **Compute config must match across all phases**: `fp32_dest_acc_en`,
+  `math_approx_mode`, `math_fidelity`, `dst_full_sync_en`, and
+  `bfp8_pack_precise` are compile-time constants that cannot change
+  mid-kernel.
 - **32 CB slot limit**: Multi-phase fusion with many phantom CBs may exhaust
   the 32-slot hardware limit.
 - **C++ binding objects cannot be deepcopied**: The save/restore mechanism
