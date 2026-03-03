@@ -168,14 +168,60 @@ In automated mode, proceed directly.
 
 ## Phase 1: Analysis
 
-**Goal**: Deep architectural analysis of reference operations.
+**Goal**: Focused architectural analysis of reference operations, scoped to their role.
 
 Launch `ttnn-operation-analyzer` on EACH reference operation. Run all analyzers **in parallel** (multiple Task calls in a single message).
 
+**CRITICAL: Include role-based focus directives in each analyzer prompt.** The analyzer agent produces exhaustive output by default (~25KB). When used in the pipeline, scope its output to what the architect actually needs for the assigned role. This cuts analysis size by ~50% and keeps the architect's context focused.
+
+### Role-Based Prompting
+
+Include the role and focus sections in each analyzer's prompt:
+
+**input_stage** (e.g., tilize):
 ```
-Task: ttnn-operation-analyzer
-  Input: program factory path
-  Output: {ref_dir}/{ref_name}_analysis.md
+Role: input_stage
+Focus on: reader kernel pattern (how RM sticks are read from DRAM), input CB
+sizing and page format, stick-to-tile batching (how many sticks per CB push),
+work distribution unit and core assignment strategy.
+De-emphasize: writer kernel details, output CB configuration, pipeline
+classification, detailed index calculation internals.
+```
+
+**output_stage** (e.g., untilize):
+```
+Role: output_stage
+Focus on: untilize helper signature and usage, writer kernel pattern (how RM
+sticks are written to DRAM), output CB sizing, stick extraction from tiles.
+De-emphasize: reader kernel details, input CB configuration, compute kernel
+internals.
+```
+
+**compute_core** (e.g., softmax, reduce):
+```
+Role: compute_core
+Focus on: compute kernel structure and all helper calls with exact signatures,
+CB layout for intermediates, multi-pass data reuse patterns (which CBs persist
+across phases and why), scalar/constant CB setup, reduce helper parameters,
+binary op broadcast patterns.
+De-emphasize: reader/writer kernel implementation details (just note what they
+provide/consume), tensor accessor internals, detailed NoC transfer mechanics.
+```
+
+### Prompt Template
+
+```
+Analyze the {operation} program factory.
+
+Program factory path: {path}
+
+Role: {role}
+{focus directive from above}
+
+Save your analysis to: {ref_dir}/{ref_name}_analysis.md
+
+This analysis will be used as a {role} reference for a new {target_op}
+operation that {brief description of what target op does}.
 ```
 
 Wait for ALL analyzers to complete before proceeding.
