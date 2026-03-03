@@ -692,12 +692,12 @@ int main(int argc, char **argv) {
 
     if (optimizer->get_name() == "NoOp") {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (!is_three_tier_training(multihost_config)) {
+    } else if (is_three_tier_training(multihost_config)) {
+        fmt::println("Remote optimizer configured!");
+    } else {
         fmt::print("Optimizer: {}\n", optimizer->get_name());
         // TODO: Replace with print_stats() after #38756 is resolved
         fmt::print("    Learning rate: {}\n", optimizer->get_lr());
-    } else {
-        fmt::println("Remote optimizer configured!");
     }
     auto scheduler = schedule_func(optimizer.get(), training_config.max_steps);
 
