@@ -385,6 +385,12 @@ TEST_CASES = [
     (3, 5, "random", 4, 1, 4, 2),
     # WAN-like: sq9, sk16, 19 K chunks with 8 padded tiles (3 Q chunks for fast iteration)
     (3, 19, "random", 16, 8, 9, 1),
+    # WAN-like: sq7, sk16, 5 K chunks with 6 padded tiles (non-subblock-aligned padding)
+    (3, 5, "random", 16, 6, 7, 1),
+    # Single K-chunk padded (isolates reduced path from SALAD)
+    (1, 1, "random", 16, 8, 7, 1),
+    # Two K-chunks padded (minimal SALAD: 1 standard + 1 reduced)
+    (1, 2, "random", 16, 8, 7, 1),
 ]
 
 TEST_IDS = [
@@ -404,6 +410,9 @@ TEST_IDS = [
     "1q_5k-random-sk8-sbh2",
     "3q_5k-random-sk4-sbh2-pad1",
     "3q_19k-random-sk16-pad8-sq9",
+    "3q_5k-random-sk16-pad6",
+    "1q_1k-random-sk16-pad8",
+    "1q_2k-random-sk16-pad8",
 ]
 
 

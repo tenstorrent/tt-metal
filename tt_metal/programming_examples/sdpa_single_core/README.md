@@ -98,6 +98,7 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 | `1q_5k-random-sk8-sbh2` | 1 | 5 | 4 | 8 | 2 | 0 | `fa_rand` |
 | `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 4 | 2 | 1 | `fa_rand` |
 | `3q_19k-random-sk16-pad8-sq9` | 3 | 19 | 9 | 16 | 1 | 8 | `fa_rand` |
+| `3q_5k-random-sk16-pad6` | 3 | 5 | 7 | 16 | 1 | 6 | `fa_rand` |
 
 ### Padding PCC impact tests
 
