@@ -104,12 +104,7 @@ def _get_xattn_mask(
         cross_attention_masks,
         get_negative_inf_value(cross_attention_masks.dtype),
     )
-    # cross_attention_masks *= full_text_row_masked_out_mask
-    cross_attention_masks = torch.where(
-        full_text_row_masked_out_mask.bool(),
-        cross_attention_masks,
-        torch.full_like(cross_attention_masks, torch.finfo(cross_attention_masks.dtype).min),
-    )
+    cross_attention_masks *= full_text_row_masked_out_mask
     return (
         cross_attention_masks.to(device=text_device, dtype=text_dtype),
         full_text_row_masked_out_mask,
