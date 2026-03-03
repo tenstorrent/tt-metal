@@ -25,13 +25,13 @@ class Hal;
 class MetalContext;
 class DeviceManager;
 
-class MetalliumEnvDescriptor {
+class MetaliumEnvDescriptor {
 public:
-    MetalliumEnvDescriptor() = default;
+    MetaliumEnvDescriptor() = default;
 
-    explicit MetalliumEnvDescriptor(const std::string& mock_cluster_desc_path);
+    explicit MetaliumEnvDescriptor(const std::string& mock_cluster_desc_path);
 
-    explicit MetalliumEnvDescriptor(std::optional<std::string> mock_cluster_desc_path);
+    explicit MetaliumEnvDescriptor(std::optional<std::string> mock_cluster_desc_path);
 
     bool is_mock_device() const { return mock_cluster_desc_path_.has_value(); }
     const std::string& mock_cluster_desc_path() const { return *mock_cluster_desc_path_; }
@@ -40,7 +40,7 @@ protected:
     std::optional<std::string> mock_cluster_desc_path_ = std::nullopt;
 };
 
-class ContextDescriptor : public MetalliumEnvDescriptor {
+class ContextDescriptor : public MetaliumEnvDescriptor {
 public:
     ContextDescriptor(
         int num_cqs = 1,
@@ -57,7 +57,7 @@ public:
         tt::tt_fabric::FabricUDMMode fabric_udm_mode = tt::tt_fabric::FabricUDMMode::DISABLED,
         tt::tt_fabric::FabricManagerMode fabric_manager = tt::tt_fabric::FabricManagerMode::DEFAULT,
         tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{}) :
-        MetalliumEnvDescriptor(
+        MetaliumEnvDescriptor(
             mock_cluster_desc_path.empty() ? std::optional<std::string>(std::nullopt)
                                            : std::optional<std::string>(mock_cluster_desc_path)),
         num_cqs_(num_cqs),
@@ -95,7 +95,7 @@ public:
 protected:
     friend class MetalContext;
     friend class DeviceManager;
-    friend class MetalliumEnv;
+    friend class MetaliumEnv;
 
     // Intended for internal use by MetalContext to pass in HAL/Cluster/RuntimeOptions dependencies for init
     ContextDescriptor(
@@ -115,7 +115,7 @@ protected:
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         const std::string& mock_cluster_desc_path = "") :
-        MetalliumEnvDescriptor(
+        MetaliumEnvDescriptor(
             mock_cluster_desc_path.empty() ? std::optional<std::string>(std::nullopt)
                                            : std::optional<std::string>(mock_cluster_desc_path)),
         hal_(&hal),

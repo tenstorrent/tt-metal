@@ -14,7 +14,7 @@
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/impl/context/context_descriptor.hpp"
-#include "tt_metal/impl/context/metallium_env.hpp"
+#include "tt_metal/impl/context/metalium_env.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
@@ -204,8 +204,8 @@ private:
     // Mutex to protect reinitialization operations (switching between mock and real hardware)
     std::mutex reinitialization_mutex_;
 
-    std::shared_ptr<MetalliumEnvDescriptor> query_descriptor_;
-    tt::tt_metal::MetalliumEnv query_;
+    std::shared_ptr<MetaliumEnvDescriptor> query_descriptor_;
+    tt::tt_metal::MetaliumEnv query_;
 
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;

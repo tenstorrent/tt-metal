@@ -6,10 +6,10 @@
 
 namespace tt::tt_metal {
 
-MetalliumEnvDescriptor::MetalliumEnvDescriptor(const std::string& mock_cluster_desc_path) :
+MetaliumEnvDescriptor::MetaliumEnvDescriptor(const std::string& mock_cluster_desc_path) :
     mock_cluster_desc_path_(
         mock_cluster_desc_path.empty() ? std::nullopt : std::optional<std::string>(mock_cluster_desc_path)) {}
-MetalliumEnvDescriptor::MetalliumEnvDescriptor(std::optional<std::string> mock_cluster_desc_path) :
+MetaliumEnvDescriptor::MetaliumEnvDescriptor(std::optional<std::string> mock_cluster_desc_path) :
     mock_cluster_desc_path_(std::move(mock_cluster_desc_path)) {}
 
 }  // namespace tt::tt_metal

@@ -9,14 +9,14 @@
 
 namespace tt::tt_metal {
 
-class MetalliumEnv {
+class MetaliumEnv {
 public:
-    MetalliumEnv();
-    ~MetalliumEnv();
+    MetaliumEnv();
+    ~MetaliumEnv();
 
-    // Init a MetalliumEnv according to a descriptor. Note: Only one MetalliumEnv representing a physical cluster
+    // Init a MetaliumEnv according to a descriptor. Note: Only one MetaliumEnv representing a physical cluster
     // is allowed due to UMD limitations.
-    void initialize(const std::shared_ptr<MetalliumEnvDescriptor>& descriptor);
+    void initialize(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor);
 
     // Destroy the object. This function may only be called when the object is no longer needed.
     void destroy();
@@ -29,7 +29,7 @@ public:
 
 private:
     // Create the base objects according to the descriptor
-    void initialize_base_objects(const std::shared_ptr<MetalliumEnvDescriptor>& descriptor);
+    void initialize_base_objects(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor);
 
     // Verify the firmware version and enable the appropriate features
     void verify_fw_capabilities();
