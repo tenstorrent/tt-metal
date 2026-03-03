@@ -578,6 +578,17 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     return *control_plane_;
 }
 
+distributed::SystemMesh& MetalContext::get_system_mesh() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    if (!system_mesh_) {
+        if (!control_plane_) {
+            this->initialize_control_plane_impl();
+        }
+        system_mesh_ = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
+    }
+    return *system_mesh_;
+}
+
 void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
