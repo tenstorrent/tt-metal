@@ -252,15 +252,15 @@ static_assert(
 // ============================================================================
 // Sender channel connection info addresses (named args)
 // ============================================================================
-constexpr size_t local_sender_channel_0_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_0");
-constexpr size_t local_sender_channel_1_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_1");
-constexpr size_t local_sender_channel_2_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_2");
-constexpr size_t local_sender_channel_3_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_3");
-constexpr size_t local_sender_channel_4_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_4");
-constexpr size_t local_sender_channel_5_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_5");
-constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_6");
-constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_7");
-constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_CONN_INFO_ADDR_8");
+constexpr size_t local_sender_channel_0_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_0_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_1_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_1_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_2_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_2_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_3_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_3_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_4_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_4_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_5_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_5_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_6_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
 
 // ============================================================================
 // Status pointers
@@ -281,19 +281,19 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // Channel servicing flags
 // ============================================================================
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_0")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_1")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_2")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_3")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_4")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_5")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_6")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_7")),
-    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_SERVICED_8")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_2_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_3_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_4_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_5_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_6_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_7_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_8_SERVICED")),
 };
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced = {
-    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_SERVICED_0")),
-    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_SERVICED_1")),
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_SERVICED")),
 };
 
 // ============================================================================
@@ -351,15 +351,15 @@ constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_O
 // Arrays are sized to NUM_SENDER_CHANNELS, built from MAX-sized intermediaries.
 // ============================================================================
 static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_skip_all_ = {
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_0")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_1")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_2")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_3")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_4")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_5")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_6")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_7")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_LIVE_CHECK_SKIP_8")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_LIVE_CHECK_SKIP")),
 };
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_live_check_skip_all_);
@@ -369,15 +369,15 @@ constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
 // This attribute is necessary to support bubble flow control.
 static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel_all_ = {
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_0")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_1")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_2")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_3")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_4")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_5")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_6")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_7")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_IS_INJECTION_8")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_INJECTION")),
 };
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
@@ -385,29 +385,29 @@ constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_inject
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
 
 static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_0")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_1")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_2")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_3")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_4")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_5")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_6")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_7")),
-    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_ACK_NOC_ID_8")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_2_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_3_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_4_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_5_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_6_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(sender_channel_ack_noc_ids_all_);
 
 static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids_all_ = {
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_0")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_1")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_2")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_3")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_4")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_5")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_6")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_7")),
-    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_ACK_CMD_BUF_ID_8")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_2_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_3_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_4_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_5_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_6_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint8_t>(sender_channel_ack_cmd_buf_ids_all_);
@@ -416,40 +416,40 @@ constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_id
 // Receiver channel per-channel arrays
 // ============================================================================
 static constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids_all_ = {
-    static_cast<size_t>(NAMED_CT_ARG("RX_CH_FWD_NOC_ID_0")),
-    static_cast<size_t>(NAMED_CT_ARG("RX_CH_FWD_NOC_ID_1")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_0_FWD_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_1_FWD_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
         receiver_channel_forwarding_noc_ids_all_);
 
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_data_cmd_buf_ids_all_ = {
-    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_FWD_DATA_CMD_BUF_ID_0")),
-    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_FWD_DATA_CMD_BUF_ID_1")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_FWD_DATA_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_FWD_DATA_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_data_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
         receiver_channel_forwarding_data_cmd_buf_ids_all_);
 
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_sync_cmd_buf_ids_all_ = {
-    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_FWD_SYNC_CMD_BUF_ID_0")),
-    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_FWD_SYNC_CMD_BUF_ID_1")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_FWD_SYNC_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_FWD_SYNC_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_sync_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
         receiver_channel_forwarding_sync_cmd_buf_ids_all_);
 
 static constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_local_write_noc_ids_all_ = {
-    static_cast<size_t>(NAMED_CT_ARG("RX_CH_LOCAL_WRITE_NOC_ID_0")),
-    static_cast<size_t>(NAMED_CT_ARG("RX_CH_LOCAL_WRITE_NOC_ID_1")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_0_LOCAL_WRITE_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_1_LOCAL_WRITE_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_noc_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
         receiver_channel_local_write_noc_ids_all_);
 
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids_all_ = {
-    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_LOCAL_WRITE_CMD_BUF_ID_0")),
-    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_LOCAL_WRITE_CMD_BUF_ID_1")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_LOCAL_WRITE_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_LOCAL_WRITE_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(

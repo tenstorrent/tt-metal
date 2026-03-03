@@ -25,6 +25,7 @@
 #include <optional>
 #include <unordered_set>
 #include <vector>
+#include <fmt/format.h>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
@@ -1134,7 +1135,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Sender channel connection info addresses (always emit MAX entries) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args["LOCAL_SENDER_CH_CONN_INFO_ADDR_" + std::to_string(i)] =
+        named_args[fmt::format("LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", i)] =
             static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[i]);
     }
 
@@ -1148,11 +1149,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Channel servicing flags (always emit MAX entries) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args["IS_SENDER_CHANNEL_SERVICED_" + std::to_string(i)] =
+        named_args[fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", i)] =
             static_cast<uint32_t>(this->is_sender_channel_serviced_[risc_id][i]);
     }
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        named_args["IS_RECEIVER_CHANNEL_SERVICED_" + std::to_string(i)] =
+        named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", i)] =
             static_cast<uint32_t>(this->is_receiver_channel_serviced_[risc_id][i]);
     }
 
@@ -1185,47 +1186,47 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Sender channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args["SENDER_CH_LIVE_CHECK_SKIP_" + std::to_string(i)] =
+        named_args[fmt::format("SENDER_CH_{}_LIVE_CHECK_SKIP", i)] =
             (i < num_sender_channels)
                 ? static_cast<uint32_t>(this->sender_channel_connection_liveness_check_disable_array[i])
                 : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args["SENDER_CH_IS_INJECTION_" + std::to_string(i)] =
+        named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =
             (i < num_sender_channels)
                 ? static_cast<uint32_t>(this->sender_channel_is_traffic_injection_channel_array.at(i))
                 : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args["SENDER_CH_ACK_NOC_ID_" + std::to_string(i)] =
+        named_args[fmt::format("SENDER_CH_{}_ACK_NOC_ID", i)] =
             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_noc_ids[i]) : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
-        named_args["SENDER_CH_ACK_CMD_BUF_ID_" + std::to_string(i)] =
+        named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] =
             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]) : 0;
     }
 
     // --- Receiver channel per-channel arrays (always emit MAX entries; 0 for unused) ---
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        named_args["RX_CH_FWD_NOC_ID_" + std::to_string(i)] =
+        named_args[fmt::format("RX_CH_{}_FWD_NOC_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_forwarding_noc_ids[i]) : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        named_args["RX_CH_FWD_DATA_CMD_BUF_ID_" + std::to_string(i)] =
+        named_args[fmt::format("RX_CH_{}_FWD_DATA_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_forwarding_data_cmd_buf_ids[i])
                                         : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        named_args["RX_CH_FWD_SYNC_CMD_BUF_ID_" + std::to_string(i)] =
+        named_args[fmt::format("RX_CH_{}_FWD_SYNC_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_forwarding_sync_cmd_buf_ids[i])
                                         : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        named_args["RX_CH_LOCAL_WRITE_NOC_ID_" + std::to_string(i)] =
+        named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_NOC_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_noc_ids[i]) : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        named_args["RX_CH_LOCAL_WRITE_CMD_BUF_ID_" + std::to_string(i)] =
+        named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_cmd_buf_ids[i]) : 0;
     }
     named_args["EDM_NOC_VC"] = config.edm_noc_vc;
