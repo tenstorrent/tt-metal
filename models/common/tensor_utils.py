@@ -153,9 +153,7 @@ def program_config_to_str(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAM
     return serialize_config(cfg)
 
 
-def program_config_to_dict(program_config):
-    if hasattr(program_config, "to_json"):
-        return json.loads(program_config.to_json())
+def program_config_to_dict(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
     return {
         "in0_block_w": program_config.in0_block_w,
         "per_core_M": program_config.per_core_M,
