@@ -29,7 +29,7 @@
 #include <tt_stl/assert.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>

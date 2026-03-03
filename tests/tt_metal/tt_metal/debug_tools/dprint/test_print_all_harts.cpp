@@ -15,7 +15,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "hal_types.hpp"

@@ -15,7 +15,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/hal.hpp>

@@ -16,7 +16,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
 #include "hal_types.hpp"

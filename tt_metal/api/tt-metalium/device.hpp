@@ -17,7 +17,6 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -28,6 +27,9 @@
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
+
+// Forward declaration
+enum NOC : uint8_t;
 
 namespace program_cache::detail {
 struct ProgramCache;
