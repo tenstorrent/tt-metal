@@ -43,7 +43,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/constants.hpp
     api/tt-metalium/experimental/fabric/control_plane.hpp
     api/tt-metalium/core_coord.hpp
-    api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
