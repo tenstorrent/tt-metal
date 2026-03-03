@@ -310,13 +310,13 @@ def _profile_trace(mesh_device, label, num_iters, run_once, profiler):
         return
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for _ in range(num_iters):
-        run_once()
+    run_once()
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
     profiler.start(label)
-    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    for _ in range(num_iters):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
     profiler.end(label)
     ttnn.release_trace(mesh_device, trace_id)
@@ -333,6 +333,15 @@ def _profile_no_trace(mesh_device, label, num_iters, run_once, profiler):
         run_once()
     ttnn.synchronize_device(mesh_device)
     profiler.end(label)
+
+
+def _warmup_no_trace(mesh_device, num_iters, run_once):
+    if num_iters <= 0:
+        return
+
+    for _ in range(num_iters):
+        run_once()
+    ttnn.synchronize_device(mesh_device)
 
 
 def run_fused_minimal_vs_decomposed_rmsnorm_impl(
@@ -371,13 +380,6 @@ def run_fused_minimal_vs_decomposed_rmsnorm_impl(
     logger.info("Profiling with TT trace replay for fused/decomposed loops")
     _profile_trace(
         test_mesh,
-        "fused-warmup",
-        num_warmup,
-        lambda: _run_fused(test_mesh, inputs, return_local_out=False, state=fused_state),
-        profiler,
-    )
-    _profile_trace(
-        test_mesh,
         "fused",
         num_iters,
         lambda: _run_fused(test_mesh, inputs, return_local_out=False, state=fused_state),
@@ -385,13 +387,6 @@ def run_fused_minimal_vs_decomposed_rmsnorm_impl(
     )
     fused_s = profiler.get_duration("fused")
 
-    _profile_trace(
-        test_mesh,
-        "decomposed-warmup",
-        num_warmup,
-        lambda: _run_decomposed(test_mesh, inputs, state=decomp_state),
-        profiler,
-    )
     _profile_trace(
         test_mesh,
         "decomposed",
@@ -402,23 +397,18 @@ def run_fused_minimal_vs_decomposed_rmsnorm_impl(
     decomposed_s = profiler.get_duration("decomposed")
 
     logger.info(
-        "RMSNorm profile (warmup={}, iters={}): decomposed={:.6f}s ({:.6f}s warmup), fused={:.6f}s ({:.6f}s warmup), speedup={:.3f}x",
-        num_warmup,
+        "RMSNorm profile (iters={}): decomposed={:.3f}us/iter, fused={:.3f}us/iter, speedup={:.3f}x",
         num_iters,
-        decomposed_s,
-        profiler.get_duration("decomposed-warmup"),
-        fused_s,
-        profiler.get_duration("fused-warmup"),
+        (decomposed_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
+        (fused_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
         decomposed_s / fused_s if fused_s > 0 else float("inf"),
     )
 
     logger.info("Profiling without TT trace for fused/decomposed loops")
-    _profile_no_trace(
+    _warmup_no_trace(
         test_mesh,
-        "fused-no-trace-warmup",
         num_warmup,
         lambda: _run_fused(test_mesh, inputs, return_local_out=False, state=fused_state),
-        profiler,
     )
     _profile_no_trace(
         test_mesh,
@@ -429,12 +419,10 @@ def run_fused_minimal_vs_decomposed_rmsnorm_impl(
     )
     fused_no_trace_s = profiler.get_duration("fused-no-trace")
 
-    _profile_no_trace(
+    _warmup_no_trace(
         test_mesh,
-        "decomposed-no-trace-warmup",
         num_warmup,
         lambda: _run_decomposed(test_mesh, inputs, state=decomp_state),
-        profiler,
     )
     _profile_no_trace(
         test_mesh,
@@ -446,20 +434,21 @@ def run_fused_minimal_vs_decomposed_rmsnorm_impl(
     decomposed_no_trace_s = profiler.get_duration("decomposed-no-trace")
 
     logger.info(
-        "RMSNorm no-trace profile (warmup={}, iters={}): decomposed={:.6f}s ({:.6f}s warmup), fused={:.6f}s ({:.6f}s warmup), speedup={:.3f}x",
-        num_warmup,
+        "RMSNorm no-trace profile (iters={}): decomposed={:.3f}us/iter, fused={:.3f}us/iter, speedup={:.3f}x",
         num_iters,
-        decomposed_no_trace_s,
-        profiler.get_duration("decomposed-no-trace-warmup"),
-        fused_no_trace_s,
-        profiler.get_duration("fused-no-trace-warmup"),
+        (decomposed_no_trace_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
+        (fused_no_trace_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
         decomposed_no_trace_s / fused_no_trace_s if fused_no_trace_s > 0 else float("inf"),
     )
 
     logger.info(
-        "Trace vs no-trace comparison (iters={}): fused no-trace/trace={:.3f}x, decomposed no-trace/trace={:.3f}x",
+        "Trace vs no-trace comparison (iters={}): fused trace={:.3f}us/iter, no-trace={:.3f}us/iter, no-trace/trace={:.3f}x; decomposed trace={:.3f}us/iter, no-trace={:.3f}us/iter, no-trace/trace={:.3f}x",
         num_iters,
+        (fused_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
+        (fused_no_trace_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
         fused_no_trace_s / fused_s if fused_s > 0 else float("inf"),
+        (decomposed_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
+        (decomposed_no_trace_s * 1e6 / num_iters) if num_iters > 0 else 0.0,
         decomposed_no_trace_s / decomposed_s if decomposed_s > 0 else float("inf"),
     )
     return decomposed_s, fused_s
@@ -467,7 +456,7 @@ def run_fused_minimal_vs_decomposed_rmsnorm_impl(
 
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.parametrize("cluster_axis, num_devices, elements_per_batch, seq_len, batch_size", [(0, 2, 8192, 1, 32)])
-@pytest.mark.parametrize("num_warmup, num_iters", [(100, 200)])
+@pytest.mark.parametrize("num_warmup, num_iters", [(10, 1)])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_fused_minimal_and_decomposed_rmsnorm_match(
@@ -499,7 +488,7 @@ def test_fused_minimal_and_decomposed_rmsnorm_match(
     "cluster_axis, num_devices, elements_per_batch, seq_len, batch_size",
     [(0, 2, 8192, 1, 32), (1, 4, 8192, 1, 32)],
 )
-@pytest.mark.parametrize("num_warmup, num_iters", [(100, 200)])
+@pytest.mark.parametrize("num_warmup, num_iters", [(10, 1)])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_profile_fused_minimal_vs_decomposed_rmsnorm(
