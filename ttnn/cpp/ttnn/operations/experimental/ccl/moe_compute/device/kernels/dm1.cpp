@@ -111,7 +111,7 @@ void kernel_main() {
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
-        num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+        512 / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);

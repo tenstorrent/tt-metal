@@ -13,9 +13,11 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 
+MESH_GRAPH_DESC_1x16 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+)
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
-    # "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
 )
 
 
@@ -275,19 +277,13 @@ def prepare_output_tensor_from_combine_writer(
         output_shard_height_dim,
         output_shard_width_dim,
         experts_per_device,
-        total_tokens // output_shard_height_dim,
+        512 // output_shard_height_dim,
         hidden // output_shard_width_dim,
     )
 
-    # breakpoint() #
     shaped_torch_output = output_shard_tensor.view(output_shape)
-    torch.set_printoptions(profile="full")
-    with open("tensor_output_1x8.txt", "w") as f:
-        f.write(str(output_shard_tensor))
 
-    shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape(
-        [experts_per_device, total_tokens, hidden]
-    )
+    shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape([experts_per_device, 512, hidden])
     torch_output = torch.zeros([experts_per_device, total_tokens, hidden], dtype=torch.bfloat16)
 
     for e in range(experts_per_device):
@@ -297,7 +293,7 @@ def prepare_output_tensor_from_combine_writer(
             bt = t // tokens_per_shard
             ot = t % tokens_per_shard
 
-            contrib = shaped_torch_output[e, bt * total_tokens // output_shard_height_dim + ot]
+            contrib = shaped_torch_output[e, bt * 512 // output_shard_height_dim + ot]
 
             torch_output[e, t] = contrib
 
@@ -346,7 +342,7 @@ def validate_matmul(
 
     matmul_all_passed = True
 
-    MATMUL_PCC_THRESHOLD = 0.987
+    MATMUL_PCC_THRESHOLD = 0.988
     for d in range(devices):
         for expert_id in range(experts_per_device):
             active_tokens = expert_token_counts[d, expert_id].item()
@@ -920,10 +916,10 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x8 mesh descriptor before running
+# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -940,17 +936,33 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        # pytest.param((1, 16), (1, 16), id="1x16_grid"),
-        pytest.param((1, 8), (1, 8), id="1x8_grid"),
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
-# @pytest.mark.parametrize("experts", [2 * 16])  # 16 experts for 8 devices = 2 experts per device
-@pytest.mark.parametrize("experts", [2 * 8])  # 16 experts for 8 devices = 2 experts per device
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
+    "selected_experts_k, num_layers, num_iterations",
+    [(1, 1, 1), (8, 5, 1)],
+    ids=["perf", "accuracy"],  # only perf tests failing (1x8)
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -962,7 +974,6 @@ def test_moe_compute(
     mesh_shape,
     cluster_axis,
     tokens_per_device,
-    experts,
     selected_experts_k,
     num_layers,
     num_iterations,
@@ -982,9 +993,10 @@ def test_moe_compute(
     4. Runs the moe operation
     5. Verifies the outputs against a golden reference
     """
-    print("NUMBER OF EXPERTS: ", experts)
     torch.manual_seed(2003)
     random.seed(2003)
+
+    experts = 2 * mesh_shape[1]
 
     #########################################
     # TEST SETUP
@@ -1274,7 +1286,6 @@ def test_moe_compute(
                 )
 
             # run the op
-            # breakpoint()
             (
                 l1_per_expert_total_tokens_output_tensor,
                 l1_expert_activation_output_tensor,
@@ -1293,7 +1304,6 @@ def test_moe_compute(
                 output_width_shard_dim=output_width_shard_dim,
                 cluster_axis=cluster_axis,
             )
-            # breakpoint()
 
             # deallocate L1 inputs
             # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
