@@ -18,7 +18,11 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
+    DeepSeekV3MoELayerWeights,
+)
 
 # Constants used by stage kinds (same as pipeline module)
 token_page_size_bytes = 64
@@ -113,6 +117,30 @@ class PassthroughStage(StageKind):
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
         )
+
+
+class MoEDecoderStage(StageKind):
+    """Decoder stage that runs an MoE layer; activation in, activation out. Compute stubbed for now."""
+
+    def __init__(self, weights: DeepSeekV3MoELayerWeights) -> None:
+        self._weights = weights
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        return PipelineBlock(
+            mesh_device,
+            pipeline_core_coord,
+            upstream_d2d_socket_fifo_size=activation_fifo_size,
+            downstream_d2d_socket_fifo_size=activation_fifo_size,
+            upstream_d2d_socket_page_size=activation_page_size_bytes,
+            downstream_d2d_socket_page_size=activation_page_size_bytes,
+        )
+
+    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        pass
+
+    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        pass
 
 
 class LMHeadStage(StageKind):
