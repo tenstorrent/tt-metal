@@ -1,0 +1,176 @@
+kernel_name: moe
+
+core_roles:
+  input_core:
+    infer_from_zone: RMSNORM
+  routing_core:
+    infer_from_zone: MATMUL
+  expert_core:
+    infer_from_zone: GATE_PROJ
+  down_proj_core:
+    infer_from_zone: DOWN_PROJ
+
+micro_ops:
+  - zone: RESIDUAL_MCAST
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: expert_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: RMSNORM
+    type: compute
+    participants:
+      - role: input_core
+        risc: TRISC
+        function: compute
+
+  - zone: MCAST
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: routing_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MATMUL
+    type: compute
+    participants:
+      - role: routing_core
+        risc: TRISC
+        function: compute
+
+  - zone: GATHER
+    type: gather_reduce
+    participants:
+      - role: routing_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+      - role: input_core
+        risc: TRISC
+        function: reducer
+
+  - zone: GATE
+    type: compute
+    participants:
+      - role: input_core
+        risc: TRISC
+        function: compute
+
+  - zone: MCAST_INDEX
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: expert_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MCAST_EXPERT_SCALE
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: expert_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: GATE_PROJ
+    type: compute
+    participants:
+      - role: expert_core
+        risc: TRISC
+        function: compute
+
+  - zone: UP_PROJ
+    type: compute
+    participants:
+      - role: expert_core
+        risc: TRISC
+        function: compute
+
+  - zone: MUL
+    type: compute
+    participants:
+      - role: expert_core
+        risc: TRISC
+        function: compute
+
+  - zone: DOWN_PROJ_GATHER
+    type: gather
+    participants:
+      - role: expert_core
+        risc: NCRISC
+        function: sender
+      - role: down_proj_core
+        risc: BRISC
+        function: receiver
+
+  - zone: DOWN_PROJ_MCAST
+    type: mcast
+    participants:
+      - role: down_proj_core
+        risc: BRISC
+        function: sender
+      - role: down_proj_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: DOWN_PROJ
+    type: compute
+    participants:
+      - role: down_proj_core
+        risc: TRISC
+        function: compute
+
+  - zone: ELTWISE_ADD
+    type: compute
+    participants:
+      - role: down_proj_core
+        risc: TRISC
+        function: compute
+
+dependencies:
+  - [RMSNORM, RESIDUAL_MCAST]
+  - [MCAST, RMSNORM]
+  - [MATMUL, MCAST]
+  - [GATHER, MATMUL]
+  - [GATE, GATHER]
+  - [MCAST_INDEX, GATE]
+  - [MCAST_EXPERT_SCALE, GATE]
+  - [GATE_PROJ, MCAST_INDEX]
+  - [GATE_PROJ, MCAST_EXPERT_SCALE]
+  - [UP_PROJ, MCAST_INDEX]
+  - [MUL, GATE_PROJ]
+  - [MUL, UP_PROJ]
+  - [DOWN_PROJ_GATHER, MUL]
+  - [DOWN_PROJ_MCAST, DOWN_PROJ_GATHER]
+  - [DOWN_PROJ, DOWN_PROJ_MCAST]
+  - [ELTWISE_ADD, DOWN_PROJ]
+
+display_order:
+  - RESIDUAL_MCAST
+  - RMSNORM
+  - MCAST
+  - MATMUL
+  - GATHER
+  - GATE
+  - MCAST_INDEX
+  - MCAST_EXPERT_SCALE
+  - GATE_PROJ
+  - UP_PROJ
+  - MUL
+  - DOWN_PROJ_GATHER
+  - DOWN_PROJ_MCAST
+  - DOWN_PROJ
+  - ELTWISE_ADD

@@ -1,0 +1,197 @@
+kernel_name: pre_sdpa
+
+core_roles:
+  input_core:
+    infer_from_zone: RMSNORM
+  matmul_core:
+    infer_from_zone: MATMUL
+  matmul2_core:
+    infer_from_zone: MATMUL2
+  qnope_core:
+    infer_from_zone: "QNOPE/MATMUL3"
+  qrope_core:
+    infer_from_zone: QROPE
+  dkv_matmul_core:
+    infer_from_zone: DKV_MATMUL
+  kv_rmsnorm_core:
+    infer_from_zone: KV_RMSNORM
+
+micro_ops:
+  - zone: CCL_BROADCAST
+    type: broadcast
+    participants:
+      - role: input_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+
+  - zone: RMSNORM
+    type: compute
+    participants:
+      - role: input_core
+        risc: TRISC
+        function: compute
+
+  - zone: MCAST
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: matmul_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MATMUL
+    type: compute
+    participants:
+      - role: matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: GATHER
+    type: gather_reduce
+    participants:
+      - role: matmul_core
+        risc: NCRISC
+        function: sender
+      - role: input_core
+        risc: BRISC
+        function: receiver
+      - role: input_core
+        risc: TRISC
+        function: reducer
+
+  - zone: RMSNORM2
+    type: compute
+    participants:
+      - role: input_core
+        risc: TRISC
+        function: compute
+
+  - zone: MCAST2
+    type: mcast
+    participants:
+      - role: input_core
+        risc: BRISC
+        function: sender
+      - role: matmul2_core
+        risc: NCRISC
+        function: receiver
+
+  - zone: MATMUL2
+    type: compute
+    participants:
+      - role: matmul2_core
+        risc: TRISC
+        function: compute
+
+  - zone: "QNOPE/MATMUL3"
+    type: compute
+    participants:
+      - role: qnope_core
+        risc: TRISC
+        function: compute
+
+  - zone: QROPE
+    type: compute
+    participants:
+      - role: qrope_core
+        risc: TRISC
+        function: compute
+
+  - zone: CREATE_Q_HEADS
+    type: span
+    participants:
+      - role: qnope_core
+        risc: NCRISC
+        function: sender
+      - role: qrope_core
+        risc: NCRISC
+        function: sender
+
+  - zone: DKV_MATMUL
+    type: compute
+    participants:
+      - role: dkv_matmul_core
+        risc: TRISC
+        function: compute
+
+  - zone: DKV_GATHER
+    type: gather
+    participants:
+      - role: dkv_matmul_core
+        risc: NCRISC
+        function: sender
+      - role: kv_rmsnorm_core
+        risc: BRISC
+        function: receiver
+
+  - zone: KV_RMSNORM
+    type: compute
+    participants:
+      - role: kv_rmsnorm_core
+        risc: TRISC
+        function: compute
+
+  - zone: K_ROPE
+    type: compute
+    participants:
+      - role: kv_rmsnorm_core
+        risc: TRISC
+        function: compute
+
+  - zone: KV_CACHE_UPDATE
+    type: dram_write
+    participants:
+      - role: kv_rmsnorm_core
+        risc: BRISC
+        function: writer
+
+  - zone: FLASH_MLA
+    type: span
+    participants:
+      - role: kv_rmsnorm_core
+        risc: TRISC
+        function: compute
+
+dependencies:
+  - [RMSNORM, CCL_BROADCAST]
+  - [MCAST, RMSNORM]
+  - [MATMUL, MCAST]
+  - [DKV_MATMUL, MCAST]
+  - [GATHER, MATMUL]
+  - [DKV_GATHER, DKV_MATMUL]
+  - [RMSNORM2, GATHER]
+  - [KV_RMSNORM, DKV_GATHER]
+  - [MCAST2, RMSNORM2]
+  - [MATMUL2, MCAST2]
+  - ["QNOPE/MATMUL3", MATMUL2]
+  - [QROPE, MATMUL2]
+  - [CREATE_Q_HEADS, "QNOPE/MATMUL3"]
+  - [CREATE_Q_HEADS, QROPE]
+  - [K_ROPE, KV_RMSNORM]
+  - [KV_CACHE_UPDATE, KV_RMSNORM]
+  - [KV_CACHE_UPDATE, K_ROPE]
+  - [FLASH_MLA, KV_CACHE_UPDATE]
+
+display_order:
+  - CCL_BROADCAST
+  - RMSNORM
+  - MCAST
+  - MATMUL
+  - DKV_MATMUL
+  - GATHER
+  - DKV_GATHER
+  - RMSNORM2
+  - KV_RMSNORM
+  - MCAST2
+  - MATMUL2
+  - "QNOPE/MATMUL3"
+  - QROPE
+  - CREATE_Q_HEADS
+  - K_ROPE
+  - KV_CACHE_UPDATE
+  - FLASH_MLA
