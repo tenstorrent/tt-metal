@@ -139,8 +139,8 @@ class HostInterface:
                 and self.embedding_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
                 and self.embedding_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
-            # Tensor is DRAM interleaved, and row major. Page size is inner dim stride.
-            self.embedding_page_size = self.embedding_tensor.shape[3] * dtype_size(self.embedding_tensor.dtype)
+            # Tensor is DRAM interleaved, and row major. Page size is inner dim (2D: shape[1], 4D: shape[3]).
+            self.embedding_page_size = self.embedding_tensor.shape[-1] * dtype_size(self.embedding_tensor.dtype)
             self.embedding_cb_index = 2 if embedding_cb_index is None else embedding_cb_index
 
         self.fabric_packet_header_cb_index = (

@@ -73,7 +73,8 @@ class PipelineBlock:
                 d2h_socket_fifo_size >= d2h_socket_page_size
             ), "D2H Socket FIFO Size must be greater than or equal to D2H Socket Page Size"
 
-            embedding_size_bytes = embedding_tensor.shape[3] * dtype_size(embedding_tensor.dtype)
+            # Embedding can be 2D (vocab_size, hidden_size) or 4D (..., hidden_size); page = last dim
+            embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
 
             # Exit D2D Socket forwards embedding rows to first decoder. Granularity of socket transfer is set to embedding size.
             assert (
