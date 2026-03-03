@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tests.unit.utils import run_test
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, create_sharded_norm_config
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI4, create_sharded_norm_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # =============================================================================
@@ -61,7 +61,7 @@ def test_rmsnorm_pre_all_gather_single_device(device):
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -149,7 +149,7 @@ def test_rmsnorm_pre_all_gather_mesh_device(mesh_device, enable_trace, device_pa
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -251,7 +251,7 @@ def test_rmsnorm_post_all_gather(device):
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -401,7 +401,7 @@ def test_rmsnorm_distributed_mesh_device(mesh_device, enable_trace, device_param
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -556,7 +556,7 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
     Test configuration:
     - Input: bfloat16, DRAM INTERLEAVED, TILE layout
     - Weight: bfloat16, DRAM INTERLEAVED, ROW_MAJOR layout
-    - LoFi compute kernel (math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True)
+    - HiFi4 compute kernel (math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)
     - LayerNormDefaultProgramConfig
     - epsilon: 1e-6
     """
@@ -591,12 +591,12 @@ def test_rmsnorm_single_device(device, inp_shape, weight_shape):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Run rms_norm with LoFi compute kernel and default program config
+    # Run rms_norm with HiFi4 compute kernel and default program config
     tt_out = ttnn.rms_norm(
         tt_inp,
         epsilon=epsilon,
         weight=tt_gamma,
-        compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+        compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
         program_config=ttnn.LayerNormDefaultProgramConfig(),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -627,7 +627,7 @@ def test_rmsnorm_mesh_device(mesh_device, inp_shape, weight_shape, enable_trace,
     Test configuration:
     - Input: bfloat16, DRAM INTERLEAVED, TILE layout
     - Weight: bfloat16, DRAM INTERLEAVED, ROW_MAJOR layout
-    - LoFi compute kernel (math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True)
+    - HiFi4 compute kernel (math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)
     - LayerNormDefaultProgramConfig
     - epsilon: 1e-6
     """
@@ -669,7 +669,7 @@ def test_rmsnorm_mesh_device(mesh_device, inp_shape, weight_shape, enable_trace,
             tt_inp,
             epsilon=epsilon,
             weight=tt_gamma,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
             program_config=ttnn.LayerNormDefaultProgramConfig(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
