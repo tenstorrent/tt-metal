@@ -100,7 +100,10 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             a.padded_shape().rank());
         if (a.layout() == Layout::ROW_MAJOR && a.padded_shape().rank() == 4) {
             TT_FATAL(
-                a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+                a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1,
+                "Only dim 0 && 3 for the input can be non 1, but got {} and {} for dim 1 and 2",
+                a.padded_shape()[1],
+                a.padded_shape()[2]);
         }
     }
 
