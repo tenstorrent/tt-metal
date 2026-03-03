@@ -17,8 +17,8 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import ttnn_dtype_from_torch_dtype
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 
 # Constants used by stage kinds (same as pipeline module)
 token_page_size_bytes = 64
@@ -39,53 +39,6 @@ out_tile = ttnn.Tile([1, 32])
 pipeline_core_coord = ttnn.CoreCoord(11, 0)
 argmax_final_core = ttnn.CoreCoord(0, 0)
 lmhead_input_core = ttnn.CoreCoord(10, 9)
-
-
-@dataclass
-class LMHeadWeights:
-    """Torch tensors for LMHead stage (RMS norm gamma, weight matrix, vocab indices)."""
-
-    gamma: torch.Tensor  # [M, K]
-    weight_matrix: torch.Tensor  # [K, n_total]
-    indices: torch.Tensor  # [1, n_total]
-
-
-def create_synthetic_weights_for_lm_head_stage(
-    iterations: int,
-) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
-    """
-    Build deterministic synthetic weights and expected output indices for the LMHead stage.
-    Returns (embedding_tensor, lmhead_weights, expected_indices).
-    """
-    torch_gamma = torch.ones((M, K), dtype=torch.bfloat16)
-    row_indices = torch.arange(iterations, dtype=torch.int64) % K
-    torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
-    torch_embedding_table[torch.arange(iterations), row_indices] = 1
-    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
-    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
-    torch_b[torch.arange(K), winner_per_row] = 1
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_indices = torch.stack(
-        [
-            LMHeadSampling.golden(
-                torch_embedding_table[iteration : iteration + 1].float(),
-                torch_gamma.float(),
-                torch_b.float().unsqueeze(0),
-                indices=torch_indices_flat,
-                k=1,
-                p=1.0,
-            ).to(torch.uint32)
-            for iteration in range(iterations)
-        ],
-        dim=0,
-    )
-    embedding_tensor = torch_embedding_table.reshape(iterations, 1, 1, K)
-    lmhead_weights = LMHeadWeights(
-        gamma=torch_gamma,
-        weight_matrix=torch_b,
-        indices=torch_indices_flat,
-    )
-    return embedding_tensor, lmhead_weights, torch_expected_indices
 
 
 @dataclass
@@ -114,17 +67,11 @@ class StageKind(ABC):
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
 
-    def __init__(self, embedding_tensor: torch.Tensor) -> None:
-        self._embedding_tensor = embedding_tensor
+    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
+        self._weights = weights
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
-        embedding_ttnn = ttnn.from_torch(
-            self._embedding_tensor,
-            dtype=ttnn_dtype_from_torch_dtype(self._embedding_tensor.dtype),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        embedding_ttnn = ttnn.to_device(embedding_ttnn, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return PipelineBlock(
             mesh_device,
             pipeline_core_coord,
@@ -135,7 +82,7 @@ class EmbeddingStage(StageKind):
             h2d_socket_fifo_size=token_fifo_size,
             d2h_socket_fifo_size=token_fifo_size,
             d2h_socket_page_size=token_page_size_bytes,
-            embedding_tensor=embedding_ttnn,
+            embedding_tensor=self._weights.embedding,
         )
 
 
@@ -173,7 +120,7 @@ class LMHeadStage(StageKind):
 
     def __init__(
         self,
-        weights: LMHeadWeights,
+        weights: DeepSeekV3LMHeadWeights,
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
@@ -205,13 +152,11 @@ class LMHeadStage(StageKind):
         my_mesh_id = ctx.my_mesh_id
         pipeline_config = ctx.pipeline_config
         torch_a = torch.zeros((M, K), dtype=torch.bfloat16)
-        torch_gamma = self._weights.gamma
-        torch_b = self._weights.weight_matrix
-        torch_indices_flat = self._weights.indices
 
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
         sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        num_devices = mesh_rows * mesh_cols
 
         mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(lmhead_input_core, lmhead_input_core)])
         matmul_core_grid = ttnn.CoreRangeSet(
@@ -226,11 +171,6 @@ class LMHeadStage(StageKind):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        width_shard_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(matmul_core_grid, (K, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -248,7 +188,6 @@ class LMHeadStage(StageKind):
             ttnn.ShardSpec(argmax_final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
         )
 
-        num_devices = mesh_rows * mesh_cols
         device_inputs = []
         device_intermediate = []
         for r in range(mesh_rows):
@@ -280,23 +219,16 @@ class LMHeadStage(StageKind):
             memory_config=input_a_mem_config,
             mesh_mapper=mesh_mapper,
         )
-        ttnn_gamma = ttnn.from_torch(
-            torch_gamma,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+        ttnn_gamma = self._weights.final_norm
+        ttnn_b = self._weights.lm_head
+        torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+        ttnn_indices = ttnn.from_torch(
+            torch_indices_flat.repeat(num_devices, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=input_a_mem_config,
-            tile=a_tile,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        ttnn_b = ttnn.from_torch(
-            torch_b,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=width_shard_mem_config,
-            tile=b_tile,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=indices_mem_config,
+            mesh_mapper=mesh_mapper,
         )
         ttnn_scores = ttnn.from_torch(
             torch.zeros((M, n_total), dtype=torch.bfloat16),
@@ -306,14 +238,6 @@ class LMHeadStage(StageKind):
             memory_config=output_mem_config,
             tile=out_tile,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        ttnn_indices = ttnn.from_torch(
-            torch_indices_flat.repeat(num_devices, 1, 1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=indices_mem_config,
-            mesh_mapper=mesh_mapper,
         )
         ttnn_output_index = ttnn.from_torch(
             torch.zeros((num_devices, 1, 1), dtype=torch.uint32),

@@ -24,15 +24,14 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
-    LMHeadWeights,
     create_single_galaxy_pipeline_configuration,
     create_single_pod_pipeline_configuration,
-    create_synthetic_weights_for_lm_head_stage,
     token_page_size_bytes,
 )
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -42,32 +41,61 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-def _create_random_weights_single_iteration(
-    seed: int = 5449,
-) -> tuple[torch.Tensor, LMHeadWeights, torch.Tensor]:
-    """Random weights for one token (4-stage single-galaxy one-shot test)."""
-    M, K = 1, 7168
-    n_total = 101 * 160
-    torch.manual_seed(seed)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
-        torch_a.float(),
-        torch_gamma.float(),
-        torch_b.float().unsqueeze(0),
-        indices=torch_indices_flat,
-        k=1,
-        p=1.0,
-    ).to(torch.uint32)
-    embedding_tensor = torch_a.reshape(1, 1, 1, K)
-    lmhead_weights = LMHeadWeights(
-        gamma=torch_gamma,
-        weight_matrix=torch_b,
-        indices=torch_indices_flat,
+# Synthetic embedding: build state dict and use prepare_embedding_weights so layout stays single path.
+_VOCAB_SIZE = 129280
+_EMBED_HIDDEN = 7168
+
+
+def _synthetic_embedding_weights(device, iterations: int):
+    """Synthetic embedding via state dict: one-hot row i at i % hidden_size, full (vocab_size, hidden_size)."""
+    w = torch.zeros((_VOCAB_SIZE, _EMBED_HIDDEN), dtype=torch.bfloat16)
+    w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % _EMBED_HIDDEN] = 1
+    return prepare_embedding_weights({"model.embed_tokens.weight": w}, device, move_to_device=True)
+
+
+# Synthetic LM head: same pattern as embedding — state dict + prepare_lm_head_weights (deterministic winner_per_row).
+_LM_HEAD_N_SYNTHETIC = 101 * 160  # 16160
+
+
+def _synthetic_lm_head_weights(device, iterations: int):
+    """Synthetic LM head via state dict: winner_per_row j at j % 16160, full (129280, 7168); norm ones."""
+    lm_w = torch.full((_VOCAB_SIZE, _EMBED_HIDDEN), -1.0, dtype=torch.bfloat16)
+    lm_w[torch.arange(_EMBED_HIDDEN, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(_EMBED_HIDDEN)] = 1
+    return prepare_lm_head_weights(
+        {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)},
+        device,
+        move_to_device=True,
     )
-    return embedding_tensor, lmhead_weights, torch_expected_idx
+
+
+# Golden helper: same deterministic formula as create_synthetic_* in prepare_weights (one-hot embedding, winner_per_row).
+def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor:
+    """Compute expected output indices for synthetic weights. Same math as _synthetic_lm_head_weights."""
+    K = 7168
+    n_total = 101 * 160
+    torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
+    row_indices = torch.arange(iterations, dtype=torch.int64) % K
+    torch_embedding_table = torch.zeros((iterations, K), dtype=torch.bfloat16)
+    torch_embedding_table[torch.arange(iterations), row_indices] = 1
+    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
+    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
+    torch_b[torch.arange(K), winner_per_row] = 1
+    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+    torch_expected_indices = torch.stack(
+        [
+            LMHeadSampling.golden(
+                torch_embedding_table[iteration : iteration + 1].float(),
+                torch_gamma.float(),
+                torch_b.float().unsqueeze(0),
+                indices=torch_indices_flat,
+                k=1,
+                p=1.0,
+            ).to(torch.uint32)
+            for iteration in range(iterations)
+        ],
+        dim=0,
+    )
+    return torch_expected_indices
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -1873,10 +1901,14 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    embedding_tensor, lmhead_weights, torch_expected_idx = _create_random_weights_single_iteration(seed=5449)
+    embedding_weights = _synthetic_embedding_weights(mesh_device, 1)
+    lm_head_weights = _synthetic_lm_head_weights(mesh_device, 1)
+    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
+    torch_expected_idx = torch_expected_indices[0]
+
     config = create_single_galaxy_pipeline_configuration(
-        embedding_tensor=embedding_tensor,
-        lmhead_weights=lmhead_weights,
+        embedding_weights=embedding_weights,
+        lm_head_weights=lm_head_weights,
         fp32_dest_acc_en=use_fp32,
         persistent_mode=False,
     )
@@ -1937,10 +1969,12 @@ def test_persistent_mode(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
-    embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights_for_lm_head_stage(iterations)
+    embedding_weights = _synthetic_embedding_weights(mesh_device, iterations)
+    lm_head_weights = _synthetic_lm_head_weights(mesh_device, iterations)
+    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_galaxy_pipeline_configuration(
-        embedding_tensor=embedding_tensor,
-        lmhead_weights=lmhead_weights,
+        embedding_weights=embedding_weights,
+        lm_head_weights=lm_head_weights,
         fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
@@ -2003,10 +2037,12 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 16 distributed pipeline processes (pod: 4 galaxies)")
 
     iterations = 100
-    embedding_tensor, lmhead_weights, torch_expected_indices = create_synthetic_weights_for_lm_head_stage(iterations)
+    embedding_weights = _synthetic_embedding_weights(mesh_device, iterations)
+    lm_head_weights = _synthetic_lm_head_weights(mesh_device, iterations)
+    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_pod_pipeline_configuration(
-        embedding_tensor=embedding_tensor,
-        lmhead_weights=lmhead_weights,
+        embedding_weights=embedding_weights,
+        lm_head_weights=lm_head_weights,
         fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)

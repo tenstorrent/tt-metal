@@ -21,7 +21,6 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_fabric_router_config,
     create_pipeline_configuration_from_num_procs,
-    create_synthetic_weights_for_lm_head_stage,
     token_page_size_bytes,
 )
 from models.demos.deepseek_v3_b1.prepare_weights import (
@@ -34,6 +33,8 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_lm_head_weights,
     load_moe_decoder_layer,
     load_moe_routed_experts,
+    prepare_embedding_weights,
+    prepare_lm_head_weights,
 )
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
@@ -190,12 +191,23 @@ def run_demo(
         ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
         # TODO: extend to all stages and allow for flipping between synthetic and real weights
-        embedding_tensor, lmhead_weights, _ = create_synthetic_weights_for_lm_head_stage(iterations)
+        emb_w = torch.zeros((129280, 7168), dtype=torch.bfloat16)
+        emb_w[torch.arange(129280), torch.arange(129280, dtype=torch.int64) % 7168] = 1
+        embedding_weights = prepare_embedding_weights(
+            {"model.embed_tokens.weight": emb_w}, mesh_device, move_to_device=True
+        )
+        lm_w = torch.full((129280, 7168), -1.0, dtype=torch.bfloat16)
+        lm_w[torch.arange(7168, dtype=torch.int64) % 16160, torch.arange(7168)] = 1
+        lm_head_weights = prepare_lm_head_weights(
+            {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(7168, dtype=torch.bfloat16)},
+            mesh_device,
+            move_to_device=True,
+        )
 
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
-            embedding_tensor=embedding_tensor,
-            lmhead_weights=lmhead_weights,
+            embedding_weights=embedding_weights,
+            lm_head_weights=lm_head_weights,
             fp32_dest_acc_en=fp32,
             persistent_mode=persistent_mode,
         )
@@ -227,6 +239,7 @@ def run_demo(
 
 
 def main(argv: list[str] | None = None) -> int:
+    ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
 
