@@ -295,9 +295,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
-    const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h * DHt <= dst_size &&
-                                       qk_out_subblock_h == 1 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && DHt <= 8;
-    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+    const bool use_streaming_compute =
+        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0;
+    log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -479,7 +479,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
+    tt::DataFormat mask_df = use_streaming_compute
+                                 ? tt::DataFormat::Float16_b  // streaming path L1-accumulates -inf;
+                                                              // Float16_b avoids Bfp4_b precision loss
+                                 : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
