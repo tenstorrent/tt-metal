@@ -365,8 +365,10 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
     // input_tensor.tensor_spec().tile():
     //   num_tiles_causal_mask = input.padded_shape()[-1] * tile_height / (tile_height * tile_width) = Wt_of_input
     // which is fully determined by input.logical_shape()[-1] already present in the hash.
-    const auto mask_dtype = tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID;
-    const auto mask_memory_config = tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : MemoryConfig{};
+    std::optional<MemoryConfig> default_memory_config =
+        !tensor_args.mask.has_value() ? std::make_optional<MemoryConfig>() : std::nullopt;
+    const auto& mask_memory_config =
+        tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : *default_memory_config;
     return operation::hash_operation<SoftmaxDeviceOperation>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.softmax_type,
@@ -383,7 +385,7 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.memory_config(),
         tensor_args.input_tensor.layout(),
-        mask_dtype,
+        tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID,
         mask_memory_config);
 }
 
