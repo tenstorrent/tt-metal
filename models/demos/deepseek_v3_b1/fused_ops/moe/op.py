@@ -422,7 +422,7 @@ class MoeRoutedExpertOp:
         core_ranges=None,
         cb_in1_index=None,
         cb_out_index=None,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         num_subblocks_k=4,
     ):
         """
@@ -757,8 +757,8 @@ class MoeRoutedExpertOp:
         if enable_routing:
             from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-            # 1. Routing matmul + sigmoid
-            logits = input_tensor.float() @ routing_weights_tensor.float()
+            # 1. Routing matmul + sigmoid (truncate to bfloat16 to approximate device accumulation)
+            logits = (input_tensor.bfloat16().float() @ routing_weights_tensor.bfloat16().float()).bfloat16().float()
             scores = torch.sigmoid(logits)
 
             # 2. Gate: top-8 selection with normalized scores
@@ -1105,7 +1105,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=4,
         )
 
@@ -1118,7 +1118,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=4,
         )
 
@@ -1186,7 +1186,7 @@ class MoeRoutedExpertOp:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             num_subblocks_k=2,
         )
 
@@ -1474,11 +1474,11 @@ class MoeRoutedExpertOp:
 
         ncrisc_named_compile_time_args = [
             # Input mcast (sender sharded buffer + receiver)
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
+            ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+            ("moe_mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+            ("moe_mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
+            ("moe_mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+            ("moe_mcast_dst_num_pages", ctx.rmsnorm_mcast_params["dst_num_pages"]),
             # Residual mcast source (setup_sharded_buffer on sender core)
             ("shared_residual_mcast_src_cb", ctx.residual_mcast_params["src_cb"]),
             ("shared_residual_mcast_src_num_pages", ctx.residual_mcast_params["src_num_pages"]),
@@ -1487,8 +1487,8 @@ class MoeRoutedExpertOp:
             ("shared_residual_cb", ctx.residual_mcast_dst_cb),
             ("shared_residual_num_pages", ctx.residual_mcast_params["dst_num_pages"]),
             # RMSNorm (setup_sharded_buffer for gamma on sender core)
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
+            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+            ("moe_rmsnorm_gamma_num_pages", ctx.rmsnorm_gamma_num_pages),
             # Gate matmul reader (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1598,18 +1598,18 @@ class MoeRoutedExpertOp:
 
         brisc_named_compile_time_args = [
             # Input mcast sender
-            ("mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
-            ("mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
-            ("mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
-            ("mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
-            ("mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
-            ("mcast_data_sender_semaphore_addr", ctx.rmsnorm_mcast_params["sender_semaphore_addr"]),
-            ("mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
-            ("mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
-            ("mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
-            ("mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
-            ("mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
-            ("mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
+            ("moe_mcast_dest_noc_start_x", ctx.rmsnorm_mcast_params["dest_noc_start_x"]),
+            ("moe_mcast_dest_noc_start_y", ctx.rmsnorm_mcast_params["dest_noc_start_y"]),
+            ("moe_mcast_dest_noc_end_x", ctx.rmsnorm_mcast_params["dest_noc_end_x"]),
+            ("moe_mcast_dest_noc_end_y", ctx.rmsnorm_mcast_params["dest_noc_end_y"]),
+            ("moe_mcast_num_cores", ctx.rmsnorm_mcast_params["num_cores"]),
+            ("moe_mcast_data_sender_semaphore_addr", ctx.rmsnorm_mcast_params["sender_semaphore_addr"]),
+            ("moe_mcast_data_receiver_semaphore_addr", ctx.rmsnorm_mcast_params["receiver_semaphore_addr"]),
+            ("moe_mcast_data_size_bytes", ctx.rmsnorm_mcast_params["data_size_bytes"]),
+            ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
+            ("moe_mcast_dst_cb", ctx.rmsnorm_mcast_params["dst_cb"]),
+            ("moe_mcast_src_num_pages", ctx.rmsnorm_mcast_params["src_num_pages"]),
+            ("moe_mcast_is_part_of_receiver_grid", ctx.rmsnorm_mcast_params["is_sender_part_of_receiver_grid"]),
             # Residual mcast sender (input from sender → residual CB on mcast grid)
             ("shared_residual_mcast_data_sender_semaphore_addr", ctx.mcast_data_sender_semaphore_addr),
             ("shared_residual_mcast_data_receiver_semaphore_addr", ctx.residual_mcast_receiver_semaphore_addr),
@@ -1695,13 +1695,13 @@ class MoeRoutedExpertOp:
 
         trisc_named_compile_time_args = [
             # RMSNorm compute (sender core only)
-            ("rmsnorm_input_cb", ctx.residual_mcast_src_cb),
-            ("rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
-            ("rmsnorm_output_cb", ctx.rmsnorm_output_cb),
-            ("rmsnorm_fp32_acc", 0),
-            ("rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
-            ("rmsnorm_rsqrt_fast_approx", 0),
-            ("rmsnorm_trisc_common_rt_arg_base", 0),
+            ("moe_rmsnorm_input_cb", ctx.residual_mcast_src_cb),
+            ("moe_rmsnorm_gamma_cb", ctx.rmsnorm_gamma_cb),
+            ("moe_rmsnorm_output_cb", ctx.rmsnorm_output_cb),
+            ("moe_rmsnorm_fp32_acc", 0),
+            ("moe_rmsnorm_num_tiles", ctx.rmsnorm_num_tiles),
+            ("moe_rmsnorm_rsqrt_fast_approx", 0),
+            ("moe_rmsnorm_trisc_common_rt_arg_base", 0),
             # Gate matmul compute (routing only — 0 when disabled)
             ("gate_mm_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else 0),
             ("gate_mm_in1", ctx.gate_mm_params["in1_cb"] if ctx.enable_routing else 0),
@@ -1728,7 +1728,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
             ("gate_proj_fuse_silu", 1),
-            ("gate_proj_fp32_dest_acc_en", 1),
+            ("gate_proj_fp32_dest_acc_en", 0),
             # up_proj compute
             ("up_proj_cb_in0", ctx.gate_mm_params["in0_cb"] if ctx.enable_routing else ctx.gate_mm_input_cb),
             ("up_proj_cb_in1", ctx.up_proj_cb_in1),
@@ -1738,7 +1738,7 @@ class MoeRoutedExpertOp:
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
             ("up_proj_fuse_silu", 0),
-            ("up_proj_fp32_dest_acc_en", 1),
+            ("up_proj_fp32_dest_acc_en", 0),
             ("up_proj_cb_mm_out", ctx.up_proj_cb_mm_out),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
@@ -1746,7 +1746,7 @@ class MoeRoutedExpertOp:
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
             ("mul_cb_scalar", ctx.mul_cb_scalar),
-            ("mul_fp32_dest_acc_en", 1),
+            ("mul_fp32_dest_acc_en", 0),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             # down_proj compute
             ("down_proj_cb_in0", ctx.down_proj_mcast_dst_cb),
@@ -1758,7 +1758,7 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),
-            ("down_proj_fp32_dest_acc_en", 1),
+            ("down_proj_fp32_dest_acc_en", 0),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
