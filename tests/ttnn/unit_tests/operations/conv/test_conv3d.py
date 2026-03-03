@@ -200,6 +200,7 @@ def run_conv3d_test(
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
@@ -217,6 +218,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -234,6 +236,7 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
