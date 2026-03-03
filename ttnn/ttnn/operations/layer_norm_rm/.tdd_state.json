@@ -3,8 +3,8 @@
   "op_path": "/localdev/mstaletovic/metal-2/tt-metal/ttnn/ttnn/operations/layer_norm_rm",
   "spec_path": "/localdev/mstaletovic/metal-2/tt-metal/ttnn/ttnn/operations/layer_norm_rm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 1,
-  "last_passing_commit": "f6ce7d18eb7a027502f3ba56efaa160b8e739147",
+  "current_stage_index": 2,
+  "last_passing_commit": "c126c377e1b80e8fd9262cc4aeeda9ad1f52d2f1",
   "stages": [
     {
       "name": "data_pipeline",
@@ -65,12 +65,58 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
-      "attempts": 0,
-      "free_retries": 0,
+      "status": "passed",
+      "commit": "c126c377e1b80e8fd9262cc4aeeda9ad1f52d2f1",
+      "attempts": 2,
+      "free_retries": 1,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: cpp: In function 'void chlkc_pack::pack_main()':\n/localdev/mstaletovic/metal-2/tt-metal/ttnn/ttnn/operations/layer_norm_rm/kernels/compute.cpp:77:44: error: too few arguments to function 'void ckernel",
+          "details": {
+            "error_snippet": "cpp: In function 'void chlkc_pack::pack_main()':\n/localdev/mstaletovic/metal-2/tt-metal/ttnn/ttnn/operations/layer_norm_rm/kernels/compute.cpp:77:44: error: too few arguments to function 'void ckernel::copy_tile_to_dst_init_short_with_dt(uint32_t, uint32_t, uint32_t)'\n   77 | \n      |"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "reduce_mean",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 0.451171875",
+          "details": {
+            "max_diff": "0.451171875"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 1,
+          "free_retries": 1,
+          "cost": "HARD",
+          "stage": "reduce_mean",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "numerical_mismatch",
+          "summary": "Numerical mismatch \u2014 max diff: 4.9713134765625",
+          "details": {
+            "max_diff": "4.9713134765625"
+          },
+          "suggested_action": "Check helper parameters against design. Verify CB data format and tile counts. Compare tolerance values \u2014 intermediate stages may need looser tolerances.",
+          "attempt": 2,
+          "free_retries": 1,
+          "cost": "HARD",
+          "stage": "reduce_mean",
+          "remaining_attempts": 4,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "subtract_mean",
@@ -97,7 +143,7 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
