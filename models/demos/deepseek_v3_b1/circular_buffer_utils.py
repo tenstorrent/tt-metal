@@ -46,7 +46,8 @@ class CircularBufferIdManager:
         if cb_id >= self.NUM_CIRCULAR_BUFFERS:
             raise RuntimeError(f"All {self.NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted")
         self._next_id += 1
-        self._id_to_format[cb_id] = key
+        # Make a copy of the tile descriptor to avoid dependencies
+        self._id_to_format[cb_id] = (data_format, ttnn.TileDescriptor(tile))
         return cb_id
 
     class Context:

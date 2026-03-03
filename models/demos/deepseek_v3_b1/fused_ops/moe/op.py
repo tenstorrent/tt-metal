@@ -828,12 +828,13 @@ class MoeRoutedExpertOp:
         # ==================================================================
         TD_1x16 = ttnn.TileDescriptor(ttnn.Tile((1, 16)))
         TD_1x32 = ttnn.TileDescriptor(TILE_1x32)
-        TD_16x16 = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH)
+        TD_16x16 = ttnn.TileDescriptor(ttnn.Tile((FACE_HEIGHT, FACE_WIDTH)))
         TD_32x32 = ttnn.TileDescriptor(ttnn.Tile((32, 32)))
 
         # ==================================================================
         # CB indices (auto-assigned via cb_id_context)
         # ==================================================================
+        assert cb_id_context is not None, "cb_id_context must be provided"
 
         # 1x32, bfloat16
         gate_mm_input_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
@@ -2241,8 +2242,9 @@ class MoeSharedExpertOp:
         # ==================================================================
         # CB indices (auto-assigned via cb_id_context)
         # ==================================================================
+        assert cb_id_context is not None, "cb_id_context must be provided"
         TD_1x32 = ttnn.TileDescriptor(ttnn.Tile((1, 32)))
-        TD_16x16 = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH)
+        TD_16x16 = ttnn.TileDescriptor(ttnn.Tile((FACE_HEIGHT, FACE_WIDTH)))
 
         # 1x32, bfloat16
         shared_gu_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
