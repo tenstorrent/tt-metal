@@ -11,7 +11,7 @@ import ttnn
 
 from models.experimental.ops.descriptors.fusion import Sequential
 from models.experimental.ops.descriptors.normalization import rms_norm
-from models.experimental.ops.descriptors import composite
+from models.experimental.ops.descriptors.fusion import launch
 
 
 def _tt(t, device):
@@ -42,7 +42,7 @@ class TestBuildTiming:
             r1.output_tensors[0], core_range_set=core_range, weight=_tt(torch_w, device), epsilon=1e-5
         )
         fused = Sequential(r1, r2).build(device)
-        composite.launch([fused])
+        launch([fused])
 
         # ---- Timed: fresh tensors each iteration ----
         print(f"\n{'='*60}")
@@ -58,7 +58,7 @@ class TestBuildTiming:
             t1 = time.perf_counter()
             fused = Sequential(r1, r2).build(device)
             t2 = time.perf_counter()
-            outputs = composite.launch([fused])
+            outputs = launch([fused])
             t3 = time.perf_counter()
             print(
                 f"  Trial {trial}: factory={1000*(t1-t0):.2f}ms  build={1000*(t2-t1):.2f}ms  launch={1000*(t3-t2):.2f}ms  total={1000*(t3-t0):.2f}ms"
@@ -69,7 +69,7 @@ class TestBuildTiming:
         print("Reuse same FusedOp (no rebuild, no factory):")
         for trial in range(5):
             t0 = time.perf_counter()
-            outputs = composite.launch([fused])
+            outputs = launch([fused])
             t1 = time.perf_counter()
             print(f"  Trial {trial}: launch={1000*(t1-t0):.2f}ms")
         print(f"{'='*60}")

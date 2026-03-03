@@ -406,7 +406,7 @@ class TestSequentialChainExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 
@@ -443,7 +443,7 @@ class TestSequentialChainExecution:
         fused_desc = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)
 
         # Execute
-        outputs = composite.launch([fused_desc])
+        outputs = launch([fused_desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -469,7 +469,7 @@ class TestSequentialChainExecution:
         """Test 4-phase RMS→RMS→RMS→RMS chain to isolate the 4-phase issue."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -515,7 +515,7 @@ class TestSequentialChainExecution:
 
         # Fuse and execute
         fused = build_op_graph([rms1, rms2, rms3, rms4], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -532,7 +532,7 @@ class TestSequentialChainExecution:
         """Test 2-phase LN→LN chain on 2 cores to validate global barrier."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
 
@@ -553,7 +553,7 @@ class TestSequentialChainExecution:
 
         fused_desc = build_op_graph([ln1_desc, ln2_desc], [], device)
 
-        outputs = composite.launch([fused_desc])
+        outputs = launch([fused_desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -578,15 +578,15 @@ class TestSequentialChainExecution:
         """
         Test running a fused chain in parallel with another op on different cores.
 
-        This demonstrates the integration of sequential.py with composite.py:
+        This demonstrates the integration of sequential.py with the fusion module:
         - Cores (0,0): LayerNorm -> RMSNorm -> LayerNorm (fused chain)
         - Cores (1,0): RMSNorm (independent op)
 
-        Both execute in a single program via composite.launch().
+        Both execute in a single program via launch().
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         # Core ranges - non-overlapping
         chain_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -634,8 +634,8 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
-        # Execute both in parallel via composite.launch
-        outputs = composite.launch([fused_chain, parallel_rms])
+        # Execute both in parallel via launch
+        outputs = launch([fused_chain, parallel_rms])
 
         # Verify we got outputs from both
         assert len(outputs) == 2
@@ -672,7 +672,7 @@ class TestSequentialIndividualOps:
     def test_single_layernorm_via_descriptor(self, device, test_tensors):
         """Test single LayerNorm execution via descriptor API."""
         from models.experimental.ops.descriptors.normalization import layer_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 
@@ -684,7 +684,7 @@ class TestSequentialIndividualOps:
             epsilon=1e-5,
         )
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -701,7 +701,7 @@ class TestSequentialIndividualOps:
     def test_single_rmsnorm_via_descriptor(self, device, test_tensors):
         """Test single RMSNorm execution via descriptor API."""
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 
@@ -712,7 +712,7 @@ class TestSequentialIndividualOps:
             epsilon=1e-5,
         )
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -726,9 +726,9 @@ class TestSequentialIndividualOps:
         assert passing, f"RMSNorm PCC check failed: {pcc}"
 
     def test_two_ops_parallel_via_composite(self, device, test_tensors):
-        """Test running two ops in parallel on different cores via composite."""
+        """Test running two ops in parallel on different cores via launch()."""
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         # Non-overlapping core ranges
         cores1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -759,7 +759,7 @@ class TestSequentialIndividualOps:
         )
 
         # Run both in parallel
-        outputs = composite.launch([ln_desc, rms_desc])
+        outputs = launch([ln_desc, rms_desc])
 
         assert len(outputs) == 2
 
@@ -1134,7 +1134,7 @@ class TestParallelChainsExecution:
     """
     Execution tests for parallel chains.
 
-    These demonstrate running multiple fused chains in parallel using composite.launch().
+    These demonstrate running multiple fused chains in parallel using launch().
     Some tests are skipped pending full kernel CB parameterization.
     """
 
@@ -1146,7 +1146,7 @@ class TestParallelChainsExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         cores1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
         cores2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
@@ -1192,7 +1192,7 @@ class TestParallelChainsExecution:
         fused = [build_op_graph(c, [], device) for c in [chain_a, chain_b]]
 
         # Execute in parallel
-        outputs = composite.launch(fused)
+        outputs = launch(fused)
 
         assert len(outputs) == 2
 
@@ -1220,7 +1220,7 @@ class TestParallelChainsExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -1255,7 +1255,7 @@ class TestParallelChainsExecution:
 
         # Fuse and execute
         fused = [build_op_graph(c, [], device) for c in chains]
-        outputs = composite.launch(fused)
+        outputs = launch(fused)
 
         assert len(outputs) == 4
 
@@ -1292,7 +1292,7 @@ class TestParallelExecutionProfiling:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -1397,7 +1397,7 @@ class TestParallelExecutionProfiling:
         start_parallel = time.perf_counter()
 
         # Launch both in parallel
-        outputs = composite.launch([mm_descriptor, fused_norm_chain])
+        outputs = launch([mm_descriptor, fused_norm_chain])
 
         # Wait for completion
         parallel_mm_out = outputs[0][0]
@@ -1491,11 +1491,11 @@ class TestMatmulDescriptor:
     def test_matmul_standalone_descriptor(self, device, matmul_tensors):
         """Test single matmul execution via descriptor API."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -1505,10 +1505,10 @@ class TestMatmulDescriptor:
         assert passing, f"Matmul PCC check failed: {pcc}"
 
     def test_matmul_composite_parallel_with_layernorm(self, device, matmul_tensors, test_tensors):
-        """Test running matmul + layernorm in parallel on different cores via composite."""
+        """Test running matmul + layernorm in parallel on different cores via launch()."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors.normalization import layer_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         cores1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
         cores2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
@@ -1523,7 +1523,7 @@ class TestMatmulDescriptor:
             epsilon=1e-5,
         )
 
-        outputs = composite.launch([mm_desc, ln_desc])
+        outputs = launch([mm_desc, ln_desc])
         assert len(outputs) == 2
 
         # Verify matmul output
@@ -1578,7 +1578,7 @@ class TestMatmulDescriptor:
     def test_matmul_core_range_respected(self, device, matmul_tensors):
         """Test matmul on a non-origin core range to verify core_range_set is respected."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         # Use core (2,0) — not the origin core
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
@@ -1591,7 +1591,7 @@ class TestMatmulDescriptor:
                 assert cr.end.x <= 2, f"Kernel core range extends beyond requested: {cr}"
 
         # Verify execution produces correct output
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -1601,10 +1601,10 @@ class TestMatmulDescriptor:
         assert passing, f"PCC check failed: {pcc}"
 
     def test_matmul_restricted_core_composite(self, device, matmul_tensors, test_tensors):
-        """Test matmul on non-origin core + layernorm on another core via composite."""
+        """Test matmul on non-origin core + layernorm on another core via launch()."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
         from models.experimental.ops.descriptors.normalization import layer_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         # Matmul on core (2,0), layernorm on core (0,0) — non-overlapping
         mm_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
@@ -1619,7 +1619,7 @@ class TestMatmulDescriptor:
             epsilon=1e-5,
         )
 
-        outputs = composite.launch([mm_desc, ln_desc])
+        outputs = launch([mm_desc, ln_desc])
         assert len(outputs) == 2
 
         # Verify matmul output
@@ -1639,7 +1639,7 @@ class TestMatmulDescriptor:
     def test_matmul_multi_core_range(self, device, matmul_tensors):
         """Test matmul distributed across 2 cores with multi-core program config."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         # Use cores (3,0)-(4,0) — 2 non-origin cores
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 0))})
@@ -1660,7 +1660,7 @@ class TestMatmulDescriptor:
             matmul_tensors["tt_a"], matmul_tensors["tt_b"], core_range_set=cores, program_config=program_config
         )
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -1672,7 +1672,7 @@ class TestMatmulDescriptor:
     def test_matmul_large_core_range(self, device):
         """Test matmul distributed across a large 4x2 = 8 core range."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -1704,7 +1704,7 @@ class TestMatmulDescriptor:
 
         desc = matmul_desc(tt_a, tt_b, core_range_set=cores, program_config=program_config)
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -1716,7 +1716,7 @@ class TestMatmulDescriptor:
     def test_matmul_2d_grid_offset(self, device):
         """Test matmul on a 2D grid offset from origin: (2,1)-(4,2) = 3x2 = 6 cores."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -1753,7 +1753,7 @@ class TestMatmulDescriptor:
                 assert cr.start.x >= 2 and cr.start.y >= 1, f"Core range starts before requested: {cr}"
                 assert cr.end.x <= 4 and cr.end.y <= 2, f"Core range extends beyond requested: {cr}"
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         torch_output = ttnn.to_torch(outputs[0][0])
         torch_golden = torch_a @ torch_b
 
@@ -1763,7 +1763,7 @@ class TestMatmulDescriptor:
     def test_matmul_column_offset_grid(self, device):
         """Test matmul on a column-oriented grid offset from origin: (5,0)-(5,3) = 1x4 = 4 cores."""
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -1800,7 +1800,7 @@ class TestMatmulDescriptor:
                 assert cr.start.x == 5 and cr.end.x == 5, f"Core range not on column 5: {cr}"
                 assert cr.start.y >= 0 and cr.end.y <= 3, f"Core range extends beyond rows 0-3: {cr}"
 
-        outputs = composite.launch([desc])
+        outputs = launch([desc])
         torch_output = ttnn.to_torch(outputs[0][0])
         torch_golden = torch_a @ torch_b
 
@@ -1808,11 +1808,11 @@ class TestMatmulDescriptor:
         assert passing, f"PCC check failed: {pcc}"
 
     def test_matmul_2d_offset_composite_with_fused_chain(self, device, test_tensors):
-        """Multi-core 2D offset matmul + fused LN->RMS chain in parallel via composite."""
+        """Multi-core 2D offset matmul + fused LN->RMS chain in parallel via launch()."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -1856,7 +1856,7 @@ class TestMatmulDescriptor:
         )
         fused = build_op_graph([ln, rms], [], device)
 
-        outputs = composite.launch([mm, fused])
+        outputs = launch([mm, fused])
         assert len(outputs) == 2
 
         # Verify matmul
@@ -1885,7 +1885,7 @@ class TestStressInfrastructure:
         """6 independent LN->RMS chains on cores (0,0)-(5,0) in parallel."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
         n_chains = 6
@@ -1920,7 +1920,7 @@ class TestStressInfrastructure:
             chains.append([ln, rms])
 
         fused = [build_op_graph(c, [], device) for c in chains]
-        outputs = composite.launch(fused)
+        outputs = launch(fused)
         assert len(outputs) == n_chains
 
         for i in range(n_chains):
@@ -1936,7 +1936,7 @@ class TestStressInfrastructure:
         """LN->RMS->LN chain on different single-core positions."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(core_x, 0), ttnn.CoreCoord(core_x, 0))})
@@ -1964,7 +1964,7 @@ class TestStressInfrastructure:
         )
 
         fused = build_op_graph([ln1, rms1, ln2], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
@@ -1978,7 +1978,7 @@ class TestStressInfrastructure:
         """4-phase all-RMS chain on core (5,0)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
 
@@ -2007,7 +2007,7 @@ class TestStressInfrastructure:
             prev_input = d.output_tensors[0]
 
         fused = build_op_graph(descs, [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = test_tensors["torch_input"]
@@ -2022,7 +2022,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2072,7 +2072,7 @@ class TestStressInfrastructure:
         fused_b = build_op_graph([rms_b, ln_b], [], device)
 
         # Launch all 3 in parallel
-        outputs = composite.launch([mm, fused_a, fused_b])
+        outputs = launch([mm, fused_a, fused_b])
         assert len(outputs) == 3
 
         # Verify matmul
@@ -2099,7 +2099,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2129,7 +2129,7 @@ class TestStressInfrastructure:
         )
         fused = build_op_graph([ln1, rms1, ln2], [], device)
 
-        outputs = composite.launch([mm, fused])
+        outputs = launch([mm, fused])
         assert len(outputs) == 2
 
         # Verify matmul
@@ -2148,7 +2148,7 @@ class TestStressInfrastructure:
         """2-phase chain + 3-phase chain running in parallel."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2202,7 +2202,7 @@ class TestStressInfrastructure:
         )
         fused_b = build_op_graph([ln_b1, rms_b, ln_b2], [], device)
 
-        outputs = composite.launch([fused_a, fused_b])
+        outputs = launch([fused_a, fused_b])
         assert len(outputs) == 2
 
         # Verify 2-phase chain
@@ -2223,7 +2223,7 @@ class TestStressInfrastructure:
         """Run chain 3 times with fresh descriptors each time to check for state leaks."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))})
@@ -2250,7 +2250,7 @@ class TestStressInfrastructure:
                 compute_kernel_config=ln_compute_config,
             )
             fused = build_op_graph([ln1, rms1], [], device)
-            outputs = composite.launch([fused])
+            outputs = launch([fused])
             result = ttnn.to_torch(outputs[0][0])
 
             passing, pcc = comp_pcc(golden, result, pcc=0.98)
@@ -2261,7 +2261,7 @@ class TestStressInfrastructure:
         """2-phase LN->RMS chain with larger tensors (128x256)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(123)
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -2300,7 +2300,7 @@ class TestStressInfrastructure:
             compute_kernel_config=ln_compute_config,
         )
         fused = build_op_graph([ln1, rms1], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_rms_norm(torch_layer_norm(torch_input, torch_w1, torch_b1), torch_w2)
@@ -2312,7 +2312,7 @@ class TestStressInfrastructure:
         """LN->LN->LN chain (all same op type, with biases)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0))})
 
@@ -2339,7 +2339,7 @@ class TestStressInfrastructure:
         )
 
         fused = build_op_graph([ln1, ln2, ln3], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
@@ -2354,7 +2354,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2388,7 +2388,7 @@ class TestStressInfrastructure:
             )
             fused_chains.append(build_op_graph([ln, rms], [], device))
 
-        outputs = composite.launch([mm] + fused_chains)
+        outputs = launch([mm] + fused_chains)
         assert len(outputs) == 4
 
         # Verify matmul
@@ -2412,7 +2412,7 @@ class TestStressInfrastructure:
         """LN->RMS chain on 4-core range (0,0)-(3,0)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
@@ -2432,7 +2432,7 @@ class TestStressInfrastructure:
         )
 
         fused = build_op_graph([ln, rms], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_rms_norm(
@@ -2446,7 +2446,7 @@ class TestStressInfrastructure:
         """LN->RMS->LN chain on 2x2 core grid (0,0)-(1,1)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
@@ -2474,7 +2474,7 @@ class TestStressInfrastructure:
         )
 
         fused = build_op_graph([ln1, rms, ln2], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
@@ -2488,7 +2488,7 @@ class TestStressInfrastructure:
         """3 independent LN->RMS chains on non-overlapping multi-core ranges."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2527,7 +2527,7 @@ class TestStressInfrastructure:
             chains.append([ln, rms])
 
         fused = [build_op_graph(c, [], device) for c in chains]
-        outputs = composite.launch(fused)
+        outputs = launch(fused)
         assert len(outputs) == 3
 
         for i in range(3):
@@ -2542,7 +2542,7 @@ class TestStressInfrastructure:
         """4-phase all-RMS chain on 3-core range (2,0)-(4,0)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(4, 0))})
 
@@ -2571,7 +2571,7 @@ class TestStressInfrastructure:
             prev_input = d.output_tensors[0]
 
         fused = build_op_graph(descs, [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = test_tensors["torch_input"]
@@ -2585,7 +2585,7 @@ class TestStressInfrastructure:
         """Mix of single-core and multi-core chains in parallel."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2640,7 +2640,7 @@ class TestStressInfrastructure:
             )
             fused_chains.append(build_op_graph([ln, rms], [], device))
 
-        outputs = composite.launch(fused_chains)
+        outputs = launch(fused_chains)
         assert len(outputs) == 3
 
         # Verify all chains
@@ -2656,7 +2656,7 @@ class TestStressInfrastructure:
         """2 independent 3-phase LN->RMS->LN chains on separate multi-core ranges."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2706,7 +2706,7 @@ class TestStressInfrastructure:
             )
             fused_chains.append(build_op_graph([ln1, rms, ln2], [], device))
 
-        outputs = composite.launch(fused_chains)
+        outputs = launch(fused_chains)
         assert len(outputs) == 2
 
         # Verify both chains
@@ -2723,7 +2723,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2773,7 +2773,7 @@ class TestStressInfrastructure:
         fused_b = build_op_graph([rms_b, ln_b], [], device)
 
         # Launch all 3 in parallel
-        outputs = composite.launch([mm, fused_a, fused_b])
+        outputs = launch([mm, fused_a, fused_b])
         assert len(outputs) == 3
 
         # Verify matmul
@@ -2799,7 +2799,7 @@ class TestStressInfrastructure:
         """4 independent 2-phase chains on different multi-core ranges - maximum stress."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
@@ -2841,7 +2841,7 @@ class TestStressInfrastructure:
             chains.append([ln, rms])
 
         fused = [build_op_graph(c, [], device) for c in chains]
-        outputs = composite.launch(fused)
+        outputs = launch(fused)
         assert len(outputs) == 4
 
         for i in range(4):
@@ -2857,7 +2857,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -2900,7 +2900,7 @@ class TestStressInfrastructure:
         )
         fused = build_op_graph([ln, rms], [], device)
 
-        outputs = composite.launch([mm, fused])
+        outputs = launch([mm, fused])
         assert len(outputs) == 2
 
         golden_mm = torch_a @ torch_b
@@ -2918,7 +2918,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -3005,7 +3005,7 @@ class TestStressInfrastructure:
         )
 
         # Launch all 4 in parallel: matmul(6c) + chain A(2c) + chain B(2c) + LN(1c) = 11 cores
-        outputs = composite.launch([mm, fused_a, fused_b, ln_c])
+        outputs = launch([mm, fused_a, fused_b, ln_c])
         assert len(outputs) == 4
 
         golden_mm = torch_a @ torch_b
@@ -3033,7 +3033,7 @@ class TestStressInfrastructure:
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -3085,7 +3085,7 @@ class TestStressInfrastructure:
         )
         fused = build_op_graph([ln1, rms1, ln2], [], device)
 
-        outputs = composite.launch([mm, fused])
+        outputs = launch([mm, fused])
         assert len(outputs) == 2
 
         golden_mm = torch_a @ torch_b
@@ -3112,7 +3112,7 @@ class TestShardedSequentialFusion:
         """LN->RMS chain with BLOCK_SHARDED input."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             create_sharded_mem_config,
             torch_layer_norm,
@@ -3176,7 +3176,7 @@ class TestShardedSequentialFusion:
         )
 
         fused = build_op_graph([ln_desc, rms_desc], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # Golden
@@ -3190,7 +3190,7 @@ class TestShardedSequentialFusion:
         """RMS->LN chain with WIDTH_SHARDED input (two-stage reduction)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             create_sharded_mem_config,
             torch_layer_norm,
@@ -3254,7 +3254,7 @@ class TestShardedSequentialFusion:
         )
 
         fused = build_op_graph([rms_desc, ln_desc], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # Golden
@@ -3268,7 +3268,7 @@ class TestShardedSequentialFusion:
         """LN->RMS->LN chain with BLOCK_SHARDED input."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             create_sharded_mem_config,
             torch_layer_norm,
@@ -3341,7 +3341,7 @@ class TestShardedSequentialFusion:
         )
 
         fused = build_op_graph([ln1, rms, ln2], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # Golden
@@ -3356,7 +3356,7 @@ class TestShardedSequentialFusion:
         """2 independent LN->RMS chains on non-overlapping sharded grids."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             torch_layer_norm,
             rms_norm_golden,
@@ -3444,7 +3444,7 @@ class TestShardedSequentialFusion:
             )
             chains_fused.append(build_op_graph([ln, rms], [], device))
 
-        outputs = composite.launch(chains_fused)
+        outputs = launch(chains_fused)
         assert len(outputs) == 2
 
         # Verify both chains
@@ -3459,7 +3459,7 @@ class TestShardedSequentialFusion:
         """4-phase all-RMS chain with BLOCK_SHARDED input."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             create_sharded_mem_config,
             rms_norm_golden,
@@ -3518,7 +3518,7 @@ class TestShardedSequentialFusion:
             prev_input = d.output_tensors[0]
 
         fused = build_op_graph(descs, [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # Golden
@@ -3534,7 +3534,7 @@ class TestShardedSequentialFusion:
         """LN->RMS chain with bias and residual using sharded tensors."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             create_sharded_mem_config,
             torch_layer_norm,
@@ -3604,7 +3604,7 @@ class TestShardedSequentialFusion:
         )
 
         fused = build_op_graph([ln, rms], [], device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # Golden
@@ -3619,7 +3619,7 @@ class TestShardedSequentialFusion:
         """Stress test: 3 parallel chains with different sharded grid sizes."""
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
             torch_layer_norm,
             rms_norm_golden,
@@ -3729,7 +3729,7 @@ class TestShardedSequentialFusion:
             )
             chains_fused.append(build_op_graph([ln, rms], [], device))
 
-        outputs = composite.launch(chains_fused)
+        outputs = launch(chains_fused)
         assert len(outputs) == 3
 
         # Verify all chains
@@ -3749,7 +3749,7 @@ class TestShardedSequentialFusion:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
         from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import rms_norm_golden
 
         h, w, nch, ncw = 64, 128, 2, 2
@@ -3790,7 +3790,7 @@ class TestShardedSequentialFusion:
         )
         fused = build_op_graph([d1, d2], [], device)
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # Golden: RMS(RMS(input))
@@ -4139,7 +4139,7 @@ class TestOpGraphExecution:
         """Stem (1 RMS on 4 cores) -> Branch A (RMS on 2 cores) + Branch B (RMS on 2 cores)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
@@ -4163,7 +4163,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
@@ -4181,7 +4181,7 @@ class TestOpGraphExecution:
         """Stem (2 RMS on 4 cores) -> Branch A (RMS on 2 cores) + Branch B (RMS on 2 cores)."""
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
@@ -4208,7 +4208,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_s0 = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_s1 = torch_rms_norm(golden_s0, t["torch_weights"][1])
@@ -4227,7 +4227,7 @@ class TestOpGraphExecution:
         """Stem (1 RMS on 6 cores) -> 3 branches of 2 cores each."""
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))})
@@ -4256,7 +4256,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         goldens = [torch_rms_norm(golden_stem, t["torch_weights"][i + 1]) for i in range(3)]
@@ -4276,7 +4276,7 @@ class TestOpGraphExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
@@ -4314,7 +4314,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         g_a = torch_rms_norm(g_stem, t["torch_weights"][1])
@@ -4334,7 +4334,7 @@ class TestOpGraphExecution:
         """OpGraph on 4 cores + independent RMS chain on 2 separate cores."""
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
@@ -4375,7 +4375,7 @@ class TestOpGraphExecution:
         indep_fused = build_op_graph([indep_op0, indep_op1], [], device)
 
         all_ops = [graph, indep_fused]
-        outputs = composite.launch(all_ops)
+        outputs = launch(all_ops)
         assert len(outputs) == 2
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
@@ -4402,7 +4402,7 @@ class TestOpGraphExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
@@ -4426,7 +4426,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
@@ -4447,7 +4447,7 @@ class TestOpGraphExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
@@ -4477,7 +4477,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden = t["torch_input"]
         for i in range(3):
@@ -4501,7 +4501,7 @@ class TestOpGraphExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -4541,7 +4541,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_stem = torch_layer_norm(t["torch_input"], t["torch_weights"][0], t["torch_bias"])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
@@ -4564,7 +4564,7 @@ class TestOpGraphExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         # 2x2 grid: (0,0)-(1,1) = 4 cores
@@ -4591,7 +4591,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
@@ -4617,7 +4617,7 @@ class TestOpGraphExecution:
         """
         from models.experimental.ops.descriptors.fusion import build_op_graph, OpNode
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         # Full 2x4 grid: cores (0,0)-(3,1), 8 cores
@@ -4660,7 +4660,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         g_a = torch_rms_norm(g_stem, t["torch_weights"][1])
@@ -4748,7 +4748,7 @@ class TestSequentialParallelAPI:
         """Sequential(rms, rms) produces same result as build_op_graph linear chain."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 
@@ -4766,7 +4766,7 @@ class TestSequentialParallelAPI:
         )
 
         fused = Sequential(rms1_desc, rms2_desc).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -4780,7 +4780,7 @@ class TestSequentialParallelAPI:
         """Sequential(stem, Parallel(branch_a, branch_b)) matches build_op_graph."""
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         t = opgraph_tensors
         union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
@@ -4796,7 +4796,7 @@ class TestSequentialParallelAPI:
         )
 
         fused = Sequential(stem_op, Parallel(branch_a_op, branch_b_op)).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
@@ -4826,7 +4826,7 @@ class TestSequentialParallelAPI:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
@@ -4968,7 +4968,7 @@ class TestSequentialParallelAPI:
         single_rms = rms_norm.rms_norm(tt_inputs[3], core_range_set=single_cores, weight=tt_w, epsilon=1e-5)
 
         # ── Launch all 7 items on full 8x8 grid ──
-        outputs = composite.launch([mm1, fused_chain1, fused_chain2, fused_chain3, fused_tree, mm2, single_rms])
+        outputs = launch([mm1, fused_chain1, fused_chain2, fused_chain3, fused_tree, mm2, single_rms])
         assert len(outputs) == 7
 
         # ── Verify matmul 1 ──
@@ -5014,7 +5014,7 @@ class TestSequentialParallelAPI:
         """Incremental .add() produces same result as inline construction."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 
@@ -5034,7 +5034,7 @@ class TestSequentialParallelAPI:
         s = Sequential(rms1_desc)
         s.add(rms2_desc)
         fused = s.build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
 
@@ -5087,7 +5087,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5113,7 +5113,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(mm, rms).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_rms_norm(torch_a.float() @ torch_b.float(), torch_w.float())
@@ -5125,7 +5125,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5150,7 +5150,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(rms, mm).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float()
@@ -5162,7 +5162,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5193,7 +5193,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(rms1, mm, rms2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float()
@@ -5206,7 +5206,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5234,7 +5234,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(mm, ln).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_layer_norm(torch_a.float() @ torch_b.float(), torch_w.float(), torch_bias.float())
@@ -5246,7 +5246,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5274,7 +5274,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(ln, mm).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_layer_norm(torch_input.float(), torch_w.float(), torch_bias.float()) @ torch_b.float()
@@ -5286,7 +5286,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5321,7 +5321,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(ln, mm, rms).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_layer_norm(torch_input.float(), torch_w.float(), torch_bias.float()) @ torch_b.float()
@@ -5334,7 +5334,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5367,7 +5367,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(mm1, rms, mm2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
@@ -5392,7 +5392,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -5439,7 +5439,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         result_a = ttnn.to_torch(outputs[0][0])
         result_b = ttnn.to_torch(outputs[0][1])
@@ -5465,7 +5465,7 @@ class TestMatmulFusionChains:
         """
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -5520,7 +5520,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(ln1, rms, ln2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         result = ttnn.to_torch(outputs[0][0])
         temp1 = torch_layer_norm(torch_input.float(), torch_gamma.float(), torch_beta.float())
@@ -5533,7 +5533,7 @@ class TestMatmulFusionChains:
         """Block-sharded LN → RMS → LN on 2x2 cores for barrier scaling comparison."""
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
 
@@ -5588,7 +5588,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(ln1, rms, ln2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         result = ttnn.to_torch(outputs[0][0])
         temp1 = torch_layer_norm(torch_input.float(), torch_gamma.float(), torch_beta.float())
@@ -5602,7 +5602,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5634,7 +5634,7 @@ class TestMatmulFusionChains:
         )
 
         fused = Sequential(rms1, mm, rms2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         temp = torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float()
@@ -5647,7 +5647,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5691,7 +5691,7 @@ class TestMatmulFusionChains:
         )
         fused_b = Sequential(mm2, rms2).build(device)
 
-        outputs = composite.launch([fused_a, fused_b])
+        outputs = launch([fused_a, fused_b])
 
         golden_a = torch_rms_norm(torch_a1.float() @ torch_b1.float(), torch_w.float())
         golden_b = torch_rms_norm(torch_a2.float() @ torch_b2.float(), torch_w.float())
@@ -5706,7 +5706,7 @@ class TestMatmulFusionChains:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5752,7 +5752,7 @@ class TestMatmulFusionChains:
         )
         fused_norm_chain = Sequential(ln, rms_after_ln).build(device)
 
-        outputs = composite.launch([fused_mm_chain, fused_norm_chain])
+        outputs = launch([fused_mm_chain, fused_norm_chain])
 
         golden_mm = torch_rms_norm(torch_a.float() @ torch_b.float(), torch_w.float())
         golden_norm = torch_rms_norm(torch_layer_norm(torch_norm_input.float(), torch_w.float()), torch_w.float())
@@ -5806,7 +5806,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5850,7 +5850,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(mm1, ln, rms, mm2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_a.float() @ torch_b1.float()
@@ -5869,7 +5869,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5908,7 +5908,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(mm1, rms1, mm2, rms2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
@@ -5929,7 +5929,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -5957,7 +5957,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(ln, mm).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_layer_norm(torch_input.float(), torch_w.float(), torch_bias.float()) @ torch_b.float()
@@ -5973,7 +5973,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6000,7 +6000,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(rms, mm).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # RMS with bias: x / rms(x) * weight + bias
@@ -6018,7 +6018,7 @@ class TestMatmulFusionStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6046,7 +6046,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(ln, rms).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         # LN(input + residual) then RMS
@@ -6069,7 +6069,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6122,7 +6122,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(rms1, mm1, ln, mm2, rms2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_rms_norm(torch_input.float(), torch_w1.float())
@@ -6146,7 +6146,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         M, K, N = 32, 64, 256
@@ -6171,7 +6171,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(mm, rms).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         golden = torch_rms_norm(torch_a.float() @ torch_b.float(), torch_w.float())
@@ -6186,7 +6186,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -6221,7 +6221,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(mm1, ln, mm2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_a.float() @ torch_b1.float()
@@ -6243,7 +6243,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6283,7 +6283,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(mm1, rms1, mm2, rms2).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
@@ -6300,7 +6300,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6337,7 +6337,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(ln, mm, rms).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_layer_norm(torch_input.float(), torch_w_ln.float(), torch_bias.float())
@@ -6355,7 +6355,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6393,7 +6393,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(rms, mm, ln).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_rms_norm(torch_input.float(), torch_w_rms.float())
@@ -6417,7 +6417,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6465,7 +6465,7 @@ class TestMatmulFusionStress:
         )
         fused_b = Sequential(ln_b, mm_b).build(device)
 
-        outputs = composite.launch([fused_a, fused_b])
+        outputs = launch([fused_a, fused_b])
 
         golden_a = torch_rms_norm(torch_a1.float() @ torch_b1.float(), torch_w1.float())
         golden_b = torch_layer_norm(torch_input_b.float(), torch_w_ln.float()) @ torch_b2.float()
@@ -6483,7 +6483,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6550,7 +6550,7 @@ class TestMatmulFusionStress:
         )
         fused2 = Sequential(rms2, mm2).build(device)
 
-        outputs = composite.launch([fused0, fused1, fused2])
+        outputs = launch([fused0, fused1, fused2])
 
         golden0 = torch_rms_norm(t_a0.float() @ t_b0.float(), t_w0.float())
         golden1 = torch_rms_norm(torch_layer_norm(t_in1.float(), t_w1a.float()), t_w1b.float())
@@ -6613,7 +6613,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6660,7 +6660,7 @@ class TestMatmulFusionStress:
         )
 
         fused = Sequential(mm1, rms1, mm2, rms2, mm3).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
@@ -6679,7 +6679,7 @@ class TestMatmulFusionStress:
         from models.experimental.ops.descriptors.fusion import Sequential
         from models.experimental.ops.descriptors.normalization import rms_norm
         from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6711,7 +6711,7 @@ class TestMatmulFusionStress:
             prev_output = rms.output_tensors[0]
 
         fused = Sequential(*ops).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
         t = torch_a.float() @ torch_b.float()
@@ -6756,7 +6756,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6820,7 +6820,7 @@ class TestNestedParallelStress:
                 Sequential(b1, b2),
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
         golden_a = torch_rms_norm(
@@ -6850,7 +6850,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6903,7 +6903,7 @@ class TestNestedParallelStress:
                 b_leaf,
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
         g_a = torch_rms_norm(g_stem, ws[1].float())
@@ -6935,7 +6935,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -6970,7 +6970,7 @@ class TestNestedParallelStress:
                 Sequential(b1, b2),
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
         g_a = torch_rms_norm(g_stem, ws[1].float())
@@ -6996,7 +6996,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -7078,7 +7078,7 @@ class TestNestedParallelStress:
                 Sequential(c1, c2),
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         w, b = torch_w.float(), torch_bias.float()
         g_stem = torch_rms_norm(torch_input.float(), w)
@@ -7104,7 +7104,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -7159,7 +7159,7 @@ class TestNestedParallelStress:
             s2,
             Parallel(a1, b1),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         w, b = torch_w.float(), torch_bias.float()
         g = torch_layer_norm(torch_rms_norm(torch_input.float(), w), w, b)
@@ -7184,7 +7184,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -7219,7 +7219,7 @@ class TestNestedParallelStress:
                 Sequential(right, Parallel(rl, rr)),
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_root = torch_rms_norm(torch_input.float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
@@ -7248,7 +7248,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -7286,7 +7286,7 @@ class TestNestedParallelStress:
                 right,
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_root = torch_rms_norm(torch_input.float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
@@ -7313,7 +7313,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -7384,7 +7384,7 @@ class TestNestedParallelStress:
                 right_ln,
             ),
         ).build(device)
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         w = torch_w.float()
         b = torch_bias.float()
@@ -7419,7 +7419,7 @@ class TestNestedParallelStress:
         """
         from models.experimental.ops.descriptors.fusion import OpNode, build_op_graph
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
-        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.fusion import launch
 
         torch.manual_seed(42)
         hidden = 128
@@ -7471,7 +7471,7 @@ class TestNestedParallelStress:
             children=[OpNode(branch_a), OpNode(branch_b)],
             device=device,
         )
-        outputs = composite.launch([fused])
+        outputs = launch([fused])
 
         g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
         golden_a = torch_layer_norm(g_stem, torch_w.float(), torch_bias.float())

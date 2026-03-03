@@ -41,7 +41,7 @@ def rms_norm(
     Example:
         >>> rms_desc_1 = models.experimental.ops.descriptors.normalization.rms_norm(input1, weight=w1, cores=cores1)
         >>> rms_desc_2 = models.experimental.ops.descriptors.normalization.rms_norm(input2, weight=w2, cores=cores2)
-        >>> out_1, out_2 = models.experimental.ops.descriptors.composite.launch([rms_desc_1, rms_desc_2])
+        >>> out_1, out_2 = models.experimental.ops.descriptors.fusion.launch([rms_desc_1, rms_desc_2])
     """
     device = input_tensor.device()
     arch = device.arch()

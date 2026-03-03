@@ -17,7 +17,7 @@ Usage::
 
     root = OpNode(ln_op, children=[OpNode(rms_op_A), OpNode(rms_op_B)])
     fused = OpGraphBuilder(root).build()
-    # Returns a single FusedOp, suitable for composite.launch()
+    # Returns a single FusedOp, suitable for launch()
 """
 
 from collections import defaultdict
@@ -286,7 +286,7 @@ class OpGraphBuilder:
 
         root = OpNode(ln_op, children=[OpNode(rms_op_A), OpNode(rms_op_B)])
         fused = OpGraphBuilder(root).build()
-        # Returns a single FusedOp, suitable for composite.launch()
+        # Returns a single FusedOp, suitable for launch()
     """
 
     def __init__(self, root: OpNode):
@@ -298,7 +298,7 @@ class OpGraphBuilder:
 
         Returns a single self-contained FusedOp.  For branching trees,
         group ProgramDescriptors are merged internally so the result can
-        be dispatched as one unit via ``composite.launch([result])``.
+        be dispatched as one unit via ``launch([result])``.
 
         Output tensors are ordered by leaf in left-to-right DFS order.
 
@@ -700,7 +700,7 @@ def build_op_graph(
 
     Returns:
         A single self-contained FusedOp suitable for
-        ``composite.launch([result])``.
+        ``launch([result])``.
     """
     if not root_phases:
         raise ValueError("root_phases cannot be empty")

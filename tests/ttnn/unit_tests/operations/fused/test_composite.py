@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 import models.experimental.ops.descriptors as descriptors
-import models.experimental.ops.descriptors.composite as composite
+from models.experimental.ops.descriptors.fusion import launch
 from tests.ttnn.utils_for_testing import assert_allclose
 from tests.ttnn.unit_tests.operations.fused.test_layer_norm import allclose_thresholds as thresholds
 
@@ -222,7 +222,7 @@ def test_deepseek_v3_q_kv_rms_norm(device):
     )
 
     # Run composite (returns list of output lists, one per op descriptor)
-    outputs = composite.launch([q_branch, kv_branch])
+    outputs = launch([q_branch, kv_branch])
 
     # Verify outputs (extract first output tensor from each op's output list)
     assert_outputs_are_close(
@@ -369,7 +369,7 @@ def _run_heavy_composite_norm_test(device, norm_fn, torch_norm_fn):
     )
 
     # Run composite (returns list of output lists, one per op descriptor)
-    outputs = composite.launch([left_branch, right_branch])
+    outputs = launch([left_branch, right_branch])
 
     # Verify outputs (extract first output tensor from each op's output list)
     for torch_input, torch_weight, ttnn_output in zip(
@@ -437,7 +437,7 @@ def test_composite_mixed_norm(device):
     )
 
     # Run composite
-    outputs = composite.launch([left_branch, right_branch])
+    outputs = launch([left_branch, right_branch])
 
     # Verify left output (RMS norm)
     expected_left = torch_rms_norm(tensors["left"]["torch_input"], tensors["left"]["torch_weight"])
@@ -517,7 +517,7 @@ def test_composite_non_sharded(device):
     )
 
     # Run composite
-    outputs = composite.launch([left_branch, right_branch])
+    outputs = launch([left_branch, right_branch])
 
     # Verify outputs
     expected_left = torch_rms_norm(torch_left_input, torch_left_weight)
@@ -622,7 +622,7 @@ def test_composite_8_ops_random_cores(device):
         branches.append(branch)
 
     # Run composite with all 8 operations
-    outputs = composite.launch(branches)
+    outputs = launch(branches)
 
     # Verify all outputs
     for i, (torch_input, torch_weight, output, norm_fn) in enumerate(
@@ -634,7 +634,7 @@ def test_composite_8_ops_random_cores(device):
 
 
 def test_composite_program_cache(device):
-    """Test that composite.launch() properly caches the merged program."""
+    """Test that launch() properly caches the merged program."""
     # Setup: sharded tensors on non-overlapping cores
     batch_size, seq_len, hidden_dim = 1, 128, 1024
     torch.manual_seed(0)
@@ -682,7 +682,7 @@ def test_composite_program_cache(device):
         )
 
         # Launch composite operation
-        outputs = composite.launch([left, right])
+        outputs = launch([left, right])
         return outputs
 
     # Get initial cache count
@@ -744,7 +744,7 @@ def test_composite_program_cache_different_configs(device):
             compute_kernel_config=compute_config,
         )
 
-        return composite.launch([left, right])
+        return launch([left, right])
 
     # Get initial cache count
     initial_cache_entries = device.num_program_cache_entries()
@@ -841,7 +841,7 @@ def test_composite_layer_norm_welford_non_sharded(device):
     )
 
     # Run composite
-    outputs = composite.launch([left_branch, right_branch])
+    outputs = launch([left_branch, right_branch])
 
     # Verify outputs
     expected_left = torch_layer_norm(torch_left_input, torch_left_weight)
@@ -965,7 +965,7 @@ def test_composite_layer_norm_welford_sharded(device):
     )
 
     # Run composite
-    outputs = composite.launch([left_branch, right_branch])
+    outputs = launch([left_branch, right_branch])
 
     # Verify outputs
     expected_left = torch_layer_norm(torch_left_input, torch_left_weight)
@@ -983,7 +983,7 @@ def test_composite_layer_norm_welford_sharded(device):
 
 def test_composite_overlapping_cores_error(device):
     """
-    Test that composite.launch() raises an error when core ranges overlap.
+    Test that launch() raises an error when core ranges overlap.
 
     Overlapping core ranges between different operations in a composite
     would cause undefined behavior, so this should be caught and rejected.
@@ -1049,4 +1049,4 @@ def test_composite_overlapping_cores_error(device):
 
     # Attempting to launch with overlapping cores should raise an error
     with pytest.raises(RuntimeError, match="overlapping"):
-        composite.launch([left_branch, right_branch])
+        launch([left_branch, right_branch])
