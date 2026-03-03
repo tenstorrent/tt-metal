@@ -84,8 +84,6 @@ def run_unet_model(
     sdxl_inpainting_unet_location,
     iterations=1,
 ):
-    assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
-
     # Select model location based on input channels
     if input_shape[1] == 4:
         model_location = sdxl_base_unet_location

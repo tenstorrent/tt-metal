@@ -83,7 +83,6 @@ def run_refiner_unet_model(
     sdxl_refiner_unet_location,
     iterations=1,
 ):
-    assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
     unet = UNet2DConditionModel.from_pretrained(
         sdxl_refiner_unet_location,
         torch_dtype=torch.float32,

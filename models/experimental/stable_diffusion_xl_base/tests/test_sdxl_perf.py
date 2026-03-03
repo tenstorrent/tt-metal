@@ -41,7 +41,8 @@ def test_unet(
     iterations,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_base_unet_location,
+    sdxl_inpainting_unet_location,
     reset_seeds,
 ):
     run_unet_model(
@@ -56,7 +57,8 @@ def test_unet(
         debug_mode=False,
         is_ci_env=is_ci_env,
         is_ci_v2_env=is_ci_v2_env,
-        model_location_generator=model_location_generator,
+        sdxl_base_unet_location=sdxl_base_unet_location,
+        sdxl_inpainting_unet_location=sdxl_inpainting_unet_location,
         iterations=iterations,
     )
 
@@ -85,7 +87,7 @@ def test_refiner_unet(
     iterations,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
+    sdxl_refiner_unet_location,
     reset_seeds,
 ):
     run_refiner_unet_model(
@@ -100,7 +102,7 @@ def test_refiner_unet(
         debug_mode=False,
         is_ci_env=is_ci_env,
         is_ci_v2_env=is_ci_v2_env,
-        model_location_generator=model_location_generator,
+        sdxl_refiner_unet_location=sdxl_refiner_unet_location,
         iterations=iterations,
     )
 
