@@ -942,4 +942,14 @@ void MetalContext::on_dispatch_timeout_detected() {
     }
 }
 
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
+MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+
 }  // namespace tt::tt_metal
