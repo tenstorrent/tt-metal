@@ -579,8 +579,9 @@ def _enum_name_or_str(obj: Any) -> str | None:
     """Get the name of an enum or return the string representation."""
     if obj is None:
         return None
-    if hasattr(obj, "name"):
-        return obj.name
+    name = getattr(obj, "name", None)
+    if name is not None:
+        return name
     return str(obj)
 
 
@@ -599,7 +600,7 @@ def _memory_config_to_dict(memory_config: ttnn.MemoryConfig | None) -> dict[str,
         if memory_config.shard_spec is not None and memory_config.shard_spec.grid is not None:
             grid = memory_config.shard_spec.grid
             # Handle CoreRangeSet - convert to list of ranges
-            if hasattr(grid, "__iter__"):
+            try:
                 # It's a CoreRangeSet (iterable of CoreRange objects)
                 grid_dict = [
                     {
@@ -608,12 +609,18 @@ def _memory_config_to_dict(memory_config: ttnn.MemoryConfig | None) -> dict[str,
                     }
                     for core_range in grid
                 ]
-            elif hasattr(grid, "start") and hasattr(grid, "end"):
-                # It's a single CoreRange
-                grid_dict = {
-                    "start": (grid.start.x, grid.start.y),
-                    "end": (grid.end.x, grid.end.y),
-                }
+            except TypeError:
+                grid_dict = None
+
+            if grid_dict is None:
+                try:
+                    # It's a single CoreRange
+                    grid_dict = {
+                        "start": (grid.start.x, grid.start.y),
+                        "end": (grid.end.x, grid.end.y),
+                    }
+                except AttributeError:
+                    grid_dict = None
 
         return {
             "memory_layout": _enum_name_or_str(memory_config.memory_layout),
@@ -694,7 +701,12 @@ def shard_and_save(
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
 ) -> SavedWeight:
-    """Shard a tensor and save it to a file."""
+    """Shard a tensor and save it to a file.
+
+    STRICTNESS CONTRACT:
+      - _torch_impl=True  => host-only sharding + host-only TTNN output
+      - _torch_impl=False => device sharding via mesh_mapper + device TTNN output
+    """
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
     assert isinstance(remove_dims, bool) or all(isinstance(remove_dim, bool) for remove_dim in remove_dims)
     assert len(shard_dims) == 2, "shard_dims must be exactly 2 dimensions (can repeat)"
@@ -706,6 +718,7 @@ def shard_and_save(
         shard_dims[0] != shard_dims[1] or remove_dims[0] == remove_dims[1]
     ), "If sharding a single dim, both remove_dim values must be the same"
 
+    # Validation of shardability vs mesh shape
     for remove_dim, shard_dim, mesh_dim in zip(remove_dims, shard_dims, mesh_device.shape, strict=True):
         assert (
             shard_dim is None or tensor.shape[shard_dim] % mesh_dim == 0
@@ -730,6 +743,13 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
+    # Strict isolation helpers
+    def _assert_host_only(t: ttnn.Tensor) -> None:
+        assert t.storage_type() != ttnn.StorageType.DEVICE, f"Expected HOST tensor, got {t.storage_type()}"
+
+    def _assert_device_only(t: ttnn.Tensor) -> None:
+        assert t.storage_type() == ttnn.StorageType.DEVICE, f"Expected DEVICE tensor, got {t.storage_type()}"
+
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -741,6 +761,7 @@ def shard_and_save(
             layout=layout,
             memory_config=memory_config,
         )
+        _assert_host_only(ttnn_tensor)
     else:
         ttnn_tensor = _shard_device_impl(
             path=path,
@@ -752,6 +773,7 @@ def shard_and_save(
             layout=layout,
             memory_config=memory_config,
         )
+        _assert_device_only(ttnn_tensor)
 
     if not path.name.endswith(TENSOR_CACHE_EXTENSION):
         path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
@@ -760,6 +782,7 @@ def shard_and_save(
 
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
+
     record = {
         "event": "deepseek_v3.cache_tensor_spec",
         "pid": os.getpid(),
@@ -783,6 +806,7 @@ def shard_and_save(
         "result_layout": _enum_name_or_str(ttnn_tensor.layout),
         "result_memory_config": _memory_config_to_dict(ttnn_tensor.memory_config()),
     }
+
     try:
         ttnn.dump_tensor(path, ttnn_tensor)
     except Exception as e:
@@ -793,13 +817,11 @@ def shard_and_save(
         _append_cache_specs_record(record)
 
     # Always convert absolute paths to relative paths for portability
-    # This ensures SavedWeight objects always have relative paths
     if path.is_absolute():
         path_str = str(path)
         mesh_idx = path_str.find("mesh_")
         if mesh_idx == -1:
             raise ValueError(f"Expected 'mesh_' in path: {path}")
-        # Skip past "mesh_<rows>x<cols>/" to get relative path
         parts = path_str[mesh_idx:].split("/", 1)
         if len(parts) < 2:
             raise ValueError(f"Invalid path structure after 'mesh_': {path}")
@@ -818,7 +840,15 @@ def _shard_device_impl(
     dtype: ttnn.DataType | None,
     layout: ttnn.Layout | None,
     memory_config: ttnn.MemoryConfig | None,
-) -> SavedWeight:
+) -> ttnn.Tensor:
+    """STRICT DEVICE PATH: sharding + storage must be on device.
+
+    Guarantees:
+      - Single `from_torch(..., device=mesh_device, mesh_mapper=...)` creates a DEVICE tensor.
+      - Any dtype/layout/memory_config adjustments happen after the tensor is already DEVICE.
+    """
+    assert tensor.device.type == "cpu", "DEVICE path expects a CPU torch.Tensor input (host->device upload)."
+
     assert layout in {
         None,
         ttnn.ROW_MAJOR_LAYOUT,
@@ -835,46 +865,84 @@ def _shard_device_impl(
     if isinstance(remove_dims, bool):
         remove_dims = (remove_dims, remove_dims)
 
+    # Build mesh mapper
     if shard_dims[0] is None and shard_dims[1] is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
+    elif shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dims[0])
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
-        ttnn_tensor = ttnn.from_torch(
-            tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
-        )
-    else:
-        ttnn_tensor = ttnn.from_torch(
-            tensor,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+    def _assert_on_device(t: ttnn.Tensor) -> None:
+        assert t.storage_type() == ttnn.StorageType.DEVICE, f"Expected DEVICE tensor, got {t.storage_type()}"
+
+    if layout is None:
+        layout = ttnn.TILE_LAYOUT if dtype_is_tilized else ttnn.ROW_MAJOR_LAYOUT
+
+    # Create the TT tensor on device
+    ttnn_tensor = ttnn.from_torch(
+        tensor,
+        layout=layout,
+        dtype=dtype,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
+        memory_config=memory_config,
+    )
+    _assert_on_device(ttnn_tensor)
+
+    # If non-DRAM memory config is requested, change the memory config
+    if (
+        memory_config is not None
+        and memory_config != ttnn.DRAM_MEMORY_CONFIG
+        and ttnn_tensor.memory_config() != memory_config
+    ):
+        ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, memory_config)
+        _assert_on_device(ttnn_tensor)
+
+    # If a dtype is requested that is different from the tensor's dtype, change the dtype
+    if dtype is not None and ttnn_tensor.dtype != dtype:
+        if "DEVICE" in str(ttnn_tensor.storage_type()).upper():
+            raise RuntimeError(
+                f"Strict device path cannot change dtype on-device from {ttnn_tensor.dtype} to {dtype}; "
+                "ensure from_torch creates the requested dtype."
+            )
         ttnn_tensor = ttnn.to_dtype(ttnn_tensor, dtype)
+        _assert_on_device(ttnn_tensor)
+
+    # If a layout is requested that is different from the tensor's layout, change the layout
+    if layout is not None and ttnn_tensor.layout != layout:
         ttnn_tensor = ttnn_tensor.to(layout)
+        _assert_on_device(ttnn_tensor)
 
-    assert memory_config == ttnn_tensor.memory_config()
-    assert dtype == ttnn_tensor.dtype
-    assert layout == ttnn_tensor.layout
+    # Assertions to ensure the tensor has desired dtype, layout, and memory config
+    if memory_config is not None:
+        assert memory_config == ttnn_tensor.memory_config()
+    if dtype is not None:
+        assert dtype == ttnn_tensor.dtype
+    if layout is not None:
+        assert layout == ttnn_tensor.layout
 
+    # Reshape the tensor to remove the sharded dimensions
     new_tensor_shape = list(ttnn_tensor.shape)
     if shard_dims[0] == shard_dims[1]:
         if remove_dims[0]:
             new_tensor_shape.pop(shard_dims[0])
     else:
-        if None not in shard_dims and shard_dims[0] > shard_dims[1]:
-            shard_dims = (shard_dims[1], shard_dims[0])
-            remove_dims = (remove_dims[1], remove_dims[0])
-        if remove_dims[1]:
-            new_tensor_shape.pop(shard_dims[1])
-        if remove_dims[0]:
-            new_tensor_shape.pop(shard_dims[0])
+        _shard_dims = shard_dims
+        _remove_dims = remove_dims
+        if None not in _shard_dims and _shard_dims[0] > _shard_dims[1]:
+            _shard_dims = (_shard_dims[1], _shard_dims[0])
+            _remove_dims = (_remove_dims[1], _remove_dims[0])
+        if _remove_dims[1]:
+            new_tensor_shape.pop(_shard_dims[1])
+        if _remove_dims[0]:
+            new_tensor_shape.pop(_shard_dims[0])
 
     new_tensor_shape = [1] * sum(remove_dims) + new_tensor_shape
     ttnn_tensor = ttnn_tensor.reshape(new_tensor_shape)
+
+    # Assert that the final tensor is on device
+    _assert_on_device(ttnn_tensor)
 
     return ttnn_tensor
 
@@ -889,7 +957,11 @@ def _shard_torch_impl(
     dtype: ttnn.DataType | None = None,
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
-) -> SavedWeight:
+) -> ttnn.Tensor:
+    """All slicing + TTNN tensor creation must be host-only."""
+    assert tensor.device.type == "cpu", "HOST path requires a CPU torch.Tensor (no CUDA tensors)."
+
+    # If the sharding dimensions are the same, remove the sharded dimension
     if shard_dims[0] == shard_dims[1]:
         assert remove_dims[0] == remove_dims[1], "If sharding a single dim, both remove_dim values must be the same"
         remove_dims = (remove_dims[0],)
@@ -898,20 +970,29 @@ def _shard_torch_impl(
     else:
         sharding_shape = (mesh_device.shape[0], mesh_device.shape[1])
 
-    return ttnn.from_host_shards(
-        [
-            ttnn.from_torch(
-                tensor[_get_shard_slices(tensor.shape, shard_dims, sharding_shape, shard_coords)][
-                    _get_remove_dim_slices(tensor.shape, shard_dims, remove_dims)
-                ],
-                dtype=dtype,
-                layout=layout,
-                memory_config=memory_config,
-            )
-            for shard_coords in itertools.product(*map(range, sharding_shape))
-        ],
-        mesh_shape=mesh_device.shape,
-    )
+    def _assert_on_host(t: ttnn.Tensor) -> None:
+        assert t.storage_type() != ttnn.StorageType.DEVICE, f"Expected HOST tensor, got {t.storage_type()}"
+
+    shards: list[ttnn.Tensor] = []
+    for shard_coords in itertools.product(*map(range, sharding_shape)):
+        shard_torch = tensor[_get_shard_slices(tensor.shape, shard_dims, sharding_shape, shard_coords)][
+            _get_remove_dim_slices(tensor.shape, shard_dims, remove_dims)
+        ]
+
+        shard = ttnn.from_torch(
+            shard_torch,
+            dtype=dtype,
+            layout=layout,
+            memory_config=memory_config,
+            device=None,
+            mesh_mapper=None,
+        )
+        _assert_on_host(shard)
+        shards.append(shard)
+
+    out = ttnn.from_host_shards(shards, mesh_shape=mesh_device.shape)
+    _assert_on_host(out)
+    return out
 
 
 def _get_shard_slices(

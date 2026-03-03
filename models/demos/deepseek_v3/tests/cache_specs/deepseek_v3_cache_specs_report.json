@@ -1,0 +1,1687 @@
+{
+  "check_mode": "record",
+  "current_mesh_shape": [
+    4,
+    8
+  ],
+  "num_cases_selected": 158,
+  "num_records_ok": 158,
+  "num_records_total": 158,
+  "results": [
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/scatter_top_expert_groups.src.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/scatter_top_expert_groups.src.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/scatter_top_expert_groups.src.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/scatter_top_expert_groups.src.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/multiply_expert_scale.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/scatter_top_expert_groups.input.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/multiply_expert_scale.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/scatter_top_expert_groups.input.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/multiply_expert_scale.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/scatter_top_expert_groups.input.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/multiply_expert_scale.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/scatter_top_expert_groups.input.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/e_score_correction_bias.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"FLOAT32\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/e_score_correction_bias.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"FLOAT32\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/e_score_correction_bias.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"FLOAT32\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/e_score_correction_bias.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"FLOAT32\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        1,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/q_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp_norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "norm/rmsnorm.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [0, -2], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/gate_proj.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        7168,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/gate_proj.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        7168,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/gate_proj.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        7168,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/gate_proj.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1,
+        7168,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wkv_b1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -3], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wkv_b2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, null], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wq_b.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [256, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [256, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [256, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [256, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 32]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wo.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [2304, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [2304, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [2304, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [2304, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [2304, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w1.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w2.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [2304, 608]}}, \"shard_dims\": [0, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w3.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 3, \"shard_spec\": {\"grid\": [{\"end\": {\"x\": 11, \"y\": 0}, \"start\": {\"x\": 0, \"y\": 0}}], \"orientation\": 0, \"shape\": [7168, 192]}}, \"shard_dims\": [0, 2], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "embedding/embedding.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, true], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [2, 1], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        129280,
+        8,
+        4,
+        224
+      ]
+    },
+    {
+      "cache_file_relpath": "lm_head/linear.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        7168,
+        129280
+      ]
+    },
+    {
+      "cache_file_relpath": "embedding/embedding.weight.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [true, true], \"requested_dtype\": \"BFLOAT16\", \"requested_layout\": \"ROW_MAJOR\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [2, 1], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        129280,
+        8,
+        4,
+        224
+      ]
+    },
+    {
+      "cache_file_relpath": "lm_head/linear.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": \"TILE\", \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [null, -1], \"torch_dtype\": \"torch.bfloat16\"}",
+      "status": "ok",
+      "torch_shape": [
+        7168,
+        129280
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w1_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w2_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w3_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w1_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w2_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w3_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w1_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w2_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w3_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w1_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w2_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT4_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w3_experts.input_tensor_b.tensorbin",
+      "signature": "{\"mesh_shape\": [4, 8], \"remove_dims\": [false, false], \"requested_dtype\": \"BFLOAT8_B\", \"requested_layout\": null, \"requested_memory_config\": {\"buffer_type\": 0, \"created_with_nd_shard_spec\": false, \"memory_layout\": 0}, \"shard_dims\": [1, 1], \"torch_dtype\": \"torch.float32\"}",
+      "status": "ok",
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    }
+  ],
+  "specs_jsonl": "/home/ubuntu/yalrawwash/tt-metal/tmp/deepseek_v3_cache_specs.jsonl"
+}

@@ -1,0 +1,1092 @@
+{
+  "paired_cases": [
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/scatter_top_expert_groups.src.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.5035090036690235,
+      "host_status": "ok",
+      "host_total_ms": 1.2560668401420116,
+      "speedup_host_over_device": 0.8354235572097161,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/scatter_top_expert_groups.src.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4052011538296938,
+      "host_status": "ok",
+      "host_total_ms": 1.1667429935187101,
+      "speedup_host_over_device": 0.8303031849489328,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/multiply_expert_scale.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3572298921644688,
+      "host_status": "ok",
+      "host_total_ms": 1.1532031930983067,
+      "speedup_host_over_device": 0.8496741780857873,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/scatter_top_expert_groups.input.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3192519545555115,
+      "host_status": "ok",
+      "host_total_ms": 1.1498071253299713,
+      "speedup_host_over_device": 0.8715599179971423,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/multiply_expert_scale.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3807439245283604,
+      "host_status": "ok",
+      "host_total_ms": 1.1477440129965544,
+      "speedup_host_over_device": 0.8312504531849416,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/scatter_top_expert_groups.input.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.2827969621866941,
+      "host_status": "ok",
+      "host_total_ms": 1.1636579874902964,
+      "speedup_host_over_device": 0.9071256183103912,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        8
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/e_score_correction_bias.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.36845582164824,
+      "host_status": "ok",
+      "host_total_ms": 0.8736720774322748,
+      "speedup_host_over_device": 0.6384364504949661,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/e_score_correction_bias.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3783611357212067,
+      "host_status": "ok",
+      "host_total_ms": 0.8762059733271599,
+      "speedup_host_over_device": 0.6356867954410934,
+      "torch_shape": [
+        1,
+        1,
+        1,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3482749927788973,
+      "host_status": "ok",
+      "host_total_ms": 0.8813529275357723,
+      "speedup_host_over_device": 0.6536892935462942,
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3421159237623215,
+      "host_status": "ok",
+      "host_total_ms": 0.8907378651201725,
+      "speedup_host_over_device": 0.6636817650022275,
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.2453198432922363,
+      "host_status": "ok",
+      "host_total_ms": 0.8751449640840292,
+      "speedup_host_over_device": 0.7027471446776432,
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.358700916171074,
+      "host_status": "ok",
+      "host_total_ms": 0.8950850460678339,
+      "speedup_host_over_device": 0.6587800415931521,
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/kv_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.2990920804440975,
+      "host_status": "ok",
+      "host_total_ms": 0.889916904270649,
+      "speedup_host_over_device": 0.6850298894643626,
+      "torch_shape": [
+        4,
+        1,
+        16,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/q_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.363558927550912,
+      "host_status": "ok",
+      "host_total_ms": 0.9041179437190294,
+      "speedup_host_over_device": 0.6630574780826786,
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/q_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.324610086157918,
+      "host_status": "ok",
+      "host_total_ms": 0.8759449701756239,
+      "speedup_host_over_device": 0.6612851429482435,
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/q_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4056318905204535,
+      "host_status": "ok",
+      "host_total_ms": 0.8853001054376364,
+      "speedup_host_over_device": 0.6298235771456797,
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/q_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.2125011999160051,
+      "host_status": "ok",
+      "host_total_ms": 0.8746539242565632,
+      "speedup_host_over_device": 0.7213633473658864,
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/q_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.338830916211009,
+      "host_status": "ok",
+      "host_total_ms": 0.889947172254324,
+      "speedup_host_over_device": 0.6647196158070061,
+      "torch_shape": [
+        4,
+        1,
+        48,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.5231878496706486,
+      "host_status": "ok",
+      "host_total_ms": 0.8912889752537012,
+      "speedup_host_over_device": 0.5851471146165066,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3513099402189255,
+      "host_status": "ok",
+      "host_total_ms": 0.8873229380697012,
+      "speedup_host_over_device": 0.6566390963763251,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.552363159134984,
+      "host_status": "ok",
+      "host_total_ms": 0.8751139976084232,
+      "speedup_host_over_device": 0.5637302022138034,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4888769946992397,
+      "host_status": "ok",
+      "host_total_ms": 0.8985400199890137,
+      "speedup_host_over_device": 0.6035018495067305,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.3805441558361053,
+      "host_status": "ok",
+      "host_total_ms": 0.8899068925529718,
+      "speedup_host_over_device": 0.6446058887656609,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.46289705298841,
+      "host_status": "ok",
+      "host_total_ms": 0.8963958825916052,
+      "speedup_host_over_device": 0.6127539055194932,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4364069793373346,
+      "host_status": "ok",
+      "host_total_ms": 0.8900680113583803,
+      "speedup_host_over_device": 0.6196489046363449,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4440990053117275,
+      "host_status": "ok",
+      "host_total_ms": 0.9006729815155268,
+      "speedup_host_over_device": 0.6236919894014502,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4863628894090652,
+      "host_status": "ok",
+      "host_total_ms": 0.8934219367802143,
+      "speedup_host_over_device": 0.6010792809388648,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp_norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4882958494126797,
+      "host_status": "ok",
+      "host_total_ms": 0.8926920127123594,
+      "speedup_host_over_device": 0.599808171920011,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "norm/rmsnorm.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1.4155961107462645,
+      "host_status": "ok",
+      "host_total_ms": 0.8854300249367952,
+      "speedup_host_over_device": 0.6254820977644677,
+      "torch_shape": [
+        4,
+        1,
+        224,
+        32
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_gate/gate_proj.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 5.368914920836687,
+      "host_status": "ok",
+      "host_total_ms": 67.85928411409259,
+      "speedup_host_over_device": 12.639292131587263,
+      "torch_shape": [
+        1,
+        1,
+        7168,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_gate/gate_proj.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 5.234763957560062,
+      "host_status": "ok",
+      "host_total_ms": 68.49345797672868,
+      "speedup_host_over_device": 13.08434506923855,
+      "torch_shape": [
+        1,
+        1,
+        7168,
+        256
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wkv_b1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 80.17787104472518,
+      "host_status": "ok",
+      "host_total_ms": 284.2140740249306,
+      "speedup_host_over_device": 3.5447944716116124,
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wkv_b2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 101.27283213660121,
+      "host_status": "ok",
+      "host_total_ms": 3183.021720033139,
+      "speedup_host_over_device": 31.430163972700402,
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wkv_b1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 81.26222109422088,
+      "host_status": "ok",
+      "host_total_ms": 282.8001491725445,
+      "speedup_host_over_device": 3.480093767614929,
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wkv_b2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 104.562534019351,
+      "host_status": "ok",
+      "host_total_ms": 3218.0111028719693,
+      "speedup_host_over_device": 30.775947934433415,
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wkv_b1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 80.84725588560104,
+      "host_status": "ok",
+      "host_total_ms": 281.15838300436735,
+      "speedup_host_over_device": 3.477649054684141,
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wkv_b2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 105.88477994315326,
+      "host_status": "ok",
+      "host_total_ms": 3121.0043190512806,
+      "speedup_host_over_device": 29.47547627455868,
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wkv_b1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 81.36178902350366,
+      "host_status": "ok",
+      "host_total_ms": 282.2311441414058,
+      "speedup_host_over_device": 3.4688414245644887,
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wkv_b2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 104.9835761077702,
+      "host_status": "ok",
+      "host_total_ms": 3120.797928189859,
+      "speedup_host_over_device": 29.726534796130625,
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wkv_b1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 81.14131796173751,
+      "host_status": "ok",
+      "host_total_ms": 281.9495720323175,
+      "speedup_host_over_device": 3.4747965538996035,
+      "torch_shape": [
+        1,
+        128,
+        128,
+        512
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wkv_b2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 105.5556561332196,
+      "host_status": "ok",
+      "host_total_ms": 3108.458288013935,
+      "speedup_host_over_device": 29.448524142475268,
+      "torch_shape": [
+        1,
+        128,
+        512,
+        128
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 146.84989186935127,
+      "host_status": "ok",
+      "host_total_ms": 495.8392570260912,
+      "speedup_host_over_device": 3.3765040662558143,
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 146.92236110568047,
+      "host_status": "ok",
+      "host_total_ms": 500.3032819367945,
+      "speedup_host_over_device": 3.4052221742946878,
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 146.83215483091772,
+      "host_status": "ok",
+      "host_total_ms": 496.609432855621,
+      "speedup_host_over_device": 3.3821572218121014,
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 147.33646204695106,
+      "host_status": "ok",
+      "host_total_ms": 521.088618086651,
+      "speedup_host_over_device": 3.5367254707161218,
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wq_kv_a.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 146.87023288570344,
+      "host_status": "ok",
+      "host_total_ms": 501.2014920357615,
+      "speedup_host_over_device": 3.412546451300338,
+      "torch_shape": [
+        1,
+        7168,
+        2112
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wq_b.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 335.53595398552716,
+      "host_status": "ok",
+      "host_total_ms": 1288.0583310034126,
+      "speedup_host_over_device": 3.838808675206744,
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wq_b.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 344.8468609713018,
+      "host_status": "ok",
+      "host_total_ms": 1244.4221070036292,
+      "speedup_host_over_device": 3.608622399805432,
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wq_b.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 328.60716502182186,
+      "host_status": "ok",
+      "host_total_ms": 1188.0234798882157,
+      "speedup_host_over_device": 3.6153304198626417,
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wq_b.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 334.7153610084206,
+      "host_status": "ok",
+      "host_total_ms": 1169.9687058571726,
+      "speedup_host_over_device": 3.4954138415766915,
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wq_b.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 337.72050496190786,
+      "host_status": "ok",
+      "host_total_ms": 1185.0422609131783,
+      "speedup_host_over_device": 3.5089437671154777,
+      "torch_shape": [
+        1,
+        1536,
+        24576
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 521.3552778586745,
+      "host_status": "ok",
+      "host_total_ms": 506.5323591697961,
+      "speedup_host_over_device": 0.9715684882873737,
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 491.7044851463288,
+      "host_status": "ok",
+      "host_total_ms": 481.2450709287077,
+      "speedup_host_over_device": 0.9787282513509951,
+      "torch_shape": [
+        4,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/shared_experts/w3.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 487.683602841571,
+      "host_status": "ok",
+      "host_total_ms": 515.9127318765968,
+      "speedup_host_over_device": 1.0578841053308827,
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 485.57256208732724,
+      "host_status": "ok",
+      "host_total_ms": 513.8095221482217,
+      "speedup_host_over_device": 1.0581518855585919,
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 485.73303292505443,
+      "host_status": "ok",
+      "host_total_ms": 510.53286995738745,
+      "speedup_host_over_device": 1.0510565173692017,
+      "torch_shape": [
+        4,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/shared_experts/w3.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 487.0637319982052,
+      "host_status": "ok",
+      "host_total_ms": 518.8330688979477,
+      "speedup_host_over_device": 1.0652262420965057,
+      "torch_shape": [
+        4,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mla/wo.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1361.856244970113,
+      "host_status": "ok",
+      "host_total_ms": 5021.908891154453,
+      "speedup_host_over_device": 3.68754698574273,
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mla/wo.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1362.9645579494536,
+      "host_status": "ok",
+      "host_total_ms": 5079.41101398319,
+      "speedup_host_over_device": 3.7267374154064856,
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mla/wo.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1361.9089620187879,
+      "host_status": "ok",
+      "host_total_ms": 5054.158804006875,
+      "speedup_host_over_device": 3.7110841803368286,
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mla/wo.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1409.8151319194585,
+      "host_status": "ok",
+      "host_total_ms": 5062.254423974082,
+      "speedup_host_over_device": 3.5907221516922148,
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mla/wo.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 1366.87449994497,
+      "host_status": "ok",
+      "host_total_ms": 5253.788560861722,
+      "speedup_host_over_device": 3.8436510162953788,
+      "torch_shape": [
+        1,
+        16384,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6651.25859901309,
+      "host_status": "ok",
+      "host_total_ms": 6733.920902945101,
+      "speedup_host_over_device": 1.0124280694700813,
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6507.860766956583,
+      "host_status": "ok",
+      "host_total_ms": 6751.165473135188,
+      "speedup_host_over_device": 1.0373862802065428,
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_0/mlp/w3.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6677.603021031246,
+      "host_status": "ok",
+      "host_total_ms": 6711.087999166921,
+      "speedup_host_over_device": 1.0050145206341576,
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6870.999041944742,
+      "host_status": "ok",
+      "host_total_ms": 6756.344269029796,
+      "speedup_host_over_device": 0.9833132311305789,
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6694.343056995422,
+      "host_status": "ok",
+      "host_total_ms": 6746.511752018705,
+      "speedup_host_over_device": 1.0077929521357243,
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_1/mlp/w3.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6661.022003972903,
+      "host_status": "ok",
+      "host_total_ms": 6709.154044976458,
+      "speedup_host_over_device": 1.0072259243363626,
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w1.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6648.081026040018,
+      "host_status": "ok",
+      "host_total_ms": 6707.9731549602,
+      "speedup_host_over_device": 1.0090089348618931,
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w2.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6523.500324925408,
+      "host_status": "ok",
+      "host_total_ms": 6764.01857403107,
+      "speedup_host_over_device": 1.0368695082587296,
+      "torch_shape": [
+        4,
+        18432,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "mlp_decoder_block_2/mlp/w3.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 6669.106852030382,
+      "host_status": "ok",
+      "host_total_ms": 6708.216297905892,
+      "speedup_host_over_device": 1.0058642703953085,
+      "torch_shape": [
+        4,
+        7168,
+        18432
+      ]
+    },
+    {
+      "cache_file_relpath": "embedding/embedding.weight.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 2089.311122195795,
+      "host_status": "ok",
+      "host_total_ms": 119.50176488608122,
+      "speedup_host_over_device": 0.05719673035602707,
+      "torch_shape": [
+        129280,
+        8,
+        4,
+        224
+      ]
+    },
+    {
+      "cache_file_relpath": "lm_head/linear.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 11855.518409051001,
+      "host_status": "ok",
+      "host_total_ms": 46748.196069849655,
+      "speedup_host_over_device": 3.943159164947196,
+      "torch_shape": [
+        7168,
+        129280
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w1_experts.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 46071.182226995006,
+      "host_status": "ok",
+      "host_total_ms": 48092.98700001091,
+      "speedup_host_over_device": 1.0438843692583006,
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w2_experts.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 45971.14362102002,
+      "host_status": "ok",
+      "host_total_ms": 47556.876078946516,
+      "speedup_host_over_device": 1.0344940833101535,
+      "torch_shape": [
+        1,
+        256,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_3/mlp/moe/moe_experts/w3_experts.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 47880.397249013186,
+      "host_status": "ok",
+      "host_total_ms": 46907.636316958815,
+      "speedup_host_over_device": 0.9796835241989472,
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w1_experts.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 46082.59719400667,
+      "host_status": "ok",
+      "host_total_ms": 47557.81474686228,
+      "speedup_host_over_device": 1.0320124655006961,
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w2_experts.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 45945.07119990885,
+      "host_status": "ok",
+      "host_total_ms": 48044.292621081695,
+      "speedup_host_over_device": 1.0456898066832685,
+      "torch_shape": [
+        1,
+        256,
+        2048,
+        7168
+      ]
+    },
+    {
+      "cache_file_relpath": "moe_decoder_block_4/mlp/moe/moe_experts/w3_experts.input_tensor_b.tensorbin",
+      "device_status": "ok",
+      "device_total_ms": 47900.23650508374,
+      "host_status": "ok",
+      "host_total_ms": 46969.395966036245,
+      "speedup_host_over_device": 0.9805670993096516,
+      "torch_shape": [
+        1,
+        256,
+        7168,
+        2048
+      ]
+    }
+  ],
+  "summary": {
+    "num_case_pairs": 79,
+    "num_case_pairs_both_fail": 0,
+    "num_case_pairs_both_ok": 79,
+    "num_case_pairs_device_only_ok": 0,
+    "num_case_pairs_host_only_ok": 0,
+    "speedup_host_over_device": {
+      "max": 31.430163972700402,
+      "mean": 3.7089925089730587,
+      "min": 0.05719673035602707,
+      "p50": 1.0090089348618931,
+      "p95": 29.45121935568361
+    }
+  }
+}
