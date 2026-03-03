@@ -22,10 +22,12 @@ import ttnn
 
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     """L2 normalization along a given dimension."""
-    x_sq = ttnn.multiply(x, x)
-    norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True)
-    inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps))
-    return ttnn.multiply(x, inv_norm)
+    x_sq = ttnn.multiply(x, x, memory_config=ttnn.L1_MEMORY_CONFIG)
+    norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
+    inv_norm = ttnn.rsqrt(
+        ttnn.add(norm_sq, eps, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    return ttnn.multiply(x, inv_norm, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 def recurrent_delta_rule_step_ttnn(
@@ -60,29 +62,29 @@ def recurrent_delta_rule_step_ttnn(
     V = v_t.shape[2]
 
     # 1. Decay the state: h = h * exp(g_t)
-    decay = ttnn.exp(g_t)  # [B, H]
+    decay = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H]
     decay = ttnn.reshape(decay, [B, H, 1, 1])  # [B, H, 1, 1]
-    h = ttnn.multiply(h, decay)
+    h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 2. Read from state via matmul: v_read = k^T @ h
     k_row = ttnn.reshape(k_t, [B, H, 1, K])  # [B, H, 1, K]
-    v_read = ttnn.matmul(k_row, h)  # [B, H, 1, V]
+    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
     v_read = ttnn.reshape(v_read, [B, H, V])  # [B, H, V]
 
     # 3. Compute delta: delta = (v_t - v_read) * beta_t
-    delta = ttnn.subtract(v_t, v_read)
+    delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1])  # [B, H, 1]
-    delta = ttnn.multiply(delta, beta_expanded)
+    delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 4. Write to state via matmul outer product: h += k @ delta^T
     k_col = ttnn.reshape(k_t, [B, H, K, 1])  # [B, H, K, 1]
     d_row = ttnn.reshape(delta, [B, H, 1, V])  # [B, H, 1, V]
-    outer = ttnn.matmul(k_col, d_row)  # [B, H, K, V]
-    h = ttnn.add(h, outer)
+    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, V]
+    h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 5. Query state via matmul: o_t = q^T @ h
     q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
-    o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
+    o_t = ttnn.matmul(q_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
     o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
 
     return o_t, h
@@ -135,27 +137,27 @@ def recurrent_gated_delta_rule_ttnn(
     if scale is None:
         scale = K**-0.5
 
-    q = ttnn.multiply(q, scale)
+    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Transpose to [B, H, T, D] for head-first processing
-    q = ttnn.transpose(q, 1, 2)
-    k = ttnn.transpose(k, 1, 2)
-    v = ttnn.transpose(v, 1, 2)
-    beta = ttnn.transpose(beta, 1, 2)  # [B, H, T]
-    g = ttnn.transpose(g, 1, 2)  # [B, H, T]
+    q = ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
+    g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
 
     # Cast to float32 for recurrent precision (matches torch reference)
-    q = ttnn.typecast(q, ttnn.float32)
-    k = ttnn.typecast(k, ttnn.float32)
-    v = ttnn.typecast(v, ttnn.float32)
-    beta = ttnn.typecast(beta, ttnn.float32)
-    g = ttnn.typecast(g, ttnn.float32)
+    q = ttnn.typecast(q, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k = ttnn.typecast(k, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v = ttnn.typecast(v, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    beta = ttnn.typecast(beta, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    g = ttnn.typecast(g, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Initialize state in float32
     if initial_state is not None:
-        h = ttnn.typecast(initial_state, ttnn.float32)
+        h = ttnn.typecast(initial_state, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
-        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.float32)
+        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     outputs = []
     for i in range(T):
@@ -170,13 +172,13 @@ def recurrent_gated_delta_rule_ttnn(
 
     # Concat outputs: reshape each [B, H, V] -> [B, H, 1, V] then concat
     outputs_4d = [ttnn.reshape(o, [B, H, 1, V]) for o in outputs]
-    o = ttnn.concat(outputs_4d, dim=2)  # [B, H, T, V]
+    o = ttnn.concat(outputs_4d, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T, V]
 
     # Transpose back to [B, T, H, V]
-    o = ttnn.transpose(o, 1, 2)
+    o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Cast back to bfloat16
-    o = ttnn.typecast(o, ttnn.bfloat16)
+    o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o, h
 
@@ -232,13 +234,25 @@ def chunk_gated_delta_rule_ttnn(
         scale = K**-0.5
 
     # Transpose to [B, H, T, D], cast to float32
-    q = ttnn.typecast(ttnn.transpose(q, 1, 2), ttnn.float32)
-    k = ttnn.typecast(ttnn.transpose(k, 1, 2), ttnn.float32)
-    v = ttnn.typecast(ttnn.transpose(v, 1, 2), ttnn.float32)
-    beta = ttnn.typecast(ttnn.transpose(beta, 1, 2), ttnn.float32)
-    g = ttnn.typecast(ttnn.transpose(g, 1, 2), ttnn.float32)
+    q = ttnn.typecast(
+        ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    k = ttnn.typecast(
+        ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    v = ttnn.typecast(
+        ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    beta = ttnn.typecast(
+        ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG),
+        ttnn.float32,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    g = ttnn.typecast(
+        ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
-    q = ttnn.multiply(q, scale)
+    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     pad_len = (chunk_size - (T % chunk_size)) % chunk_size
     L = T + pad_len
@@ -254,20 +268,75 @@ def chunk_gated_delta_rule_ttnn(
 
     if pad_len > 0:
         q = ttnn.concat(
-            [q, ttnn.zeros([BH, pad_len, K], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)], dim=1
+            [
+                q,
+                ttnn.zeros(
+                    [BH, pad_len, K],
+                    device=device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                ),
+            ],
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         k = ttnn.concat(
-            [k, ttnn.zeros([BH, pad_len, K], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)], dim=1
+            [
+                k,
+                ttnn.zeros(
+                    [BH, pad_len, K],
+                    device=device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                ),
+            ],
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         v = ttnn.concat(
-            [v, ttnn.zeros([BH, pad_len, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)], dim=1
+            [
+                v,
+                ttnn.zeros(
+                    [BH, pad_len, V],
+                    device=device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                ),
+            ],
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         beta_flat = ttnn.concat(
-            [beta_flat, ttnn.zeros([BH, pad_len, 1], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)], dim=1
+            [
+                beta_flat,
+                ttnn.zeros(
+                    [BH, pad_len, 1],
+                    device=device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                ),
+            ],
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         g_3d = ttnn.reshape(g, [BH, T, 1])
         g_3d = ttnn.concat(
-            [g_3d, ttnn.zeros([BH, pad_len, 1], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)], dim=1
+            [
+                g_3d,
+                ttnn.zeros(
+                    [BH, pad_len, 1],
+                    device=device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                ),
+            ],
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         g = ttnn.reshape(g_3d, [BH, L])
         beta_flat = ttnn.reshape(beta_flat, [BH, L, 1])
@@ -275,8 +344,8 @@ def chunk_gated_delta_rule_ttnn(
         beta_flat = ttnn.reshape(beta_flat, [BH, L, 1])
 
     # v_beta = v * beta, k_beta = k * beta
-    v_beta = ttnn.multiply(v, beta_flat)
-    k_beta = ttnn.multiply(k, beta_flat)
+    v_beta = ttnn.multiply(v, beta_flat, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_beta = ttnn.multiply(k, beta_flat, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Reshape into chunks: [BH*nc, cs, D]
     q_c = ttnn.reshape(q, [batch, chunk_size, K])
@@ -288,55 +357,73 @@ def chunk_gated_delta_rule_ttnn(
 
     # --- Cumsum via matmul with upper-triangular ones ---
     triu_torch = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
-    triu_ones = ttnn.from_torch(triu_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    triu_ones = ttnn.from_torch(
+        triu_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size])
-    decay = ttnn.reshape(ttnn.matmul(g_c_3d, triu_ones), [batch, chunk_size])
+    decay = ttnn.reshape(ttnn.matmul(g_c_3d, triu_ones, memory_config=ttnn.L1_MEMORY_CONFIG), [batch, chunk_size])
 
     # decay_exp for weighting k_beta: [batch, cs, 1]
-    decay_exp = ttnn.reshape(ttnn.exp(decay), [batch, chunk_size, 1])
+    decay_exp = ttnn.reshape(ttnn.exp(decay, memory_config=ttnn.L1_MEMORY_CONFIG), [batch, chunk_size, 1])
 
     # --- L_mask: exp(decay_i - decay_j) for j <= i ---
     decay_col = ttnn.reshape(decay, [batch, chunk_size, 1])
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size])
-    L_diff = ttnn.subtract(decay_col, decay_row)
+    L_diff = ttnn.subtract(decay_col, decay_row, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     tril_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
-    tril_mask = ttnn.from_torch(tril_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tril_mask = ttnn.from_torch(
+        tril_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size])
 
-    L_diff_masked = ttnn.multiply(L_diff, tril_mask)
-    L_mask = ttnn.multiply(ttnn.exp(L_diff_masked), tril_mask)
+    L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+    L_mask = ttnn.multiply(
+        ttnn.exp(L_diff_masked, memory_config=ttnn.L1_MEMORY_CONFIG), tril_mask, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     # --- Intra-chunk interaction matrix M ---
-    k_c_t = ttnn.transpose(k_c, 1, 2)
-    kk = ttnn.matmul(k_beta_c, k_c_t)
+    k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    M = ttnn.neg(ttnn.multiply(kk, L_mask))
+    M = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
     strict_lower_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32), diagonal=-1)
-    strict_lower = ttnn.from_torch(strict_lower_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    strict_lower = ttnn.from_torch(
+        strict_lower_torch,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size])
-    M = ttnn.multiply(M, strict_lower)
+    M = ttnn.multiply(M, strict_lower, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # --- Woodbury via repeated-squaring Neumann series ---
     # Compute (I - M)^{-1} = I + M + M^2 + ... for nilpotent M
     eye_torch = torch.eye(chunk_size, dtype=torch.float32)
-    eye = ttnn.from_torch(eye_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    eye = ttnn.from_torch(
+        eye_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     eye = ttnn.reshape(eye, [1, chunk_size, chunk_size])
 
-    R = ttnn.add(M, eye)
-    P = ttnn.matmul(M, M)
+    R = ttnn.add(M, eye, memory_config=ttnn.L1_MEMORY_CONFIG)
+    P = ttnn.matmul(M, M, memory_config=ttnn.L1_MEMORY_CONFIG)
     num_steps = max(int(math.ceil(math.log2(max(chunk_size, 2)))) - 1, 0)
     for _ in range(num_steps):
-        R = ttnn.add(R, ttnn.matmul(R, P))
-        P = ttnn.matmul(P, P)
+        R = ttnn.add(R, ttnn.matmul(R, P, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
+        P = ttnn.matmul(P, P, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     attn = R
 
     # --- Corrected values and keys ---
-    v_corrected = ttnn.matmul(attn, v_beta_c)
-    k_cumdecay = ttnn.matmul(attn, ttnn.multiply(k_beta_c, decay_exp))
+    v_corrected = ttnn.matmul(attn, v_beta_c, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_cumdecay = ttnn.matmul(
+        attn,
+        ttnn.multiply(k_beta_c, decay_exp, memory_config=ttnn.L1_MEMORY_CONFIG),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
     # --- Cross-chunk recurrence ---
     q_c_4d = ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K])
@@ -347,60 +434,82 @@ def chunk_gated_delta_rule_ttnn(
     decay_3d = ttnn.reshape(decay, [BH, num_chunks, chunk_size])
 
     # Precompute total decay per chunk (= cumsum at last position)
-    decay_last = ttnn.reshape(ttnn.sum(g_c, dim=-1), [BH, num_chunks, 1])
+    decay_last = ttnn.reshape(ttnn.sum(g_c, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, num_chunks, 1])
 
     lower_causal_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
-    lower_causal = ttnn.from_torch(lower_causal_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    lower_causal = ttnn.from_torch(
+        lower_causal_torch,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
-    S = ttnn.zeros([BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    S = ttnn.zeros(
+        [BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     if initial_state is not None:
-        S = ttnn.typecast(ttnn.reshape(initial_state, [BH, K, V]), ttnn.float32)
+        S = ttnn.typecast(ttnn.reshape(initial_state, [BH, K, V]), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     outputs = []
     for i in range(num_chunks):
         # Slice and re-tilize (slicing from 4D may lose TILE_LAYOUT)
-        q_i = ttnn.to_layout(q_c_4d[:, i], ttnn.TILE_LAYOUT)
-        k_i = ttnn.to_layout(k_c_4d[:, i], ttnn.TILE_LAYOUT)
-        v_i = ttnn.to_layout(v_cor_4d[:, i], ttnn.TILE_LAYOUT)
-        k_cum_i = ttnn.to_layout(k_cum_4d[:, i], ttnn.TILE_LAYOUT)
-        L_mask_i = ttnn.to_layout(L_mask_4d[:, i], ttnn.TILE_LAYOUT)
+        q_i = ttnn.to_layout(q_c_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k_i = ttnn.to_layout(k_c_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v_i = ttnn.to_layout(v_cor_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k_cum_i = ttnn.to_layout(k_cum_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        L_mask_i = ttnn.to_layout(L_mask_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         decay_i = decay_3d[:, i]
 
         # Intra-chunk attention: (q @ k^T) * L_mask, lower-triangular
-        k_i_t = ttnn.transpose(k_i, 1, 2)
-        intra_attn = ttnn.multiply(ttnn.matmul(q_i, k_i_t), L_mask_i)
-        intra_attn = ttnn.multiply(intra_attn, lower_causal)
+        k_i_t = ttnn.transpose(k_i, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        intra_attn = ttnn.multiply(
+            ttnn.matmul(q_i, k_i_t, memory_config=ttnn.L1_MEMORY_CONFIG), L_mask_i, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        intra_attn = ttnn.multiply(intra_attn, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Cross-chunk: read from state
-        v_prime = ttnn.matmul(k_cum_i, S)
-        v_new = ttnn.subtract(v_i, v_prime)
+        v_prime = ttnn.matmul(k_cum_i, S, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v_new = ttnn.subtract(v_i, v_prime, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        decay_i_exp = ttnn.reshape(ttnn.exp(decay_i), [BH, chunk_size, 1])
-        o_inter = ttnn.matmul(ttnn.multiply(q_i, decay_i_exp), S)
+        decay_i_exp = ttnn.reshape(ttnn.exp(decay_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, chunk_size, 1])
+        o_inter = ttnn.matmul(
+            ttnn.multiply(q_i, decay_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG), S, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
-        o_i = ttnn.add(o_inter, ttnn.matmul(intra_attn, v_new))
+        o_i = ttnn.add(
+            o_inter,
+            ttnn.matmul(intra_attn, v_new, memory_config=ttnn.L1_MEMORY_CONFIG),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V]))
 
         # Update state
         dl_i = decay_last[:, i]
-        dl_i_exp = ttnn.reshape(ttnn.exp(dl_i), [BH, 1, 1])
-        S = ttnn.multiply(S, dl_i_exp)
+        dl_i_exp = ttnn.reshape(ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, 1, 1])
+        S = ttnn.multiply(S, dl_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         dl_i_2d = ttnn.reshape(dl_i, [BH, 1])
-        decay_diff = ttnn.subtract(dl_i_2d, decay_i)
-        k_decay = ttnn.multiply(k_i, ttnn.reshape(ttnn.exp(decay_diff), [BH, chunk_size, 1]))
-        k_decay_t = ttnn.transpose(k_decay, 1, 2)
-        S = ttnn.add(S, ttnn.matmul(k_decay_t, v_new))
+        decay_diff = ttnn.subtract(dl_i_2d, decay_i, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k_decay = ttnn.multiply(
+            k_i,
+            ttnn.reshape(ttnn.exp(decay_diff, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, chunk_size, 1]),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        S = ttnn.add(
+            S, ttnn.matmul(k_decay_t, v_new, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
-    o = ttnn.concat(outputs, dim=1)
+    o = ttnn.concat(outputs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.reshape(o, [BH, L, V])
 
     if pad_len > 0:
         o = o[:, :T]
 
     o = ttnn.reshape(o, [B, H, T, V])
-    o = ttnn.transpose(o, 1, 2)
-    o = ttnn.typecast(o, ttnn.bfloat16)
+    o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     final_state = ttnn.reshape(S, [B, H, K, V])
     return o, final_state
