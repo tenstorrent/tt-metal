@@ -417,7 +417,7 @@ class RunChecks:
                             self._broken_cores[location._device] = {BrokenCore(location, risc_name)}
                     if print_broken_cores:
                         log_warning(
-                            f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}."
+                            f"Core {risc_name} broken at {location.to_user_str()} at device {location.device_id}: {e}."
                         )
                     continue
                 except Exception as e:
