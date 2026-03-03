@@ -2344,3 +2344,280 @@ def test_moe_host_dispatch_device_compute_host_combine(device):
 
     assert pcc >= 0.97, f"MoE combined output PCC {pcc:.6f} < 0.97"
     logger.info("[moe_host_dispatch_device_compute] PASSED")
+
+
+# Kernel path for dispatch
+DISPATCH_WRITER_KERNEL = f"{KERNEL_DIR}/dispatch_writer.cpp"
+
+
+def _make_dispatch_program(device, hs_tensor, pkt_buf_tensor, num_tiles, dispatch_core):
+    """Create a ProgramDescriptor for the dispatch tile-copy kernel on 1 core."""
+    ct_args = list(ttnn.TensorAccessorArgs(hs_tensor).get_compile_time_args())
+    ct_args.extend(ttnn.TensorAccessorArgs(pkt_buf_tensor).get_compile_time_args())
+
+    rt_args = ttnn.RuntimeArgs()
+    rt_args[0][0] = [
+        hs_tensor.buffer_address(),
+        pkt_buf_tensor.buffer_address(),
+        num_tiles,
+    ]
+
+    cb_desc = ttnn.CBDescriptor(
+        total_size=BF16_TILE_BYTES,
+        core_ranges=dispatch_core,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=0,
+                data_format=ttnn.bfloat16,
+                page_size=BF16_TILE_BYTES,
+            )
+        ],
+    )
+
+    kernel_desc = ttnn.KernelDescriptor(
+        kernel_source=DISPATCH_WRITER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=dispatch_core,
+        compile_time_args=ct_args,
+        runtime_args=rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    return ttnn.ProgramDescriptor(
+        kernels=[kernel_desc],
+        semaphores=[],
+        cbs=[cb_desc],
+    )
+
+
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+def test_moe_device_dispatch_host_combine(device):
+    """Phase 4 Step 4.2: Device dispatch + device compute + host combine.
+
+    Replaces host_dispatch with a device kernel that copies activation tiles
+    from hidden_states to per-expert pkt_bufs. Since N_tokens = P = 32, all
+    tokens share one tile row and dispatch is a tile-level copy.
+
+    The combine step uses original token positions (not gathered positions)
+    since pkt_buf contains all tokens at their original rows.
+
+    PCC target: >= 0.97 (should match Step 4.1 exactly).
+    """
+    D = 2880
+    D_FF = 5760
+    D_FF_HALF = D_FF // 2
+    P = 32
+    N_TOKENS = 32
+    NUM_EXPERTS = 4
+    TOP_K = 2
+    NUM_CORES = 15
+    GRID_X, GRID_Y = 5, 3
+
+    k_tiles = D // TILE
+    D_tiles = D // TILE  # 90
+    n_weight_tiles_gu = D_FF // TILE
+    n_weight_per_core_gu = n_weight_tiles_gu // NUM_CORES
+    n_out_per_core = n_weight_per_core_gu // 2
+    n_tiles_dn = D // TILE
+    n_per_core_dn = n_tiles_dn // NUM_CORES
+
+    cols_per_core = n_weight_per_core_gu * TILE
+    half_cols = n_out_per_core * TILE
+
+    torch.manual_seed(123)
+
+    # ---- Generate inputs (same as Step 4.1) ----
+    hidden_states = torch.randn(N_TOKENS, D, dtype=torch.bfloat16)
+
+    topk_indices = torch.zeros(N_TOKENS, TOP_K, dtype=torch.int64)
+    for t in range(N_TOKENS):
+        perm = torch.randperm(NUM_EXPERTS)[:TOP_K]
+        topk_indices[t] = perm
+
+    raw_weights = torch.rand(N_TOKENS, TOP_K, dtype=torch.float32)
+    topk_weights = raw_weights / raw_weights.sum(dim=1, keepdim=True)
+
+    gate_up_ws = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+    down_ws = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+
+    # Pre-shuffle gate_up weights
+    shuffled_ws = []
+    for w in gate_up_ws:
+        gate_cols = w[:, :D_FF_HALF]
+        up_cols = w[:, D_FF_HALF:]
+        s = torch.empty_like(w)
+        for c in range(NUM_CORES):
+            s[:, c * cols_per_core : c * cols_per_core + half_cols] = gate_cols[:, c * half_cols : (c + 1) * half_cols]
+            s[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core] = up_cols[
+                :, c * half_cols : (c + 1) * half_cols
+            ]
+        shuffled_ws.append(s)
+
+    # ---- Build routing metadata (host-side, for combine) ----
+    routing_meta = host_dispatch(hidden_states, topk_indices, NUM_EXPERTS, P)
+
+    for e in range(NUM_EXPERTS):
+        logger.info(
+            f"Expert {e}: M_e={routing_meta[e]['M_e']} tokens " f"(indices={routing_meta[e]['token_indices'][:8]})"
+        )
+
+    # ---- Upload to device ----
+    hs_tensor = ttnn.from_torch(
+        hidden_states.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    gu_w_tensors = [
+        ttnn.from_torch(
+            s.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for s in shuffled_ws
+    ]
+    dn_w_tensors = [
+        ttnn.from_torch(
+            w.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for w in down_ws
+    ]
+
+    # ---- Core grids ----
+    # Dispatch: 1 core at (0, 0)
+    dispatch_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    # Compute: 15 cores at (0,0)-(4,2) — same grid, separate programs
+    compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1))])
+
+    phys_coords = []
+    for y in range(GRID_Y):
+        for x in range(GRID_X):
+            phys = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            phys_coords.append((phys.x, phys.y))
+    leader_phys_x, leader_phys_y = phys_coords[0]
+
+    # ---- Per-expert: dispatch → compute ----
+    device_out_bufs = []
+    for e in range(NUM_EXPERTS):
+        # Allocate pkt_buf for this expert
+        pkt_buf_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Run dispatch: copy hidden_states tiles → pkt_buf
+        dispatch_prog = _make_dispatch_program(device, hs_tensor, pkt_buf_tensor, D_tiles, dispatch_core)
+        ttnn.generic_op([hs_tensor, pkt_buf_tensor], dispatch_prog)
+        ttnn.synchronize_device(device)
+
+        # Verify dispatch: pkt_buf should match hidden_states
+        if e == 0:
+            pkt_torch = ttnn.to_torch(pkt_buf_tensor).squeeze().float()
+            hs_torch = ttnn.to_torch(hs_tensor).squeeze().float()
+            dispatch_pcc = torch.corrcoef(torch.stack([pkt_torch.flatten(), hs_torch.flatten()]))[0, 1].item()
+            logger.info(f"Dispatch verification: pkt_buf vs hidden_states PCC={dispatch_pcc:.6f}")
+            assert dispatch_pcc > 0.999, f"Dispatch copy failed: PCC={dispatch_pcc:.6f}"
+
+        # Allocate intermediate and output
+        inter_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D_FF_HALF]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Run compute: pkt_buf + weights → out_buf
+        logger.info(f"Expert {e}: dispatch done, running compute")
+        compute_prog = _make_single_program_expert(
+            device,
+            pkt_buf_tensor,
+            gu_w_tensors[e],
+            dn_w_tensors[e],
+            inter_tensor,
+            out_tensor,
+            compute_grid,
+            phys_coords,
+            leader_phys_x,
+            leader_phys_y,
+            NUM_CORES,
+            GRID_X,
+            GRID_Y,
+            k_tiles,
+            n_weight_per_core_gu,
+            n_weight_tiles_gu,
+            n_out_per_core,
+            n_per_core_dn,
+            n_tiles_dn,
+        )
+        io_tensors = [pkt_buf_tensor, gu_w_tensors[e], dn_w_tensors[e], inter_tensor, out_tensor]
+        expert_out = ttnn.generic_op(io_tensors, compute_prog)
+        ttnn.synchronize_device(device)
+
+        out_torch = ttnn.to_torch(expert_out).squeeze().float()
+        device_out_bufs.append(out_torch)
+
+    # ---- Host combine using ORIGINAL token positions ----
+    # Since pkt_buf = hidden_states (all tokens), out_buf[e] row t = expert e output for token t
+    combined_output = torch.zeros(N_TOKENS, D, dtype=torch.float32)
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        for i in range(meta["M_e"]):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights[t, k].float().item()
+            combined_output[t] += w * device_out_bufs[e][t].float()
+
+    # ---- Reference (same as Step 4.1 but using full-token expert outputs) ----
+    gu_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in gu_w_tensors]
+    dn_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in dn_w_tensors]
+
+    ref_output = torch.zeros(N_TOKENS, D, dtype=torch.float32)
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        if meta["M_e"] == 0:
+            continue
+
+        # All-token expert compute (matches device behavior: pkt_buf = hidden_states)
+        ref_gu = hidden_states.float() @ gu_w_dequant[e]
+        ref_inter = torch.empty(P, D_FF_HALF, dtype=torch.float32)
+        for c in range(NUM_CORES):
+            g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
+            u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
+            ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
+        ref_out = ref_inter.bfloat16().float() @ dn_w_dequant[e]
+
+        for i in range(meta["M_e"]):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights[t, k].float().item()
+            ref_output[t] += w * ref_out[t]
+
+    # ---- Verify PCC ----
+    pcc = torch.corrcoef(torch.stack([combined_output.flatten(), ref_output.flatten()]))[0, 1].item()
+    max_err = (combined_output - ref_output).abs().max().item()
+    mean_err = (combined_output - ref_output).abs().mean().item()
+
+    logger.info(f"[moe_device_dispatch_host_combine] N_tokens={N_TOKENS}, K={TOP_K}, " f"experts={NUM_EXPERTS}")
+    logger.info(f"[moe_device_dispatch_host_combine] PCC={pcc:.6f} max_err={max_err:.6f} " f"mean_err={mean_err:.6f}")
+
+    assert pcc >= 0.97, f"MoE output PCC {pcc:.6f} < 0.97"
+    logger.info("[moe_device_dispatch_host_combine] PASSED")
