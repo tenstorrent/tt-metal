@@ -474,12 +474,77 @@ void launch_h2d_workload(
     // owner_thread.join();
 }
 
+void launch_d2h_workload(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    std::size_t data_size,
+    const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
+    TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
+
+    std::string socket_id = "test_d2h_xproc_0";
+
+    auto owner_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
+    owner_socket.export_descriptor(socket_id);
+
+    const ReplicatedBufferConfig buffer_config{.size = data_size};
+    auto sender_data_shard_params =
+        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig sender_device_local_config{
+        .page_size = data_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
+
+    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord);
+
+    auto send_program = CreateProgram();
+    CreateKernel(
+        send_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender.cpp",
+        sender_core.core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(owner_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(sender_data_buffer->address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(data_size),
+            }});
+
+    auto mesh_workload = MeshWorkload();
+    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
+    mesh_workload.add_program(devices, std::move(send_program));
+    std::cout << "Enqueueing D2H workload" << std::endl;
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    std::cout << "D2H workload enqueued, waiting for Finish" << std::endl;
+    Finish(mesh_device->mesh_command_queue());
+    std::cout << "D2H workload finished" << std::endl;
+}
 TEST_F(HDSocketFixture, LaunchH2DWorkload) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
     launch_h2d_workload(
-        mesh_device_, 1024, 64, 32768, H2DMode::HOST_PUSH, 1000, MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)));
+        mesh_device_,
+        1024,
+        64,
+        32768,
+        H2DMode::DEVICE_PULL,
+        1000,
+        MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)));
+}
+
+TEST_F(HDSocketFixture, LaunchD2HWorkload) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+    launch_d2h_workload(mesh_device_, 1024, 64, 1310720, MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)));
 }
 
 }  // namespace tt::tt_metal::distributed
