@@ -51,6 +51,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
@@ -137,6 +139,16 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # Ring SDPA Forward (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/ring_sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.cpp
+    # Ring SDPA Backward (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/ring_sdpa_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
     # SDPA Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
@@ -291,6 +303,15 @@ endforeach()
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
+# Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
+# Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
+target_compile_options(
+    ttml
+    PRIVATE
+        -Wdeprecated-declarations
+        -Wno-error=deprecated-declarations
+)
+
 target_link_libraries(
     ttml
     PUBLIC
@@ -390,13 +411,14 @@ target_precompile_headers(
 
 if(ENABLE_LIBCXX)
     target_link_libraries(
+        ttml
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
 endif()
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+target_compile_definitions(ttml PUBLIC TOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
 set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
 set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")

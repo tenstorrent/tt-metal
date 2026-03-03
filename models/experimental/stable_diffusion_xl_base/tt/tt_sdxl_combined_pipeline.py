@@ -288,7 +288,11 @@ class TtSDXLCombinedPipeline:
                 self.refiner_pipeline.compile_text_encoding()
 
             logger.info("Allocating device tensors for refiner pipeline...")
-            dummy_latents = torch.randn(self.batch_size, 4, 128, 128)
+            latents_height, latents_width = (
+                self.base_pipeline.tt_latents_shape[2],
+                self.base_pipeline.tt_latents_shape[3],
+            )
+            dummy_latents = torch.randn(self.batch_size, 4, latents_height, latents_width)
             refiner_dummy_embeds = torch.randn(
                 self.batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
             )

@@ -94,11 +94,14 @@ void kernel_main() {
     }
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        split_reader_enabled ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices))
-                             : nullptr;
+        (split_reader_enabled && is_sender_core)
+            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices))
+            : nullptr;
 
     // Initial setup for second reader (starting from second reader's data)
-    uint32_t start_reader_idx = split_reader_enabled ? (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1 : 0;
+    // Only read reader indices on cores that have sharded input (is_sender_core).
+    uint32_t start_reader_idx =
+        (split_reader_enabled && is_sender_core) ? (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1 : 0;
     uint32_t reader_idx = start_reader_idx;
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
@@ -186,8 +189,11 @@ void kernel_main() {
             }
             if constexpr (split_reader_enabled) {
                 // Update reader index for next iteration (split reader increment)
-                start_reader_idx =
-                    reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+                // Only read reader indices on cores that have sharded input (is_sender_core).
+                if (is_sender_core) {
+                    start_reader_idx =
+                        reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+                }
             }
             if constexpr (fuse_bias) {
                 if (load_bias) {
