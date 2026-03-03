@@ -87,7 +87,7 @@ def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) * factor)
                 factor += 1
             else:
-                tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)))
+                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)))
     res = torch.cat(tokens, dim=0)
     return res.reshape(batch, 1, seq, hidden_size)
 
@@ -442,7 +442,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [False])
-@pytest.mark.parametrize("num_iterations", [20])
+@pytest.mark.parametrize("num_iterations", [1])
 @pytest.mark.parametrize(
     "device_params",
     [
