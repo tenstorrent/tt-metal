@@ -43,9 +43,8 @@ def _run_eltwise_add_compressed(device, M, N, formats, threshold=0.993, pcc_thre
     logger.info(f"Compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
 
-    # Golden: A + dequantized(B)
-    b_decompressed = ct.to_torch()
-    golden = a_torch + b_decompressed.unsqueeze(0).unsqueeze(0)
+    # Golden: A + B (original float, no quantization)
+    golden = a_torch + b_torch.unsqueeze(0).unsqueeze(0)
 
     # A tensor on device
     a_shard_spec = ttnn.ShardSpec(core_grid, [M, N], ttnn.ShardOrientation.ROW_MAJOR)
@@ -72,6 +71,16 @@ def _run_eltwise_add_compressed(device, M, N, formats, threshold=0.993, pcc_thre
 
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
+
+
+def test_eltwise_add_compressed_1tile_bfp2(device):
+    """1 tile, bfp2 only."""
+    _run_eltwise_add_compressed(device, 32, 32, formats=["bfp2"], pcc_threshold=0.94)
+
+
+def test_eltwise_add_compressed_4tile_bfp2(device):
+    """4 tiles (64x64), bfp2 only."""
+    _run_eltwise_add_compressed(device, 64, 64, formats=["bfp2"], pcc_threshold=0.94)
 
 
 def test_eltwise_add_compressed_1tile_bfp4(device):
