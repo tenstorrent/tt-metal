@@ -360,9 +360,10 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
     // mask padded_shape is NOT included, even though num_tiles_causal_mask (compile-time arg,
     // is_causal_mask=True only) is derived from it. It is provably redundant: scale_mask_softmax
     // enforces mask.padded_shape()[-1] == input.padded_shape()[-1] and mask.padded_shape()[-2]
-    // is always tile_height (32) at the device op level (either already 32 or padded to 32 by
-    // tilize_with_val_padding). Therefore:
-    //   num_tiles_causal_mask = input.padded_shape()[-1] * 32 / (32*32) = Wt_of_input
+    // is always the tile height at the device op level (either already equal to the tile height or
+    // padded to it by tilize_with_val_padding). Therefore, using tile_height and tile_width from
+    // input_tensor.tensor_spec().tile():
+    //   num_tiles_causal_mask = input.padded_shape()[-1] * tile_height / (tile_height * tile_width) = Wt_of_input
     // which is fully determined by input.logical_shape()[-1] already present in the hash.
     const auto mask_dtype = tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID;
     const auto mask_memory_config = tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : MemoryConfig{};
