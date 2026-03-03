@@ -531,6 +531,7 @@ def get_num_blocks_and_num_tiles_in_block(
     num_tiles_for_calculation = (
         num_tiles_in_input
         if blocks_algorithm == BlocksCalculationAlgorithm.Standard
+        or blocks_algorithm == BlocksCalculationAlgorithm.Tilize
         else num_tiles_in_input // (num_rows_tensor // num_rows_tile)
     )
 
