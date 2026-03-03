@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -94,11 +96,36 @@ private:
     void assert_cores(tt::ChipId device_id, std::unordered_set<CoreCoord>& ignore_virtual_cores);
     void teardown_simulator_ethernet_cores();
 
+    // Lifetime Safety Requirements:
+    // - get_control_plane_ must remain valid for the lifetime of RiscFirmwareInitializer.
+    //   The std::function must not capture state that could become invalid.
+    // - dispatch_core_manager_ is a reference and must outlive RiscFirmwareInitializer.
     GetControlPlaneFn get_control_plane_;
     dispatch_core_manager& dispatch_core_manager_;
     std::optional<GetDispatchIgnoreCoresFn> get_dispatch_ignore_cores_;
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;
+
+    // Lock Ordering Hierarchy (to prevent deadlocks):
+    // 1. cluster_ops_mutex_ (device hardware operations)
+    // 2. tables_mutex_ (bank-to-NOC table updates)
+    //
+    // CRITICAL: MPI collective operations must NEVER be called while holding any locks.
+    // All ranks must participate in MPI collectives, and holding locks during blocking
+    // MPI calls can cause deadlocks when other ranks are waiting for the lock.
+    //
+    // Thread-safety notes:
+    // - Parallelization is thread-based via detail::async(), not MPI-based.
+    // - Per-device context isolation is maintained during async operations.
+
+    // Mutex to protect cluster hardware operations (write_core, barriers, etc.)
+    // Cluster operations are serialized per-device to ensure safe device communication.
+    mutable std::mutex cluster_ops_mutex_;
+
+    // Mutex to protect bank-to-NOC table updates during initialization.
+    // Tables are pre-populated single-threaded, then accessed via pointer isolation
+    // in async tasks. This mutex protects against potential future concurrent access.
+    mutable std::mutex tables_mutex_;
 
     std::unordered_map<tt::ChipId, std::vector<int32_t>> dram_bank_offset_map_;
     std::unordered_map<tt::ChipId, std::vector<int32_t>> l1_bank_offset_map_;
@@ -107,7 +134,9 @@ private:
     std::unordered_map<tt::ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
     std::unordered_map<tt::ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;
 
-    bool initialized_ = false;
+    // Atomic flag for thread-safe initialization state checking.
+    // Using std::atomic_flag (guaranteed lock-free) instead of std::atomic<bool>.
+    std::atomic_flag initialized_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace tt::tt_metal
