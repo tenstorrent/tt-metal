@@ -235,3 +235,18 @@ def hf_model_path():
 def hf_state_dict(hf_model_path):
     """Session-scoped LazyStateDict over the HuggingFace model for real-weights tests."""
     return LazyStateDict(hf_model_path)
+
+
+@pytest.fixture(scope="session")
+def cache_path():
+    """Path to pre-generated weight cache (layer_XXX/ with manifest + tensorbin).
+
+    Skips when DEEPSEEK_V3_CACHE_PATH is not set or when the directory is missing.
+    """
+    raw = os.getenv("DEEPSEEK_V3_CACHE_PATH")
+    if not raw or not raw.strip():
+        pytest.skip("DEEPSEEK_V3_CACHE_PATH is not set")
+    path = Path(raw.strip()).resolve()
+    if not path.is_dir():
+        pytest.skip(f"Cache directory not found: {path}")
+    return path
