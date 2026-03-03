@@ -1985,3 +1985,362 @@ def test_single_program_multi_expert(device):
     logger.info(
         f"[single_program_multi_expert] PASSED: all {NUM_EXPERTS} experts verified ({NUM_EXPERTS} programs vs {NUM_EXPERTS * 2} in Phase 2)"
     )
+
+
+# =====================================================================
+# Phase 4 Step 4.1: Host Dispatch + Device Compute + Host Combine
+# =====================================================================
+
+
+def host_dispatch(hidden_states_torch, topk_indices_torch, num_experts, P):
+    """Sort tokens by expert, create per-expert pkt_buf tensors (zero-padded to P rows).
+
+    Args:
+        hidden_states_torch: [N_tokens, D] bfloat16 tensor
+        topk_indices_torch: [N_tokens, K] int64 tensor
+        num_experts: number of local experts
+        P: packet size (rows per pkt_buf)
+
+    Returns:
+        List of dicts per expert, each containing:
+            pkt_buf: [P, D] bfloat16 tensor (zero-padded)
+            M_e: int (actual token count, <= P)
+            token_indices: list of global token indices
+            k_indices: list of which top-k slot each token came from
+    """
+    N_tokens, D = hidden_states_torch.shape
+    K = topk_indices_torch.shape[1]
+
+    routing = []
+    for e in range(num_experts):
+        pkt_buf = torch.zeros(P, D, dtype=hidden_states_torch.dtype)
+        token_indices = []
+        k_indices = []
+
+        for t in range(N_tokens):
+            for k in range(K):
+                if topk_indices_torch[t, k].item() == e:
+                    token_indices.append(t)
+                    k_indices.append(k)
+
+        M_e = min(len(token_indices), P)
+        for i in range(M_e):
+            pkt_buf[i] = hidden_states_torch[token_indices[i]]
+
+        routing.append(
+            {
+                "pkt_buf": pkt_buf,
+                "M_e": M_e,
+                "token_indices": token_indices[:M_e],
+                "k_indices": k_indices[:M_e],
+            }
+        )
+
+    return routing
+
+
+def host_combine(out_bufs_torch, routing_meta, topk_weights_torch, N_tokens, D):
+    """Weighted accumulation of expert outputs back to token positions.
+
+    Args:
+        out_bufs_torch: list of [P, D] float32 tensors per expert
+        routing_meta: list of dicts from host_dispatch
+        topk_weights_torch: [N_tokens, K] float tensor
+        N_tokens: total number of tokens
+        D: hidden dimension
+
+    Returns:
+        output: [N_tokens, D] float32 tensor
+    """
+    output = torch.zeros(N_tokens, D, dtype=torch.float32)
+
+    for e, meta in enumerate(routing_meta):
+        for i in range(meta["M_e"]):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights_torch[t, k].float().item()
+            output[t] += w * out_bufs_torch[e][i].float()
+
+    return output
+
+
+def moe_reference_dequant(
+    hidden_states_torch,
+    gu_w_dequant_list,
+    dn_w_dequant_list,
+    topk_weights_torch,
+    routing_meta,
+    d_ff,
+    num_cores,
+    n_weight_per_core_gu,
+    n_out_per_core,
+):
+    """Full MoE reference using dequantized BFP4_b weights (matching device precision).
+
+    Uses per-core SwiGLU on shuffled gate_up layout to match device behavior exactly.
+    """
+    N_tokens, D = hidden_states_torch.shape
+    num_experts = len(gu_w_dequant_list)
+    d_ff_half = d_ff // 2
+    cols_per_core = n_weight_per_core_gu * TILE
+    half_cols = n_out_per_core * TILE
+    P = routing_meta[0]["pkt_buf"].shape[0]
+
+    output = torch.zeros(N_tokens, D, dtype=torch.float32)
+
+    for e in range(num_experts):
+        meta = routing_meta[e]
+        M_e = meta["M_e"]
+        if M_e == 0:
+            continue
+
+        # Build the pkt_buf in float32 (same as what device receives after bf16→f32)
+        pkt = torch.zeros(P, D, dtype=torch.float32)
+        for i in range(M_e):
+            pkt[i] = hidden_states_torch[meta["token_indices"][i]].float()
+
+        # gate_up matmul with dequantized shuffled weights
+        ref_gu = pkt @ gu_w_dequant_list[e]  # [P, D_FF] in shuffled layout
+
+        # Per-core SwiGLU (matches device behavior)
+        ref_inter = torch.empty(P, d_ff_half, dtype=torch.float32)
+        for c in range(num_cores):
+            g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
+            u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
+            ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
+
+        # BF16 DRAM roundtrip simulation
+        ref_inter_bf16 = ref_inter.bfloat16().float()
+
+        # down matmul with dequantized weights
+        ref_out = ref_inter_bf16 @ dn_w_dequant_list[e]  # [P, D]
+
+        # Weighted accumulate only M_e actual tokens
+        for i in range(M_e):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights_torch[t, k].float().item()
+            output[t] += w * ref_out[i]
+
+    return output
+
+
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+def test_moe_host_dispatch_device_compute_host_combine(device):
+    """Phase 4 Step 4.1: End-to-end MoE with host dispatch/combine, device compute.
+
+    Validates MoE arithmetic: host sorts tokens by expert (dispatch), device runs
+    gate_up+SwiGLU+down per expert (reusing Phase 3 single-program kernels),
+    host accumulates weighted outputs (combine).
+
+    PCC target: >= 0.97 (BFP4_b quantization in both matmuls + SwiGLU nonlinearity).
+    """
+    D = 2880
+    D_FF = 5760
+    D_FF_HALF = D_FF // 2
+    P = 32
+    N_TOKENS = 32
+    NUM_EXPERTS = 4
+    TOP_K = 2
+    NUM_CORES = 15
+    GRID_X, GRID_Y = 5, 3
+
+    k_tiles = D // TILE
+    n_weight_tiles_gu = D_FF // TILE
+    n_weight_per_core_gu = n_weight_tiles_gu // NUM_CORES
+    n_out_per_core = n_weight_per_core_gu // 2
+    n_tiles_dn = D // TILE
+    n_per_core_dn = n_tiles_dn // NUM_CORES
+
+    cols_per_core = n_weight_per_core_gu * TILE
+    half_cols = n_out_per_core * TILE
+
+    torch.manual_seed(123)
+
+    # ---- Generate inputs ----
+    hidden_states = torch.randn(N_TOKENS, D, dtype=torch.bfloat16)
+
+    # Random top-k routing: each token picks TOP_K distinct experts from {0..NUM_EXPERTS-1}
+    topk_indices = torch.zeros(N_TOKENS, TOP_K, dtype=torch.int64)
+    for t in range(N_TOKENS):
+        perm = torch.randperm(NUM_EXPERTS)[:TOP_K]
+        topk_indices[t] = perm
+
+    # Softmax-like routing weights (normalized per token)
+    raw_weights = torch.rand(N_TOKENS, TOP_K, dtype=torch.float32)
+    topk_weights = raw_weights / raw_weights.sum(dim=1, keepdim=True)
+
+    # Per-expert weights
+    gate_up_ws = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+    down_ws = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+
+    # Pre-shuffle gate_up weights (interleave gate/up per core)
+    shuffled_ws = []
+    for w in gate_up_ws:
+        gate_cols = w[:, :D_FF_HALF]
+        up_cols = w[:, D_FF_HALF:]
+        s = torch.empty_like(w)
+        for c in range(NUM_CORES):
+            s[:, c * cols_per_core : c * cols_per_core + half_cols] = gate_cols[:, c * half_cols : (c + 1) * half_cols]
+            s[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core] = up_cols[
+                :, c * half_cols : (c + 1) * half_cols
+            ]
+        shuffled_ws.append(s)
+
+    # ---- Host dispatch: sort tokens by expert ----
+    routing_meta = host_dispatch(hidden_states, topk_indices, NUM_EXPERTS, P)
+
+    for e in range(NUM_EXPERTS):
+        logger.info(
+            f"Expert {e}: M_e={routing_meta[e]['M_e']} tokens " f"(indices={routing_meta[e]['token_indices'][:8]})"
+        )
+
+    # ---- Upload weights to device ----
+    gu_w_tensors = [
+        ttnn.from_torch(
+            s.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for s in shuffled_ws
+    ]
+    dn_w_tensors = [
+        ttnn.from_torch(
+            w.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for w in down_ws
+    ]
+
+    # ---- Core grid and physical coords ----
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1))])
+
+    phys_coords = []
+    for y in range(GRID_Y):
+        for x in range(GRID_X):
+            phys = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            phys_coords.append((phys.x, phys.y))
+    leader_phys_x, leader_phys_y = phys_coords[0]
+
+    # ---- Device compute per expert ----
+    device_out_bufs = []
+    for e in range(NUM_EXPERTS):
+        M_e = routing_meta[e]["M_e"]
+        if M_e == 0:
+            logger.info(f"Expert {e}: skipping (0 tokens)")
+            device_out_bufs.append(torch.zeros(P, D, dtype=torch.float32))
+            continue
+
+        # Upload pkt_buf as activation
+        act_tensor = ttnn.from_torch(
+            routing_meta[e]["pkt_buf"].unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Allocate intermediate and output buffers
+        inter_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D_FF_HALF]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        logger.info(f"Expert {e}: running single-program compute (M_e={M_e})")
+        prog = _make_single_program_expert(
+            device,
+            act_tensor,
+            gu_w_tensors[e],
+            dn_w_tensors[e],
+            inter_tensor,
+            out_tensor,
+            core_grid,
+            phys_coords,
+            leader_phys_x,
+            leader_phys_y,
+            NUM_CORES,
+            GRID_X,
+            GRID_Y,
+            k_tiles,
+            n_weight_per_core_gu,
+            n_weight_tiles_gu,
+            n_out_per_core,
+            n_per_core_dn,
+            n_tiles_dn,
+        )
+        io_tensors = [act_tensor, gu_w_tensors[e], dn_w_tensors[e], inter_tensor, out_tensor]
+        expert_out = ttnn.generic_op(io_tensors, prog)
+        ttnn.synchronize_device(device)
+
+        out_torch = ttnn.to_torch(expert_out).squeeze().float()
+        device_out_bufs.append(out_torch)
+
+    # ---- Host combine: weighted accumulation ----
+    combined_output = host_combine(device_out_bufs, routing_meta, topk_weights, N_TOKENS, D)
+
+    # ---- Reference computation with dequantized weights ----
+    gu_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in gu_w_tensors]
+    dn_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in dn_w_tensors]
+
+    ref_output = moe_reference_dequant(
+        hidden_states,
+        gu_w_dequant,
+        dn_w_dequant,
+        topk_weights,
+        routing_meta,
+        D_FF,
+        NUM_CORES,
+        n_weight_per_core_gu,
+        n_out_per_core,
+    )
+
+    # ---- Verify PCC on all tokens ----
+    # With TOP_K=2, all tokens are routed to at least one expert
+    pcc = torch.corrcoef(torch.stack([combined_output.flatten(), ref_output.flatten()]))[0, 1].item()
+    max_err = (combined_output - ref_output).abs().max().item()
+    mean_err = (combined_output - ref_output).abs().mean().item()
+
+    logger.info(f"[moe_host_dispatch_device_compute] N_tokens={N_TOKENS}, K={TOP_K}, " f"experts={NUM_EXPERTS}")
+    logger.info(f"[moe_host_dispatch_device_compute] PCC={pcc:.6f} max_err={max_err:.6f} " f"mean_err={mean_err:.6f}")
+
+    # Per-expert PCC for diagnostics
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        M_e = meta["M_e"]
+        if M_e == 0:
+            continue
+        # Compare just this expert's raw output (before combine weighting)
+        dev_out_e = device_out_bufs[e][:M_e]
+        # Compute per-expert reference
+        pkt = torch.zeros(P, D, dtype=torch.float32)
+        for i in range(M_e):
+            pkt[i] = hidden_states[meta["token_indices"][i]].float()
+        ref_gu_e = pkt @ gu_w_dequant[e]
+        ref_inter_e = torch.empty(P, D_FF_HALF, dtype=torch.float32)
+        for c in range(NUM_CORES):
+            g = ref_gu_e[:, c * cols_per_core : c * cols_per_core + half_cols]
+            u = ref_gu_e[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
+            ref_inter_e[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
+        ref_out_e = ref_inter_e.bfloat16().float() @ dn_w_dequant[e]
+        ref_out_e_active = ref_out_e[:M_e]
+
+        epcc = torch.corrcoef(torch.stack([dev_out_e.flatten(), ref_out_e_active.flatten()]))[0, 1].item()
+        logger.info(f"  Expert {e}: M_e={M_e}, per-expert PCC={epcc:.6f}")
+
+    assert pcc >= 0.97, f"MoE combined output PCC {pcc:.6f} < 0.97"
+    logger.info("[moe_host_dispatch_device_compute] PASSED")
