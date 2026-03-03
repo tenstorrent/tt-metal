@@ -11,7 +11,7 @@
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
-tokens satisfying cumulative probabilty > p condition.
+tokens satisfying cumulative probability > p condition.
 
 Top-k Sampling:
 Samples from the top-k subset by comparing cumulative sums of probabilities with a random threshold to select the

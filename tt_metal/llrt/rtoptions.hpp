@@ -725,7 +725,7 @@ public:
     void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
 
 private:
-    // Helper functions to parse feature-specific environment vaiables.
+    // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     bool ParseFeatureChipIds(
