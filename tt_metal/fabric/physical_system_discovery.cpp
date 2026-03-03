@@ -25,12 +25,6 @@ namespace tt::tt_metal {
 
 namespace {
 
-std::string get_host_name() {
-    char hostname[HOST_NAME_MAX + 1];
-    gethostname(hostname, sizeof(hostname));
-    return std::string(hostname);
-}
-
 std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
     std::string motherboard;

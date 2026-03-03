@@ -12,7 +12,7 @@
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt_stl/assert.hpp>
 #include "llrt/tt_target_device.hpp"
-#include <unistd.h>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,12 +21,6 @@ namespace tt::tt_metal {
 **************************************************************************************************/
 
 namespace {
-
-std::string get_host_name() {
-    char hostname[HOST_NAME_MAX + 1];
-    gethostname(hostname, sizeof(hostname));
-    return std::string(hostname);
-}
 
 struct EthEndpoint {
     AsicID board_id;
@@ -45,10 +39,10 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(tt::TargetDevice target_devic
     target_device_type_(target_device_type) {}
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto_desc_path) :
+    target_device_type_(tt::TargetDevice::Silicon) {
     // Deserialize the proto descriptor and move all its members directly
     // This avoids discovery and merge operations for mock proto descriptors
-    PhysicalSystemDescriptor proto_desc =
-        deserialize_physical_system_descriptor_from_text_proto_file(mock_proto_desc_path);
+    auto proto_desc = deserialize_physical_system_descriptor_from_text_proto_file(mock_proto_desc_path);
 
     // Move all members directly from the deserialized descriptor using non-const getters
     target_device_type_ = proto_desc.get_target_device_type();
