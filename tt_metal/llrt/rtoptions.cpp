@@ -162,6 +162,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
+    TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -1180,6 +1181,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.serialize_on_dispatch_timeout = true;
             if (std::strncmp(value, "0", 1) == 0) {
                 this->inspector_settings.serialize_on_dispatch_timeout = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES
+        // Enables logging of runtime entries (operation name, parameters, runtime ID) to YAML.
+        // WARNING: This is expensive and will cause significant log file growth.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES:
+            this->inspector_settings.log_runtime_entries = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_runtime_entries = true;
             }
             break;
 

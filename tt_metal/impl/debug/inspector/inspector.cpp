@@ -363,6 +363,10 @@ void Inspector::emit_debug_entry(
         if (data->runtime_entries.size() > inspector::Data::MAX_RUNTIME_ENTRIES) {
             data->runtime_entries.pop_front();
         }
+
+        if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            data->logger.log_runtime_entry(workload_id, runtime_id, operation_name, operation_parameters);
+        }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to emit debug entry: {}", e.what());
     }

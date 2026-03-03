@@ -350,4 +350,26 @@ void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData&
     }
 }
 
+void Logger::log_runtime_entry(
+    uint64_t workload_id,
+    uint64_t runtime_id,
+    std::string_view operation_name,
+    std::string_view operation_parameters) noexcept {
+    if (!initialized) {
+        return;
+    }
+    try {
+        mesh_workloads_ostream << "- runtime_entry:\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << workload_id << "\n";
+        mesh_workloads_ostream << "    runtime_id: " << runtime_id << "\n";
+        mesh_workloads_ostream << "    name: " << operation_name << "\n";
+        mesh_workloads_ostream << "    parameters: '" << operation_parameters << "'\n";
+        mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                               << "\n";
+        mesh_workloads_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log runtime entry: {}", e.what());
+    }
+}
+
 }  // namespace tt::tt_metal::inspector

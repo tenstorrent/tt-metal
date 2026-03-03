@@ -440,30 +440,49 @@ class InspectorLogsData:
     def mesh_workloads(self):
         GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads", "runtimeIds"])
         return GetMeshWorkloadResults(
-            meshWorkloads=list(get_mesh_workloads(self.log_directory).values()), runtimeIds=self._get_runtime_ids()
+            meshWorkloads=list(get_mesh_workloads(self.log_directory).values()), runtimeIds=self._get_runtime_entries()
         )
 
-    def _get_runtime_ids(self) -> list[MeshWorkloadRuntimeEntry]:
-        """Parse runtime IDs from logs"""
+    def _get_runtime_entries(self) -> list[MeshWorkloadRuntimeEntry]:
+        """Parse runtime entries from logs"""
         yaml_path = os.path.join(self.log_directory, "mesh_workloads_log.yaml")
         data = read_yaml(yaml_path)
-        runtime_ids = []
+        runtime_entries = []
+        # Build a map from (workload_id, runtime_id) -> entry so runtime_entry logs can enrich them
+        entry_map: dict[tuple[int, int], MeshWorkloadRuntimeEntry] = {}
         for entry in data:
             if "workload_runtime_id" in entry:
                 info = entry["workload_runtime_id"]
-                runtime_ids.append(
-                    MeshWorkloadRuntimeEntry(
-                        workloadId=int(info.get("mesh_workload_id")), runtimeId=int(info.get("runtime_id"))
+                wid = int(info.get("mesh_workload_id"))
+                rid = int(info.get("runtime_id"))
+                re = MeshWorkloadRuntimeEntry(workloadId=wid, runtimeId=rid)
+                runtime_entries.append(re)
+                entry_map[(wid, rid)] = re
+            elif "runtime_entry" in entry:
+                info = entry["runtime_entry"]
+                wid = int(info.get("mesh_workload_id"))
+                rid = int(info.get("runtime_id"))
+                existing = entry_map.get((wid, rid))
+                if existing is not None:
+                    existing.operationName = info.get("name", "")
+                    existing.operationParameters = info.get("parameters", "")
+                else:
+                    re = MeshWorkloadRuntimeEntry(
+                        workloadId=wid,
+                        runtimeId=rid,
+                        operationName=info.get("name", ""),
+                        operationParameters=info.get("parameters", ""),
                     )
-                )
-        return runtime_ids
+                    runtime_entries.append(re)
+                    entry_map[(wid, rid)] = re
+        return runtime_entries
 
     def getMeshWorkloads(self):
         return self.mesh_workloads
 
     def getMeshWorkloadRuntimeEntries(self):
         GetMeshWorkloadRuntimeEntriesResults = namedtuple("GetMeshWorkloadRuntimeEntriesResults", ["runtimeEntries"])
-        return GetMeshWorkloadRuntimeEntriesResults(runtimeEntries=self._get_runtime_ids())
+        return GetMeshWorkloadRuntimeEntriesResults(runtimeEntries=self._get_runtime_entries())
 
     @cached_property
     def kernels(self) -> dict[int, KernelData]:
