@@ -21,6 +21,7 @@ void MetaliumEnv::initialize(const std::shared_ptr<MetaliumEnvDescriptor>& descr
     TT_FATAL(!initialized_, "MetaliumEnv already initialized");
     this->initialize_base_objects(descriptor);
     initialized_ = true;
+    descriptor_ = descriptor;
 }
 
 void MetaliumEnv::destroy() {
@@ -30,6 +31,7 @@ void MetaliumEnv::destroy() {
     cluster_.reset();
     hal_.reset();
     rtoptions_.reset();
+    descriptor_.reset();
     initialized_ = false;
 }
 
@@ -49,6 +51,11 @@ tt::Cluster& MetaliumEnv::get_cluster() const {
 }
 
 bool MetaliumEnv::is_initialized() const { return initialized_; }
+
+const std::shared_ptr<MetaliumEnvDescriptor>& MetaliumEnv::get_descriptor() const {
+    TT_FATAL(descriptor_ != nullptr, "MetaliumEnv not initialized");
+    return descriptor_;
+}
 
 void MetaliumEnv::initialize_base_objects(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor) {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();

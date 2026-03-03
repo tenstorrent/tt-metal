@@ -27,6 +27,9 @@ public:
 
     bool is_initialized() const;
 
+    // Get the descriptor that was used to initialize the MetaliumEnv
+    const std::shared_ptr<MetaliumEnvDescriptor>& get_descriptor() const;
+
 private:
     // Create the base objects according to the descriptor
     void initialize_base_objects(const std::shared_ptr<MetaliumEnvDescriptor>& descriptor);
@@ -35,6 +38,7 @@ private:
     void verify_fw_capabilities();
 
     bool initialized_ = false;
+    std::shared_ptr<MetaliumEnvDescriptor> descriptor_ = nullptr;
 
     // Below objects are listed in the order of dependency
     std::unique_ptr<llrt::RunTimeOptions> rtoptions_ = nullptr;
