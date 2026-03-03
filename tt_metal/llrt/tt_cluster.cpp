@@ -230,9 +230,10 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
-
-    if (this->target_type_ != tt::TargetDevice::Mock) {
-        this->assert_risc_reset();
+    if (std::getenv("TT_METAL_SKIP_DRIVER_START") == nullptr) {
+        if (this->target_type_ != tt::TargetDevice::Mock) {
+            this->assert_risc_reset();
+        }
     }
 }
 

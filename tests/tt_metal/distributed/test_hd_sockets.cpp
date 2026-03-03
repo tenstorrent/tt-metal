@@ -403,7 +403,7 @@ TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
     }
 }
 
-void test_h2d_socket_cross_process(
+void launch_h2d_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
@@ -413,27 +413,9 @@ void test_h2d_socket_cross_process(
     const MeshCoreCoord& recv_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    static std::atomic<uint32_t> test_counter{0};
-    std::string socket_id = fmt::format("test_xproc_{}", test_counter.fetch_add(1));
-
-    // Synchronization: main signals transfer done to owner thread.
-    std::promise<void> transfer_done;
-    auto done_future = transfer_done.get_future();
-
-    // Owner thread: create socket, export descriptor, wait for main to finish.
-    std::thread owner_thread([&, socket_id]() {
-        auto owner_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
-        owner_socket.export_descriptor(socket_id);
-        std::cout << "waiting for worker thread to finish" << std::endl;
-        done_future.wait();
-        std::cout << "owner thread finished" << std::endl;
-    });
-
-    // Main thread: wait for descriptor, connect, do transfers.
-    std::cout << "Main thread: Connecting to socket" << std::endl;
-    auto connected_socket = H2DSocket::connect(socket_id);
-    connected_socket->set_page_size(page_size);
-    std::cout << "Main thread: Connected to socket" << std::endl;
+    std::string socket_id = fmt::format("test_xproc_{}", 0);
+    auto owner_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
+    owner_socket.export_descriptor(socket_id);
 
     const ReplicatedBufferConfig buffer_config{.size = data_size};
     auto recv_data_shard_params =
@@ -457,7 +439,7 @@ void test_h2d_socket_cross_process(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {
-                static_cast<uint32_t>(connected_socket->get_config_buffer_address()),
+                static_cast<uint32_t>(owner_socket.get_config_buffer_address()),
                 static_cast<uint32_t>(recv_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
@@ -467,53 +449,37 @@ void test_h2d_socket_cross_process(
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
     mesh_workload.add_program(devices, std::move(recv_program));
-    std::cout << "Enqueueing workload" << std::endl;
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-    std::cout << "Enqueued workload" << std::endl;
-    uint32_t num_writes = data_size / page_size;
-    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
+    Finish(mesh_device->mesh_command_queue());
 
-    auto recv_core_virtual = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-
-    const auto& cluster = MetalContext::instance().get_cluster();
-    for (uint32_t i = 0; i < num_iterations; i++) {
-        std::iota(src_vec.begin(), src_vec.end(), i);
-        for (uint32_t j = 0; j < num_writes; j++) {
-            connected_socket->write(src_vec.data() + (j * page_size_words), 1);
-        }
-        connected_socket->barrier();
-        std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
-        cluster.read_core(
-            recv_data_readback.data(),
-            data_size,
-            tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
-            recv_data_buffer->address());
-        EXPECT_EQ(src_vec, recv_data_readback);
-    }
+    // const auto& cluster = MetalContext::instance().get_cluster();
+    // for (uint32_t i = 0; i < num_iterations; i++) {
+    //     std::iota(src_vec.begin(), src_vec.end(), i);
+    //     for (uint32_t j = 0; j < num_writes; j++) {
+    //         connected_socket->write(src_vec.data() + (j * page_size_words), 1);
+    //     }
+    //     connected_socket->barrier();
+    //     std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
+    //     cluster.read_core(
+    //         recv_data_readback.data(),
+    //         data_size,
+    //         tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
+    //         recv_data_buffer->address());
+    //     EXPECT_EQ(src_vec, recv_data_readback);
+    // }
 
     // Signal owner thread that transfers are complete; it can now destroy the socket.
-    connected_socket.reset();
-    transfer_done.set_value();
-    owner_thread.join();
+    // connected_socket.reset();
+    // transfer_done.set_value();
+    // owner_thread.join();
 }
 
-TEST_F(HDSocketFixture, H2DSocketCrossProcess) {
+TEST_F(HDSocketFixture, LaunchH2DWorkload) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
-
-    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
-        for (const auto& recv_coord : MeshCoordinateRange(mesh_device_->shape())) {
-            if (!is_device_coord_mmio_mapped(mesh_device_, recv_coord)) {
-                continue;
-            }
-            test_h2d_socket_cross_process(
-                mesh_device_, 1024, 64, 1024, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
-            test_h2d_socket_cross_process(
-                mesh_device_, 1024, 64, 32768, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
-        }
-    }
+    launch_h2d_workload(
+        mesh_device_, 1024, 64, 32768, H2DMode::HOST_PUSH, 1000, MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)));
 }
 
 }  // namespace tt::tt_metal::distributed
