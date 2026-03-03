@@ -205,10 +205,8 @@ class TtDINONeck:
 
     def _conv1x1_gn(self, x, conv_params, in_ch, level_idx):
         """1x1 Conv2d (HEIGHT_SHARDED) + GroupNorm (DRAM Welford). NCHW in/out."""
-        N, C, H, W = x.shape
-
-        nhwc = ttnn.permute(x, (0, 2, 3, 1))
-        nhwc = ttnn.to_memory_config(nhwc, ttnn.DRAM_MEMORY_CONFIG)
+        # N, C, H, W = x.shape
+        N, H, W, C = x.shape
 
         shard_grid = get_shard_grid_from_num_cores(64, self.device)
         conv_config = ttnn.Conv2dConfig(
@@ -222,7 +220,7 @@ class TtDINONeck:
         conv_config.override_sharding_config = True
 
         [output, [out_h, out_w], [conv_params["weight"], conv_params["bias"]]] = ttnn.conv2d(
-            input_tensor=nhwc,
+            input_tensor=x,
             weight_tensor=conv_params["weight"],
             bias_tensor=conv_params["bias"],
             in_channels=in_ch,
@@ -246,10 +244,8 @@ class TtDINONeck:
 
     def _conv3x3_s2_gn(self, x, conv_params, in_ch, level_idx):
         """3x3 stride-2 Conv2d (BLOCK_SHARDED) + GroupNorm (DRAM). NCHW in/out."""
-        N, C, H, W = x.shape
-
-        nhwc = ttnn.permute(x, (0, 2, 3, 1))
-        nhwc = ttnn.to_memory_config(nhwc, ttnn.DRAM_MEMORY_CONFIG)
+        # N, C, H, W = x.shape
+        N, H, W, C = x.shape
 
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
@@ -261,7 +257,7 @@ class TtDINONeck:
         )
 
         [output, [out_h, out_w], [conv_params["weight"], conv_params["bias"]]] = ttnn.conv2d(
-            input_tensor=nhwc,
+            input_tensor=x,
             weight_tensor=conv_params["weight"],
             bias_tensor=conv_params["bias"],
             in_channels=in_ch,
