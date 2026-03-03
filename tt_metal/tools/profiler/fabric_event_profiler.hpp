@@ -9,6 +9,7 @@
 
 #include "tools/profiler/noc_event_profiler.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdevcommon/profiler_common.h"
 
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
@@ -16,7 +17,7 @@ using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 namespace kernel_profiler {
 
 // For Unicasts
-template <typename NocAddrU64, uint32_t STATIC_ID = 12345>
+template <typename NocAddrU64, uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordFabricNocEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
@@ -42,7 +43,7 @@ FORCE_INLINE void recordFabricNocEvent(
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordFabricNocEventMulticast(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
@@ -68,7 +69,7 @@ FORCE_INLINE void recordFabricNocEventMulticast(
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordFabricScatterEvent(
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     KernelProfilerNocEventMetadata::FabricPacketType packet_type,
@@ -102,7 +103,7 @@ FORCE_INLINE void recordFabricScatterEvent(
     }
 }
 
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
     KernelProfilerNocEventMetadata event_routing_fields;
     event_routing_fields.data.fabric_routing_fields_1d.noc_xfer_type =
@@ -114,7 +115,7 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
 }
 
 // how slow is this? alternative is sotring entire route buffer which isn't ideal either...
-template <uint32_t STATIC_ID = 12345>
+template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordRoutingFields2D(
     const volatile tt::tt_fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {
     KernelProfilerNocEventMetadata ev_md;

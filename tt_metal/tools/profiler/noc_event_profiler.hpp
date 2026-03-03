@@ -12,6 +12,7 @@
 #include "event_metadata.hpp"
 #include "internal/risc_attribs.h"
 #include "kernel_profiler.hpp"
+#include "hostdevcommon/profiler_common.h"
 
 namespace noc_event_profiler {
 
@@ -70,7 +71,10 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
     return ev_md;
 }
 
-template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, uint32_t STATIC_ID = 12345>
+template <
+    KernelProfilerNocEventMetadata::NocEventType noc_event_type,
+    bool posted,
+    uint32_t STATIC_ID = kernel_profiler::NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordNocEvent(
     int32_t dst_x = -1,
     int32_t dst_y = -1,
@@ -107,7 +111,9 @@ FORCE_INLINE void recordNocEvent(
     }
 }
 
-template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, uint32_t STATIC_ID = 12345>
+template <
+    KernelProfilerNocEventMetadata::NocEventType noc_event_type,
+    uint32_t STATIC_ID = kernel_profiler::NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordMulticastNocEvent(
     int32_t mcast_dst_start_x,
     int32_t mcast_dst_start_y,
