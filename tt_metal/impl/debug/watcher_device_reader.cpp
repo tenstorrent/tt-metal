@@ -273,6 +273,7 @@ private:
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
+    void SetEnableFlags(uint32_t enables) const;
 
     Core(
         CoreCoord virtual_coord,
@@ -904,6 +905,51 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     }
 }
 
+void WatcherDeviceReader::Core::SetEnableFlags(uint32_t enables) const {
+    const auto& hal = MetalContext::instance().hal();
+    // Get enable flags symbols for watcher log
+    const auto& symbols = reader_.get_cached_enable_symbols(programmable_core_type_);
+    TT_ASSERT(!symbols.empty(), "No enable symbols found for core type {}", static_cast<int>(programmable_core_type_));
+
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        // On Quasar, we use a new format to represent enable/disable: hex bitmask for all processor types
+        if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
+            // Enables bits: [0, 1, .. dm_count): one per DM processor
+            uint32_t dm_count = hal.get_processor_types_count(
+                programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::DM));
+            uint32_t num_fw_binaries = hal.get_processor_class_num_fw_binaries(
+                hal.get_programmable_core_type_index(programmable_core_type_),
+                static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+            uint32_t num_triscs = hal.get_processor_types_count(
+                programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+            uint32_t num_clusters = num_triscs / num_fw_binaries;  // Neo0, Neo1, Neo2, Neo3
+
+            fprintf(reader_.f, "%s%X ", symbols[0].c_str(), enables & ((1u << dm_count) - 1));
+            uint32_t cluster_val = 0;
+
+            // On Quasar, compute clusters are all enabled as one unit
+            // So just poll enable bit of first TRISC of each compute cluster
+            // Enables bits: [dm_count + c*num_fw_binaries]
+            for (uint32_t c = 0; c < num_clusters; c++) {
+                if (enables & (1u << (dm_count + c * num_fw_binaries))) {
+                    cluster_val |= (1u << c);
+                }
+            }
+            fprintf(reader_.f, "%s%X ", symbols[1].c_str(), cluster_val);
+        } else {
+            // ETH on Quasar: single E: hex symbol, all processor bits
+            fprintf(reader_.f, "%s%X ", symbols[0].c_str(), enables);
+        }
+    } else {
+        // WH/BH: case-toggle format
+        for (size_t i = 0; i < symbols.size(); i++) {
+            for (char c : symbols[i]) {
+                fputc((enables & (1u << i)) ? c : (char)tolower(static_cast<unsigned char>(c)), reader_.f);
+            }
+        }
+    }
+}
+
 void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     auto subordinate_sync = mbox_data_.subordinate_sync();
     const auto& hal = MetalContext::instance().hal();
@@ -954,47 +1000,8 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             enables);
     }
 
-    // Get enable flags symbols for watcher log
-    const auto& symbols = reader_.get_cached_enable_symbols(programmable_core_type_);
-    TT_ASSERT(!symbols.empty(), "No enable symbols found for core type {}", static_cast<int>(programmable_core_type_));
-
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
-        // On Quasar, we use a new format to represent enable/disable: hex bitmask for all processor types
-        if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
-            // Enables bits: [0, 1, .. dm_count): one per DM processor
-            uint32_t dm_count = hal.get_processor_types_count(
-                programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::DM));
-            uint32_t num_fw_binaries = hal.get_processor_class_num_fw_binaries(
-                hal.get_programmable_core_type_index(programmable_core_type_),
-                static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
-            uint32_t num_triscs = hal.get_processor_types_count(
-                programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
-            uint32_t num_clusters = num_triscs / num_fw_binaries;  // Neo0, Neo1, Neo2, Neo3
-
-            fprintf(reader_.f, "%s%X ", symbols[0].c_str(), enables & ((1u << dm_count) - 1));
-            uint32_t cluster_val = 0;
-
-            // On Quasar, compute clusters are all enabled as one unit
-            // So just poll enable bit of first TRISC of each compute cluster
-            // Enables bits: [dm_count + c*num_fw_binaries]
-            for (uint32_t c = 0; c < num_clusters; c++) {
-                if (enables & (1u << (dm_count + c * num_fw_binaries))) {
-                    cluster_val |= (1u << c);
-                }
-            }
-            fprintf(reader_.f, "%s%X ", symbols[1].c_str(), cluster_val);
-        } else {
-            // ETH on Quasar: single E: hex symbol, all processor bits
-            fprintf(reader_.f, "%s%X ", symbols[0].c_str(), enables);
-        }
-    } else {
-        // WH/BH: case-toggle format
-        for (size_t i = 0; i < symbols.size(); i++) {
-            for (char c : symbols[i]) {
-                fputc((enables & (1u << i)) ? c : (char)tolower(static_cast<unsigned char>(c)), reader_.f);
-            }
-        }
-    }
+    // Set the processor enable flags per log line entry
+    SetEnableFlags(enables);
 
     fprintf(reader_.f, " h_id:%3d ", launch_msg_.kernel_config().host_assigned_id());
     uint32_t num_subordinates = hal.get_num_risc_processors(programmable_core_type_) - 1;
@@ -1002,17 +1009,17 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
         hal.get_processor_types_count(programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::DM)) - 1;
     if (num_subordinates > 0) {
         fprintf(reader_.f, "smsg:");
-        for (uint32_t i = 0; i < num_subordinates; ++i) {
-            uint32_t map_idx = i;
-            if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
-                // On Quasar TENSIX, subordinate_sync.map() layout is:
-                // dm1 .. dm7, padding, neo0_trisc0, neo0_trisc1 .. neo3_trisc3
-                // so we must skip the padding byte between DM and NEO entries.
-                if (i >= dm_subordinates) {
-                    map_idx = i + 1;
-                }
+        // On Quasar TENSIX, subordinate_sync.map() layout is:
+        // dm1 .. dm7, padding, neo0_trisc0, neo0_trisc1 .. neo3_trisc3
+        // so we must skip the padding byte between DM and NEO entries.
+        const bool skip_padding =
+            (hal.get_arch() == tt::ARCH::QUASAR) && (programmable_core_type_ == HalProgrammableCoreType::TENSIX);
+        for (uint32_t i = 0, dumped = 0; dumped < num_subordinates; ++i) {
+            if (skip_padding && (i == dm_subordinates)) {
+                continue;
             }
-            DumpRunState(subordinate_sync.map()[map_idx]);
+            DumpRunState(subordinate_sync.map()[i]);
+            dumped++;
         }
         fprintf(reader_.f, " ");
     }
