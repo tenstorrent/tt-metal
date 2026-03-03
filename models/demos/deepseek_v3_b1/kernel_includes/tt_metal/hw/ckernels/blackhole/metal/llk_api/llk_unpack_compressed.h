@@ -236,4 +236,112 @@ FORCE_INLINE uint32_t matmul_tiles_in1_compressed(
     return tile_size_b;
 }
 
+// ---------------------------------------------------------------------------
+// Custom MM with compressed in1 (per-tile format reconfig in software loop)
+//
+// Uses custom_mm_block init/uninit for MOP setup, but replaces the standard
+// _run_ with a custom version that does reconfig_unpack_srca + variable
+// address increment per context. ct_dim=1 only. kt_dim must be even.
+//
+// SrcB (in0/activations) auto-advances via HW counters.
+// SrcA (in1/weights) address and format set per context in software loop.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Custom _run_ for ct_dim=1 with per-tile format switching.
+ *
+ * Replaces _llk_unpack_AB_custom_mm_run_ for compressed weights.
+ * Each K-tile can have a different BFP format.
+ */
+/**
+ * @brief Reconfig SrcA format for use inside custom_mm MOP loop.
+ *
+ * Uses direct cfg[] writes instead of cfg_reg_rmw_tensix to avoid
+ * tensix instruction pipeline latency. Must be called AFTER
+ * wait_for_next_context() when the unpacker is paused at semaphore.
+ */
+/**
+ * @brief Reconfig SrcA format for use inside custom_mm MOP loop.
+ *
+ * Uses direct cfg[] writes instead of cfg_reg_rmw_tensix to avoid
+ * tensix instruction pipeline latency. Must be called AFTER
+ * wait_for_next_context() when the unpacker is paused at semaphore.
+ *
+ * @param cfg Config register pointer
+ * @param fmt_idx Format index (0=bfp8, 1=bfp4, 2=bfp2)
+ * @param reg0_base Cached upper bits of THCON_SEC0_REG0 (format bits cleared)
+ * @param reg2_base Cached upper bits of THCON_SEC0_REG2 (format bits cleared)
+ */
+FORCE_INLINE void reconfig_custom_mm_srca(
+    volatile uint* cfg, uint32_t fmt_idx, uint32_t reg0_base, uint32_t reg2_base) {
+    uint32_t src_format = DATA_FORMATS[fmt_idx];
+    cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] = reg0_base | src_format;
+    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] = reg2_base | src_format;
+    // NOTE: TT_SETDMAREG for TILE_SIZE_A not needed for custom_mm —
+    // custom_mm uses explicit tile_size passed via _run_, not the GPR.
+    // The GPR is only used by standard matmul's _llk_unpack_AB_matmul_.
+}
+
+FORCE_INLINE void _custom_mm_compressed_run_ct1_(
+    const volatile uint8_t* assign_ptr,
+    uint32_t address_a,  // starting SrcA address (in1/weights)
+    uint32_t address_b,  // SrcB base (in0/activations, set once)
+    uint32_t kt_dim)     // must be even
+{
+    UNPACK(({
+        volatile uint* cfg = get_cfg_pointer();
+
+        // Cache upper bits of format registers (only bottom 4 bits change per tile)
+        uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
+
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+        TT_MOP(0, (kt_dim / 2) - 1, 0);
+
+        for (uint32_t k = 0; k < kt_dim; k += 2) {
+            uint32_t fmt0 = get_tile_format(assign_ptr, k);
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+            address_a += TILE_SIZES[fmt0] >> cb_addr_shift;
+            semaphore_post(semaphore::UNPACK_SYNC);
+
+            uint32_t fmt1 = get_tile_format(assign_ptr, k + 1);
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+            address_a += TILE_SIZES[fmt1] >> cb_addr_shift;
+            semaphore_post(semaphore::UNPACK_SYNC);
+        }
+    }));
+}
+
+/**
+ * @brief Custom MM block for compressed weights (ct_dim=1, per-tile format).
+ *
+ * Combines unpack (_custom_mm_compressed_run_ct1_) with math (_llk_math_custom_mm_).
+ * Requires custom_mm_block_init_short to have been called first.
+ *
+ * @param assign_ptr   Pointer to 2-bit packed assignment array
+ * @param addr_in0     SrcB base (in0/activations) in shifted units
+ * @param addr_in1     SrcA base (in1/compressed weights) in shifted units
+ * @param in0_face_r_dim  Face row dim of in0 (for math)
+ * @param kt_dim       Number of K tiles (must be even)
+ * @param dst_index    Destination register index
+ */
+FORCE_INLINE void custom_mm_compressed_block(
+    const volatile uint8_t* assign_ptr,
+    uint32_t addr_in0,
+    uint32_t addr_in1,
+    uint32_t in0_face_r_dim,
+    uint32_t kt_dim,
+    uint32_t dst_index) {
+    UNPACK(({
+        wait_for_next_context(1);
+        reset_config_context();
+    }));
+    _custom_mm_compressed_run_ct1_(assign_ptr, addr_in1, addr_in0, kt_dim);
+    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, kt_dim, 1)));
+}
+
 }  // namespace compressed
