@@ -41,7 +41,12 @@ def unpack_uint16(packed_list):
 
 
 def unpack_int8(packed_list):
-    return np.frombuffer(bytes(packed_list), dtype=np.int8).tolist()
+    # INT8 uses sign-magnitude format in hardware (not two's complement)
+    # Format: bit 7 = sign, bits 6:0 = magnitude
+    uint8_array = np.frombuffer(bytes(packed_list), dtype=np.uint8)
+    sign = (uint8_array & 0x80).astype(bool)
+    magnitude = (uint8_array & 0x7F).astype(np.int8)
+    return np.where(sign, -magnitude, magnitude).tolist()
 
 
 def unpack_uint8(packed_list):
