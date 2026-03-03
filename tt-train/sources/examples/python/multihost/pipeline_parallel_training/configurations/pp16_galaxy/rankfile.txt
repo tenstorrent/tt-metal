@@ -13,3 +13,4 @@ rank 11=bh-glx-c02u08 slot=0
 rank 12=bh-glx-c02u02 slot=0
 rank 13=bh-glx-c02u02 slot=0
 rank 14=bh-glx-c02u02 slot=0
+rank 15=bh-glx-c02u02 slot=0

@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Rank Binding for 2-Galaxy Exabox Configuration (Blackhole)
+# Rank Binding for 4-Galaxy Exabox Configuration (Blackhole)
 #
-# This binds two MPI ranks to two separate Galaxies on the exabox.
-# Process 0 (rank=0): Galaxy 0 (mesh_id=0) - Sender
-# Process 1 (rank=1): Galaxy 1 (mesh_id=1) - Receiver
-#
-# oion between Galaxies: 4 ethernet channels
+# This binds four MPI ranks to four separate Galaxies on the exabox.
+# Process 0 (rank=0): Galaxy 0 (mesh_id=0)
+# Process 1 (rank=1): Galaxy 1 (mesh_id=1)
+# Process 2 (rank=2): Galaxy 2 (mesh_id=2)
+# Process 3 (rank=3): Galaxy 3 (mesh_id=3)
+# Connection between Galaxies: 4 ethernet channels
 #
 # Note: On exabox, each Galaxy is a separate physical system managed by a single host.
 # The TT_VISIBLE_DEVICES is typically not needed when each rank runs on its own host.
-# If running both ranks from a single host (e.g., for testing), you would need to
+# If running all ranks from a single host (e.g., for testing), you would need to
 # set TT_VISIBLE_DEVICES appropriately based on PCIe enumeration.
 
 rank_bindings:

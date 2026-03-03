@@ -31,7 +31,7 @@ from loguru import logger
 
 def run_ttnn_fabric_verification() -> None:
     """
-    Optional TTNN fabric verification rountine.
+    Optional TTNN fabric verification routine.
 
     This helper contains the verification logic for send/recv between ranks. It is not invoked by default.
     """
@@ -261,7 +261,7 @@ def main(config: str):
             tensor_data = tensor.to_numpy(composer=composer).flatten()
             assert tensor_data.tolist()[:32] == [
                 i for i in range(32)
-            ], f"Rank {rank} received data: {tensor_data} does not match expected data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]"
+            ], f"Rank {rank} received data: {tensor_data} does not match expected data: {[i for i in range(32)]}"
         if rank == sender:
             print(f"Rank {rank} is sending data")
             tensor_data = np.array([i for i in range(32)], dtype=np.float32)

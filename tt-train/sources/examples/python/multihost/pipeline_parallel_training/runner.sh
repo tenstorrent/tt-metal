@@ -10,7 +10,10 @@
 WORKLOAD="llama405b"
 
 # Common environmental variables
-export TT_METAL_HOME="/data/${USER}/pr_review/tt-metal"
+if [ -z "${TT_METAL_HOME:-}" ]; then
+    TT_METAL_HOME="/data/${USER}/tt-metal"
+fi
+export TT_METAL_HOME
 export PYTHONPATH="${TT_METAL_HOME}"
 source ${TT_METAL_HOME}/python_env/bin/activate
 export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
@@ -34,7 +37,7 @@ elif [[ "$WORKLOAD" == "llama70b_16stage" ]]; then
     CONFIG_FILE="training_configs/training_shakespeare_llama70b_pp16_fabric_galaxy.yaml"
     HOST_CONFIG="pp16_galaxy"
 elif [[ "$WORKLOAD" == "llama405b" ]]; then
-    CONFIG_FILE="training_configs/training_shakespeare_llama405b_pp_fabric_galaxy.yaml"
+    CONFIG_FILE="training_configs/training_shakespeare_llama405b_pp_fabric.yaml"
     HOST_CONFIG="pp16_galaxy"
 else
     echo "Unknown workload: $WORKLOAD"
