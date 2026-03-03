@@ -172,7 +172,7 @@ jobs:
           tt-run --skip-executable-check \
             --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
             --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
-            /bin/bash -c "cd /home/user/tt-metal && python3 -m pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py"
+            /bin/bash -c "cd /home/user/tt-metal && /opt/venv/bin/python3 -m pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py"
   cleanup:
     name: Cleanup
     needs: [run, create-allocation]
