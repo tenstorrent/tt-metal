@@ -168,14 +168,38 @@ In automated mode, proceed directly.
 
 ## Phase 1: Analysis
 
-**Goal**: Deep architectural analysis of reference operations.
+**Goal**: Focused architectural analysis of reference operations, scoped to their role.
 
 Launch `ttnn-operation-analyzer` on EACH reference operation. Run all analyzers **in parallel** (multiple Task calls in a single message).
 
+**Include role-based focus hints in each analyzer prompt.** The analyzer agent produces exhaustive output by default (~25KB). When used in the pipeline, hint at what the architect needs most for the assigned role. This helps the analyzer prioritize without artificially restricting its output — if the analyzer finds something important outside the hinted focus, it should still include it.
+
+### Role-Based Focus Hints
+
+A reference may serve one or more roles. A single reference can be both `input_stage` and `compute_core` if the operation fuses reading with computation. Use your judgment — these are hints, not hard boundaries.
+
+| Role | Prioritize | Lower priority |
+|------|-----------|----------------|
+| `input_stage` | Reader kernel pattern, input CB sizing/page format, stick-to-tile batching, work distribution | Writer kernel internals, pipeline classification |
+| `output_stage` | Untilize helper usage, writer kernel pattern, output CB sizing, stick extraction | Reader kernel internals, input CB config |
+| `compute_core` | Compute kernel helper calls (exact signatures), intermediate CB layout, multi-pass data reuse, scalar/constant setup, broadcast patterns | Reader/writer implementation details (just note what they provide/consume) |
+
+When a reference serves multiple roles (e.g., a fused tilize-compute op is both `input_stage` and `compute_core`), include focus hints for all applicable roles.
+
+### Prompt Template
+
 ```
-Task: ttnn-operation-analyzer
-  Input: program factory path
-  Output: {ref_dir}/{ref_name}_analysis.md
+Analyze the {operation} program factory.
+
+Program factory path: {path}
+
+Role(s): {role(s)}
+Prioritize: {relevant items from the focus hints table above}
+
+Save your analysis to: {ref_dir}/{ref_name}_analysis.md
+
+This analysis will be used as a {role} reference for a new {target_op}
+operation that {brief description of what target op does}.
 ```
 
 Wait for ALL analyzers to complete before proceeding.
