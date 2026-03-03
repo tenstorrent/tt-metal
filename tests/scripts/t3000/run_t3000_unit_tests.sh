@@ -749,6 +749,24 @@ run_t3000_tttv2_fast_unit_tests() {
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
+  # Run Penalties1D tests
+  pytest models/common/tests/modules/sampling/test_penalties_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --durations=10 \
+    --cov=models.common.modules.sampling.penalties_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  # Run Sampling1D tests
+  pytest models/common/tests/modules/sampling/test_sampling_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --durations=10 \
+    --cov=models.common.modules.sampling.sampling_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
