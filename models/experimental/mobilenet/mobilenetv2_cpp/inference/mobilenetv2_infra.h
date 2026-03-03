@@ -6,6 +6,8 @@
 #define MOBILENETV2_CPP_INFERENCE_MOBILENETV2_INFRA
 
 #include <string>
+#include <tuple>
+#include <optional>
 #include <memory>
 #include "ttnn_mobilenetv2.h"
 #include "ttnn/types.hpp"

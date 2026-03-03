@@ -17,7 +17,7 @@ The C++ implementation uses LibTorch to load the model, which requires a TorchSc
 ```bash
 python3 models/experimental/mobilenet/mobilenetv2_cpp/script/gen_mobilenetv2_script.py
 ```
-This will generate `mobilenet_v2-b0353104-script.pt` in `models/experimental/mobilenet/mobilenetv2_cpp/script/`.
+This will generate `mobilenet_v2-b0353104.pt` in `models/experimental/mobilenet/mobilenetv2_cpp/script/`.
 
 ### 2. Build the Project
 Use CMake to build the target:
@@ -34,8 +34,8 @@ The generated binaries will be located at:
 Run the compiled binary, providing the path to the generated TorchScript model as a command-line argument:
 
 ```bash
-./build/models/experimental/mobilenet/mobilenetv2_cpp/mobilenetv2_e2e models/experimental/mobilenet/mobilenetv2_cpp/script/mobilenet_v2-b0353104-script.pt
-./build/models/experimental/mobilenet/mobilenetv2_cpp/mobilenetv2_cpp models/experimental/mobilenet/mobilenetv2_cpp/script/mobilenet_v2-b0353104-script.pt
+./build/models/experimental/mobilenet/mobilenetv2_cpp/mobilenetv2_e2e models/experimental/mobilenet/mobilenetv2_cpp/script/mobilenet_v2-b0353104.pt
+./build/models/experimental/mobilenet/mobilenetv2_cpp/mobilenetv2_cpp models/experimental/mobilenet/mobilenetv2_cpp/script/mobilenet_v2-b0353104.pt
 ```
 
 ## Performance
