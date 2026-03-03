@@ -51,7 +51,7 @@ def slice_op(
 
     output_tensor = ttnn.SliceDeviceOperation.create_output_tensors(params, tensor_args)
 
-    descriptor = ttnn.SliceTileProgramFactory.create_descriptor(params, tensor_args, output_tensor, None)
+    descriptor = ttnn.SliceTileProgramFactory.create_descriptor(params, tensor_args, output_tensor)
 
     return OpDescriptor(
         descriptor=descriptor,

@@ -230,10 +230,7 @@ void SliceTileProgramFactory::override_runtime_arguments(
 }
 
 tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
-    const SliceParams& args,
-    const SliceInputs& tensor_args,
-    Tensor& output,
-    const std::optional<CoreRangeSet>& core_range_set) {
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::IDevice* device = input.device();
 
@@ -241,8 +238,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        core_range_set.has_value() ? tt::tt_metal::split_work_to_cores(core_range_set.value(), num_unpadded_tiles)
-        : args.sub_core_grids.has_value()
+        args.sub_core_grids.has_value()
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
