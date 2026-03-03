@@ -114,13 +114,48 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
 
     const std::vector<CoreCoord> shard_cores = shard_builder::get_shard_cores(output);
     const uint32_t shard_count = shard_cores.size();
+    const uint32_t input_shard_count = shard_builder::get_sharding_core_count(input);
+    const uint32_t output_shard_count = shard_builder::get_sharding_core_count(output);
+    TT_FATAL(
+        input_shard_count == shard_count && output_shard_count == shard_count,
+        "Input/output shard core counts must match for height-sharded tilize (input={}, output={}, program={})",
+        input_shard_count,
+        output_shard_count,
+        shard_count);
+
+    const auto input_shard_map = shard_builder::generate_run_time_args(input);
+    const auto output_shard_map = shard_builder::generate_run_time_args(output);
+    auto get_core_index = [](const std::vector<uint32_t>& shard_map, const CoreCoord& core, uint32_t core_count) {
+        const uint32_t packed = ((core.x & 0xFF) << 8) | (core.y & 0xFF);
+        uint32_t core_num = 0;
+        for (uint32_t idx = 0; idx < shard_map.size() && core_num < core_count; ++idx) {
+            const uint32_t word = shard_map[idx];
+            const uint32_t high = (word >> 16) & 0xFFFF;
+            if (high == packed) {
+                return core_num;
+            }
+            ++core_num;
+            if (core_num >= core_count) {
+                break;
+            }
+            const uint32_t low = word & 0xFFFF;
+            if (low == packed) {
+                return core_num;
+            }
+            ++core_num;
+        }
+        TT_FATAL(false, "Core ({},{}) not found in shard map", core.x, core.y);
+        return 0u;
+    };
 
     // Per-core RT args.
     for (uint32_t i = 0; i < shard_count; ++i) {
         const auto& core = shard_cores[i];
+        const uint32_t reader_core_index = get_core_index(input_shard_map, core, shard_count);
+        const uint32_t writer_core_index = get_core_index(output_shard_map, core, shard_count);
 
         // Shard start row per batch
-        const uint32_t shard_start_row = i * output_shard_height;
+        const uint32_t shard_start_row = reader_core_index * output_shard_height;
         const uint32_t logical_height_core =
             shard_start_row < global_logical_height
                 ? std::min(output_shard_height, global_logical_height - shard_start_row)
@@ -152,7 +187,7 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         // Tile offset per core.
-        const uint32_t shard_start_tile = i * total_tiles_per_core;
+        const uint32_t shard_start_tile = writer_core_index * total_tiles_per_core;
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),  // Base address for ShardedAddrGen
             total_tiles_per_core,

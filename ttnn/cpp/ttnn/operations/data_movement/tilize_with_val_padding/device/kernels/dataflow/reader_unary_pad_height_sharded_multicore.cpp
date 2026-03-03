@@ -70,6 +70,9 @@ void kernel_main() {
         get_compile_time_arg_val(9),
         get_compile_time_arg_val(10)>;
 
+    constexpr uint32_t page_size_jump = get_compile_time_arg_val(6);
+    constexpr uint32_t pages_per_tensor_row = get_compile_time_arg_val(7);
+
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_base_addr, .shard_array = mapping_table};
@@ -94,11 +97,23 @@ void kernel_main() {
 
                 if (is_real_row) {
                     const uint32_t global_row = batch_row_base + shard_start_row + local_row;
-                    const uint64_t src_row_addr = get_noc_addr(global_row, s0) + start_col_bytes;
+                    const uint32_t row_page_base = global_row * pages_per_tensor_row;
+                    const uint32_t page_index_offset = start_col_bytes / page_size_jump;
+                    uint32_t offset_in_page = start_col_bytes - (page_index_offset * page_size_jump);
+                    uint32_t page_id = row_page_base + page_index_offset;
+                    uint32_t remaining = row_bytes;
 
-                    // Read the real row segment
-                    noc_async_read(src_row_addr, l1, row_bytes);
-                    l1 += row_bytes;
+                    // Read the real row segment across pages.
+                    while (remaining > 0) {
+                        const uint32_t max_bytes_this_page = page_size_jump - offset_in_page;
+                        const uint32_t read_size = remaining < max_bytes_this_page ? remaining : max_bytes_this_page;
+                        const uint64_t src_row_addr = get_noc_addr(page_id, s0, offset_in_page);
+                        noc_async_read(src_row_addr, l1, read_size);
+                        l1 += read_size;
+                        remaining -= read_size;
+                        page_id++;
+                        offset_in_page = 0;
+                    }
 
                     // Width padding (if any)
                     if (width_pad_bytes > 0) {
