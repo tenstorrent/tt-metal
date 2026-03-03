@@ -914,9 +914,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         cond_latents, _ = current_model.preprocess_spatial_input_host(cond_latents)
 
                     # Allocate on host when traced since device tensors may be overwritten by trace execution.
-                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.prepare_rope_features(
-                        latents, on_host=traced
-                    )
+                    rope_cos_1HND, rope_sin_1HND, trans_mat = current_model.get_rope_features(latents, on_host=traced)
                     rope_args = {
                         "rope_cos_1HND": rope_cos_1HND,
                         "rope_sin_1HND": rope_sin_1HND,
