@@ -157,6 +157,9 @@ jobs:
       #       /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
       - name: Run Python Interface Test
         timeout-minutes: 15
+        env:
+          TT_METAL_HOME: /home/user/tt-metal
+          PYTHONPATH: /home/user/tt-metal
         run: |
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
           PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
