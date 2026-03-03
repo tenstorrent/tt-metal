@@ -799,7 +799,6 @@ class MoeRoutedExpertOp:
         from device properties and weight tensor shapes. Their CB descriptors are overridden by
         _overlap_cbs_with_sdpa_buffer in the production path.
         """
-        print("start setup_dimensions")
         # ==================================================================
         # Extract global semaphore addresses
         # ==================================================================
@@ -1394,7 +1393,6 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Return context
         # ==================================================================
-        print("finish setup_dimensions")
         return _MoeRoutedExpertContext(
             # Device & mesh
             device=device,
@@ -1518,7 +1516,6 @@ class MoeRoutedExpertOp:
     @staticmethod
     def _build_compile_time_args(ctx, mesh_chip_id):
         """Build NCRISC, BRISC, and TRISC compile-time arg lists for routed expert."""
-        print("start build_compile_time_args")
         ncrisc_named_compile_time_args = [
             # Input mcast (sender sharded buffer + receiver)
             ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
@@ -1834,12 +1831,10 @@ class MoeRoutedExpertOp:
             ("reduce_output_cb", ctx.reduce_output_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
         ]
-        print("finish build_compile_time_args")
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
     @staticmethod
     def _build_cb_descriptors(ctx):
-        print("start build_cb_descriptors")
         """Build circular buffer descriptors for routed expert."""
         descriptors = [
             ctx.rmsnorm_output_cb_descriptor,
@@ -1903,12 +1898,10 @@ class MoeRoutedExpertOp:
         if ctx.enable_bcast and ctx.bcast_pkt_cb_descriptor is not None:
             descriptors.append(ctx.bcast_pkt_cb_descriptor)
 
-        print("finish build_cb_descriptors")
         return descriptors
 
     @staticmethod
     def _build_core_descriptors(ctx):
-        print("start build_core_descriptors")
         """Build unified and per-core compile-time core descriptors for routed expert."""
         unified_compile_time_core_descriptors = [
             UnifiedCompileTimeCoreDescriptor(
@@ -1992,7 +1985,6 @@ class MoeRoutedExpertOp:
                 other_value=0,
             ),
         ]
-        print("finish build_core_descriptors")
         return unified_compile_time_core_descriptors, per_core_compile_time_descriptors
 
 
@@ -4310,17 +4302,14 @@ class MoeOp:
         is_torus=False,
         downstream_socket=None,
     ):
-        print("start of init")
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
         self.downstream_socket = downstream_socket
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
-        print("moe semaphores created")
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
-        print("semaphore addresses:", sem_addrs)
 
         self.cb_id_manager = CircularBufferIdManager()
         cb_id_context = self.cb_id_manager.create_context()
@@ -4352,12 +4341,10 @@ class MoeOp:
             cb_id_context=cb_id_context,
             worker_core_grid=worker_core_grid,
         )
-        print("routed context set up")
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
         input_tile = device_tensor.get_tile()
         input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
-        print("before shared context set up, input tile:", input_tile, "input tile size:", input_tile_size)
         shared_ctx = MoeSharedExpertOp._setup_dimensions(
             device=routed_ctx.device,
             shared_gate_weights_overlapped=shared_gate_weights_overlapped,
@@ -4387,7 +4374,6 @@ class MoeOp:
             cb_id_context=cb_id_context,
             residual_mcast_dst_cb=routed_ctx.residual_mcast_dst_cb,
         )
-        print("shared context set up")
 
         if sdpa_kv_cache_buffer is not None and sdpa_out_interm_buffer is not None:
             sdpa_kv_cache_buffer_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)[0]
@@ -4399,7 +4385,6 @@ class MoeOp:
                     [ttnn.CoreRange(c, c) for c in routed_ctx.reduce_params["worker_cores_list"]]
                     + [ttnn.CoreRange(c, c) for c in routed_ctx.reduce_params["fabric_cores"]]
                 )
-            print("before overlapping CBs with SDPA buffers, reduce_all_cores_set:", reduce_all_cores_set)
             MoeOp._overlap_cbs_with_sdpa_buffer(
                 routed_ctx,
                 shared_ctx,
@@ -4407,8 +4392,6 @@ class MoeOp:
                 sdpa_out_interm_buffer_device,
                 reduce_all_cores_set=reduce_all_cores_set,
             )
-            print("CBs overlapped with SDPA buffers")
-        print("before MoeContext creation")
         self.ctx = MoeContext(
             routed_ctx=routed_ctx,
             shared_ctx=shared_ctx,
@@ -4451,7 +4434,6 @@ class MoeOp:
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
         )
-        print("MoeContext created")
 
         # Shared descriptors (populated by _build_descriptors)
         self.cb_descriptors = []
@@ -4706,7 +4688,6 @@ class MoeOp:
         import sys
 
         sys.stdout.reconfigure(line_buffering=True)
-        print("before creating moe op")
         moe = MoeOp(
             shared_residual_mcast_src_tensor,
             gate_mm_weights_tensor=gate_mm_weights_tensor,
@@ -4745,28 +4726,24 @@ class MoeOp:
             is_torus=is_torus,
             downstream_socket=downstream_socket,
         )
-        print("after creating moe op")
 
         # ==================================================================
         # Build descriptors
         # ==================================================================
         moe._build_descriptors()
-        print("after building descriptors")
 
         # ==================================================================
         # Create per-device programs (mesh loop)
         # ==================================================================
         ctx = moe.ctx
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-        print("before mesh loop")
 
         for row in range(ctx.mesh_rows):
             for col in range(ctx.mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 chip_id = row * ctx.mesh_cols + col
-                print(f"Setting up device at coord {coord} with chip_id {chip_id}")
+
                 moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, coord, row, col)
-                print("setup per-device args done")
 
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",
@@ -4789,42 +4766,29 @@ class MoeOp:
                     defines=moe.device_kernel_defines,
                     noc_mode=moe.noc_mode,
                 )
-                print("created unified kernel descriptor")
                 kernel_result = unified_kernel.get_kernel_descriptors()
-                print("after getting kernel descriptors")
 
                 kernels = kernel_result.kernels
                 cb_descs = moe.dummy_cb_descs if ctx.reconfig_moe_cbs else moe.device_cb_descs
                 sem_descs = moe.device_sem_descs
 
-                print(
-                    f"  creating ProgramDescriptor (kernels={len(kernels)}, cbs={len(cb_descs)}, sems={len(sem_descs)})..."
-                )
                 program = ttnn.ProgramDescriptor(
                     kernels=kernels,
                     cbs=cb_descs,
                     semaphores=sem_descs,
                 )
-                print("after creating program descriptor")
 
                 moe._setup_fabric_connections(coord, row, col, reduce_root_coord, kernel_result, program)
-                print("after setting up fabric connections")
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-                print("after adding program to mesh program descriptor")
 
         # Execute
-        print(f"before executing mesh program (io_tensors={len(moe.io_tensors)})")
         ttnn.generic_op(moe.io_tensors, mesh_program_descriptor)
-        print("after executing mesh program")
 
         # Return appropriate output based on reduce mode
         if ctx.enable_reduce_to_one:
-            print("Reduce-to-one enabled: returning reduce output tensor")
             if ctx.enable_routing:
                 return ctx.gate_output_scores_tensor, ctx.gate_output_indices_tensor, ctx.reduce_output_tensor
             return ctx.reduce_output_tensor
         if ctx.enable_routing:
-            print("Routing enabled (reduce disabled): returning gate output tensors and final output tensor")
             return ctx.gate_output_scores_tensor, ctx.gate_output_indices_tensor, ctx.final_output_tensor
-        print("No routing, no reduce: returning final output tensor")
         return ctx.final_output_tensor
