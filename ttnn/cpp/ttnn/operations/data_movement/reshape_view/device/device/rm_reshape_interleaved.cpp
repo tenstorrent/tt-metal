@@ -19,12 +19,12 @@ Compile arguments
 Runtime arguments
 0. src_addr: source address
 1. dst_addr: destination address
-2. source_read_size_bytes: source read size in bytes
-3. read_start_page: read start page
-4. read_end_page: read end page
-5. write_start_page: write start page
-6. write_start_offset: write start offset
-7. nop: 1 if this core should be skipped
+2. source_page_size_bytes: source page size in bytes
+3. dest_page_size_bytes: destination page size in bytes
+4. source_read_size_bytes: source read size in bytes
+5. read_start_page: read start page
+6. read_end_page: read end page
+7. write_start_page: write start page
 */
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -42,7 +42,7 @@ void kernel_main() {
     const uint32_t read_end_page = get_arg_val<uint32_t>(4);
     const uint32_t write_start_page = get_arg_val<uint32_t>(5);
     const uint32_t write_start_offset = get_arg_val<uint32_t>(6);
-    const uint32_t nop = get_arg_val<uint32_t>(7);
+    const uint32_t nop = get_arg_val<uint32_t>(9);
 
     constexpr bool src_aligned_to_64 = get_compile_time_arg_val(0) == 1;
     constexpr bool src_aligned_to_16 = get_compile_time_arg_val(1) == 1;
