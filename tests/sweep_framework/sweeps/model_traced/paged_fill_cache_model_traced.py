@@ -11,16 +11,22 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 TIMEOUT = 300
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("experimental::paged_fill_cache", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::paged_fill_cache")
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 64)],
+        "input_a_shape": [(1, 1, 32, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -39,8 +45,29 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0)
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -51,6 +78,7 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -58,21 +86,27 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle dict input_shape from traced configurations (multi-input)
-    if isinstance(input_shape, dict):
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
+    # Handle dict input_a_shape from traced configurations (multi-input)
+    if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs
-        shape_a = input_shape.get("input_a", input_shape.get("self"))
-        shape_b = input_shape.get("input_b", input_shape.get("other"))
-        shape_c = input_shape.get("input_c")
+        shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
+        shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
+        shape_c = input_a_shape.get("input_c")
         if shape_c is None:
             # If only 2 inputs, use B shape for C
             shape_c = shape_b
     else:
         # Fallback for sample configurations
-        if isinstance(input_shape, (tuple, list)):
-            shape = tuple(input_shape)
+        if isinstance(input_a_shape, (tuple, list)):
+            shape = tuple(input_a_shape)
         else:
-            shape = input_shape
+            shape = input_a_shape
         shape_a = shape_b = shape_c = shape
 
     # Use provided dtypes - fail if not provided (no fallbacks)
@@ -121,51 +155,44 @@ def run(
     torch_output_tensor = torch_input_tensor_a.clone()
 
     # Convert to TTNN tensors
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": dtype_a,
-        "layout": layout_a,
-    }
+    if is_mesh_device:
+        input_tensor_a = create_tensor_on_mesh(
+            torch_input_tensor_a, device, dtype_a, layout_a, mem_config_a, input_a_tensor_placement
+        )
+        input_tensor_b = create_tensor_on_mesh(
+            torch_input_tensor_b,
+            device,
+            dtype_b,
+            layout_b,
+            mem_config_b,
+            kwargs.get("input_b_tensor_placement", input_a_tensor_placement),
+        )
+        input_tensor_c = create_tensor_on_mesh(
+            torch_input_tensor_c,
+            device,
+            dtype_c,
+            layout_c,
+            mem_config_c,
+            kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+        )
+    else:
+        from_torch_kwargs_a = {"dtype": dtype_a, "layout": layout_a}
+        from_torch_kwargs_b = {"dtype": dtype_b, "layout": layout_b}
+        from_torch_kwargs_c = {"dtype": dtype_c, "layout": layout_c}
 
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = mem_config_a
+        if not is_host:
+            from_torch_kwargs_a["device"] = device
+            from_torch_kwargs_a["memory_config"] = mem_config_a
+            from_torch_kwargs_b["device"] = device
+            from_torch_kwargs_b["memory_config"] = mem_config_b
+            from_torch_kwargs_c["device"] = device
+            from_torch_kwargs_c["memory_config"] = mem_config_c
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": dtype_b,
-        "layout": layout_b,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = mem_config_b
-
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": dtype_c,
-        "layout": layout_c,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = mem_config_c
-
-    input_tensor_c = ttnn.from_torch(torch_input_tensor_c, **from_torch_kwargs)
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs_a)
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs_b)
+        input_tensor_c = ttnn.from_torch(torch_input_tensor_c, **from_torch_kwargs_c)
 
     start_time = start_measuring_time()
     # paged_fill_cache signature: (cache_tensor, input_tensor, page_table, *, batch_idx_tensor=None, batch_idx=0, ...)
@@ -190,7 +217,7 @@ def run(
         )
     # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)

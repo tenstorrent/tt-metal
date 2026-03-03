@@ -59,7 +59,13 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.rope import compute_gather_cos_sin
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -67,14 +73,14 @@ TIMEOUT = 30
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("experimental::rotary_embedding_llama", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::rotary_embedding_llama")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     # Shape format for prefill: [batch, n_heads, seq_len, head_dim]
     "model_traced_sample": {
-        "input_shape": [(1, 8, 128, 64)],  # batch=1, n_heads=8, seq_len=128, head_dim=64
+        "input_a_shape": [(1, 8, 128, 64)],  # batch=1, n_heads=8, seq_len=128, head_dim=64
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -100,6 +106,27 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0)
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
 
 
 def invalidate_vector(test_vector) -> tuple:

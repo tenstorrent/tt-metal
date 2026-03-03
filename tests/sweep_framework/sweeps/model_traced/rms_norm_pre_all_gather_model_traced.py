@@ -8,17 +8,23 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 
 TIMEOUT = 300
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("rms_norm_pre_all_gather", all_cases=False)
+model_traced_params = loader.get_suite_parameters("rms_norm_pre_all_gather")
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -34,23 +40,52 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0)
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
     input_b_memory_config=None,
     program_config=None,
+    output_memory_config=None,
+    memory_config=None,
     *,
     device,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    if isinstance(input_shape, dict) and "self" in input_shape:
-        shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
-    elif isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
+    if isinstance(input_a_shape, dict) and "self" in input_a_shape:
+        shape = input_a_shape["self"] if isinstance(input_a_shape["self"], tuple) else tuple(input_a_shape["self"])
+    elif isinstance(input_a_shape, (tuple, list)):
+        shape = tuple(input_a_shape) if isinstance(input_a_shape, list) else input_a_shape
     else:
         shape = (1, 1, 32, 32)
 
@@ -61,13 +96,22 @@ def run(
     torch_expected_stats = torch_input.pow(2).sum(dim=-1, keepdim=True)
 
     # Create tensor in DRAM first, then move to target memory config
-    input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    if is_mesh_device:
+        input_tensor = create_tensor_on_mesh(
+            torch_input, device, input_a_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+        )
+    else:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=input_a_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     # If the traced config specifies a sharded memory config, move the tensor there
     is_sharded = False
-    if hasattr(input_a_memory_config, "memory_layout"):
+    if not is_mesh_device and hasattr(input_a_memory_config, "memory_layout"):
         mem_layout = str(input_a_memory_config.memory_layout)
         if "SHARDED" in mem_layout:
             is_sharded = True
@@ -90,7 +134,7 @@ def run(
     if ttnn_program_config is not None:
         op_kwargs["program_config"] = ttnn_program_config
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, **op_kwargs)
-    tt_stats_torch = ttnn.to_torch(tt_stats)
+    tt_stats_torch = mesh_tensor_to_torch(tt_stats, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     tt_sum_x2 = tt_stats_torch[..., 0:1]

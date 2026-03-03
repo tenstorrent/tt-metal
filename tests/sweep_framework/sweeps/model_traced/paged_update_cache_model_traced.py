@@ -11,16 +11,22 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
 TIMEOUT = 120
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("experimental::paged_update_cache", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::paged_update_cache")
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 64)],
+        "input_a_shape": [(1, 1, 32, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -42,8 +48,29 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0)
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -57,6 +84,7 @@ def run(
     input_d_layout=None,
     input_d_memory_config=None,
     output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -64,23 +92,29 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle dict input_shape from traced configurations (multi-input)
-    if isinstance(input_shape, dict):
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
+    # Handle dict input_a_shape from traced configurations (multi-input)
+    if isinstance(input_a_shape, dict):
         # Traced configuration with multiple inputs
-        shape_a = input_shape.get("input_a", input_shape.get("self"))
-        shape_b = input_shape.get("input_b", input_shape.get("other"))
-        shape_c = input_shape.get("input_c")
-        shape_d = input_shape.get("input_d")
+        shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
+        shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
+        shape_c = input_a_shape.get("input_c")
+        shape_d = input_a_shape.get("input_d")
         if shape_c is None:
             shape_c = shape_b
         if shape_d is None:
             shape_d = shape_c
     else:
         # Fallback for sample configurations
-        if isinstance(input_shape, (tuple, list)):
-            shape = tuple(input_shape)
+        if isinstance(input_a_shape, (tuple, list)):
+            shape = tuple(input_a_shape)
         else:
-            shape = input_shape
+            shape = input_a_shape
         shape_a = shape_b = shape_c = shape_d = shape
 
     # Check if we have 3 or 4 tensors (4th tensor is optional)
