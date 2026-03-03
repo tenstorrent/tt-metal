@@ -119,13 +119,17 @@ struct DRAMStreamingMatmul {
     //             correctly wraps within [CBIn1ResetAddr, CBIn1ResetAddr+CB_size)
     //             across loop iterations. No CB pointer reset needed — fifo_wr_ptr
     //             and fifo_rd_ptr naturally wrap at the same boundary via cb_push/pop.
+    // PopIndex: If true, pops the index CB after reading the expert index.
+    //           Only the last consumer (e.g., down_proj) should set this to true.
     // ========================================================================
     template <
         typename CTArgs,
         bool IsActiveCore,
         bool PopIn0 = true,
         bool ResetCBIn1 = false,
-        uint32_t CBIn1ResetAddr = 0>
+        uint32_t CBIn1ResetAddr = 0,
+        bool PopIndex = false,
+        bool WaitForOutput = false>
     class Op {
     public:
         void operator()() {
@@ -172,6 +176,9 @@ struct DRAMStreamingMatmul {
                 expert_offset_bytes = expert_idx * expert_size_bytes;
             }
 
+            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
             // Setup DRAM read for in1
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
             uint32_t l1_write_addr_in1;
@@ -180,9 +187,9 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Multi-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3 * CTArgs::num_subblocks_k;
-            constexpr uint32_t extra_blocks_in_flight = 2;
+            // Triple-buffering with transaction IDs for pipelining
+            constexpr uint32_t num_buffers = 3;
+            constexpr uint32_t extra_blocks_in_flight = 1;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
@@ -233,6 +240,16 @@ struct DRAMStreamingMatmul {
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
 
+            // Pop index CB after the last consumer is done reading
+            if constexpr (PopIndex && CTArgs::enable_indexing) {
+                cb_pop_front(CTArgs::cb_index, 1);
+            }
+
+            // Optionally wait for compute to finish writing output
+            if constexpr (WaitForOutput) {
+                cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
+            }
+
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC: Matmul compute with optional fused SiLU
@@ -249,7 +266,7 @@ struct DRAMStreamingMatmul {
             } else {
                 reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
-                custom_mm_block_init_short<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
+                custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
 

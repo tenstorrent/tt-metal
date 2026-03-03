@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
@@ -26,7 +29,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
-    // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
@@ -36,6 +38,9 @@ void kernel_main() {
 
     constexpr auto tensor_args = TensorAccessorArgs<9>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
 
     uint32_t w = curr_col_in_batch;
 
@@ -61,15 +66,13 @@ void kernel_main() {
         uint32_t reset_w = w;
         uint32_t reset_col_start = col_start_tile_id;
 
-        // row wise read for one chunk
         for (uint32_t j = 0; j < Ht; ++j) {
             w = reset_w;
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read_page(curr_id, tensor_accessor, l1_write_addr);
-                noc_async_read_barrier();
+                cb_in0.reserve_back(onetile);
+                noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
                 if constexpr (LAST_W > 0) {
                     if (w == Wt - 1) {
                         apply_width_padding<IN_DF, LAST_W, NEUTRAL>(l1_write_addr);
@@ -80,7 +83,7 @@ void kernel_main() {
                         apply_height_padding<IN_DF, LAST_H, NEUTRAL>(l1_write_addr);
                     }
                 }
-                cb_push_back(cb_id_in0, onetile);
+                cb_in0.push_back(onetile);
 
                 ++w;
 

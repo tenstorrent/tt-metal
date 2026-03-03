@@ -51,6 +51,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
@@ -1149,8 +1150,12 @@ void ReadMeshDeviceProfilerResults(
             profiler_state_manager->signal_debug_dump_read();
         }
         if (auto& noc_debug_state = MetalContext::instance().noc_debug_state()) {
+            noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
-            noc_debug_state->print_aggregated_errors();
+            // Only print when called by the user (state == normal) to avoid duplicate printing
+            if (state != ProfilerReadState::LAST_FD_READ) {
+                noc_debug_state->print_aggregated_errors();
+            }
         }
         return;
     }

@@ -33,20 +33,21 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     // NCRISC: Sender args for QNOPE/QROPE cores (matching pre_sdpa gather pattern: NCRISC sender, BRISC receiver)
     uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
+    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::SenderCTArgs<
+        get_named_compile_time_arg_val("qnope_data_size_bytes"),
+        get_named_compile_time_arg_val("qrope_head_size_bytes")>;
     deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
         get_named_compile_time_arg_val("sender_grid_start_x"),
         get_named_compile_time_arg_val("sender_grid_start_y"),
-        get_named_compile_time_arg_val("qnope_data_size_bytes"),
-        get_named_compile_time_arg_val("qrope_head_size_bytes"),
         get_named_compile_time_arg_val("head_stride_bytes"),
         get_named_compile_time_arg_val("qnope_cols"),
         get_named_compile_time_arg_val("qnope_cb"),
         get_named_compile_time_arg_val("qrope_cb"),
         get_named_compile_time_arg_val("src_num_pages"),
         // 3 semaphores for race-free synchronization
-        get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
-        get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
-        get_named_compile_time_arg_val("rope_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase1_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase2_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("rope_semaphore_id")),
         {
             get_named_compile_time_arg_val("target_noc_coords_row0"),
             get_named_compile_time_arg_val("target_noc_coords_row1"),
@@ -62,10 +63,11 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
     // BRISC: Receiver args for SDPA input cores (matching pre_sdpa gather pattern: NCRISC sender, BRISC receiver)
+    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::ReceiverCTArgs;
     deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
-        get_named_compile_time_arg_val("nope_phase1_semaphore_id"),
-        get_named_compile_time_arg_val("nope_phase2_semaphore_id"),
-        get_named_compile_time_arg_val("rope_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase1_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("nope_phase2_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("rope_semaphore_id")),
         get_named_compile_time_arg_val("num_nope_senders"),
         get_named_compile_time_arg_val("num_rope_senders"),
         get_named_compile_time_arg_val("receiver_in_cb"),
@@ -76,17 +78,18 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // TRISC (Compute): Tilization args for receiver cores
+    using CreateQHeadsCTArgs = deepseek_b1_ops::CreateQHeads::ComputeCTArgs;
     deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_args{
         get_named_compile_time_arg_val("receiver_in_cb"),
         get_named_compile_time_arg_val("out_cb"),
         get_named_compile_time_arg_val("nope_tiles"),
         get_named_compile_time_arg_val("rope_tiles"),
     };
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
-    using CreateQHeadsOp = deepseek_b1_ops::CreateQHeads::Op<Core::is_sender_core, Core::is_receiver_core, true, true>;
+    using CreateQHeadsOp =
+        deepseek_b1_ops::CreateQHeads::Op<CreateQHeadsCTArgs, Core::is_sender_core, Core::is_receiver_core, true, true>;
     CreateQHeadsOp create_q_heads;
     create_q_heads(create_q_heads_args);
 }

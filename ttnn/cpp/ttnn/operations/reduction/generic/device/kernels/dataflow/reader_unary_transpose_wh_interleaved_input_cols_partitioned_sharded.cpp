@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
@@ -34,19 +37,31 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    cb_reserve_back(cb_id_in1, num_tiles);
-    uint64_t base_noc_addr = get_noc_addr(get_write_ptr(cb_id_in1));
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+
+    cb_in1.reserve_back(num_tiles);
+    uint32_t base_l1_addr = cb_in1.get_write_ptr();
+
+    experimental::UnicastEndpoint src;
+    uint32_t src_noc_x = my_x[noc_index];
+    uint32_t src_noc_y = my_y[noc_index];
 
     for (uint32_t b = 0; b < batch; ++b) {
-        uint64_t col_noc_addr = base_noc_addr;
+        uint32_t col_l1_addr = base_l1_addr;
         for (uint32_t i = 0; i < Wt; ++i) {
-            uint64_t curr_noc_addr = col_noc_addr;
+            uint32_t curr_l1_addr = col_l1_addr;
             for (uint32_t j = 0; j < Ht; ++j) {
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read(curr_noc_addr, l1_write_addr, tile_bytes);
-                curr_noc_addr += row_size_bytes;
-                noc_async_read_barrier();
+                cb_in0.reserve_back(onetile);
+                noc.async_read(
+                    src,
+                    cb_in0,
+                    tile_bytes,
+                    {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = curr_l1_addr},
+                    {.offset_bytes = 0});
+                curr_l1_addr += row_size_bytes;
+                noc.async_read_barrier();
                 if constexpr (LAST_W > 0) {
                     if (is_last_w_padded && (i == Wt - 1)) {
                         apply_width_padding<IN_DF, LAST_W, NEUTRAL>(l1_write_addr);
@@ -57,10 +72,10 @@ void kernel_main() {
                         apply_height_padding<IN_DF, LAST_H, NEUTRAL>(l1_write_addr);
                     }
                 }
-                cb_push_back(cb_id_in0, onetile);
+                cb_in0.push_back(onetile);
             }
-            col_noc_addr += tile_bytes;
+            col_l1_addr += tile_bytes;
         }
-        base_noc_addr += batch_size_bytes;
+        base_l1_addr += batch_size_bytes;
     }
 }
