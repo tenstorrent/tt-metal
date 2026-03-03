@@ -155,7 +155,7 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
     TT_ASSERT(query_descriptor_ != nullptr);
-    TT_FATAL(query_.is_initialized(), "MetaliumEnv not initialized");
+    TT_FATAL(query_->is_initialized(), "MetaliumEnv not initialized");
 
     // Workaround for galaxy, need to always re-init
     if (rtoptions().get_force_context_reinit() or get_cluster().is_galaxy_cluster()) {
@@ -446,7 +446,7 @@ void MetalContext::teardown_base_objects() {
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
-    query_.destroy();
+    query_.reset();
     query_descriptor_.reset();
 }
 
@@ -473,7 +473,8 @@ void MetalContext::initialize_base_objects() {
     } else {
         query_descriptor_ = std::make_shared<MetaliumEnvDescriptor>();
     }
-    query_.initialize(query_descriptor_);
+    query_ = std::make_shared<tt::tt_metal::MetaliumEnv>();
+    query_->initialize(query_descriptor_);
 
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
 }
@@ -518,15 +519,15 @@ MetalContext::~MetalContext() {
     teardown_base_objects();
 }
 
-llrt::RunTimeOptions& MetalContext::rtoptions() { return query_.get_rtoptions(); }
+llrt::RunTimeOptions& MetalContext::rtoptions() { return query_->get_rtoptions(); }
 
-Cluster& MetalContext::get_cluster() { return query_.get_cluster(); }
+Cluster& MetalContext::get_cluster() { return query_->get_cluster(); }
 
-const llrt::RunTimeOptions& MetalContext::rtoptions() const { return query_.get_rtoptions(); }
+const llrt::RunTimeOptions& MetalContext::rtoptions() const { return query_->get_rtoptions(); }
 
-const Cluster& MetalContext::get_cluster() const { return query_.get_cluster(); }
+const Cluster& MetalContext::get_cluster() const { return query_->get_cluster(); }
 
-const Hal& MetalContext::hal() const { return query_.get_hal(); }
+const Hal& MetalContext::hal() const { return query_->get_hal(); }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");

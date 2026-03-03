@@ -205,7 +205,7 @@ private:
     std::mutex reinitialization_mutex_;
 
     std::shared_ptr<MetaliumEnvDescriptor> query_descriptor_;
-    tt::tt_metal::MetaliumEnv query_;
+    std::shared_ptr<tt::tt_metal::MetaliumEnv> query_;
 
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
