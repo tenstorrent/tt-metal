@@ -30,19 +30,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
-
-    uint32_t Mt, Kt, Nt, B;
-    if (dev->arch() == ARCH::QUASAR) {
-        Mt = 1;
-        Kt = 1;
-        Nt = 1;
-        B = 1;
-    } else {
-        Mt = 4;
-        Kt = 2;
-        Nt = 3;
-        B = 2;
-    }
+    uint32_t Mt = 4, Kt = 2, Nt = 3, B = 2;
     uint32_t num_tilesA = Mt * Kt * B;
     uint32_t num_tilesB = Kt * Nt * B;
     uint32_t num_tilesC = Mt * Nt * B;
