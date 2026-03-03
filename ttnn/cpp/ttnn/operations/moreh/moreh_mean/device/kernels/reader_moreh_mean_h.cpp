@@ -32,6 +32,7 @@ void kernel_main() {
         cb_id_in2,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_COL,
+        tt::constants::TILE_WIDTH,
         reduce_factor>();
 #endif
 

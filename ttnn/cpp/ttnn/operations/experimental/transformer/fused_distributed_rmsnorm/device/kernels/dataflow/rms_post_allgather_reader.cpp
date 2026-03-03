@@ -77,6 +77,7 @@ void kernel_main() {
         reduce_scalar_cb,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
         reduce_factor>();
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
 
