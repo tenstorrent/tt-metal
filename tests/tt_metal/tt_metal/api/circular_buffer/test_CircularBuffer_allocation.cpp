@@ -552,6 +552,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         detail::WriteToBuffer(src_dram_buffer, src_vec);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> result_vec;
         detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -575,6 +576,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         // relaunch program
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> second_result_vec;
         detail::ReadFromBuffer(dst_dram_buffer, second_result_vec);
