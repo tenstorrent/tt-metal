@@ -612,7 +612,7 @@ class BypassBroadcastConfig:
         return self.get_socket_reader_rt_args(coord)
 
     def get_writer_per_core_rt_args(self, coord, program, core):
-        return [0]
+        return []
 
     def get_cb_descriptor(self, coord):
         return None

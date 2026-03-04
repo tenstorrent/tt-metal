@@ -2431,19 +2431,15 @@ class PreSDPA:
                     # fabric setup), then merge only for the bcast worker core in explicit
                     # order: bcast prefix first, that core's tail args after.
                     #
-                    # In skip_ccl mode, kernel_main does not parse broadcast per-core args.
-                    # Prepending even a dummy bcast prefix would shift downstream per-core
-                    # args (e.g. MLA) and can deadlock execution.
-                    if not skip_ccl:
-                        bcast_writer_args = bcast_config.get_writer_per_core_rt_args(coord, program, worker_core)
-                        bcast_group = [(worker_core, bcast_writer_args)]
-                        merged_ncrisc_group = merge_per_core_runtime_args(
-                            bcast_group,
-                            [(worker_core, kernel.runtime_args[worker_core.x][worker_core.y])],
-                        )
-                        # TODO: Generalize to multi-core merge/writeback if bcast and tail
-                        # producers overlap on additional cores in this op.
-                        kernel.runtime_args[worker_core.x][worker_core.y][:] = merged_ncrisc_group[0][1]
+                    bcast_writer_args = bcast_config.get_writer_per_core_rt_args(coord, program, worker_core)
+                    bcast_group = [(worker_core, bcast_writer_args)]
+                    merged_ncrisc_group = merge_per_core_runtime_args(
+                        bcast_group,
+                        [(worker_core, kernel.runtime_args[worker_core.x][worker_core.y])],
+                    )
+                    # TODO: Generalize to multi-core merge/writeback if bcast and tail
+                    # producers overlap on additional cores in this op.
+                    kernel.runtime_args[worker_core.x][worker_core.y] = merged_ncrisc_group[0][1]
                     break
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
