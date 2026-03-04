@@ -62,13 +62,13 @@ FORCE_INLINE void prefetch_batch_read_tiles(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
-                noc_async_read(get_noc_addr_and_advance(tiles_read), l1_write_addr, input_tensor_page_size);
+                // noc_async_read(get_noc_addr_and_advance(tiles_read), l1_write_addr, input_tensor_page_size);
                 l1_write_addr += payload_size_bytes;
                 tiles_read += contig_pages_advanced;
             }
             l1_write_addr += (packet_size_in_pages - num_pages_to_read) * input_tensor_page_size;
         }
-        noc_async_read_barrier();
+        // noc_async_read_barrier();
         for (uint32_t p = 0; p < batch_packets; p++) {
             cb_push_back(cb_output_id, packet_size_in_pages);
         }
@@ -171,8 +171,9 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
-        // Got it
+        // COMMENTED OUT FOR CCL PERF TESTING - Comment out waiting for remote semaphore increments
+        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+        // Got it - simulate receiving the slice without actually waiting for remote fabric transmission
         slices_received++;
 
         int sender_chip_id;
