@@ -56,6 +56,7 @@ class LMHead(LightweightModule):
 
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        torch_output_bias = state_dict.get(f"{state_dict_prefix}output.bias", None)
 
         # Pad the output weights to the padded vocab size with zeros
         if self.vocab_size < self.padded_vocab_size:
@@ -67,9 +68,19 @@ class LMHead(LightweightModule):
                 ],
                 dim=-1,
             )
+            if torch_output_bias is not None:
+                torch_output_bias = torch.cat(
+                    [
+                        torch_output_bias,
+                        torch.zeros(padding_size, dtype=torch_output_bias.dtype),
+                    ],
+                    dim=-1,
+                )
 
         self.output_weights_dram_sharded = []
         self.output_weights_ring_mm = []
+        self.output_biases_dram_sharded = [] if torch_output_bias is not None else None
+        self.output_biases_ring_mm = [] if torch_output_bias is not None else None
 
         self.split_sizes = [self.split_sizes_dram_sharded]
         if self.prefetcher is not None:
@@ -132,6 +143,34 @@ class LMHead(LightweightModule):
                         )
                     )
 
+                if torch_output_bias is not None:
+                    device_bias_splits = []
+                    for device in range(self.num_devices):
+                        start = device * size_per_device + sum(split_sizes[:i])
+                        end = start + split_size
+                        device_bias_splits.append(torch_output_bias[start:end])
+
+                    combined_bias = torch.cat(device_bias_splits, dim=-1).view(1, 1, 1, -1)
+                    bias_cache_file_name = (
+                        None
+                        if args.dummy_weights
+                        else weight_cache_path
+                        / f"output_lm_head_bias_{len(split_sizes)}_split_shard_{i}_{combined_bias.shape[-1]}_mode_{mode}"
+                    )
+                    bias_tensor = ttnn.as_tensor(
+                        combined_bias,
+                        device=mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        cache_file_name=bias_cache_file_name,
+                    )
+                    if mode == 0:
+                        self.output_biases_dram_sharded.append(bias_tensor)
+                    else:
+                        self.output_biases_ring_mm.append(bias_tensor)
+
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -149,6 +188,7 @@ class LMHead(LightweightModule):
         ]
 
         output_weights = self.output_weights_ring_mm if use_prefetcher else self.output_weights_dram_sharded
+        output_biases = self.output_biases_ring_mm if use_prefetcher else self.output_biases_dram_sharded
 
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
@@ -164,6 +204,13 @@ class LMHead(LightweightModule):
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
+            if output_biases is not None:
+                output = ttnn.add(
+                    output,
+                    output_biases[i],
+                    memory_config=output.memory_config(),
+                    dtype=ttnn.bfloat16,
+                )
             output = ttnn.to_memory_config(
                 output,
                 memory_config=self.args.get_lm_head_sharded_output_mem_config(
