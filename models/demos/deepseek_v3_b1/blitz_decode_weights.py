@@ -540,7 +540,7 @@ class BlitzDecodeWeights:
         kv_a_proj_weights: torch.Tensor,
         *,
         move_to_device: bool = True,
-    ) -> list[OverlappedTensor]:
+    ) -> dict[str, OverlappedTensor]:
         """Fuse q_a_proj, q_b_proj, and kv_a_proj via ``overlap_tensors``.
 
         The fused buffer spans two core regions (lanes):
@@ -564,9 +564,9 @@ class BlitzDecodeWeights:
                 provided for layout/sharding metadata.
 
         Returns:
-            A list of three :class:`OverlappedTensor` views
-            ``[q_a_proj, q_b_proj, kv_a_proj]`` that share the same
-            underlying fused device buffer.
+            A dict of :class:`OverlappedTensor` views keyed by name
+            (``q_a_proj``, ``q_b_proj``, ``kv_a_proj``) that share the
+            same underlying fused device buffer.
         """
         cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
         mesh_shape = (self._device.shape[0], self._device.shape[1])
@@ -609,6 +609,7 @@ class BlitzDecodeWeights:
             [
                 [
                     (
+                        "q_a_proj",
                         q_a_packed,
                         OverlappedShardSpec(
                             core_range_set=q_ab_cores,
@@ -617,6 +618,7 @@ class BlitzDecodeWeights:
                         ),
                     ),
                     (
+                        "q_b_proj",
                         q_b_preprocessed,
                         OverlappedShardSpec(
                             core_range_set=q_ab_cores,
@@ -628,6 +630,7 @@ class BlitzDecodeWeights:
                 ],
                 [
                     (
+                        "kv_a_proj",
                         kv_reordered,
                         OverlappedShardSpec(
                             core_range_set=kv_cores,
@@ -651,7 +654,7 @@ class BlitzDecodeWeights:
         ffn_norm: torch.Tensor,
         *,
         move_to_device: bool = True,
-    ) -> list[OverlappedTensor]:
+    ) -> dict[str, OverlappedTensor]:
         """Fuse o_proj, gate_mm, and 4 RMSNorm gammas into one WIDTH_SHARDED tensor.
 
         The fused buffer is a UINT32 raw-byte container where each core's
@@ -674,17 +677,21 @@ class BlitzDecodeWeights:
             ffn_norm:  MoE pre-MLP RMSNorm gamma, shape (1, 7168).
 
         Returns:
-            List of six OverlappedTensors
-            ``[o_proj, gate_mm, attn_norm, q_norm, ffn_norm, kv_norm]``.
+            A dict of six OverlappedTensors keyed by name:
+            ``o_proj``, ``gate_mm``, ``attn_norm``, ``q_norm``, ``ffn_norm``, ``kv_norm``.
         """
         cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
 
         return overlap_tensors(
             [
-                [(o_proj_weights, cfg.o_proj)],
-                [(gate_mm_weights, cfg.gate_mm)],
-                [(attn_norm, cfg.attn_norm), (q_norm, cfg.q_norm), (ffn_norm, cfg.ffn_norm)],
-                [(kv_norm, cfg.kv_norm)],
+                [("o_proj", o_proj_weights, cfg.o_proj)],
+                [("gate_mm", gate_mm_weights, cfg.gate_mm)],
+                [
+                    ("attn_norm", attn_norm, cfg.attn_norm),
+                    ("q_norm", q_norm, cfg.q_norm),
+                    ("ffn_norm", ffn_norm, cfg.ffn_norm),
+                ],
+                [("kv_norm", kv_norm, cfg.kv_norm)],
             ],
             device=self._device,
             move_to_device=move_to_device,
@@ -696,7 +703,7 @@ class BlitzDecodeWeights:
         kv_b2_proj_weights: torch.Tensor,
         *,
         move_to_device: bool = True,
-    ) -> list[OverlappedTensor]:
+    ) -> dict[str, OverlappedTensor]:
         """Fuse kv_b1_proj and kv_b2_proj via ``overlap_tensors``.
 
         Fuses ``kv_b1_proj (8192, 512)`` onto 64 cores and
@@ -721,8 +728,9 @@ class BlitzDecodeWeights:
                 TP-sharded on the heads dim.
 
         Returns:
-            ``[kv_b1_proj, kv_b2_proj]`` as :class:`OverlappedTensor`
-            views sharing the same fused device buffer.
+            A dict of :class:`OverlappedTensor` views keyed by name
+            (``kv_b1_proj``, ``kv_b2_proj``) sharing the same fused
+            device buffer.
         """
         cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
         mla_tp = self.mla_tp
@@ -747,6 +755,7 @@ class BlitzDecodeWeights:
             [
                 [
                     (
+                        "kv_b1_proj",
                         kv_b1_proj_weights,
                         OverlappedShardSpec(
                             core_range_set=cfg.kv_b1_core_range_set,
@@ -759,6 +768,7 @@ class BlitzDecodeWeights:
                 ],
                 [
                     (
+                        "kv_b2_proj",
                         kv_b2_preprocessed,
                         OverlappedShardSpec(
                             core_range_set=cfg.kv_b2_core_range_set,
@@ -875,10 +885,11 @@ class BlitzDecodeWeights:
                 .contiguous()
             )
 
-        gate_ov, up_ov = overlap_tensors(
+        gate_up_dict = overlap_tensors(
             [
                 [
                     (
+                        "gate_proj",
                         gate_preprocessed,
                         OverlappedShardSpec(
                             core_range_set=cfg.gate_core_range_set,
@@ -892,6 +903,7 @@ class BlitzDecodeWeights:
                 ],
                 [
                     (
+                        "up_proj",
                         up_preprocessed,
                         OverlappedShardSpec(
                             core_range_set=cfg.up_core_range_set,
@@ -907,6 +919,8 @@ class BlitzDecodeWeights:
             device=self._device,
             move_to_device=move_to_device,
         )
+        gate_ov = gate_up_dict["gate_proj"]
+        up_ov = gate_up_dict["up_proj"]
 
         # ==================================================================
         # Down (WIDTH_SHARDED in L1 on 112 matmul cores)
