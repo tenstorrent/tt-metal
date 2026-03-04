@@ -28,6 +28,13 @@ from typing import Union
 
 SUPPORTED_REPORT_VERSION = 1
 
+_BUFFER_TYPE_MAP = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
+
+
+def _tid_int(tid):
+    """Coerce a tensor ID (possibly a string) to int."""
+    return int(tid) if isinstance(tid, str) else tid
+
 
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """Create the full ttnn-visualizer SQLite database schema."""
@@ -331,12 +338,12 @@ def _validate_graph_integrity(
     warnings = []
 
     operation_ids = {row[0] for row in operations_batch}
-    tensor_ids = {int(row[0]) if isinstance(row[0], str) else row[0] for row in tensors_batch}
+    tensor_ids = {_tid_int(row[0]) for row in tensors_batch}
     device_ids = {dev.get("device_id", 0) for dev in devices} if devices else set()
 
     # input_tensors.tensor_id must reference a known tensor
     for op_id, idx, tid in input_tensors_batch:
-        tid_int = int(tid) if isinstance(tid, str) else tid
+        tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(
                 f"input_tensors references tensor_id={tid} (operation_id={op_id}, input_index={idx}) "
@@ -346,7 +353,7 @@ def _validate_graph_integrity(
 
     # output_tensors.tensor_id must reference a known tensor
     for op_id, idx, tid in output_tensors_batch:
-        tid_int = int(tid) if isinstance(tid, str) else tid
+        tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(
                 f"output_tensors references tensor_id={tid} (operation_id={op_id}, output_index={idx}) "
@@ -372,7 +379,7 @@ def _validate_graph_integrity(
 
     # device_tensors.tensor_id must reference a known tensor
     for tid, dev_id, addr in device_tensors_batch:
-        tid_int = int(tid) if isinstance(tid, str) else tid
+        tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(f"device_tensors references tensor_id={tid} which does not exist in tensors table.")
 
@@ -599,14 +606,13 @@ def import_graph(
                 # Gather this op's own input tensor IDs so we can detect in-place ops
                 # (where the output tensor is the same as an input tensor)
                 this_op_input_ids = set()
-                if start_node:
-                    for node_counter in start_node.get("input_tensors", []):
-                        if node_counter < len(graph):
-                            tensor_node = graph[node_counter]
-                            if tensor_node.get("node_type") == "tensor":
-                                tid = tensor_node.get("params", {}).get("tensor_id", "")
-                                if tid:
-                                    this_op_input_ids.add(int(tid))
+                for node_counter in start_node.get("input_tensors", []):
+                    if node_counter < len(graph):
+                        tensor_node = graph[node_counter]
+                        if tensor_node.get("node_type") == "tensor":
+                            tid = tensor_node.get("params", {}).get("tensor_id", "")
+                            if tid:
+                                this_op_input_ids.add(int(tid))
 
                 # Track ALL input tensors at every depth for intermediate detection
                 all_nested_input_ids.update(this_op_input_ids)
@@ -628,9 +634,8 @@ def import_graph(
 
                 # Lift INPUT tensors from ALL depths (not just direct children).
                 # Filters below correctly discard internal intermediates.
-                if start_node:
-                    for tid in this_op_input_ids:
-                        nested_input_tensor_ids.append(tid)
+                for tid in this_op_input_ids:
+                    nested_input_tensor_ids.append(tid)
 
                 # Collect OUTPUT tensor candidates from ALL depths.
                 for conn_id in connections:
@@ -837,8 +842,7 @@ def import_graph(
                 buffer_type = None
                 if buffer_type_str:
                     cleaned = buffer_type_str.split("::")[-1] if "::" in buffer_type_str else buffer_type_str
-                    buffer_type_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
-                    buffer_type = buffer_type_map.get(cleaned, 0)
+                    buffer_type = _BUFFER_TYPE_MAP.get(cleaned, 0)
 
                 tensors_batch.append((tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type))
 
@@ -856,9 +860,8 @@ def import_graph(
             size = int(params.get("size", 0))
             page_size = int(params.get("page_size", 0))
             num_cores = int(params.get("num_cores", 0))
-            _buffer_type_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
             buffer_type_str = params.get("exact_buffer_type") or params.get("type", "DRAM")
-            buffer_type = _buffer_type_map.get(buffer_type_str, 0)
+            buffer_type = _BUFFER_TYPE_MAP.get(buffer_type_str, 0)
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
@@ -896,7 +899,7 @@ def import_graph(
                 for t in tensors_batch:
                     tid, _, _, _, _, _, addr, _ = t
                     if addr == dealloc_address:
-                        dealloc_tensor_id = int(tid) if isinstance(tid, str) else tid
+                        dealloc_tensor_id = _tid_int(tid)
                         break
 
             if not function_stack:
@@ -948,14 +951,14 @@ def import_graph(
     # Keep host tensors only when referenced in I/O; keep all device tensors as-is.
     referenced_tids = set()
     for _, _, tid in input_tensors_batch:
-        referenced_tids.add(int(tid) if isinstance(tid, str) else tid)
+        referenced_tids.add(_tid_int(tid))
     for _, _, tid in output_tensors_batch:
-        referenced_tids.add(int(tid) if isinstance(tid, str) else tid)
+        referenced_tids.add(_tid_int(tid))
 
     filtered_tensors = []
     for t in tensors_batch:
         tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
-        tid_int = int(tid) if isinstance(tid, str) else tid
+        tid_int = _tid_int(tid)
         if dev_id is None:
             if tid_int in referenced_tids:
                 filtered_tensors.append(t)
@@ -968,12 +971,12 @@ def import_graph(
     # new tensor IDs after C++ records the output.  These Python-level IDs appear
     # in py_io output_tensor_ids but have no C++ tensor node.  Create tensor
     # entries for them by copying from the nearest tensor at the same address.
-    existing_tids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
+    existing_tids = {_tid_int(t[0]) for t in tensors_batch}
     io_tids = set()
     for _, _, tid in input_tensors_batch:
-        io_tids.add(int(tid) if isinstance(tid, str) else tid)
+        io_tids.add(_tid_int(tid))
     for _, _, tid in output_tensors_batch:
-        io_tids.add(int(tid) if isinstance(tid, str) else tid)
+        io_tids.add(_tid_int(tid))
     missing_tids = io_tids - existing_tids
     if missing_tids:
         addr_to_tensor = {}
@@ -989,6 +992,12 @@ def import_graph(
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
+                bt_raw = p.get("buffer_type")
+                if isinstance(bt_raw, str):
+                    bt_cleaned = bt_raw.split("::")[-1] if "::" in bt_raw else bt_raw
+                    bt_val = _BUFFER_TYPE_MAP.get(bt_cleaned, 0)
+                else:
+                    bt_val = bt_raw if bt_raw is not None else None
                 tensors_batch.append(
                     (
                         mtid,
@@ -998,18 +1007,18 @@ def import_graph(
                         str(p.get("memory_config", "")),
                         p.get("device_id"),
                         p.get("address"),
-                        p.get("buffer_type", 0),
+                        bt_val,
                     )
                 )
 
-    kept_tensor_ids = {int(t[0]) if isinstance(t[0], str) else t[0] for t in tensors_batch}
+    kept_tensor_ids = {_tid_int(t[0]) for t in tensors_batch}
 
     # Deduplicate per operation (same op + same tensor = one entry)
     seen_input = set()
     deduped_inputs = []
     input_idx_counter = {}
     for op_id, idx, tid in input_tensors_batch:
-        tid_int = int(tid) if isinstance(tid, str) else tid
+        tid_int = _tid_int(tid)
         if tid_int in kept_tensor_ids:
             key = (op_id, tid_int)
             if key not in seen_input:
@@ -1023,7 +1032,7 @@ def import_graph(
     deduped_outputs = []
     output_idx_counter = {}
     for op_id, idx, tid in output_tensors_batch:
-        tid_int = int(tid) if isinstance(tid, str) else tid
+        tid_int = _tid_int(tid)
         if tid_int in kept_tensor_ids:
             key = (op_id, tid_int)
             if key not in seen_output:
@@ -1033,9 +1042,7 @@ def import_graph(
                 deduped_outputs.append((op_id, new_idx, tid_int))
     output_tensors_batch = deduped_outputs
     device_tensors_batch = [
-        (int(tid) if isinstance(tid, str) else tid, dev_id, addr)
-        for tid, dev_id, addr in device_tensors_batch
-        if (int(tid) if isinstance(tid, str) else tid) in kept_tensor_ids
+        (_tid_int(tid), dev_id, addr) for tid, dev_id, addr in device_tensors_batch if _tid_int(tid) in kept_tensor_ids
     ]
     seen_dt = set()
     filtered_dt = []
