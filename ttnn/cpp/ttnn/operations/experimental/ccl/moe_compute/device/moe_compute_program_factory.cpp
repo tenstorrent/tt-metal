@@ -933,7 +933,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tile_height", tile_height},
         {"tile_width", tile_width},
         {"tile_width_size_bytes", tile_width * tt::datum_size(tilize_output_dataformat)},
-        {"num_tokens_total", tokens},
+        {"buffer_size_total_tokens", 512},  // Hardware buffer is always sized for 512 tokens
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", output_width_shard_dim},
     };
