@@ -26,21 +26,18 @@ _ASSIGN_MASK = (1 << _ASSIGN_BITS) - 1
 _TILES_PER_UINT32 = 32 // _ASSIGN_BITS  # 16
 
 
-def pack_formats_as_ctas(assignment: np.ndarray, num_tiles_k: int, out_w: int = 1) -> list[int]:
-    """Pack format indices into uint32 CTAs, row-major over K×N tile grid.
+def pack_formats_as_ctas(assignment_flat: np.ndarray) -> list[int]:
+    """Pack flat format indices into uint32 CTAs.
 
     Each uint32 holds TILES_PER_UINT32 format indices (ASSIGN_BITS bits each).
-    Tiles packed in row-major order: (k=0,n=0), (k=0,n=1), ..., (k=1,n=0), ...
 
     Args:
-        assignment: (tiles_h, tiles_w) format index array from CompressedTensor
-        num_tiles_k: number of K tiles
-        out_w: number of N tiles (ct_dim)
+        assignment_flat: 1D array of format indices.
 
     Returns:
         List of uint32 values with packed format indices.
     """
-    total_tiles = num_tiles_k * out_w
+    total_tiles = len(assignment_flat)
     num_packed = (total_tiles + _TILES_PER_UINT32 - 1) // _TILES_PER_UINT32
     result = []
     for word_idx in range(num_packed):
@@ -48,9 +45,7 @@ def pack_formats_as_ctas(assignment: np.ndarray, num_tiles_k: int, out_w: int = 
         for bit_idx in range(_TILES_PER_UINT32):
             flat_idx = word_idx * _TILES_PER_UINT32 + bit_idx
             if flat_idx < total_tiles:
-                k = flat_idx // out_w
-                n = flat_idx % out_w
-                fmt = int(assignment[k, n]) & _ASSIGN_MASK
+                fmt = int(assignment_flat[flat_idx]) & _ASSIGN_MASK
                 packed |= fmt << (bit_idx * _ASSIGN_BITS)
         result.append(packed)
     return result
@@ -121,9 +116,7 @@ class MatmulCustomCompressed:
         core_values = []
         for core_coord in all_cores:
             shard_assignment = ct.get_assignment_numpy_per_shard(core_coord)
-            shard_k = shard_assignment.shape[0]
-            shard_w = shard_assignment.shape[1]
-            ctas = pack_formats_as_ctas(shard_assignment, shard_k, shard_w)
+            ctas = pack_formats_as_ctas(shard_assignment)
             core_values.append((core_coord, ctas))
         per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
 
