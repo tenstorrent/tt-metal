@@ -61,7 +61,7 @@ struct MaxUtilConfig {
     uint32_t num_wl_loops = 100;
 
     // Data transfer size in bytes.
-    uint32_t data_transfer_size = 8192;  // 8KB
+    uint32_t data_transfer_size = 2048;  // 2KB
 
     // L1 buffer addresses (filled by pre-fill phase, passed to main phase).
     uint32_t l1_buffer0_addr = 0;   // input 0 bfloat16 data
@@ -445,7 +445,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
     Program program = CreateProgram();
 
     // -- Reader kernel (BRISC / RISCV_0 / NOC0) -----------------------------
-    // Only generates NOC traffic - no CBs, no DRAM
+    // Top-left core multicasts to entire grid; all other cores are no-ops.
     auto reader_kernel = CreateKernel(
         program,
         "tests/didt/max_util_workload/kernels/max_util_reader.cpp",
@@ -455,19 +455,19 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .noc = NOC::RISCV_0_default,
             .compile_args =
                 {
-                    cfg.num_wl_loops,        // 0: num_iterations (inner loops per dispatch)
-                    cfg.l1_buffer3_addr,     // 1: l1_buffer_addr for tx pattern A
-                    cfg.l1_buffer4_addr,     // 2: l1_buffer_addr for tx pattern B
-                    cfg.l1_buffer7_addr,     // 3: l1_buffer_addr for rx from left
-                    cfg.l1_buffer8_addr,     // 4: l1_buffer_addr for rx from up
-                    cfg.l1_buffer9_addr,     // 5: l1_buffer_addr for rx from right
-                    cfg.l1_buffer10_addr,    // 6: l1_buffer_addr for rx from down
-                    cfg.data_transfer_size,  // 7: data_transfer_size (8KB)
+                    cfg.num_wl_loops,        // 0: num_loops (inner loops per dispatch)
+                    cfg.l1_buffer3_addr,     // 1: l1_tx_A_addr – pattern A (0x5555)
+                    cfg.l1_buffer4_addr,     // 2: l1_tx_B_addr – pattern B (0xAAAA)
+                    cfg.l1_buffer7_addr,     // 3: l1_rx_addr – destination on receiving cores
+                    cfg.l1_buffer8_addr,     // 4: (unused)
+                    cfg.l1_buffer9_addr,     // 5: (unused)
+                    cfg.l1_buffer10_addr,    // 6: (unused)
+                    cfg.data_transfer_size,  // 7: transfer_size
                 },
         });
 
     // -- Writer kernel (NCRISC / RISCV_1 / NOC1) ----------------------------
-    // Only generates NOC traffic - no CBs, no DRAM
+    // Bottom-right core multicasts to entire grid; all other cores are no-ops.
     auto writer_kernel = CreateKernel(
         program,
         "tests/didt/max_util_workload/kernels/max_util_writer.cpp",
@@ -477,14 +477,14 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .noc = NOC::RISCV_1_default,
             .compile_args =
                 {
-                    cfg.num_wl_loops,        // 0: num_iterations (inner loops per dispatch)
-                    cfg.l1_buffer5_addr,     // 1: l1_buffer_addr for tx pattern A
-                    cfg.l1_buffer6_addr,     // 2: l1_buffer_addr for tx pattern B
-                    cfg.l1_buffer7_addr,     // 3: l1_buffer_addr for rx from left
-                    cfg.l1_buffer8_addr,     // 4: l1_buffer_addr for rx from up
-                    cfg.l1_buffer9_addr,     // 5: l1_buffer_addr for rx from right
-                    cfg.l1_buffer10_addr,    // 6: l1_buffer_addr for rx from down
-                    cfg.data_transfer_size,  // 7: data_transfer_size (8KB)
+                    cfg.num_wl_loops,        // 0: num_loops (inner loops per dispatch)
+                    cfg.l1_buffer5_addr,     // 1: l1_tx_A_addr – pattern A (0x5555)
+                    cfg.l1_buffer6_addr,     // 2: l1_tx_B_addr – pattern B (0xAAAA)
+                    cfg.l1_buffer7_addr,     // 3: (unused)
+                    cfg.l1_buffer8_addr,     // 4: (unused)
+                    cfg.l1_buffer9_addr,     // 5: l1_rx_addr – destination on receiving cores
+                    cfg.l1_buffer10_addr,    // 6: (unused)
+                    cfg.data_transfer_size,  // 7: transfer_size
                 },
         });
 
@@ -508,43 +508,37 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
         });
 
     // -- Set runtime arguments for NOC traffic kernels ----------------------
-    // Pass physical coordinates of neighbor cores for NOC addressing
+    // Reader  (NOC0): only the top-left  core multicasts to the whole grid.
+    // Writer  (NOC1): only the bottom-right core multicasts to the whole grid.
+    // All other cores receive is_sender=0 and exit immediately.
+
+    // Physical NOC0 coordinates of the grid corners (used by both kernels).
+    CoreCoord phys_tl = device->worker_core_from_logical_core(cfg.grid_start);
+    CoreCoord phys_br = device->worker_core_from_logical_core(cfg.grid_end);
+
+    // Number of destination cores for multicast (all cores minus the sender itself).
+    uint32_t grid_size = (cfg.grid_end.x - cfg.grid_start.x + 1) * (cfg.grid_end.y - cfg.grid_start.y + 1);
+    uint32_t num_dests = grid_size - 1;
+
+    // Runtime arg vectors – sender gets full multicast rectangle info.
+    std::vector<uint32_t> sender_args = {
+        1u,
+        static_cast<uint32_t>(phys_tl.x),
+        static_cast<uint32_t>(phys_tl.y),
+        static_cast<uint32_t>(phys_br.x),
+        static_cast<uint32_t>(phys_br.y),
+        num_dests};
+    std::vector<uint32_t> idle_args = {0u, 0u, 0u, 0u, 0u, 0u};
+
     for (uint32_t y = cfg.grid_start.y; y <= cfg.grid_end.y; ++y) {
         for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
             CoreCoord core = {x, y};
 
-            // Calculate neighbor logical coordinates with wraparound
-            // Reader (NOC0): sends to right and down
-            uint32_t target_right_x = (x >= cfg.grid_end.x) ? cfg.grid_start.x : (x + 1);
-            uint32_t target_down_y = (y >= cfg.grid_end.y) ? cfg.grid_start.y : (y + 1);
-            // Writer (NOC1): sends to left and up
-            uint32_t target_left_x = (x == cfg.grid_start.x) ? cfg.grid_end.x : (x - 1);
-            uint32_t target_up_y = (y == cfg.grid_start.y) ? cfg.grid_end.y : (y - 1);
+            bool is_reader_sender = (x == cfg.grid_start.x && y == cfg.grid_start.y);
+            bool is_writer_sender = (x == cfg.grid_end.x && y == cfg.grid_end.y);
 
-            // Convert neighbor logical coordinates to physical coordinates
-            CoreCoord right_core = {target_right_x, y};
-            CoreCoord down_core = {x, target_down_y};
-            CoreCoord left_core = {target_left_x, y};
-            CoreCoord up_core = {x, target_up_y};
-
-            CoreCoord physical_right = device->worker_core_from_logical_core(right_core);
-            CoreCoord physical_down = device->worker_core_from_logical_core(down_core);
-            CoreCoord physical_left = device->worker_core_from_logical_core(left_core);
-            CoreCoord physical_up = device->worker_core_from_logical_core(up_core);
-
-            // Runtime args for reader (NOC0): physical coords of right and down neighbors
-            SetRuntimeArgs(
-                program,
-                reader_kernel,
-                core,
-                std::vector<uint32_t>{physical_right.x, physical_right.y, physical_down.x, physical_down.y});
-
-            // Runtime args for writer (NOC1): physical coords of left and up neighbors
-            SetRuntimeArgs(
-                program,
-                writer_kernel,
-                core,
-                std::vector<uint32_t>{physical_left.x, physical_left.y, physical_up.x, physical_up.y});
+            SetRuntimeArgs(program, reader_kernel, core, is_reader_sender ? sender_args : idle_args);
+            SetRuntimeArgs(program, writer_kernel, core, is_writer_sender ? sender_args : idle_args);
 
             // Compute kernel doesn't need runtime args - uses compile-time L1 addresses
         }
