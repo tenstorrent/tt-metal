@@ -1743,7 +1743,13 @@ bool RunTimeOptions::ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const 
                 env_var,
                 env_var_str);
         }
-        feature_targets[feature].mesh_coords.emplace_back(row, col);
+        auto coord = std::make_pair(row, col);
+        auto& coords = feature_targets[feature].mesh_coords;
+        if (std::find(coords.begin(), coords.end(), coord) != coords.end()) {
+            log_warning(tt::LogMetal, "{}: coordinate ({},{}) specified more than once, ignoring duplicate.", env_var, row, col);
+        } else {
+            coords.emplace_back(coord);
+        }
         env_var_str = strchr(env_var_str, ')');
         if (env_var_str != nullptr) {
             env_var_str++;  // Skip ')'
