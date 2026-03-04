@@ -29,22 +29,22 @@ def _core_range_set_eq(a: ttnn.CoreRangeSet, b: ttnn.CoreRangeSet) -> bool:
     return _key(a) == _key(b)
 
 
-def _assert_overlapped_metadata_eq(original: OverlappedTensor, loaded: OverlappedTensor, idx: int):
+def _assert_overlapped_metadata_eq(original: OverlappedTensor, loaded: OverlappedTensor, key: str | int):
     """Assert all metadata fields of two OverlappedTensor views match."""
     assert (
         original.tensor_shape == loaded.tensor_shape
-    ), f"view[{idx}] tensor_shape: {original.tensor_shape} != {loaded.tensor_shape}"
+    ), f"view[{key}] tensor_shape: {original.tensor_shape} != {loaded.tensor_shape}"
     assert (
         original.shard_shape == loaded.shard_shape
-    ), f"view[{idx}] shard_shape: {original.shard_shape} != {loaded.shard_shape}"
-    assert _core_range_set_eq(original.core_range_set, loaded.core_range_set), f"view[{idx}] core_range_set mismatch"
-    assert original.dtype == loaded.dtype, f"view[{idx}] dtype: {original.dtype} != {loaded.dtype}"
+    ), f"view[{key}] shard_shape: {original.shard_shape} != {loaded.shard_shape}"
+    assert _core_range_set_eq(original.core_range_set, loaded.core_range_set), f"view[{key}] core_range_set mismatch"
+    assert original.dtype == loaded.dtype, f"view[{key}] dtype: {original.dtype} != {loaded.dtype}"
     assert (
         original.tile_shape == loaded.tile_shape
-    ), f"view[{idx}] tile_shape: {original.tile_shape} != {loaded.tile_shape}"
+    ), f"view[{key}] tile_shape: {original.tile_shape} != {loaded.tile_shape}"
     assert (
         original.byte_offset == loaded.byte_offset
-    ), f"view[{idx}] byte_offset: {original.byte_offset} != {loaded.byte_offset}"
+    ), f"view[{key}] byte_offset: {original.byte_offset} != {loaded.byte_offset}"
 
 
 def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device):
@@ -62,16 +62,17 @@ def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device):
     assert len(views) == 2
 
     file_name = str(tmp_path / "single_lane.overlappedtensorbin")
-    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, list(views.values()))
+    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
 
     loaded = ttnn._ttnn.tensor.load_overlapped_tensors(file_name)
     assert len(loaded) == len(views)
+    assert set(loaded.keys()) == set(views.keys())
 
-    for i, (orig, ld) in enumerate(zip(views.values(), loaded)):
-        _assert_overlapped_metadata_eq(orig, ld, i)
+    for name in views:
+        _assert_overlapped_metadata_eq(views[name], loaded[name], name)
 
     orig_torch = ttnn.to_torch(views["t1"].fused_tensor)
-    loaded_torch = ttnn.to_torch(loaded[0].fused_tensor)
+    loaded_torch = ttnn.to_torch(loaded["t1"].fused_tensor)
     assert orig_torch.shape == loaded_torch.shape
     assert torch.equal(orig_torch, loaded_torch)
 
@@ -96,16 +97,17 @@ def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device):
     assert len(views) == 2
 
     file_name = str(tmp_path / "multi_lane.overlappedtensorbin")
-    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, list(views.values()))
+    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
 
     loaded = ttnn._ttnn.tensor.load_overlapped_tensors(file_name)
     assert len(loaded) == len(views)
+    assert set(loaded.keys()) == set(views.keys())
 
-    for i, (orig, ld) in enumerate(zip(views.values(), loaded)):
-        _assert_overlapped_metadata_eq(orig, ld, i)
+    for name in views:
+        _assert_overlapped_metadata_eq(views[name], loaded[name], name)
 
     orig_torch = ttnn.to_torch(views["bfp8"].fused_tensor)
-    loaded_torch = ttnn.to_torch(loaded[0].fused_tensor)
+    loaded_torch = ttnn.to_torch(loaded["bfp8"].fused_tensor)
     assert torch.equal(orig_torch, loaded_torch)
 
 
@@ -120,16 +122,16 @@ def test_overlapped_tensor_roundtrip_to_device(tmp_path, device):
     views = overlap_tensors([[("t1", t1, spec1)]], device=device)
 
     file_name = str(tmp_path / "to_device.overlappedtensorbin")
-    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, list(views.values()))
+    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
 
     loaded = ttnn._ttnn.tensor.load_overlapped_tensors(file_name, device=device)
     assert len(loaded) == 1
-    assert loaded[0].fused_tensor.is_allocated()
+    assert loaded["t1"].fused_tensor.is_allocated()
 
-    _assert_overlapped_metadata_eq(views["t1"], loaded[0], 0)
+    _assert_overlapped_metadata_eq(views["t1"], loaded["t1"], "t1")
 
     orig_torch = ttnn.to_torch(views["t1"].fused_tensor)
-    loaded_torch = ttnn.to_torch(loaded[0].fused_tensor)
+    loaded_torch = ttnn.to_torch(loaded["t1"].fused_tensor)
     assert torch.equal(orig_torch, loaded_torch)
 
 
@@ -149,14 +151,14 @@ def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device):
     views = overlap_tensors([[("t1", t1, spec1)]], device=device)
 
     file_name = str(tmp_path / "height_sharded.overlappedtensorbin")
-    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, list(views.values()))
+    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
 
     loaded = ttnn._ttnn.tensor.load_overlapped_tensors(file_name)
     assert len(loaded) == 1
-    _assert_overlapped_metadata_eq(views["t1"], loaded[0], 0)
+    _assert_overlapped_metadata_eq(views["t1"], loaded["t1"], "t1")
 
     orig_torch = ttnn.to_torch(views["t1"].fused_tensor)
-    loaded_torch = ttnn.to_torch(loaded[0].fused_tensor)
+    loaded_torch = ttnn.to_torch(loaded["t1"].fused_tensor)
     assert torch.equal(orig_torch, loaded_torch)
 
 
@@ -186,16 +188,17 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device):
     assert len(views) == 2
 
     file_name = str(tmp_path / "mixed_tiles.overlappedtensorbin")
-    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, list(views.values()))
+    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
 
     loaded = ttnn._ttnn.tensor.load_overlapped_tensors(file_name)
     assert len(loaded) == 2
+    assert set(loaded.keys()) == set(views.keys())
 
-    for i, (orig, ld) in enumerate(zip(views.values(), loaded)):
-        _assert_overlapped_metadata_eq(orig, ld, i)
+    for name in views:
+        _assert_overlapped_metadata_eq(views[name], loaded[name], name)
 
     orig_torch = ttnn.to_torch(views["main"].fused_tensor)
-    loaded_torch = ttnn.to_torch(loaded[0].fused_tensor)
+    loaded_torch = ttnn.to_torch(loaded["main"].fused_tensor)
     assert torch.equal(orig_torch, loaded_torch)
 
 
@@ -240,18 +243,19 @@ def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device):
     assert len(views) == 2
 
     file_name = str(tmp_path / "tp_4x2.overlappedtensorbin")
-    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, list(views.values()))
+    ttnn._ttnn.tensor.dump_overlapped_tensors(file_name, views)
 
     loaded = ttnn._ttnn.tensor.load_overlapped_tensors(file_name, device=submesh)
     assert len(loaded) == len(views)
+    assert set(loaded.keys()) == set(views.keys())
 
-    for i, (orig, ld) in enumerate(zip(views.values(), loaded)):
-        _assert_overlapped_metadata_eq(orig, ld, i)
+    for name in views:
+        _assert_overlapped_metadata_eq(views[name], loaded[name], name)
 
-    assert loaded[0].fused_tensor.is_allocated()
+    assert loaded["t1"].fused_tensor.is_allocated()
 
     orig_shards = ttnn.get_device_tensors(views["t1"].fused_tensor)
-    loaded_shards = ttnn.get_device_tensors(loaded[0].fused_tensor)
+    loaded_shards = ttnn.get_device_tensors(loaded["t1"].fused_tensor)
     assert len(orig_shards) == len(loaded_shards) == mesh_rows * mesh_cols
 
     for dev_idx in range(len(orig_shards)):
