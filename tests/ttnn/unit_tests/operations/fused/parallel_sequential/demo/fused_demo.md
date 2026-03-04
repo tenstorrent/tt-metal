@@ -2,20 +2,20 @@
 
 Eight demos showcasing different fusion capabilities on Tenstorrent Wormhole hardware.
 
-**Test file:** `tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py`
+**Test file:** `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py`
 
 Perf tests are parametrized by `perf_mode`: `cold_start`, `e2e`, or `device_fw`. Run subsets with `-k`:
 
 ```bash
 # Run all tests (all perf_modes):
-python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs
+python -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py -xvs
 
 # Run perf demos only, one mode:
-python -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs -k "TestPerfDemos and e2e"
+python -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py -xvs -k "TestPerfDemos and e2e"
 
 # Run with Tracy device profiler (device_fw mode, skip GlobalCB demo):
 export TT_METAL_DEVICE_PROFILER=1
-python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/fusion_demo/test_fused_demo.py -xvs -k "device_fw and not global_circular"
+python -m tracy -r -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py -xvs -k "device_fw and not global_circular"
 ```
 
 All timing measured on Wormhole n150, BF16.
@@ -66,29 +66,29 @@ Sequential(rms1, matmul, rms2).build()
 
 ### H=128 (dispatch-dominated)
 
-Unfused breakdown: RMS #1 FW=8.0 us + matmul FW=8.7 us + RMS #2 FW=7.9 us = 24.6 us.
+Unfused breakdown: RMS #1 FW=7.9 us + matmul FW=8.8 us + RMS #2 FW=7.8 us = 24.6 us.
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 27.1 us | 24.6 us (3 ops) | 0.91x |
-| Device kernel | 26.4 us | 22.6 us | 0.86x |
-| E2E steady state | 0.043 ms | 0.067 ms | **1.56x** |
-| Cold start | 1714 ms | 2136 ms | **1.25x** |
+| Device FW | 26.0 us | 24.6 us (3 ops) | 0.95x |
+| Device kernel | 25.4 us | 22.6 us | 0.89x |
+| E2E steady state | 0.045 ms | 0.069 ms | **1.53x** |
+| Cold start | 1720 ms | 2127 ms | **1.24x** |
 
-At H=128, each op takes 7-8 us. The fused kernel is ~3 us slower than the unfused sum due to inter-phase barrier overhead. The **1.56x E2E speedup** comes from reducing per-op overhead: each unfused dispatch has device firmware setup/teardown and host-side RT arg prep that fast dispatch can't fully hide when ops are this short.
+At H=128, each op takes 7-9 us. The fused kernel is ~3 us slower than the unfused sum due to inter-phase barrier overhead. The **1.53x E2E speedup** comes from reducing per-op overhead: each unfused dispatch has device firmware setup/teardown and host-side RT arg prep that fast dispatch can't fully hide when ops are this short.
 
 ### H=1536 (compute-dominated)
 
-Unfused breakdown: RMS #1 FW=30.0 us + matmul FW=949.4 us + RMS #2 FW=572.5 us = 1551.9 us. (RMS #2 FW inflated by cold program loading; kernel = 30.3 us.)
+Unfused breakdown: RMS #1 FW=30.2 us + matmul FW=901.0 us + RMS #2 FW=310.4 us = 1241.5 us. (RMS #2 FW inflated by cold program loading; kernel = 30.3 us.)
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 993.4 us | 1551.9 us (3 ops) | 1.56x |
-| Device kernel | 992.8 us | 1008.4 us | 1.02x |
-| E2E steady state | 0.998 ms | 1.005 ms | 1.01x |
-| Cold start | 1758 ms | 2192 ms | **1.25x** |
+| Device FW | 948.1 us | 1241.5 us (3 ops) | 1.31x |
+| Device kernel | 947.5 us | 960.1 us | 1.01x |
+| E2E steady state | 0.996 ms | 0.994 ms | 1.00x |
+| Cold start | 1752 ms | 2157 ms | **1.23x** |
 
-At H=1536, the matmul dominates (~949 us). Device kernel times are essentially identical (the 1.56x FW speedup is an artifact of cold program loading in the unfused RMS #2 dispatch). **No structural device speedup** for a linear chain of DRAM-interleaved ops.
+At H=1536, the matmul dominates (~901 us). Device kernel times are essentially identical (the 1.31x FW speedup is an artifact of cold program loading in the unfused RMS #2 dispatch). **No structural device speedup** for a linear chain of DRAM-interleaved ops.
 
 **PCC:** 0.9999 (both H values)
 
@@ -122,25 +122,25 @@ Unfused breakdown: RMS FW=8.9 us + LN FW=13.4 us = 22.3 us.
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 22.1 us | 22.3 us (2 ops) | 1.01x |
-| Device kernel | 21.3 us | 20.5 us | 0.96x |
-| E2E steady state | 0.088 ms | 0.060 ms | 0.68x |
-| Cold start | 1699 ms | 2654 ms | **1.56x** |
+| Device FW | 21.9 us | 22.3 us (2 ops) | 1.02x |
+| Device kernel | 21.1 us | 20.5 us | 0.97x |
+| E2E steady state | 0.089 ms | 0.065 ms | 0.73x |
+| Cold start | 1653 ms | 2638 ms | **1.60x** |
 
-At the device level, fused and unfused FW are nearly identical. The **E2E is 0.68x (slower fused)** because `generic_op` dispatch overhead (`override_runtime_arguments`) is larger than the native program-cache fast path used by individual `ttnn.rms_norm`/`ttnn.layer_norm` calls.
+At the device level, fused and unfused FW are nearly identical. The **E2E is 0.73x (slower fused)** because `generic_op` dispatch overhead (`override_runtime_arguments`) is larger than the native program-cache fast path used by individual `ttnn.rms_norm`/`ttnn.layer_norm` calls.
 
 ### H=1536 (compute-dominated)
 
-Unfused breakdown: RMS FW=39.7 us + LN FW=63.6 us = 103.3 us.
+Unfused breakdown: RMS FW=39.6 us + LN FW=63.8 us = 103.4 us.
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 107.5 us | 103.3 us (2 ops) | 0.96x |
-| Device kernel | 106.7 us | 101.6 us | 0.95x |
-| E2E steady state | 0.121 ms | 0.104 ms | 0.86x |
-| Cold start | 1676 ms | 2645 ms | **1.58x** |
+| Device FW | 107.2 us | 103.4 us (2 ops) | 0.96x |
+| Device kernel | 106.4 us | 101.7 us | 0.95x |
+| E2E steady state | 0.121 ms | 0.105 ms | 0.87x |
+| Cold start | 1654 ms | 2599 ms | **1.57x** |
 
-The fused kernel is ~5 us slower than the unfused kernel sum (~107 vs ~103 us) — inter-phase barrier overhead. E2E is 0.86x for the same reason as H=128: `generic_op`'s per-launch cost exceeds the per-op overhead that fusion eliminates.
+The fused kernel is ~5 us slower than the unfused kernel sum (~107 vs ~103 us) — inter-phase barrier overhead. E2E is 0.87x for the same reason as H=128: `generic_op`'s per-launch cost exceeds the per-op overhead that fusion eliminates.
 
 **PCC:** 1.000000 (both H values)
 
@@ -173,16 +173,16 @@ Parallel(
 
 **Program configs:** LN/RMS on 1x8 grids, matmul `MatmulMultiCoreReuseProgramConfig`. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-Unfused breakdown: LN FW=44.8 us + matmul FW=18.2 us + RMS FW=26.8 us + matmul FW=18.0 us = 107.8 us. (Unfused runs 4 sequential dispatches on a single (0,0)-based grid.)
+Unfused breakdown: LN FW=44.8 us + matmul FW=17.9 us + RMS FW=26.8 us + matmul FW=17.9 us = 107.5 us. (Unfused runs 4 sequential dispatches on a single (0,0)-based grid.)
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 70.0 us | 107.9 us (4 ops) | **1.54x** |
-| Device kernel | 69.4 us | 105.4 us | **1.52x** |
-| E2E steady state | 0.077 ms | 0.141 ms | **1.83x** |
-| Cold start | 1613 ms | 3517 ms | **2.18x** |
+| Device FW | 69.8 us | 107.5 us (4 ops) | **1.54x** |
+| Device kernel | 69.1 us | 104.9 us | **1.52x** |
+| E2E steady state | 0.078 ms | 0.148 ms | **1.89x** |
+| Cold start | 1614 ms | 3481 ms | **2.16x** |
 
-The **1.54x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM = 44.8+18.2 = 63 us) and Chain B (RMS+MM = 26.8+18.0 = 45 us) run simultaneously, so fused time ~ `max(63, 45)` + barriers = 70 us. The **1.83x E2E speedup** additionally saves per-dispatch overhead (4 dispatches → 1), which adds up when each op is only 18-45 us.
+The **1.54x device speedup** comes from parallelism — both chains overlap on disjoint core columns. Chain A (LN+MM = 44.8+17.9 = 63 us) and Chain B (RMS+MM = 26.8+17.9 = 45 us) run simultaneously, so fused time ~ `max(63, 45)` + barriers = 70 us. The **1.89x E2E speedup** additionally saves per-dispatch overhead (4 dispatches → 1), which adds up when each op is only 18-45 us.
 
 **PCC:** Chain A = 1.0000, Chain B = 1.0000
 
@@ -228,16 +228,16 @@ Sequential(
 
 **Program configs:** LN sharded, matmul `MatmulMultiCoreReuseProgramConfig`, slice tile-path with named CT args. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-Unfused breakdown (13 dispatches): ln_stem FW=42.6 us + 2 slices FW=11.9 us + 2 matmuls FW=36.0 us + 4 leaf slices FW=11.3 us + 4 leaf LNs FW=98.9 us = 200.8 us.
+Unfused breakdown (13 dispatches): ln_stem FW=42.6 us + 2 slices FW=11.8 us + 2 matmuls FW=35.6 us + 4 leaf slices FW=11.3 us + 4 leaf LNs FW=98.9 us = 200.1 us.
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 120.9 us | 200.8 us (13 ops) | **1.66x** |
-| Device kernel | 119.4 us | 191.1 us | **1.60x** |
-| E2E steady state | 0.195 ms | 0.452 ms | **2.32x** |
-| Cold start | 1917 ms | 5035 ms | **2.63x** |
+| Device FW | 120.0 us | 200.1 us (13 ops) | **1.67x** |
+| Device kernel | 118.5 us | 190.4 us | **1.61x** |
+| E2E steady state | 0.211 ms | 0.465 ms | **2.20x** |
+| Cold start | 1848 ms | 4893 ms | **2.65x** |
 
-The **1.66x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **2.32x E2E speedup** additionally saves per-dispatch overhead across 12 eliminated dispatches. The **2.63x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
+The **1.67x device speedup** comes from branch parallelism — the fused kernel runs independent tree branches simultaneously on disjoint core subsets. The **2.20x E2E speedup** additionally saves per-dispatch overhead across 12 eliminated dispatches. The **2.65x cold start speedup** comes from JIT-compiling 1 fused kernel instead of 13 individual kernels.
 
 **PCC:** 0.993 (leaf LN output vs unfused reference)
 
@@ -279,16 +279,16 @@ Sequential(
 
 **Program configs:** LN/RMS `LayerNormShardedMultiCoreProgramConfig`, slice tile-path. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-Unfused breakdown (6 dispatches): stem LN FW=40.7 us + 2 slices FW=20.6 us + 2 branch RMS FW=51.0 us + branch LN FW=35.3 us = 147.6 us.
+Unfused breakdown (6 dispatches): stem LN FW=40.7 us + 2 slices FW=20.5 us + 2 branch RMS FW=51.0 us + branch LN FW=35.3 us = 147.6 us.
 
 | Metric | Fused | Unfused | Speedup |
 |--------|------:|--------:|--------:|
-| Device FW | 120.8 us | 147.6 us (6 ops) | **1.22x** |
-| Device kernel | 119.0 us | 142.3 us | **1.20x** |
-| E2E steady state | 0.187 ms | 0.213 ms | **1.14x** |
-| Cold start | 1998 ms | 4778 ms | **2.39x** |
+| Device FW | 120.3 us | 147.6 us (6 ops) | **1.23x** |
+| Device kernel | 118.5 us | 142.2 us | **1.20x** |
+| E2E steady state | 0.198 ms | 0.223 ms | **1.13x** |
+| Cold start | 1967 ms | 4598 ms | **2.34x** |
 
-The **1.22x device speedup** comes from the left branch (Slice+RMS+RMS ~ 10+25+25 us) running in parallel with the right branch (Slice+LN ~ 10+35 us). Fused time ~ stem (41 us) + max(60, 45) = 101 us kernel + barriers. The speedup is more modest than demos 3 and 4 because the stem LN (41 us FW, 32 cores) is a large serial component that cannot be parallelized.
+The **1.23x device speedup** comes from the left branch (Slice+RMS+RMS ~ 10+25+25 us) running in parallel with the right branch (Slice+LN ~ 10+35 us). Fused time ~ stem (41 us) + max(60, 45) = 101 us kernel + barriers. The speedup is more modest than demos 3 and 4 because the stem LN (41 us FW, 32 cores) is a large serial component that cannot be parallelized.
 
 **PCC:** Left chain = 1.0000, Right LN = 0.9998
 
@@ -371,10 +371,10 @@ Sequential(*[noop_op for _ in range(N)]).build()
 
 | Cores | Grid | 2 phases | 3 phases | 4 phases | 5 phases | 6 phases | Converged |
 |------:|:-----|-------:|-------:|-------:|-------:|-------:|----------:|
-| 1 | (0,0) | 4.6 us | 2.6 us | 1.9 us | 1.5 us | 1.6 us | ~1.5 us |
-| 8 | 1x8 | 3.7 us | 2.1 us | 1.2 us | 1.6 us | 1.3 us | ~1.4 us |
-| 16 | 2x8 | 4.0 us | 2.6 us | 1.9 us | 1.9 us | 1.5 us | ~1.5 us |
-| 64 | 8x8 | 4.8 us | 1.8 us | 2.4 us | 1.9 us | 1.7 us | ~1.7 us |
+| 1 | (0,0) | 5.0 us | 1.4 us | 2.1 us | 1.8 us | 1.4 us | ~1.5 us |
+| 8 | 1x8 | 4.9 us | 3.2 us | 1.8 us | 1.5 us | 1.5 us | ~1.5 us |
+| 16 | 2x8 | 5.1 us | 2.3 us | 2.2 us | 1.7 us | 1.5 us | ~1.5 us |
+| 64 | 8x8 | 6.3 us | 3.1 us | 2.8 us | 3.0 us | 1.6 us | ~1.7 us |
 
 **Per-barrier cost is ~1.5 us** regardless of core count (1 to 64). The barrier has two levels:
 
