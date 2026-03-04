@@ -18,8 +18,100 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::transformer {
+
+namespace {
+ttnn::Tensor flash_mla_prefill_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const uint32_t head_dim_v,
+    const std::optional<ttnn::Tensor>& attn_mask,
+    bool is_causal,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    return ttnn::transformer::flash_mla_prefill(
+        input_tensor_q,
+        input_tensor_k,
+        head_dim_v,
+        std::nullopt,
+        attn_mask,
+        is_causal,
+        scale,
+        memory_config,
+        program_config,
+        compute_kernel_config);
+}
+
+ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& attn_mask,
+    bool is_causal,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    return ttnn::transformer::flash_mla_prefill(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v.logical_shape()[-1],
+        input_tensor_v,
+        attn_mask,
+        is_causal,
+        scale,
+        memory_config,
+        program_config,
+        compute_kernel_config);
+}
+
+// Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
+ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& page_table_tensor,
+    const nb::object& chunk_start_idx_arg,
+    std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
+    if (chunk_start_idx_tensor_opt.has_value()) {
+        return ttnn::transformer::chunked_scaled_dot_product_attention(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            page_table_tensor,
+            chunk_start_idx_tensor_opt.value(),
+            scale,
+            memory_config,
+            program_config,
+            compute_kernel_config);
+    }
+    if (chunk_start_idx_arg.is_none()) {
+        throw std::runtime_error(
+            "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
+            "chunk_start_idx_tensor=...");
+    }
+    int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
+    return ttnn::transformer::chunked_scaled_dot_product_attention(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        page_table_tensor,
+        chunk_start_idx,
+        scale,
+        memory_config,
+        program_config,
+        compute_kernel_config);
+}
+
+}  // namespace
 
 void bind_sdpa(nb::module_& mod) {
     const auto* const doc =
@@ -117,46 +209,7 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"chunked_scaled_dot_product_attention", "ttnn.transformer.">(
         mod,
         chunked_doc,
-        // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
-        +[](const ttnn::Tensor& input_tensor_q,
-            const ttnn::Tensor& input_tensor_k,
-            const ttnn::Tensor& input_tensor_v,
-            const ttnn::Tensor& page_table_tensor,
-            const nb::object& chunk_start_idx_arg,
-            std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
-            std::optional<float> scale,
-            const std::optional<MemoryConfig>& memory_config,
-            const std::optional<SDPAProgramConfig>& program_config,
-            std::optional<DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
-            if (chunk_start_idx_tensor_opt.has_value()) {
-                return ttnn::transformer::chunked_scaled_dot_product_attention(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v,
-                    page_table_tensor,
-                    chunk_start_idx_tensor_opt.value(),
-                    scale,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            }
-            if (chunk_start_idx_arg.is_none()) {
-                throw std::runtime_error(
-                    "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
-                    "chunk_start_idx_tensor=...");
-            }
-            int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
-            return ttnn::transformer::chunked_scaled_dot_product_attention(
-                input_tensor_q,
-                input_tensor_k,
-                input_tensor_v,
-                page_table_tensor,
-                chunk_start_idx,
-                scale,
-                memory_config,
-                program_config,
-                compute_kernel_config);
-        },
+        &chunked_scaled_dot_product_attention_wrapper,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
@@ -322,27 +375,7 @@ void bind_sdpa(nb::module_& mod) {
         mla_doc,
         // Overload: head_dim_v as uint32_t (original MLA)
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor_q,
-                const ttnn::Tensor& input_tensor_k,
-                const uint32_t head_dim_v,
-                const std::optional<ttnn::Tensor>& attn_mask,
-                bool is_causal,
-                std::optional<float> scale,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<SDPAProgramConfig>& program_config,
-                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return ttnn::transformer::flash_mla_prefill(
-                    input_tensor_q,
-                    input_tensor_k,
-                    head_dim_v,
-                    std::nullopt,
-                    attn_mask,
-                    is_causal,
-                    scale,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
+            &flash_mla_prefill_wrapper,
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("head_dim_v").noconvert(),
@@ -355,27 +388,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none()),
         // Overload: input_tensor_v as Tensor (V in embedding space)
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor_q,
-                const ttnn::Tensor& input_tensor_k,
-                const ttnn::Tensor& input_tensor_v,
-                const std::optional<ttnn::Tensor>& attn_mask,
-                bool is_causal,
-                std::optional<float> scale,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<SDPAProgramConfig>& program_config,
-                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                return ttnn::transformer::flash_mla_prefill(
-                    input_tensor_q,
-                    input_tensor_k,
-                    input_tensor_v.logical_shape()[-1],
-                    input_tensor_v,
-                    attn_mask,
-                    is_causal,
-                    scale,
-                    memory_config,
-                    program_config,
-                    compute_kernel_config);
-            },
+            &flash_mla_prefill_wrapper_input_tensor,
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
