@@ -111,7 +111,6 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     subdevice_id,
                     cluster_axis,
                     use_optimal_ccl_for_llama,
-                    use_broadcast,
                     barrier_semaphore,
                     use_broadcast,
                     chunks_per_sync,
