@@ -53,6 +53,9 @@ target_link_libraries(
 )
 
 target_include_directories(ttnn_pch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(ttnn_pch)
+endif()
 
 ##################################################
 # Set options
