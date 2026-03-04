@@ -227,7 +227,7 @@ def prepare_generator_args(
             False,  # enable_trace
             1,  # max_batch_size
             (
-                # "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
                 "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-notrace
@@ -236,7 +236,7 @@ def prepare_generator_args(
             True,  # enable_trace
             1,  # max_batch_size
             (
-                # "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
+                "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
                 "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-trace
