@@ -934,6 +934,10 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
         }
+        // Add output addresses at the end (unified layout for both regular and split)
+        for (const auto& mm_output_tensor : mm_output_tensors) {
+            in0_args.push_back(mm_output_tensor.buffer()->address());
+        }
         if (in0_core_order_index > (in0_core_order.size() - 3)) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
@@ -988,10 +992,6 @@ all_gather_minimal_matmul_async_factory_helper(
                 program,
                 termination_master_virtual_core_forward,
                 in0_args);
-        }
-        // Add output addresses at the end (unified layout for both regular and split)
-        for (const auto& mm_output_tensor : mm_output_tensors) {
-            in0_args.push_back(mm_output_tensor.buffer()->address());
         }
         if (in0_core_order_index == 0) {
             // in0 sender
@@ -1096,7 +1096,6 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
 
         auto in0_addr = output_tensor.at(0).buffer()->address();
         auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-        auto output_addr = output_tensor.at(1).buffer()->address();
         auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
         auto in3_addr = tensor_args.input_tensor.buffer()->address();
 
@@ -1121,61 +1120,86 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
             if (in1_idx == 0) {
                 auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
                 in0_sender_args[0] = in0_addr;
-                in0_sender_args[1] = output_addr;
-                in0_sender_args[2] = in2_addr;
-                in0_sender_args[3] = in3_addr;
-                in0_sender_args[21] = out_ready_semaphore_backward.address();
-                in0_sender_args[22] = out_ready_semaphore_forward.address();
+                in0_sender_args[1] = in2_addr;
+                in0_sender_args[2] = in3_addr;
+                in0_sender_args[20] = out_ready_semaphore_backward.address();
+                in0_sender_args[21] = out_ready_semaphore_forward.address();
 
+                uint32_t output_offset = 24;
                 if (has_fused_ternary) {
-                    in0_sender_args[25] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in0_sender_args[26] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    in0_sender_args[24] = tensor_args.fused_ternary_input_a.value().buffer()->address();
+                    in0_sender_args[25] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    output_offset = 26;
+                }
+                // Update N output addresses at the end
+                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
+                    in0_sender_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
                 }
             } else if (in1_idx > (in1_size - 3)) {
                 auto& in0_receiver_args = in0_receiver_fabric_runtime_args[core.x][core.y];
                 in0_receiver_args[0] = in0_addr;
-                in0_receiver_args[1] = output_addr;
-                in0_receiver_args[2] = in2_addr;
-                in0_receiver_args[3] = in3_addr;
-                in0_receiver_args[21] = out_ready_semaphore_backward.address();
-                in0_receiver_args[22] = out_ready_semaphore_forward.address();
+                in0_receiver_args[1] = in2_addr;
+                in0_receiver_args[2] = in3_addr;
+                in0_receiver_args[20] = out_ready_semaphore_backward.address();
+                in0_receiver_args[21] = out_ready_semaphore_forward.address();
 
+                uint32_t output_offset = 24;
                 if (has_fused_ternary) {
-                    in0_receiver_args[25] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in0_receiver_args[26] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    in0_receiver_args[24] = tensor_args.fused_ternary_input_a.value().buffer()->address();
+                    in0_receiver_args[25] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    output_offset = 26;
+                }
+                // Update N output addresses at the end
+                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
+                    in0_receiver_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
                 }
             } else {
                 auto& in0_receiver_args = in0_receiver_no_fabric_runtime_args[core.x][core.y];
                 in0_receiver_args[0] = in0_addr;
-                in0_receiver_args[1] = output_addr;
-                in0_receiver_args[2] = in2_addr;
-                in0_receiver_args[3] = in3_addr;
-                in0_receiver_args[21] = out_ready_semaphore_backward.address();
-                in0_receiver_args[22] = out_ready_semaphore_forward.address();
+                in0_receiver_args[1] = in2_addr;
+                in0_receiver_args[2] = in3_addr;
+                in0_receiver_args[20] = out_ready_semaphore_backward.address();
+                in0_receiver_args[21] = out_ready_semaphore_forward.address();
 
+                uint32_t output_offset = 24;
                 if (has_fused_ternary) {
-                    in0_receiver_args[25] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in0_receiver_args[26] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    in0_receiver_args[24] = tensor_args.fused_ternary_input_a.value().buffer()->address();
+                    in0_receiver_args[25] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    output_offset = 26;
+                }
+                // Update N output addresses at the end
+                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
+                    in0_receiver_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
                 }
             }
             if (in0_idx == 0) {
                 auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
                 in1_sender_args[0] = in1_addr;
-                in1_sender_args[1] = output_addr;
-                in1_sender_args[2] = in2_addr;
+                in1_sender_args[1] = in2_addr;
 
+                uint32_t output_offset = 15;
                 if (has_fused_ternary) {
-                    in1_sender_args[16] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in1_sender_args[17] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    in1_sender_args[15] = tensor_args.fused_ternary_input_a.value().buffer()->address();
+                    in1_sender_args[16] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    output_offset = 17;
+                }
+                // Update N output addresses at the end
+                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
+                    in1_sender_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
                 }
             } else {
                 auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-                in1_receiver_args[1] = output_addr;
-                in1_receiver_args[2] = in2_addr;
+                in1_receiver_args[1] = in2_addr;
 
+                uint32_t output_offset = 15;
                 if (has_fused_ternary) {
-                    in1_receiver_args[16] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                    in1_receiver_args[17] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    in1_receiver_args[15] = tensor_args.fused_ternary_input_a.value().buffer()->address();
+                    in1_receiver_args[16] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                    output_offset = 17;
+                }
+                // Update N output addresses at the end
+                for (size_t out_idx = 0; out_idx < (output_tensor.size() - 1); ++out_idx) {
+                    in1_receiver_args[output_offset + out_idx] = output_tensor[out_idx + 1].buffer()->address();
                 }
             }
 

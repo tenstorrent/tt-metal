@@ -124,6 +124,16 @@ void kernel_main() {
     const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
 #endif  // FUSE_TERNARY
 
+    // Tensor accessor for input tensor
+    constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
+    const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
+
+    // Always create tuple of output accessors (size = N_chunks)
+    constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, argidx, out_tile_size);
+    argidx = argidx + N_chunks;
+
 #ifdef USE_MUX
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
     uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
@@ -138,15 +148,6 @@ void kernel_main() {
     auto* mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
     auto* mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
 #endif
-
-    // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
-    const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
-
-    // Always create tuple of output accessors (size = N_chunks)
-    constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
-    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, argidx, out_tile_size);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
