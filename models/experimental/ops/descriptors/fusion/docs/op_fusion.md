@@ -18,12 +18,12 @@ compute_cfg = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
 )
 
-# Core grids — single row of 8 cores, split left/right then top/bottom
-full_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})  # 8 cores
-left_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})  # 4 cores (left)
-right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})  # 4 cores (right)
-left_top    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})  # 2 cores (left-top)
-left_bot    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})  # 2 cores (left-bottom)
+# Core grids — full 8x8 grid (64 cores), split left/right then top/bottom
+full_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})  # 8x8 = 64 cores
+left_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})  # 4x8 = 32 cores
+right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))})  # 4x8 = 32 cores
+left_top    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})  # 2x8 = 16 cores
+left_bot    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 7))})  # 2x8 = 16 cores
 
 # Each descriptor function returns an OpDescriptor — a thin wrapper
 # around ProgramDescriptor with input/output tensors.
@@ -43,13 +43,13 @@ op6 = descriptors.rms_norm(op3.output_tensors[0], core_range_set=right_cores,
                            compute_kernel_config=compute_cfg)
 
 fused = Sequential(
-    op1,                          # matmul on all 8 cores
+    op1,                          # matmul on all 64 cores
     Parallel(
-        Sequential(               # left half (4 cores)
+        Sequential(               # left half (32 cores)
             op2,                  # slice left
-            Parallel(op4, op5),   # matmul (top 2) + LN (bottom 2)
+            Parallel(op4, op5),   # matmul (top 16) + LN (bottom 16)
         ),
-        Sequential(op3, op6),     # right half: slice → RMS (4 cores)
+        Sequential(op3, op6),     # right half: slice → RMS (32 cores)
     ),
 ).build()
 
