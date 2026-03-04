@@ -370,7 +370,7 @@ Set mesh_axis to None to disable data parallelism.
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
-    }  # used to overrride the num_out_blocks computed based on the input shape.
+    }  # used to override the num_out_blocks computed based on the input shape.
 
     def __init__(
         self,
