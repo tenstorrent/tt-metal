@@ -139,11 +139,6 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     ttnn_values = ttnn.to_torch(ttnn.from_device(ttnn_result[0]))
     ttnn_indices = ttnn.to_torch(ttnn.from_device(ttnn_result[1]))
 
-    atol = rtol = 0.1
-    pcc = 0.999
-    passing, output_pcc = comp_allclose_and_pcc(torch_values, ttnn_values, pcc=pcc, rtol=rtol, atol=atol)
-    assert passing, f"Values: {output_pcc}, torch: {torch_values}, ttnn: {ttnn_values}"
-
     if (
         torch_values.numel() == 0
         and ttnn_values.numel() == 0
@@ -151,9 +146,19 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
         and ttnn_indices.numel() == 0
     ):
         logger.info(f"Both PyTorch and TTNN returned 0-volume tensors")
-        # Cosine similarity cannot be computed for empty tensors.
-        # comp_allclose_and_pcc already validated that shapes match, so we can return.
+        assert (
+            torch_values.shape == ttnn_values.shape
+        ), f"Shape mismatch on values: torch: {torch_values.shape}, ttnn: {ttnn_values.shape}"
+        assert (
+            torch_indices.shape == ttnn_indices.shape
+        ), f"Shape mismatch on indices: torch: {torch_indices.shape}, ttnn: {ttnn_indices.shape}"
+        # Other checks are not meaningful for empty tensors.
         return
+
+    atol = rtol = 0.1
+    pcc = 0.999
+    passing, output_pcc = comp_allclose_and_pcc(torch_values, ttnn_values, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"Values: {output_pcc}, torch: {torch_values}, ttnn: {ttnn_values}"
 
     ttnn_indices = ttnn_indices.to(torch.int32)
     # Indices can come back as negative values from ttnn (stored as unsigned in bfloat16).
@@ -165,12 +170,12 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     # The result is "the values that ttnn thinks are the top-k."
     ttnn_gather_from_indices = torch.gather(torch_tensor, dim, ttnn_indices.to(torch.int64))
     cosine = torch.nn.CosineSimilarity(dim=dim)
+    # Comparing indices directly may not be a good measure because when there are ties
+    # (duplicate values), both implementations may return different but equally valid
+    # index positions.
     # Compare PyTorch's top-k values against the values gathered using ttnn's indices.
     # If ttnn returned correct indices, then gathering from the original tensor at those
     # index positions should yield the same (or very similar) values as PyTorch's top-k values.
-    # This is a more robust check than directly comparing torch_indices vs ttnn_indices, because
-    # when there are ties (duplicate values), both implementations may return different but equally
-    # valid index positions.
     cosine_sim = torch.mean(cosine(torch_values, ttnn_gather_from_indices)).float()
     assert (
         cosine_sim >= cosine_sim_target
@@ -235,6 +240,7 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
         assert (
             torch_result.shape == ttnn_result.shape
         ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result.shape}"
+        # Other checks are not meaningful for empty tensors.
         return
 
     # Secondary check: PCC on raw indices (ties are rare with random bfloat16)
@@ -246,19 +252,36 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
     ttnn_result_i64 = ttnn_result.to(torch.int64)
 
     # Primary check: semantic validation - verify the values at ttnn's indices
-    # are the actual maximum values along the reduced dimension
-    if dim is None:
-        ttnn_value = torch_tensor.flatten()[ttnn_result_i64.item()]
-        torch_max_value = torch_tensor.max()
-        assert torch.allclose(
-            ttnn_value.float().unsqueeze(0), torch_max_value.float().unsqueeze(0), atol=0.1, rtol=0.1
-        ), f"Value at ttnn index {ttnn_result_i64.item()} is {ttnn_value}, expected max {torch_max_value}"
-    else:
-        indices_for_gather = ttnn_result_i64 if keepdim else ttnn_result_i64.unsqueeze(dim)
-        gathered = torch.gather(torch_tensor, dim, indices_for_gather)
+    # match the values at torch's indices (robust against tie-breaking differences)
+    torch_result_i64 = torch_result.to(torch.int64)
+    if dim is not None:
+        # torch.gather requires that index has the same number of dimensions as input.
+        # When keepdim=False, the reduced dimension is removed, making the index tensor one
+        # rank lower than the input; unsqueeze(dim) adds that dimension back.
+        ttnn_gather_indices = ttnn_result_i64 if keepdim else ttnn_result_i64.unsqueeze(dim)
+        torch_gather_indices = torch_result_i64 if keepdim else torch_result_i64.unsqueeze(dim)
+        # Comparing indices directly may not be a good measure because when there are ties
+        # (duplicate values), both implementations may return different but equally valid
+        # index positions. Instead, we gather the values at the indices each implementation
+        # thinks are the max, and compare them.
+        ttnn_gathered = torch.gather(torch_tensor, dim, ttnn_gather_indices)
+        torch_gathered = torch.gather(torch_tensor, dim, torch_gather_indices)
         if not keepdim:
-            gathered = gathered.squeeze(dim)
-        torch_max_values = torch.max(torch_tensor, dim=dim, keepdim=keepdim).values
+            # Undo the unsqueeze that was added to make torch.gather work.
+            # This helps make errors more readable in case of test failure.
+            ttnn_gathered = ttnn_gathered.squeeze(dim)
+            torch_gathered = torch_gathered.squeeze(dim)
         assert torch.allclose(
-            gathered.float(), torch_max_values.float(), atol=0.1, rtol=0.1
-        ), f"Values at ttnn indices don't match max: gathered={gathered}, max={torch_max_values}"
+            ttnn_gathered.float(), torch_gathered.float(), atol=atol, rtol=rtol
+        ), f"Values at ttnn indices don't match values at torch indices: ttnn={ttnn_gathered}, torch={torch_gathered}"
+    else:
+        # When dim is None, torch.argmax flattens the entire tensor and returns a single scalar
+        # index into the flattened view. Therefore, we can't use torch.gather with a dim argument
+        # on the original multi-dimensional tensor. Instead, we flatten the tensor and use the index
+        # that ttnn returned to gather the value from the flattened tensor.
+        ttnn_value = torch_tensor.flatten()[ttnn_result_i64.item()]
+        # Do the same for torch then compare them.
+        torch_value = torch_tensor.flatten()[torch_result_i64.item()]
+        assert torch.allclose(
+            ttnn_value.float(), torch_value.float(), atol=atol, rtol=rtol
+        ), f"Value at ttnn index {ttnn_result_i64.item()} is {ttnn_value}, expected {torch_value} (at torch index {torch_result_i64.item()})"
