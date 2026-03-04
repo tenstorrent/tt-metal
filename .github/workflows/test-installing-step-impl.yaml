@@ -118,18 +118,6 @@ jobs:
           # simulate a completely blank system for our Podman install
           sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
 
-      - name: Start memory monitor
-        shell: bash
-        run: |
-          echo "[memmon] timestamp | total_mb | used_mb | free_mb | available_mb | buff_cache_mb | swap_used_mb"
-          while true; do
-            ts=$(date '+%Y-%m-%d %H:%M:%S')
-            read -r total used free shared buff avail < <(free -m | awk '/^Mem:/{print $2,$3,$4,$5,$6,$7}')
-            swap_used=$(free -m | awk '/^Swap:/{print $3}')
-            echo "[memmon] ${ts} | ${total} | ${used} | ${free} | ${avail} | ${buff} | ${swap_used}"
-            sleep 5
-          done &
-
       - name: Install TT dependencies via TT-Installer
         shell: bash
         run: |
@@ -168,6 +156,15 @@ jobs:
         timeout-minutes: 30
         run: |
           set -euo pipefail
+
+          while true; do
+            ts=$(date '+%Y-%m-%d %H:%M:%S')
+            read -r total used free shared buff avail < <(free -m | awk '/^Mem:/{print $2,$3,$4,$5,$6,$7}')
+            swap_used=$(free -m | awk '/^Swap:/{print $3}')
+            echo "[memmon] ${ts} | ${total} | ${used} | ${free} | ${avail} | ${buff} | ${swap_used}"
+            sleep 5
+          done &
+
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
             -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py::test_demo_text[wormhole_b0-8-device_params0-False-performance-batch-1] -k 'not performance-ci-stress-1'"
