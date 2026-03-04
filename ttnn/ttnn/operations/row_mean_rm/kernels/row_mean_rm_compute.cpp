@@ -32,6 +32,11 @@ void kernel_main() {
         // Tilize input RM sticks -> tiled format
         compute_kernel_lib::tilize<cb_input_rm, cb_input_tiled>(Wt, 1);
 
+        // Restore HW state after tilize for enforce_fp32_accumulation reduce
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(cb_input_tiled, cb_scaler)));
+        MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(cb_mean)));
+
         // Reduce sum across row with 1/W scaler = mean
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
