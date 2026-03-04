@@ -1721,6 +1721,8 @@ bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std
 bool RunTimeOptions::ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const std::string& env_var) {
     char* env_var_str = std::getenv(env_var.c_str());
     bool specified = env_var_str != nullptr;
+    // Clear stale state so repeated parses (e.g. on MetalContext re-init) are deterministic.
+    feature_targets[feature].mesh_coords.clear();
     while (env_var_str != nullptr && *env_var_str != '\0') {
         // Skip leading whitespace and quotes
         while (*env_var_str == ' ' || *env_var_str == '"') {
@@ -1757,6 +1759,12 @@ bool RunTimeOptions::ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const 
                 env_var_str++;
             }
         }
+    }
+    if (specified && !feature_targets[feature].all_chips && feature_targets[feature].mesh_coords.empty()) {
+        TT_THROW(
+            "{} is set but contains no valid coordinates. "
+            "Expected (row,col) tuples or 'all'. Example: (0,0),(1,3)",
+            env_var);
     }
     return specified;
 }
@@ -1856,11 +1864,14 @@ void RunTimeOptions::resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::Co
     }
 }
 
-void RunTimeOptions::resolve_mesh_coords_to_chip_ids(tt::tt_metal::distributed::SystemMesh& system_mesh) {
+void RunTimeOptions::resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distributed::SystemMesh& system_mesh) {
     for (auto& target : feature_targets) {
         if (target.mesh_coords.empty()) {
             continue;
         }
+
+        // Explicit coord list overrides the "all chips" mode.
+        target.all_chips = false;
 
         const tt::tt_metal::distributed::MeshShape& mesh_shape = system_mesh.shape();
         const tt::tt_metal::distributed::SystemMesh::MappedDevices mapped =
