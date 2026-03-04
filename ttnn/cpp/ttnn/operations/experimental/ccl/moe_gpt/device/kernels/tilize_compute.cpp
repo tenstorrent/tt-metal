@@ -118,13 +118,6 @@ void kernel_main() {
 
         fast_tilize_block(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
 
-        // DEBUG: Print first and last tiles of output (tilized format)
-        // PACK(({
-        //     DPRINT << "=== CHUNK " << chunk << " OUTPUT ===" << ENDL();
-        //     print_tile_rows(tilize_output_cb_id, 0, true, 0, 1, 0, 1);                    // First tile, 4x8
-        //     // print_tile_rows(tilize_output_cb_id, tiles_per_local_chunk - 1, true, 0, 1, 0, 1);  // Last tile, 4x8
-        // }));
-
         cb_push_back(tilize_output_cb_id, shared_cb_num_pages);
 
         // Pop input from reader (tokens_per_chunk pages)

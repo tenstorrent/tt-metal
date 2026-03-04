@@ -822,10 +822,19 @@ void kernel_main() {
             noc_async_writes_flushed();
         }
 
+#ifndef TILIZE_TO_DRAM
         /*
          * Send metadata to MM cores (repeat for both bounding boxes):
          * 1) Encode number of tokens per expert into the semaphore (plus a valid bit)
          * 2) Signal the metadata via semaphore to MM cores
+         *
+         * Skipped in TILIZE_TO_DRAM mode: matmul cores run independently and
+         * don't consume tilize metadata.  More importantly, the multicast goes
+         * out on the same NOC (NOC_1) that the writer uses for DRAM page
+         * writes.  Because BRISC and NCRISC share the NOC interface, the
+         * writer's noc_async_write_barrier would stall waiting for this
+         * multicast to be acknowledged -- which may never happen when matmul
+         * cores aren't expecting it.
          */
 
         // == 1 ==
@@ -863,6 +872,7 @@ void kernel_main() {
         // multicast semaphore
         noc_semaphore_set_multicast(
             metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
+#endif  // !TILIZE_TO_DRAM
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========
