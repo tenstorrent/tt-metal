@@ -665,6 +665,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
+    attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
 
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
@@ -692,7 +693,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     # Token-wise linears operate on [1,1,B*S_pad,...] (total_seq tokens).
     w_q_kv_a = getattr(w, "w_q_kv_a", None)
     if w_q_kv_a is not None:
-        if tp_enabled:
+        if tp_enabled and not attn_dp:
             qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,T,q_lora_rank+kvpe_dim]
         else:
             qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,T,q_lora_rank+kvpe_dim]
@@ -704,12 +705,12 @@ def run_decoder_layer_prefill_update_cache_tt(
         )
         ttnn.deallocate(qkv, force=False)
     else:
-        if tp_enabled:
+        if tp_enabled and not attn_dp:
             q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,T,q_lora_rank]
         else:
             q_a = _mlp_linear(x, w.w_q_a)  # [1,1,T,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="prefill")
-    if tp_enabled:
+    if tp_enabled and not attn_dp:
         q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
     else:
         q = _mlp_linear(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
@@ -728,7 +729,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     # Project q_nope into KV latent space (per-head).
     # TTNN non-bcast matmul requires dim-0==1 for 4D×2D. When batch>1, reshape
     # [B,H,S,D] → [1,B*H,S,D] so dim-0 is 1, then reshape back after.
-    use_tp_kv_b1 = tp_enabled
+    use_tp_kv_b1 = tp_enabled and not attn_dp
     if use_tp_kv_b1:
         qk_nope = int(hparams.qk_nope_head_dim)
         qk_nope_per_shard = qk_nope // max(1, int(tp_size))
@@ -760,7 +761,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     # ---- KVPE for the prompt -> fill cache ----
     t0 = time.perf_counter() if profile is not None else 0.0
     if kv is None:
-        if tp_enabled:
+        if tp_enabled and not attn_dp:
             kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B*S_pad,kvpe_dim]
         else:
             kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B*S_pad,kvpe_dim]
@@ -906,7 +907,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     t0 = time.perf_counter() if profile is not None else 0.0
     # Same per-batch loop as w_kv_b1 for w_kv_b2 (small per-head matmul).
     if batch > 1:
-        kv_b2_fn = _tp_row_parallel_linear_from_replicated if tp_enabled else _mlp_linear
+        kv_b2_fn = _tp_row_parallel_linear_from_replicated if (tp_enabled and not attn_dp) else _mlp_linear
         v_parts = []
         for bi in range(batch):
             a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.kv_lora_rank)])
@@ -918,7 +919,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         for p in v_parts:
             ttnn.deallocate(p, force=False)
     else:
-        if tp_enabled:
+        if tp_enabled and not attn_dp:
             v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)
         else:
             v = _mlp_linear(attn_latent, w.w_kv_b2)
@@ -934,7 +935,9 @@ def run_decoder_layer_prefill_update_cache_tt(
         v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
         v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
     if tp_enabled:
-        attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,B*S_pad,hidden]
+        attn_out = _tp_row_parallel_linear_from_replicated(
+            v, w.w_o
+        )  # [1,1,B*S_pad,hidden] — w_o stays row-parallel even with ATTN_DP
     else:
         attn_out = _mlp_linear(v, w.w_o)  # [1,1,B*S_pad,hidden]
     ttnn.deallocate(v, force=False)
