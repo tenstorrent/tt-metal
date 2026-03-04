@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import time
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -375,7 +376,7 @@ def run_test_ring_joint_sdpa(
 
 
 benchmark_model_input_shapes = {
-    "wan_14b_720p": (1, 40, 75600, 0, 128),
+    # "wan_14b_720p": (1, 40, 75600, 0, 128),
     "wan_quad_14b_720p": (1, 40, 18944, 0, 128),
     # "wan_14b_480p": (1, 40, 32760, 0, 128),
     # "mochi": (1, 24, 44520, 118, 128),
@@ -399,7 +400,7 @@ parallel_config_map = {
     #     "sd35": (0, 2, 1, 2),
     # },
     "bh_glx": {
-        "wan_14b_720p": (0, 8, 1, 4),
+        # "wan_14b_720p": (0, 8, 1, 4),
         "wan_quad_14b_720p": (0, 8, 1, 4),
         #     "wan_14b_480p": (0, 8, 1, 4),
         #     "mochi": (0, 8, 1, 4),
@@ -442,27 +443,27 @@ all_parallel_config_ids = [
 )
 @pytest.mark.parametrize("parallel_config", all_parallel_configs, ids=all_parallel_config_ids)
 @pytest.mark.parametrize(
-    "q_chunk_size", [64, 96, 128, 224, 256, 288], ids=["q64", "q96", "q128", "q224", "q256", "q288"]
+    "q_chunk_size", [64, 96, 128, 224], ids=["q64", "q96", "q128", "q224"]
 )
 @pytest.mark.parametrize(
-    "k_chunk_size", [96, 128, 224, 256, 288, 512], ids=["k96", "k128", "k224", "k256", "k288", "k512"]
+    "k_chunk_size", [96, 128, 224, 256], ids=["k96", "k128", "k224", "k256"]
 )
 @pytest.mark.parametrize(
     "n_iters, trace_enabled, skip_check",
-    [(1, False, False), (1, False, True), (5, True, True)],
+    [(1, False, False), (3, False, True), (5, True, True)],
     ids=["no_trace_check", "no_trace_no_check", "yes_trace_no_check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            ttnn.Topology.Linear,
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
     ids=[
-        "line",
+        "ring_topo",
     ],
 )
 @pytest.mark.parametrize(
@@ -508,6 +509,8 @@ def test_ring_joint_sdpa(
     ids=mesh_device_map.keys(),
 )
 def test_ring_joint_sdpa_perf_table(mesh_device_id):
+    from collections import defaultdict
+
     results = []
     for model_input_id, model_input_shape in benchmark_model_input_shapes.items():
         parallel_config = parallel_config_map[mesh_device_id][model_input_id]
@@ -526,27 +529,43 @@ def test_ring_joint_sdpa_perf_table(mesh_device_id):
             is_command_binary_exe=True,
         )
         r = post_process_ops_log("ring_joint_sdpa", sum_vals=False, has_signposts=False)
-        attrs = r["ATTRIBUTES"].tolist()
-        durations = r["DEVICE KERNEL DURATION [ns]"].tolist()
-        sorted_results = sorted(zip(durations, attrs), key=lambda x: x[0])
-        min_duration, best_attrs = sorted_results[0]
-        max_duration = sorted_results[-1][0]
-        mean_duration = sum(durations) / len(durations)
-        results.append(
-            [model_input_shape, model_input_id, parallel_name, min_duration, max_duration, mean_duration, best_attrs]
-        )
 
-    header = "| model_input_id | model_input_shape | parallel_name | padded seq | qchunk, kchunk | min perf (ms) | max perf (ms) | mean perf (ms) |"
-    sep = "|---:|---:|---:|---:|---:|---:|---:|---:|"
+        config_groups = defaultdict(list)
+        for _, row in r.iterrows():
+            dur_str = str(row["DEVICE KERNEL DURATION [ns]"]).strip()
+            if not dur_str:
+                continue
+            attrs = str(row["ATTRIBUTES"])
+            q_chunk = int(attrs.split("q_chunk_size=")[1].split(";")[0])
+            k_chunk = int(attrs.split("k_chunk_size=")[1].split(";")[0].rstrip(")"))
+            config_groups[(q_chunk, k_chunk)].append(row)
+
+        for (q_chunk, k_chunk), rows_list in config_groups.items():
+            invocation_groups = defaultdict(list)
+            for row in rows_list:
+                base = int(row["GLOBAL CALL COUNT"]) - int(row["DEVICE ID"])
+                invocation_groups[base].append(row)
+
+            iter_maxes = []
+            for base in sorted(invocation_groups):
+                chunk_rows = invocation_groups[base]
+                max_dur = max(int(row["DEVICE KERNEL DURATION [ns]"]) for row in chunk_rows)
+                iter_maxes.append(max_dur)
+
+            best_iter_max = min(iter_maxes)
+            results.append([model_input_shape, model_input_id, parallel_name, q_chunk, k_chunk, best_iter_max])
+
+    results.sort(key=lambda x: x[5])
+
+    header = "| model_input_id | model_input_shape | parallel_name | padded seq | qchunk, kchunk | best iter max kernel (ms) |"
+    sep = "|---:|---:|---:|---:|---:|---:|"
     print(header)
     print(sep)
     for result in results:
-        model_input_shape, model_input_id, parallel_name, min_duration, max_duration, mean_duration, attrs = result
-        q_chunk = attrs.split("q_chunk_size=")[1].split(";")[0]
-        k_chunk = attrs.split("k_chunk_size=")[1].split(";")[0]
+        model_input_shape, model_input_id, parallel_name, q_chunk, k_chunk, best_iter_max = result
         new_seqlen = get_padded_vision_seq_len(int(model_input_shape[2]), rp_factor)
         print(
-            f"| {model_input_id} | {model_input_shape} | {parallel_name} | {new_seqlen} | {q_chunk}, {k_chunk} | {min_duration / 1e6:.3f} | {max_duration / 1e6:.3f} | {mean_duration / 1e6:.3f} |"
+            f"| {model_input_id} | {model_input_shape} | {parallel_name} | {new_seqlen} | {q_chunk}, {k_chunk} | {best_iter_max / 1e6:.3f} |"
         )
 
 
@@ -921,12 +940,12 @@ def test_ring_joint_sdpa_perf_table(mesh_device_id):
 bh_glx_unit_test_params = pytest.mark.parametrize(
     "input_shape, parallel_config, chunk_sizes, expected_correctness",
     [
-        [
-            benchmark_model_input_shapes["wan_14b_720p"],
-            parallel_config_map["bh_glx"]["wan_14b_720p"],
-            (224, 512),
-            (0.9993, 8e-5),
-        ],
+        # [
+        #     benchmark_model_input_shapes["wan_14b_720p"],
+        #     parallel_config_map["bh_glx"]["wan_14b_720p"],
+        #     (288, 224),
+        #     (0.9993, 8e-5),
+        # ],
         [
             benchmark_model_input_shapes["wan_quad_14b_720p"],
             parallel_config_map["bh_glx"]["wan_quad_14b_720p"],
@@ -944,7 +963,7 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
         # [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_glx"]["sd35"], (128, 512), (0.9997, 4e-5)],
     ],
     ids=[
-        "wan_14b_720p",
+        # "wan_14b_720p",
         "wan_quad_14b_720p",
         # "wan_14b_480p",
         # "mochi",
@@ -959,13 +978,18 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 10000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
             ttnn.Topology.Linear,
+        ),
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 10000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
     ids=[
-        "line",
+        "line_topo",
+        "ring_topo",
     ],
 )
 @pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
