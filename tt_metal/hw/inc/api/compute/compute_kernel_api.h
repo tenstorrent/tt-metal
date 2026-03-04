@@ -338,7 +338,7 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_power<APPROX, DST_ACCUM_MODE>(idst, param0)));
 }
 
 /**

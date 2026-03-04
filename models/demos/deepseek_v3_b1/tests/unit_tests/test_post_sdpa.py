@@ -13,7 +13,7 @@ When SDPA is enabled:
   - SDPA Forwarders (2 cores): Forward fabric packets for SDPA CCL
 
 Post-SDPA phases:
-- Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
+- Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (kv_b2 grid: 5x8 + 12x2)
 - Gather1: Collect to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
@@ -21,7 +21,7 @@ Post-SDPA phases:
 - TP All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
 The mcast grid (13x10=130 cores) includes 18 inactive cores that receive mcast data
-but skip matmul2 via is_matmul2_core=false (col 12 rows 0-8 + row 9 cols 4-11).
+but skip matmul2 via is_matmul2_core=false.
 
 Core Layout:
 - SDPA Workers: FlashMLADecode.output_cores(0, SDPA_INPUT_NUM_CORES)
@@ -39,6 +39,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+    BlitzDecodeWeights,
+)
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
@@ -163,21 +168,25 @@ def test_post_sdpa(
     b_tile = ttnn.Tile([32, 32])  # 32x32 tiles for weights
 
     # ========================================================================
-    # Grid configuration
+    # Grid configuration — derived from production weight overlap specs
     # ========================================================================
-    # Matmul1 grid: 8x8 = 64 cores
-    MATMUL1_GRID_X = 8
-    MATMUL1_GRID_Y = 8
-    num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
+    num_tp = mesh_cols  # TP parallelism across mesh columns (2 for 4x2, 1 for 1x1)
+
+    kv_b12_cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    o_proj_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+
+    # Matmul1 grid: kv_b2 cores (5×8 + 12×2 = 64 cores)
+    matmul1_grid = kv_b12_cfg.kv_b2_core_range_set
+    num_matmul1_cores = matmul1_grid.num_cores()  # 64
 
     # Mcast grid: 13x10 = 130 cores (rectangular for efficient mcast)
     MCAST_GRID_X = 13
     MCAST_GRID_Y = 10
     num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
-    # Active Matmul2 cores: 112 (rows 0-8 full 12 cols + row 9 cols 0-3)
-    # Non-rectangular grid: 12*9 + 4 = 108 + 4 = 112
-    num_matmul2_cores = 112
+    # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
+    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # Per-core dimensions
     n1_per_core = intermediate // num_matmul1_cores  # 8192 / 64 = 128
@@ -190,19 +199,6 @@ def test_post_sdpa(
     logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
     logger.info(f"  Output: [{M}, {output_size}] (fuse_residual_add={fuse_residual_add})")
 
-    # Create core grids
-    matmul1_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL1_GRID_X - 1, MATMUL1_GRID_Y - 1))]
-    )
-    # Active matmul2 cores: non-rectangular grid (112 cores)
-    # - Rows 0-8: all 12 columns = 108 cores
-    # - Row 9: columns 0-3 = 4 cores
-    matmul2_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8)),  # 12x9 = 108 cores
-            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),  # 4x1 = 4 cores
-        ]
-    )
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
@@ -211,12 +207,23 @@ def test_post_sdpa(
     # ========================================================================
     torch.manual_seed(0)
 
-    # Weights are shared across all devices (replicated)
-    # Weights1: [512, 8192]
+    # Weights are shared across all devices (replicated per TP slice)
+    # Weights1 (kv_b2_proj): [512, 8192] per TP slice
     torch_weights1 = torch.randn((K1, intermediate), dtype=torch.bfloat16)
-
-    # Weights2: [8192, 7168]
+    # Weights2 (o_proj): [8192, 7168] per TP slice
     torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
+
+    # TP-expanded tensors for BlitzDecodeWeights (replicate across TP so golden stays unchanged)
+    torch_kv_b1_proj_dummy = torch.zeros(
+        (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
+    )
+    torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
+    torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
+    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
+    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
+    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
+    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
+    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
 
     # Input per device: [1, 512]
     device_inputs = []
@@ -294,54 +301,36 @@ def test_post_sdpa(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create weights1 tensor (width-sharded across matmul1 cores, replicated)
-    # Each core gets [512, 128]
+    # Create overlapped weight tensors via BlitzDecodeWeights
     # ========================================================================
-    weights1_shard_shape = (K1, n1_per_core)  # [512, 128] per core
-    weights1_shard_spec = ttnn.ShardSpec(
-        matmul1_grid,
-        weights1_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    weights1_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights1_shard_spec
-    )
-
-    # Get single device for weights (they're replicated, so we just need one)
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
-    ttnn_weights1 = ttnn.from_torch(
-        torch_weights1,
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=single_device,
-        memory_config=weights1_mem_config,
-        tile=b_tile,
-    )
-    logger.info(f"Created weights1 tensor: shard {weights1_shard_shape} on {num_matmul1_cores} cores")
+    bdw = BlitzDecodeWeights(submesh)
 
-    # ========================================================================
-    # Create weights2 tensor (width-sharded across 112 active matmul2 cores, replicated)
-    # Each core gets [8192, 64]
-    # ========================================================================
-    weights2_shard_shape = (K2, n2_per_core)  # [8192, 64] per core
-    weights2_shard_spec = ttnn.ShardSpec(
-        matmul2_grid,  # Non-rectangular grid of 112 active cores
-        weights2_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    weights2_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights2_shard_spec
+    # Weights1 = kv_b2_proj (second half of fused kv_b12 buffer)
+    _, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    logger.info(
+        f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
-    ttnn_weights2 = ttnn.from_torch(
-        torch_weights2,
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=single_device,
-        memory_config=weights2_mem_config,
-        tile=b_tile,
+    # Weights2 = o_proj (first element of fused o_proj/gate/gamma buffer)
+    (
+        o_proj_overlapped,
+        _,  # gate_mm
+        _,  # attn_norm
+        _,  # q_norm
+        _,  # kv_norm
+        _,  # ffn_norm
+    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+        torch_o_proj_weights,
+        torch_gate_mm_dummy,
+        torch_attn_norm_dummy,
+        torch_q_norm_dummy,
+        torch_kv_norm_dummy,
+        torch_ffn_norm_dummy,
     )
-    logger.info(f"Created weights2 tensor: shard {weights2_shard_shape} on {num_matmul2_cores} active cores")
+    logger.info(
+        f"Created o_proj overlapped tensor: shard {o_proj_overlapped.shard_shape} on {matmul2_grid.num_cores()} cores"
+    )
 
     # ========================================================================
     # Create gather1 output tensor (intermediate [1, 8192] on gather core, replicated)
@@ -523,8 +512,8 @@ def test_post_sdpa(
     logger.info(f"Running post_sdpa fused operation (ccl_enabled={ccl_enabled})...")
     ttnn_result = PostSDPA.op(
         ttnn_input,
-        ttnn_weights1,
-        ttnn_weights2,
+        kv_b2_overlapped,
+        o_proj_overlapped,
         ttnn_gather1_output,
         ttnn_gather2_output,
         ttnn_ccl_intermediate,
@@ -633,20 +622,25 @@ def test_post_sdpa_with_sdpa_phase(
     sdpa_tile = ttnn.Tile([8, 32])  # 8x32 tiles for SDPA L and MS tensors (matches original SDPA op)
 
     # ========================================================================
-    # Grid configuration
+    # Grid configuration — derived from production weight overlap specs
     # ========================================================================
-    # Matmul1 grid: 8x8 = 64 cores
-    MATMUL1_GRID_X = 8
-    MATMUL1_GRID_Y = 8
-    num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
+    num_tp = mesh_cols
+
+    kv_b12_cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    o_proj_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+
+    # Matmul1 grid: kv_b2 cores (5×8 + 12×2 = 64 cores)
+    matmul1_grid = kv_b12_cfg.kv_b2_core_range_set
+    num_matmul1_cores = matmul1_grid.num_cores()  # 64
 
     # Mcast grid: 13x10 = 130 cores (rectangular for efficient mcast)
     MCAST_GRID_X = 13
     MCAST_GRID_Y = 10
     num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
-    # Active Matmul2 cores: 112 (rows 0-8 full 12 cols + row 9 cols 0-3)
-    num_matmul2_cores = 112
+    # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
+    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # SDPA configuration (matching original sdpa_reduce_to_all test)
     NUM_SDPA_WORKERS = 8
@@ -666,16 +660,6 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
     logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
 
-    # Create core grids
-    matmul1_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL1_GRID_X - 1, MATMUL1_GRID_Y - 1))]
-    )
-    matmul2_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8)),  # 12x9 = 108 cores
-            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),  # 4x1 = 4 cores
-        ]
-    )
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
@@ -684,8 +668,9 @@ def test_post_sdpa_with_sdpa_phase(
         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
     )
 
-    # SDPA forwarder cores
-    sdpa_forwarder_cores = [ttnn.CoreCoord(6, 9), ttnn.CoreCoord(7, 9)]
+    # SDPA forwarder cores: (9,8), (10,8) — inside the kv_b2 matmul1 grid (cols 0-11, rows 8-9)
+    # Must match the cores where sdpa_forwarder_scratch_mesh is allocated.
+    sdpa_forwarder_cores = [ttnn.CoreCoord(9, 8), ttnn.CoreCoord(10, 8)]
     sdpa_forwarder_grid = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(sdpa_forwarder_cores[0], sdpa_forwarder_cores[0]),
@@ -698,9 +683,21 @@ def test_post_sdpa_with_sdpa_phase(
     # ========================================================================
     torch.manual_seed(0)
 
-    # Weights are shared across all devices (replicated)
+    # Weights are shared across all devices (replicated per TP slice)
     torch_weights1 = torch.randn((K1, intermediate), dtype=torch.bfloat16)
     torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
+
+    # TP-expanded tensors for BlitzDecodeWeights
+    torch_kv_b1_proj_dummy = torch.zeros(
+        (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
+    )
+    torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
+    torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
+    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
+    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
+    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
+    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
+    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
 
     # SDPA input tensors per device: L [8, 4096], MS [8, 256]
     # MS tensor layout: for each worker core c (0..7), within columns [c*32, (c+1)*32]:
@@ -836,38 +833,34 @@ def test_post_sdpa_with_sdpa_phase(
     )
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
-    # Get single device for replicated tensors
+    # ========================================================================
+    # Create overlapped weight tensors via BlitzDecodeWeights
+    # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
+    bdw = BlitzDecodeWeights(submesh)
 
-    # ========================================================================
-    # Create weights tensors (same as non-SDPA test)
-    # ========================================================================
-    weights1_shard_shape = (K1, n1_per_core)
-    weights1_shard_spec = ttnn.ShardSpec(matmul1_grid, weights1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    weights1_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights1_shard_spec
-    )
-    ttnn_weights1 = ttnn.from_torch(
-        torch_weights1,
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=single_device,
-        memory_config=weights1_mem_config,
-        tile=b_tile,
+    _, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    logger.info(
+        f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
-    weights2_shard_shape = (K2, n2_per_core)
-    weights2_shard_spec = ttnn.ShardSpec(matmul2_grid, weights2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    weights2_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights2_shard_spec
+    (
+        o_proj_overlapped,
+        _,  # gate_mm
+        _,  # attn_norm
+        _,  # q_norm
+        _,  # kv_norm
+        _,  # ffn_norm
+    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+        torch_o_proj_weights,
+        torch_gate_mm_dummy,
+        torch_attn_norm_dummy,
+        torch_q_norm_dummy,
+        torch_kv_norm_dummy,
+        torch_ffn_norm_dummy,
     )
-    ttnn_weights2 = ttnn.from_torch(
-        torch_weights2,
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=single_device,
-        memory_config=weights2_mem_config,
-        tile=b_tile,
+    logger.info(
+        f"Created o_proj overlapped tensor: shard {o_proj_overlapped.shard_shape} on {matmul2_grid.num_cores()} cores"
     )
 
     # ========================================================================
@@ -1113,8 +1106,8 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info("Running post_sdpa fused operation with SDPA phase...")
     ttnn_result = PostSDPA.op(
         ttnn_input,
-        ttnn_weights1,
-        ttnn_weights2,
+        kv_b2_overlapped,
+        o_proj_overlapped,
         ttnn_gather1_output,
         ttnn_gather2_output,
         ttnn_ccl_intermediate,
@@ -1133,7 +1126,6 @@ def test_post_sdpa_with_sdpa_phase(
         sdpa_forwarder_scratch_mesh=ttnn_sdpa_forwarder_scratch,
         sdpa_semaphores=sdpa_semaphores,
         sdpa_scale_fp32=1.0,
-        sdpa_forwarder_cores=sdpa_forwarder_cores,
         sdpa_cluster_axis=0,  # SDPA reduces on axis 0 (rows), TP reduces on axis 1 (cols)
         sdpa_position_id_tensor_mesh=position_id_tensor_mesh,
         sdpa_per_device_chunk_size=per_device_chunk_size,

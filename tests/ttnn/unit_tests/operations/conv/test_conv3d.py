@@ -19,16 +19,18 @@ def _out_size(in_size, pad, stride, k, dilation):
 ALIGNMENT = 32  # Valid L1 alignment for Wormhole and Blackhole
 
 
-def prepare_input_tensor(input_tensor, C, device, alignment=ALIGNMENT):
+def prepare_input_tensor(input_tensor, C, device, alignment=ALIGNMENT, dtype=ttnn.DataType.BFLOAT16):
     """Prepare input tensor for TTNN by permuting and padding."""
     tt_input = input_tensor.permute(0, 2, 3, 4, 1)
     ALIGN_PAD = alignment - C % alignment
     if C % alignment != 0:
         tt_input = torch.nn.functional.pad(tt_input, (0, ALIGN_PAD))
-    return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.from_torch(tt_input, device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
+def prepare_weights(
+    conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT, dtype=ttnn.DataType.BFLOAT16
+):
     """Prepare weights and bias for TTNN."""
     w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
     w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
@@ -45,11 +47,11 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
     w = w.permute(3, 0, 1, 2, 4, 5)
     w = w.reshape(-1, out_channels)
 
-    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+    tt_weight = ttnn.from_torch(w, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0)
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
         device=device,
-        dtype=ttnn.DataType.BFLOAT16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
     )
@@ -71,10 +73,11 @@ def create_conv3d_config(
     C_in_block=0,
     dilation=(1, 1, 1),
     compute_with_storage_grid_size=(1, 1),
+    weights_dtype=ttnn.bfloat16,
 ):
     """Create Conv3d configuration."""
     return ttnn.Conv3dConfig(
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=weights_dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
         W_out_block=W_out_block,
@@ -87,7 +90,15 @@ def create_conv3d_config(
 
 
 def setup_conv3d_test(
-    input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, dilation=(1, 1, 1)
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    device,
+    dilation=(1, 1, 1),
+    dtype=ttnn.DataType.BFLOAT16,
 ):
     """Common setup for Conv3D tests, preparing inputs and ground truth."""
     torch.manual_seed(42)
@@ -115,7 +126,7 @@ def setup_conv3d_test(
     gt_output = conv3d_module(input_tensor)
 
     # Prepare input for TTNN
-    tt_input = prepare_input_tensor(input_tensor, C, device)
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=dtype)
 
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -129,25 +140,34 @@ def setup_conv3d_test(
 
 
 def run_conv3d_test(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1), dilation=(1, 1, 1)
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    grid_size=(1, 1),
+    dilation=(1, 1, 1),
+    dtype=ttnn.DataType.BFLOAT16,
 ):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, dilation=dilation
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, dilation=dilation, dtype=dtype
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, dtype=dtype)
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(compute_with_storage_grid_size=grid_size, dilation=dilation)
+    config = create_conv3d_config(compute_with_storage_grid_size=grid_size, dilation=dilation, weights_dtype=dtype)
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         output_channels=out_channels,
         kernel_size=kernel_size,
         stride=stride,
@@ -180,7 +200,6 @@ def run_conv3d_test(
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
@@ -198,7 +217,6 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -216,7 +234,6 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -350,4 +367,21 @@ def test_conv3d_non_aligned_output_channels(device, C_out):
         padding=(0, 1, 1),
         padding_mode="zeros",
         grid_size=grid_size,
+    )
+
+
+def test_conv3d_float32(device):
+    """Test Conv3d end-to-end with FLOAT32 dtype."""
+    input_shape = (1, 64, 8, 10, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels=64,
+        kernel_size=(3, 3, 3),
+        stride=(1, 1, 1),
+        padding=(0, 1, 1),
+        padding_mode="zeros",
+        grid_size=grid_size,
+        dtype=ttnn.DataType.FLOAT32,
     )
