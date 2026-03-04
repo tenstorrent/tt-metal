@@ -12,7 +12,7 @@ struct KernelSpec {
     // Kernel identifier
     // A handle used to reference this kernel within the ProgramSpec
     std::variant<KernelID, KernelName> unique_id;
-    // TODO -- I'm strongly considering removing the string option. 
+    // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
 
 
     // Kernel source
@@ -84,10 +84,9 @@ struct KernelSpec {
 
 
     // Semaphore bindings
-    // (TODO -- needs additional vetting)
     struct SemaphoreBinding {
         std::variant<SemaphoreID, std::string> semaphore_id; // identify the semaphore within the ProgramSpec
-        std::string local_accessor_name;                     // semaphore accessor name (used in the kernel source code)
+        std::string accessor_name;                           // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
 

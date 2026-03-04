@@ -9,8 +9,7 @@ struct DataflowBufferSpec {
     // DFB identifier
     // A handle used to reference this DFB within the ProgramSpec
     std::variant<DFBid, DFBName> unique_id;  
-    // TODO -- I'm strongly considering removing the string option. 
-    // It spews icky variants everywhere, for little advantage. You'd just use a named variable as a handle anyways.
+    // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
 
     // Target nodes
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>
