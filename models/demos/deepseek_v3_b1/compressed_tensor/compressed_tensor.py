@@ -234,11 +234,11 @@ class CompressedTensor:
             return self._unpack_sharded(flat_np)
         return self._unpack_flat(flat_np)
 
-    def get_assignment_numpy(self) -> np.ndarray:
+    def get_assignment(self) -> np.ndarray:
         """Get assignment as (tiles_h, tiles_w) numpy array."""
         return self._assignment_flat.reshape(self.tiles_h, self.tiles_w)
 
-    def get_assignment_numpy_per_shard(self, core_coord) -> np.ndarray:
+    def get_assignment_per_shard(self, core_coord) -> np.ndarray:
         """Get flat assignment array for a specific core's shard."""
         assert self.max_shard_size > 0, "Per-shard assignment only for sharded tensors"
         core_key = (core_coord.x, core_coord.y)

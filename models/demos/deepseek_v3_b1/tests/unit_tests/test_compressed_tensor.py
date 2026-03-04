@@ -52,7 +52,7 @@ def test_assignment_stored_correctly():
     result = assigner.assign(x, ttnn_quantize_fn)
     ct = CompressedTensor(x, result.assignment)
 
-    recovered_assignment = ct.get_assignment_numpy()
+    recovered_assignment = ct.get_assignment()
     assert (recovered_assignment == result.assignment).all(), "Assignment round-trip mismatch"
 
 
@@ -109,7 +109,7 @@ def test_bfp0_tiles():
 
     recovered = ct.to_torch()
     tile_hw = 32
-    assign = ct.get_assignment_numpy()
+    assign = ct.get_assignment()
 
     for tr in range(ct.tiles_h):
         for tc in range(ct.tiles_w):
@@ -445,7 +445,7 @@ def test_device_uneven_height_shard(device):
 
     # Verify assignment round-trips correctly despite uneven shards
     result = assigner.assign(x, ttnn_quantize_fn)
-    recovered_assignment = ct.get_assignment_numpy()
+    recovered_assignment = ct.get_assignment()
     assert (recovered_assignment == result.assignment).all(), "Assignment mismatch on uneven shard"
 
     recovered = ct.to_torch()
@@ -471,7 +471,7 @@ def test_device_uneven_width_shard(device):
     assert ttnn.is_tensor_storage_on_device(ct.data)
 
     result = assigner.assign(x, ttnn_quantize_fn)
-    recovered_assignment = ct.get_assignment_numpy()
+    recovered_assignment = ct.get_assignment()
     assert (recovered_assignment == result.assignment).all(), "Assignment mismatch on uneven shard"
 
     recovered = ct.to_torch()
@@ -502,7 +502,7 @@ def test_device_uneven_block_shard(device):
     assert ttnn.is_tensor_storage_on_device(ct.data)
 
     result = assigner.assign(x, ttnn_quantize_fn)
-    recovered_assignment = ct.get_assignment_numpy()
+    recovered_assignment = ct.get_assignment()
     assert (recovered_assignment == result.assignment).all(), "Assignment mismatch on uneven block shard"
 
     recovered = ct.to_torch()
@@ -657,7 +657,7 @@ def test_device_bfp0_bfp2_bfp4_uneven_height_shard(device):
 
     recovered = ct.to_torch()
     tile_hw = 32
-    assign = ct.get_assignment_numpy()
+    assign = ct.get_assignment()
 
     # Log per-tile format assignment as a grid
     print("Format assignment grid:")
