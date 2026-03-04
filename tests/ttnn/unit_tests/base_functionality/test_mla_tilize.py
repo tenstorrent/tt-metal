@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -64,9 +64,9 @@ def test_deepseek_v3_mla_tilize_trace_mode(
     - Output: L1 memory, TILE_LAYOUT
     - Memory config: INTERLEAVED or WIDTH_SHARDED (parameterized)
       - INTERLEAVED: no sharding
-      - WIDTH_SHARDED: shard_spec grid [0:0-7:1], shape [16, 1024], ROW_MAJOR
+      - WIDTH_SHARDED: width-wise sharding configuration as defined by the test's shard_spec
     """
-    torch.manual_seed(0)
+    torch.manual_seed(2003)
 
     # Create random tensor for input
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
