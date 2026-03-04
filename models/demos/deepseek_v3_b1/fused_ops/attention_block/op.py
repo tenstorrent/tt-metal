@@ -3933,11 +3933,19 @@ class AttentionBlock:
                         _extend_runtime_args(
                             program.kernels[group.brisc_kernel_index].runtime_args, sdpa["worker_brisc_rt_args"], crs
                         )
+                        print(
+                            f"before extend {mesh_coord} sdpa_worker_core {group.core_range_set}",
+                            sdpa["worker_ncrisc_rt_args"],
+                        )
                         if sdpa["worker_trisc_rt_args"] is not None:
                             _extend_runtime_args(
                                 program.kernels[group.trisc_kernel_index].runtime_args,
                                 sdpa["worker_trisc_rt_args"],
                                 crs,
+                            )
+                            print(
+                                f"after extend {mesh_coord} sdpa_worker_core {group.core_range_set}",
+                                sdpa["worker_trisc_rt_args"],
                             )
 
                 sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
@@ -3978,17 +3986,6 @@ class AttentionBlock:
                             program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa_forwarder_ncrisc_rt_args, crs
                         )
 
-            """
-            if coord == ttnn.MeshCoordinate(0, 0):
-                for group in kernel_result.groups:
-                    crs = group.core_range_set
-                    for c, args in program.kernels[group.ncrisc_kernel_index].runtime_args:
-                        print(f"NCRISC ({c.x},{c.y}): {args}")
-                    for c, args in program.kernels[group.brisc_kernel_index].runtime_args:
-                        print(f"BRISC ({c.x},{c.y}): {args}")
-                    for c, args in program.kernels[group.trisc_kernel_index].runtime_args:
-                        print(f"TRISC ({c.x},{c.y}): {args}")
-            """
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)

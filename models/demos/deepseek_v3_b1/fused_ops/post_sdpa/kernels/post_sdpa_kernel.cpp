@@ -330,8 +330,13 @@ void kernel_main() {
                 .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-                .rta_offset = per_core_rta_arg_idx,
             };
+            if constexpr (ReaderCTArgs::position_enabled) {
+                reader_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            }
 
             unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
             unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_ms, 1);
@@ -408,7 +413,15 @@ void kernel_main() {
                 1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
-            Worker::ComputeArgs compute_args{};
+            Worker::ComputeArgs compute_args;
+            if constexpr (ComputeCTArgs::position_enabled) {
+                uint32_t per_core_rta_arg_idx = 0;
+                compute_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            }
             Worker::Op<ComputeCTArgs> sdpa_worker;
             sdpa_worker(compute_args);
 #endif

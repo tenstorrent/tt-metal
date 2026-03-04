@@ -133,7 +133,7 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(10),  // ring_index
             get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
             get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
-            per_core_rta_arg_idx,
+            per_core_rta_arg_idx,              // TODO: THIS IS WRONG if broadcast core has other RTAs before
         };
     }
 
@@ -338,8 +338,13 @@ void kernel_main() {
             .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .rta_offset = per_core_rta_arg_idx,
         };
+        if constexpr (SdpaReduceWorkerCTArgs::position_enabled) {
+            sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
@@ -439,12 +444,14 @@ void kernel_main() {
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     if constexpr (Core::is_ccl_sender_core) {
+        DPRINT << " CCL SENDER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_sender_args = {
             .tensor_address = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
     }
 
     if constexpr (Core::is_ccl_receiver_core) {
+        DPRINT << " CCL RECEIVER ARGS " << per_core_rta_arg_idx << ENDL();
         ccl_receiver_args = {
             .sender_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
@@ -608,6 +615,7 @@ void kernel_main() {
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
+        DPRINT << " THIS IS MLA CORE " << ENDL();
         constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
         uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -730,6 +738,10 @@ void kernel_main() {
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .rta_offset = per_core_rta_arg_idx,
         };
+        DPRINT << " SDPA REDUCE FORWARDER ARGS " << per_core_rta_arg_idx << " "
+               << sdpa_reduce_forwarder_args.buffer_base << " " << sdpa_reduce_forwarder_args.buffer_offset << " "
+               << sdpa_reduce_forwarder_args.r1_sem_addr << " " << sdpa_reduce_forwarder_args.r2_sem_addr << " "
+               << sdpa_reduce_forwarder_args.rta_offset << ENDL();
     }
 
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
@@ -1043,7 +1055,19 @@ void kernel_main() {
         get_named_compile_time_arg_val("sdpa_position_enabled"),
         get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
         1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
-    deepseek_b1_ops::SdpaReduceWorker::ComputeArgs sdpa_reduce_worker_args{.rta_offset = per_core_rta_arg_idx};
+    deepseek_b1_ops::SdpaReduceWorker::ComputeArgs sdpa_reduce_worker_args;
+    if constexpr (Core::is_sdpa_worker_core) {
+        DPRINT << " SDPA REDUCE WORKER ARGS " << per_core_rta_arg_idx << " " << ENDL();
+        DPRINT << " SDPA REDUCE WORKER ARGS " << get_arg_val<uint32_t>(per_core_rta_arg_idx) << " " << ENDL();
+        DPRINT << " SDPA REDUCE WORKER ARGS " << get_arg_val<uint32_t>(per_core_rta_arg_idx + 1) << " " << ENDL();
+        DPRINT << " SDPA REDUCE WORKER ARGS " << get_arg_val<uint32_t>(per_core_rta_arg_idx + 2) << " " << ENDL();
+        DPRINT << " SDPA REDUCE WORKER ARGS " << get_arg_val<uint32_t>(per_core_rta_arg_idx + 3) << " " << ENDL();
+        sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+    }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<0, 0, 0>;
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
@@ -1259,7 +1283,7 @@ void kernel_main() {
             mcast2;
         mcast2(mcast2_args);
     }
-    mcast.teardown();
+    //    mcast.teardown();
 
     DPRINT << " DONE MCAST2" << ENDL();
     // ========================================================================
@@ -1440,7 +1464,7 @@ void kernel_main() {
              deepseek_b1_ops::Mcast::
                  Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
                      mcast3;
-             mcast3.init(mcast3_args);
+             // mcast3.init(mcast3_args);
              {
                  DeviceZoneScopedN("MCAST3");
                  mcast3(mcast3_args);

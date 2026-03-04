@@ -53,8 +53,13 @@ void kernel_main() {
             .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .rta_offset = per_core_rta_arg_idx,
         };
+        if constexpr (ReaderCTArgs::position_enabled) {
+            reader_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
         Worker::Op<ReaderCTArgs> op;
         op(reader_args);
     } else {
@@ -177,7 +182,15 @@ void kernel_main() {
         // Initialize compute engine for unified kernel
         deepseek_compute_kernel_init();
 
-        Worker::ComputeArgs compute_args{};
+        Worker::ComputeArgs compute_args;
+        if constexpr (ComputeCTArgs::position_enabled) {
+            uint32_t per_core_rta_arg_idx = 0;
+            compute_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            compute_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        }
         Worker::Op<ComputeCTArgs> op;
         op(compute_args);
     }

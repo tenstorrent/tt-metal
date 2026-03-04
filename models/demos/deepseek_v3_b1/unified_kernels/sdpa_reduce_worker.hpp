@@ -527,7 +527,11 @@ struct SdpaReduceWorker {
         uint32_t r2_neighbor_sem_addr;
         uint32_t r1_recv_buffer_addr;
         uint32_t r2_recv_buffer_addr;
-        uint32_t rta_offset = 0;
+        // Position args (only meaningful when position_enabled CTArg is set)
+        uint32_t pos_addr;
+        uint32_t r1_neighbor_device_idx;
+        uint32_t r2_neighbor_device_idx;
+        uint32_t r2_neighbor_r1_neighbor_idx;
     };
 
     // Writer args (BRISC): fabric destinations, core coordinates, forwarder config
@@ -555,9 +559,13 @@ struct SdpaReduceWorker {
         uint32_t scatter_arrival_sem_addr;
     };
 
-    // Compute args (TRISC): rta_offset for position args in fused kernels
+    // Compute args (TRISC): position validity for SDPA reduction
     struct ComputeArgs {
-        uint32_t rta_offset = 0;
+        uint32_t pos_addr;
+        uint32_t device_idx;
+        uint32_t r1_neighbor_device_idx;
+        uint32_t r2_neighbor_device_idx;
+        uint32_t r2_neighbor_r1_neighbor_idx;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -614,21 +622,16 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (CTArgs::position_enabled) {
-                size_t arg_idx = args.rta_offset;
-                uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
-                // Read position_id from HEIGHT_SHARDED L1 tensor
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
                 uint32_t position_id = pos_ptr[0];
-                DPRINT << " SDPA position_id=" << position_id << " r1_neighbor_device_idx=" << r1_neighbor_device_idx
-                       << " r2_neighbor_device_idx=" << r2_neighbor_device_idx
-                       << " r2_neighbor_r1_neighbor_idx=" << r2_neighbor_r1_neighbor_idx << ENDL();
+                DPRINT << " SDPA position_id=" << position_id
+                       << " r1_neighbor_device_idx=" << args.r1_neighbor_device_idx
+                       << " r2_neighbor_device_idx=" << args.r2_neighbor_device_idx
+                       << " r2_neighbor_r1_neighbor_idx=" << args.r2_neighbor_r1_neighbor_idx << ENDL();
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
-                r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
-                r2_neighbor_r1_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
-                                       (position_id >= r2_neighbor_r1_neighbor_idx * chunk);
+                r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
+                r2_neighbor_r1_valid = (position_id >= args.r2_neighbor_device_idx * chunk) ||
+                                       (position_id >= args.r2_neighbor_r1_neighbor_idx * chunk);
             }
 
             // Prepare R1 neighbor data for compute
@@ -660,6 +663,9 @@ struct SdpaReduceWorker {
         // BRISC (Writer) - sends data to neighbors, scatters output
         // ==================================================================
         void writer_impl(const WriterArgs& args) {
+            DPRINT << " SDPA REDUCE WORKER ARGS " << args.r1_dst_mesh_id << " " << args.r1_dst_chip_id << " "
+                   << args.r1_neighbor_dst_addr << " " << args.r1_neighbor_sem_addr << " " << args.r2_dst_mesh_id << " "
+                   << args.r2_dst_chip_id << " " << args.r2_neighbor_dst_addr << " " << ENDL();
             using Sender = SdpaChunkSender<
                 CTArgs::cb_packet_slot,
                 CTArgs::l1_alignment,
@@ -767,25 +773,23 @@ struct SdpaReduceWorker {
             [[maybe_unused]] uint32_t position_id = 0;
 
             if constexpr (CTArgs::position_enabled) {
-                size_t arg_idx = args.rta_offset;
-                uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
-                device_idx = get_arg_val<uint32_t>(arg_idx++);
-                r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
-                uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
+                device_idx = args.device_idx;
+                r1_neighbor_device_idx = args.r1_neighbor_device_idx;
+                r2_neighbor_device_idx = args.r2_neighbor_device_idx;
+
+                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
+                DPRINT << " SDPA pos_ptr=" << args.pos_addr << ENDL();
+                position_id = pos_ptr[0];
+
                 DPRINT << " SDPA position_id=" << position_id << " r1_neighbor_device_idx=" << r1_neighbor_device_idx
                        << " r2_neighbor_device_idx=" << r2_neighbor_device_idx
-                       << " r2_neighbor_r1_neighbor_idx=" << r2_neighbor_r1_neighbor_idx << ENDL();
-
-                // Read position_id from HEIGHT_SHARDED L1 tensor
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
-                position_id = pos_ptr[0];
+                       << " r2_neighbor_r1_neighbor_idx=" << args.r2_neighbor_r1_neighbor_idx << ENDL();
 
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 local_valid = (position_id >= device_idx * chunk);
                 r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
                 r2_neighbor_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
-                                    (position_id >= r2_neighbor_r1_neighbor_idx * chunk);
+                                    (position_id >= args.r2_neighbor_r1_neighbor_idx * chunk);
             }
             UNPACK(DPRINT << (uint32_t)local_valid << ENDL());
             UNPACK(DPRINT << (uint32_t)r1_neighbor_valid << ENDL());

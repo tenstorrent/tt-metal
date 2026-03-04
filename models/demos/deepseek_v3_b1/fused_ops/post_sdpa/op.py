@@ -82,7 +82,9 @@ def _extend_runtime_args(existing_rt_args, rt_args, core_range_set):
     """
     for coord, args in rt_args:
         if core_range_set.contains(coord):
+            print(f"extend {coord} {existing_rt_args[coord.x][coord.y]}")
             existing_rt_args[coord.x][coord.y].extend(list(args))
+            print(f"after extend {coord} {existing_rt_args[coord.x][coord.y]}")
 
 
 class PostSDPA:
