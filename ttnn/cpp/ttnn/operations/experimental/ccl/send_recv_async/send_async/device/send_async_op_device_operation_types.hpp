@@ -13,7 +13,7 @@
 namespace ttnn::experimental::prim {
 
 struct SendAsyncParams {
-    const tt::tt_metal::distributed::MeshSocket mesh_socket;  // No default constructor
+    const tt::tt_metal::distributed::MeshSocket mesh_socket;  // No default contructor
     SendAsyncParams(const tt::tt_metal::distributed::MeshSocket& mesh_socket) : mesh_socket(mesh_socket) {}
     // Add attributes method for reflection
     auto attributes() const {

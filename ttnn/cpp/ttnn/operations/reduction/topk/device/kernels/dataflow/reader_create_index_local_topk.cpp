@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t start_wt = get_arg_val<uint32_t>(2);        // Starting width tile index for this core
     const bool is32_bit_data = get_arg_val<uint32_t>(3) == 1;  // Flag indicating if indices data is 32-bit
 
-    // Compile time args
+    // Compiletime args
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);  // Input values circular buffer
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);  // Generated indices circular buffer
     constexpr uint32_t Ht = get_compile_time_arg_val(2);         // Total height tiles in tensor

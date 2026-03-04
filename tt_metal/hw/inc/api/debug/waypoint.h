@@ -9,7 +9,7 @@
 // Each riscv processor has a 4 byte debug status mailbox in L1
 // Use the macro WATCHER_WAYPOINT(...) to log up to 4 characters in the mailbox
 // The host watcher thread prints these periodically
-// All functionality gated behind defined WATCHER_ENABLED
+// All functionaly gated behind defined WATCHER_ENABLED
 //
 #pragma once
 

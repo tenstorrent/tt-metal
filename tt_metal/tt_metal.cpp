@@ -1491,7 +1491,7 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
-        "Mismatch between number of cores {} and number of runtime args {} getting updated",
+        "Mistmatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
     auto k = program.impl().get_kernel(kernel);

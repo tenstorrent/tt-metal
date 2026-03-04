@@ -76,7 +76,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     // Need another scratch CB for output_grad reading data from DRAM into L1.
     CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_8, 1});
 
-    // create read/write kernel
+    // create read/wrtie kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);

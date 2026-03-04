@@ -37,7 +37,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
     // This approximation defines erfinv(x) as:
     // erfinv(x) = sqrt( - 2/(pi*a) - log(1 - x^2)/2 + sqrt( ( 2/(pi*a) + log(1 - x^2)) ^2 - 1/a log(1 - x^2)) )
-    // Where a is a polynomial coefficient used in the approximation of the error function (and reused in inverse error
+    // Where a is a polynomial coefficient used in the approximation of the error function (and re-used in inverse error
     // function)
 
     // Compute log(1 - x^2)

@@ -82,9 +82,9 @@ void noc_address_translation_table_routing_table_entry(uint32_t entry, uint32_t 
 // Read back routing registers for the specified entry
 void noc_address_translation_table_routing_table_entry_read(uint32_t entry, uint32_t& compare, uint32_t routing[]);
 
-// Write and entry into the endpoint table.
+// Wrtie and entry into the endpoint table.
 // entry - a value between 0 to 1023
-// x - The translated (physical) x coordinate
+// x - The translated (physical) x coodinate
 // y - The translated (physical) y coordinate
 void noc_address_translation_table_endpoint_table_entry(uint32_t entry, uint32_t x, uint32_t y);
 

@@ -298,7 +298,7 @@ void kernel_main() {
         reconfig_data_format(cb_exps, cb_recipsumexps);
         pack_reconfig_data_format(cb_out0);
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
-        // by now we already did a cumulative wait for Wt tiles in cb_exps
+        // by now we already did a umulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             tile_regs_acquire();

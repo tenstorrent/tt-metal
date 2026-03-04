@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// this programming example is based on the vecadd single core example in the
+// this programing example is based on the vecadd single core example in the
 // contributed folder it illustarted using multiple cores to perform vector
 // addition the program will use 4 cores to perform the vector addition
 #include <tt-metalium/bfloat16.hpp>
@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
 
     // A Tensix core is made up with 5 processors. 2 data movement processors,
     // and 3 compute processors. The 2 data movement processors act independent
-    // to other cores. And the 3 compute processors act together (hence 1 kernel
+    // to other cores. And the 3 compute processors act together (hence 1 kerenl
     // for compute). There is no need to explicitly parallelize the compute
     // kernels. Unlike traditional CPU/GPU style SPMD programming, the 3 compute
     // processors moves data from SRAM into the FPU(tensor engine)/SFPU(SIMD

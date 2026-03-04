@@ -61,7 +61,7 @@ void kernel_main() {
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
-    // clean up semaphore – needs to be done before the sender side semaphore increment if we're reusing the semaphore
+    // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
     // in subsequent program cache hits
     noc_semaphore_set(local_semaphore_ptr, 0);
 

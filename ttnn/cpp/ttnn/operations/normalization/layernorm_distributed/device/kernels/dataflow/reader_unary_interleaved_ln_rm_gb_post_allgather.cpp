@@ -163,7 +163,7 @@ void kernel_main() {
 }
 template <uint32_t t>
 void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) {
-    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);  // reads 32 elements (64 bytes) 16 useful, the next bad
+    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);  // reads 32 elements (64 bytes) 16 usefull, the next bad
     if constexpr (t == 0) {                              // TILE LAYOUT
         noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);  // Fills the second face with next 16 elements
     } else if constexpr (t == 1) {                                   // ROW MAJOR LAYOUT

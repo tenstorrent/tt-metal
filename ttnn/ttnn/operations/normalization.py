@@ -321,7 +321,7 @@ def dram_group_norm_params_from_torch(
     """
     Create group norm parameters from torch in row major layout. It currently supports sharding along 1 mesh dimension. Sharding along 2 dimensions to be added as needed.
     Args:
-        torch_params: List[torch.Tensor] or torch.Tensor. This is weight and or bias for the affine transformation.
+        torch_params: List[torch.Tensor] or torch.Tensor. This is weith and or bias for the affine transformation.
         channels_per_device: Number of channels per device if using multi-device else number of channels
         groups_per_device: Number of groups per device if using multi-device else number of groups
         device: Device to create the group norm parameters on. Set to None if setting up on host. Must be provided if core_grid is None
@@ -337,7 +337,7 @@ def dram_group_norm_params_from_torch(
     """
     import torch
 
-    assert core_grid or device, "Either core_grid or device must be provided to determine virtual columns"
+    assert core_grid or device, "Either core_grid or device must be provided to determin virtual columns"
     assert (
         channels_per_device % 32 == 0 == channels_per_device % groups_per_device
     ), f"channels_per_device {channels_per_device} must be divisible by 32 and groups_per_device {groups_per_device}"

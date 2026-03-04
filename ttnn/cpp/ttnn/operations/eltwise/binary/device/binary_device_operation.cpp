@@ -362,7 +362,7 @@ BinaryDeviceOperation::create_op_performance_model(
     const auto& output_tensor = tensor_return_value;
     // GS specific parameters
     // 80 B/cycle unpacker BW shared
-    // 128 datums per cycle math, but unpacker can't keep up
+    // 128 datums per cycle math, but unpacker cant keep up
     constexpr uint32_t num_cores = 9 * 12;
 
     uint32_t total_bytes = 0;

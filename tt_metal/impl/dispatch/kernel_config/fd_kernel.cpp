@@ -31,7 +31,7 @@ ChipId FDKernel::GetUpstreamDeviceId(const ContextDescriptor& descriptor, ChipId
     for (auto tunnel : descriptor.cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
-                // MMIO device doesn't have an upstream, just return itself
+                // MMIO device doesn't have an upsream, just return itself
                 return (idx == 0) ? device_id : tunnel[idx - 1];
             }
         }

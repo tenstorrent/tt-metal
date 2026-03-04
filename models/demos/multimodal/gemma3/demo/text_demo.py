@@ -195,7 +195,7 @@ def load_inputs(user_input, batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengths
+    # It clips the excerpt to the max length provided to allow testing different long context lengthts
     for i in range(batch):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:

@@ -40,9 +40,9 @@
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 #define MEM_LOCAL_BASE 0x0802000
 
-// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
-// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
 // NUM_L1_BANKS)
 #define MEM_BANK_OFFSET_SIZE 1024
 
@@ -84,7 +84,7 @@
 #define MEM_L1_ARC_FW_SCRATCH_SIZE 16
 
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-// time. If one port on the recipient has no back-pressure then the transaction will hang because there is no mechanism
+// time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 // Each noc has 16B to store value written out by inline writes.

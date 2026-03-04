@@ -29,12 +29,12 @@ void multicast_data(
             noc_async_write_multicast_loopback_src(
                 src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
         } else {
-            // In this case sender core is the only receiver in the grid,
+            // In this case sender core is the only reciever in the grid,
             // we can't use the multicast_loopback_src (hang)
             noc_async_write(get_noc_addr(src_l1_addr), get_noc_addr(dst_l1_addr), total_bytes);
         }
     } else {
-        // If sender core is not the receiver core as well we can't use the loopback mcast. (hang)
+        // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
         noc_async_write_multicast(src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
     }
 }
@@ -45,7 +45,7 @@ void multicast_data(
 // multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
 // NOC_MAX_BURST_SIZE size
 // It calls the multicast_data function for each chunk of maximum size NOC_MAX_BURST_SIZE bytes.
-// Said function does mcast loopback when the sender core is also a receiver core (it is both in output and input grids)
+// Said function does mcast loopback when the sender core is also a receiver core (it is both in ouput and input grids)
 // or mcast when the sender core is not a receiver core (it is only present in the input grid, mcast loopback will hang
 // if the core isn't one of receivers) or just local write when it is in both input and output grids but is the only
 // receiver core (will hang if mcast loopback is used)

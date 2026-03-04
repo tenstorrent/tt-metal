@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
-// arrived at (at least one of) the intended destination(s)
+// arrived at (atleast one of) the intended destination(s)
 static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;

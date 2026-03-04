@@ -449,7 +449,7 @@ class TtBEVFormerLayer:
                 ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
-            # spatial cross attention
+            # spaital cross attention
             elif layer == "cross_attn":
                 query = self.attentions[attn_index](
                     query,

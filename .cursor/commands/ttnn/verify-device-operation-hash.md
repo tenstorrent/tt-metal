@@ -306,7 +306,7 @@ Test that programs with different structure create separate cache entries:
 
 ```python
 def test_operation_cache_hash(device, ...):
-    # Test that program cache does not reuse the same program for different inputs
+    # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
     for i in range(2):

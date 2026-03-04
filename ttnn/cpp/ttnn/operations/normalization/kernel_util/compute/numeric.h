@@ -120,7 +120,7 @@ inline void accumulate_compute_loop(
  * @tparam Epilogue The type of the epilogue functor
  * @tparam AdditionalCBs The types of the additional input CBs (must be uint32_t)
  *
- * @note dst0 is used to accumulate the sum, so it
+ * @note dst0 is used to accumuate the sum, so it
  * will be overwritten here @anchor dst0_overwritten
  * @note It is up to the caller to ensure that the scalar tile
  * is correctly populated. If it doesn't contain 1's, the result

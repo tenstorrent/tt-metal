@@ -178,7 +178,7 @@ public:
 
     static std::uint32_t l1_size() { return SIM_L1_SIZE; }
 
-    // MM July 19 2022: In a desperate bid to fix compiler errors, I just
+    // MM July 19 2022: In a desperate bid to fix copmiler errors, I just
     // copy-pasted the version of these NOC functions directly from c_tensix_core.h
     // in blackhole. Fingers crossed...
     /*
@@ -355,7 +355,7 @@ inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint addr) { return fifo_rd
 inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint addr) { return fifo_endptr(l1_cast<uint*>(addr)); }
 
 // NOC API
-// MM July 19 2022: In a desperate bid to fix compiler errors, I just
+// MM July 19 2022: In a desperate bid to fix copmiler errors, I just
 // copy-pasted the version of these NOC functions directly from c_tensix_core.h
 // in blackhole. Fingers crossed...
 /*
@@ -414,7 +414,7 @@ inline std::uint32_t c_tensix_core::noc_id()
 */
 
 inline void c_tensix_core::initialize_tensix_semaphores(vptr_uint instrn_buf) {
-    // Initialize semaphores - check if we need to do this still
+    // Initialize sempahores - check if we need to do this still
     // math->packer semaphore - max set to 1, as double-buffering is disabled by default
     ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf);
     ex_sem_init(ckernel::semaphore::UNPACK_TO_DEST, 1, 0, instrn_buf);
