@@ -29,9 +29,6 @@ void kernel_main() {
     constexpr volatile uint32_t num_unique_rt_args = get_compile_time_arg_val(5);
     constexpr volatile uint32_t num_common_rt_args = get_compile_time_arg_val(6);
     constexpr volatile uint32_t page_size = get_compile_time_arg_val(7);
-    constexpr volatile uint32_t device_id = get_compile_time_arg_val(8);
-
-    DPRINT << "I am running on device id " << device_id << ENDL();
 
     for (uint32_t i = 0; i < num_cbs; i++) {
         tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);

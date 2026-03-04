@@ -6,7 +6,6 @@
 #include <gtest/gtest.h>
 #include <fstream>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -30,7 +29,8 @@ namespace tt::tt_metal {
 // fires during device open and populates chip_ids from the stored mesh_coords.
 class DPrintMeshCoordsFixture : public DPrintMeshFixture {
 public:
-    ChipId target_chip_id = -1;
+    // The global system-mesh coordinate currently targeted by the DPRINT filter.
+    std::pair<uint32_t, uint32_t> target_coord = {0, 0};
 
 protected:
     void ExtraSetUp() override;
@@ -45,8 +45,23 @@ std::string ReadLogFile(const std::string& path) {
     return {std::istreambuf_iterator<char>(f), {}};
 }
 
-// Trailing '\n' (from ENDL()) prevents "device_id=1" matching inside "device_id=16".
-std::string DeviceIdToken(ChipId chip_id) { return fmt::format("device_id={}\n", chip_id); }
+// Returns a unique search token for a device's DPRINT line.
+// The trailing '\n' (produced by ENDL()) prevents "(0,1)" matching inside "(0,10)".
+std::string MeshCoordToken(uint32_t row, uint32_t col) {
+    return fmt::format("mesh_coord=({},{})\n", row, col);
+}
+
+// Returns the global system-mesh coordinate for the given local chip_id.
+std::pair<uint32_t, uint32_t> GetGlobalCoord(ChipId chip_id) {
+    auto mapped = distributed::SystemMesh::instance().get_mapped_devices(std::nullopt);
+    for (const auto& coord : distributed::MeshCoordinateRange(mapped.mesh_shape)) {
+        auto idx = coord.to_linear_index(mapped.mesh_shape);
+        if (mapped.device_ids[idx].is_local() && *mapped.device_ids[idx] == chip_id) {
+            return {coord[0], coord[1]};
+        }
+    }
+    TT_THROW("No global mesh coord found for chip_id={}", chip_id);
+}
 
 // Configures rtopts to restrict DPRINT to a single mesh coordinate.
 // Called after each MetalContext teardown to restore the intended filter before device open.
@@ -64,87 +79,81 @@ void ConfigureDPrintForCoord(
     rtopts.set_feature_all_chips(kDprint, false);
 }
 
-// Builds a MeshWorkload where each device DPRINTs its physical chip_id.
-distributed::MeshWorkload BuildDeviceIdWorkload(
+// Builds a MeshWorkload where each device DPRINTs its global mesh coordinate (row, col).
+// The kernel takes the global system-mesh row and col of each device as compile-time args,
+// so the DPRINT output directly matches what was configured in the DPRINT filter.
+distributed::MeshWorkload BuildMeshCoordWorkload(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
     constexpr CoreCoord kCore = {0, 0};
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        ChipId chip_id = mesh_device->get_device(coord)->id();
+        auto [row, col] = GetGlobalCoord(mesh_device->get_device(coord)->id());
         Program program;
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_device_id.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_mesh_coord.cpp",
             kCore,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = {static_cast<uint32_t>(chip_id)}});
+                .compile_args = {row, col}});
         workload.add_program(distributed::MeshCoordinateRange(coord, coord), std::move(program));
     }
     return workload;
 }
 
 // Runs a kernel on every device (log accumulates across all), then asserts that only
-// fixture->target_chip_id produced output and all others were silenced by the DPRINT filter.
+// fixture->target_coord produced output and all others were silenced by the DPRINT filter.
 void RunFilteringTest(
     DPrintMeshCoordsFixture* fixture,
     const std::vector<std::shared_ptr<distributed::MeshDevice>>& all_devices) {
     for (const auto& mesh_device : all_devices) {
-        auto workload = BuildDeviceIdWorkload(mesh_device);
+        auto workload = BuildMeshCoordWorkload(mesh_device);
         fixture->RunProgram(mesh_device, workload);
     }
 
     const std::string log = ReadLogFile(fixture->dprint_file_name);
+    auto [trow, tcol] = fixture->target_coord;
 
-    EXPECT_NE(log.find(DeviceIdToken(fixture->target_chip_id)), std::string::npos)
-        << "Expected DPRINT output from target chip " << fixture->target_chip_id << " not found.\n"
+    EXPECT_NE(log.find(MeshCoordToken(trow, tcol)), std::string::npos)
+        << "Expected DPRINT from target coord (" << trow << "," << tcol << ") not found.\n"
         << "Log:\n" << log;
 
     for (const auto& mesh_device : all_devices) {
-        ChipId chip_id = mesh_device->get_devices()[0]->id();
-        if (chip_id == fixture->target_chip_id) {
+        auto [row, col] = GetGlobalCoord(mesh_device->get_devices()[0]->id());
+        if (std::make_pair(row, col) == fixture->target_coord) {
             continue;
         }
-        EXPECT_EQ(log.find(DeviceIdToken(chip_id)), std::string::npos)
-            << "Unexpected DPRINT output from non-target chip " << chip_id
-            << " (only chip " << fixture->target_chip_id << " should print).";
+        EXPECT_EQ(log.find(MeshCoordToken(row, col)), std::string::npos)
+            << "Unexpected DPRINT from coord (" << row << "," << col << ") "
+            << "(only coord (" << trow << "," << tcol << ") should print).";
     }
 }
 
-// Runs a kernel that DPRINTs chip_id, verifies the output appears in the log, then
-// cross-checks that resolve_mesh_coords_to_chip_ids maps the device's coord back to the same id.
+// Runs a kernel that DPRINTs the device's global mesh coord, verifies the output appears,
+// then cross-checks that resolve_mesh_coords_to_chip_ids maps that coord back to the same chip_id.
 void RunAllChipsVerificationTest(
     DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     constexpr auto kDprint = tt::llrt::RunTimeDebugFeatureDprint;
     ChipId chip_id = mesh_device->get_devices()[0]->id();
+    auto [row, col] = GetGlobalCoord(chip_id);
 
-    auto workload = BuildDeviceIdWorkload(mesh_device);
+    auto workload = BuildMeshCoordWorkload(mesh_device);
     fixture->RunProgram(mesh_device, workload);
 
     const std::string log = ReadLogFile(fixture->dprint_file_name);
-    EXPECT_NE(log.find(DeviceIdToken(chip_id)), std::string::npos)
-        << "Missing DPRINT output for chip_id=" << chip_id;
+    EXPECT_NE(log.find(MeshCoordToken(row, col)), std::string::npos)
+        << "Missing DPRINT for coord (" << row << "," << col << "), chip_id=" << chip_id;
 
-    auto mapped = distributed::SystemMesh::instance().get_mapped_devices(std::nullopt);
-    std::optional<std::pair<uint32_t, uint32_t>> found_coord;
-    for (const auto& coord : distributed::MeshCoordinateRange(mapped.mesh_shape)) {
-        auto linear_idx = coord.to_linear_index(mapped.mesh_shape);
-        if (mapped.device_ids[linear_idx].is_local() && *mapped.device_ids[linear_idx] == chip_id) {
-            found_coord = {coord[0], coord[1]};
-            break;
-        }
-    }
-    ASSERT_TRUE(found_coord.has_value()) << "No mesh coord found for chip_id=" << chip_id;
-
+    // Cross-check: resolve (row,col) → chip_id via the rtoptions API.
     auto& rtopts = MetalContext::instance().rtoptions();
-    rtopts.set_feature_mesh_coords(kDprint, {*found_coord});
+    rtopts.set_feature_mesh_coords(kDprint, {{row, col}});
     rtopts.resolve_mesh_coords_to_chip_ids(distributed::SystemMesh::instance());
 
-    const auto& resolved_ids = rtopts.get_feature_chip_ids(kDprint);
-    ASSERT_EQ(resolved_ids.size(), 1u) << "Expected exactly one chip_id for chip_id=" << chip_id;
-    EXPECT_EQ(resolved_ids[0], chip_id)
-        << "resolve_mesh_coords_to_chip_ids mismatch: expected " << chip_id << " got " << resolved_ids[0];
+    const auto& resolved = rtopts.get_feature_chip_ids(kDprint);
+    ASSERT_EQ(resolved.size(), 1u) << "Expected exactly one chip_id for coord (" << row << "," << col << ")";
+    EXPECT_EQ(resolved[0], chip_id)
+        << "Coord (" << row << "," << col << ") resolved to wrong chip_id";
 
     rtopts.set_feature_mesh_coords(kDprint, {});
     rtopts.set_feature_chip_ids(kDprint, {});
@@ -167,36 +176,29 @@ void DPrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardow
 
 // Test 1: Only the device at mesh coord (0,0) should produce DPRINT output.
 TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersCorrectDevice) {
-    const auto& chip_ids =
-        MetalContext::instance().rtoptions().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
-    ASSERT_FALSE(chip_ids.empty()) << "No chip_id resolved for mesh coord (0,0).";
-    this->target_chip_id = chip_ids[0];
+    // ExtraSetUp configured (0,0) as the DPRINT target.
+    this->target_coord = {0, 0};
     CMAKE_UNIQUE_NAMESPACE::RunFilteringTest(this, this->devices_);
 }
 
-// Test 2: For every mesh coordinate, restrict DPRINT to that chip and verify filtering.
+// Test 2: For every mesh coordinate, restrict DPRINT to that coord and verify filtering.
 // Each iteration tears down MetalContext and reopens devices so resolve_mesh_coords_to_chip_ids
 // fires fresh with the new target coord.
 TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersAllCoords) {
-    struct LocalDevice {
-        uint32_t row, col;
-        ChipId chip_id;
-    };
-
     // Snapshot before any teardown invalidates the SystemMesh reference.
-    std::vector<LocalDevice> local_devices;
+    std::vector<std::pair<uint32_t, uint32_t>> local_coords;
     {
         auto mapped = distributed::SystemMesh::instance().get_mapped_devices(std::nullopt);
         for (const auto& coord : distributed::MeshCoordinateRange(mapped.mesh_shape)) {
             auto linear_idx = coord.to_linear_index(mapped.mesh_shape);
             if (mapped.device_ids[linear_idx].is_local()) {
-                local_devices.push_back({coord[0], coord[1], *mapped.device_ids[linear_idx]});
+                local_coords.push_back({coord[0], coord[1]});
             }
         }
     }
 
-    for (size_t i = 0; i < local_devices.size(); ++i) {
-        auto [row, col, target_chip] = local_devices[i];
+    for (size_t i = 0; i < local_coords.size(); ++i) {
+        auto [row, col] = local_coords[i];
 
         if (i > 0) {
             MeshDispatchFixture::TearDown();
@@ -206,20 +208,21 @@ TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersAllCoords) {
             MeshDispatchFixture::SetUp();
         }
 
-        const auto& chip_ids =
-            MetalContext::instance().rtoptions().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
-        ASSERT_FALSE(chip_ids.empty()) << "No chip_id resolved for coord (" << row << "," << col << ").";
-        ASSERT_EQ(chip_ids[0], target_chip)
-            << "resolve_mesh_coords_to_chip_ids returned wrong chip for (" << row << "," << col << ")";
+        ASSERT_FALSE(
+            MetalContext::instance()
+                .rtoptions()
+                .get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint)
+                .empty())
+            << "No chip resolved for coord (" << row << "," << col << ").";
 
-        this->target_chip_id = target_chip;
-        log_info(tt::LogTest, "Filtering test: coord ({},{}) → chip_id={}", row, col, target_chip);
+        this->target_coord = {row, col};
+        log_info(tt::LogTest, "Filtering test: coord ({},{})", row, col);
         CMAKE_UNIQUE_NAMESPACE::RunFilteringTest(this, this->devices_);
         MetalContext::instance().dprint_server()->clear_log_file();
     }
 }
 
-// Test 3: Every mesh coordinate resolves to the correct chip_id and the device prints its id.
+// Test 3: Every mesh coordinate resolves to the correct chip_id and the device prints its coord.
 TEST_F(DPrintMeshFixture, TensixTestDprintMeshCoordsAllDevicesMapping) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunAllChipsVerificationTest, mesh_device);
