@@ -8,6 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn {
 namespace transformer {
@@ -85,7 +86,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     CoreCoord ccl_core_grid_offset,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 
 ttnn::Tensor flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,

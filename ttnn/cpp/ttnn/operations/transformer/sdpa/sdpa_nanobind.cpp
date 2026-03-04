@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -252,6 +253,9 @@ void bind_sdpa(nb::module_& mod) {
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
+            use_column_major_ccl (bool, optional): If True, allocate CCL worker cores in column-major order.
+                This places CCL workers in a column (useful when reserving the last column for CCL).
+                If False (default), uses row-major allocation. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -285,7 +289,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("ccl_core_grid_offset"));
+        nb::arg("ccl_core_grid_offset"),
+        nb::arg("use_column_major_ccl") = false);
 
     const auto* const mla_doc =
         R"doc(

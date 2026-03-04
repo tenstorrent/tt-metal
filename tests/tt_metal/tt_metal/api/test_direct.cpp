@@ -101,6 +101,7 @@ bool reader_only(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_core_data;
     // tt_metal::detail::ReadFromBuffer(l1_buffer, dest_core_data);
@@ -171,6 +172,7 @@ bool writer_only(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -270,6 +272,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -369,6 +373,16 @@ bool reader_datacopy_writer(
         const uint32_t input0_cb_index = 0;
         const uint32_t output_cb_index = 16;
 
+        tt_metal::CircularBufferConfig l1_input_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
+                .set_page_size(input0_cb_index, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input_cb_config);
+
+        tt_metal::CircularBufferConfig l1_output_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
+                .set_page_size(output_cb_index, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
+
         reader_kernel = tt_metal::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
@@ -431,6 +445,9 @@ bool reader_datacopy_writer(
 
     auto blocking = device->arch() == ARCH::QUASAR;
     distributed::EnqueueMeshWorkload(cq, workload, blocking);
+    if (not blocking) {
+        distributed::Finish(cq);
+    }
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);

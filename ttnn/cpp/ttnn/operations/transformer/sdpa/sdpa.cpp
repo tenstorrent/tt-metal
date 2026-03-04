@@ -170,7 +170,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const CoreCoord ccl_core_grid_offset,
     std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -192,7 +193,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         ccl_core_grid_offset,
         subdevice_id,
         scale,
-        compute_kernel_config);
+        compute_kernel_config,
+        core_allocation_strategy);
     return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
 }
 

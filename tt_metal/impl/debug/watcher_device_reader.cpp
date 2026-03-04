@@ -34,7 +34,6 @@
 #include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
-#include "debug_helpers.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -64,6 +63,13 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            auto num_processors = hal.get_num_risc_processors(core_type);
+            TT_FATAL(
+                processor_index < num_processors,
+                "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
+                processor_index,
+                core_type,
+                num_processors - 1);
             return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
         case HalProgrammableCoreType::ACTIVE_ETH: {
@@ -204,6 +210,10 @@ string get_l1_target_str(
 
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
+    TT_FATAL(
+        launch_msg_read_ptr < mbox_data.launch().size(),
+        "No launch message found at read pointer {}. Was TT-Metalium initialized on this system?",
+        launch_msg_read_ptr);
     if (mbox_data.launch()[launch_msg_read_ptr].kernel_config().enables() == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + dev_msgs::launch_msg_buffer_num_entries) %
                               dev_msgs::launch_msg_buffer_num_entries;
@@ -263,6 +273,7 @@ private:
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
+    void SetEnableFlags(uint32_t enables) const;
 
     Core(
         CoreCoord virtual_coord,
@@ -310,6 +321,13 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, ChipId device_id, const std::v
                 sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
+    }
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t core_count = hal.get_programmable_core_type_count();
+    for (uint32_t i = 0; i < core_count; i++) {
+        auto core_type = hal.get_programmable_core_type(i);
+        symbols_info_cache_.emplace(core_type, get_enable_symbols_info(core_type));
     }
 }
 
@@ -710,6 +728,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (ethernet send with L1 source overflow).";
             break;
+        case dev_msgs::DebugSanitizeCBOutOfBounds:
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (NOC transaction overflows a circular buffer).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -883,6 +905,51 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     }
 }
 
+void WatcherDeviceReader::Core::SetEnableFlags(uint32_t enables) const {
+    const auto& hal = MetalContext::instance().hal();
+    // Get enable flags symbols for watcher log
+    const auto& symbols = reader_.get_cached_enable_symbols(programmable_core_type_);
+    TT_ASSERT(!symbols.empty(), "No enable symbols found for core type {}", static_cast<int>(programmable_core_type_));
+
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        // On Quasar, we use a new format to represent enable/disable: hex bitmask for all processor types
+        if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
+            // Enables bits: [0, 1, .. dm_count): one per DM processor
+            uint32_t dm_count = hal.get_processor_types_count(
+                programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::DM));
+            uint32_t num_fw_binaries = hal.get_processor_class_num_fw_binaries(
+                hal.get_programmable_core_type_index(programmable_core_type_),
+                static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+            uint32_t num_triscs = hal.get_processor_types_count(
+                programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+            uint32_t num_clusters = num_triscs / num_fw_binaries;  // Neo0, Neo1, Neo2, Neo3
+
+            fprintf(reader_.f, "%s%X ", symbols[0].c_str(), enables & ((1u << dm_count) - 1));
+            uint32_t cluster_val = 0;
+
+            // On Quasar, compute clusters are all enabled as one unit
+            // So just poll enable bit of first TRISC of each compute cluster
+            // Enables bits: [dm_count + c*num_fw_binaries]
+            for (uint32_t c = 0; c < num_clusters; c++) {
+                if (enables & (1u << (dm_count + c * num_fw_binaries))) {
+                    cluster_val |= (1u << c);
+                }
+            }
+            fprintf(reader_.f, "%s%X ", symbols[1].c_str(), cluster_val);
+        } else {
+            // ETH on Quasar: single E: hex symbol, all processor bits
+            fprintf(reader_.f, "%s%X ", symbols[0].c_str(), enables);
+        }
+    } else {
+        // WH/BH: case-toggle format
+        for (size_t i = 0; i < symbols.size(); i++) {
+            for (char c : symbols[i]) {
+                fputc((enables & (1u << i)) ? c : (char)tolower(static_cast<unsigned char>(c)), reader_.f);
+            }
+        }
+    }
+}
+
 void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     auto subordinate_sync = mbox_data_.subordinate_sync();
     const auto& hal = MetalContext::instance().hal();
@@ -933,40 +1000,27 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             enables);
     }
 
-    // TODO(#17275): Generalize and pull risc data out of HAL
-    std::string_view symbols;
-    if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
-        symbols = "BNT";
-    } else {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-            symbols = "EE";
-        } else {
-            symbols = "E";
-        }
-    }
-    for (size_t i = 0; i < symbols.size(); i++) {
-        char c = symbols[i];
-        if ((enables & (1u << i)) == 0) {
-            c = tolower(c);
-        }
-        fputc(c, reader_.f);
-    }
+    // Set the processor enable flags per log line entry
+    SetEnableFlags(enables);
 
     fprintf(reader_.f, " h_id:%3d ", launch_msg_.kernel_config().host_assigned_id());
-
-    if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
+    uint32_t num_subordinates = hal.get_num_risc_processors(programmable_core_type_) - 1;
+    uint32_t dm_subordinates =
+        hal.get_processor_types_count(programmable_core_type_, static_cast<uint32_t>(HalProcessorClassType::DM)) - 1;
+    if (num_subordinates > 0) {
         fprintf(reader_.f, "smsg:");
-        // TODO once we have triscs running on Quasar, just loop over all RISC cores
-        DumpRunState(subordinate_sync.map()[0]);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
-            DumpRunState(subordinate_sync.map()[1]);
-            DumpRunState(subordinate_sync.map()[2]);
-            DumpRunState(subordinate_sync.map()[3]);
+        // On Quasar TENSIX, subordinate_sync.map() layout is:
+        // dm1 .. dm7, padding, neo0_trisc0, neo0_trisc1 .. neo3_trisc3
+        // so we must skip the padding byte between DM and NEO entries.
+        const bool skip_padding =
+            (hal.get_arch() == tt::ARCH::QUASAR) && (programmable_core_type_ == HalProgrammableCoreType::TENSIX);
+        for (uint32_t i = 0, dumped = 0; dumped < num_subordinates; ++i) {
+            if (skip_padding && (i == dm_subordinates)) {
+                continue;
+            }
+            DumpRunState(subordinate_sync.map()[i]);
+            dumped++;
         }
-        fprintf(reader_.f, " ");
-    } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-        fprintf(reader_.f, "smsg:");
-        DumpRunState(subordinate_sync.map()[0]);
         fprintf(reader_.f, " ");
     }
 }
