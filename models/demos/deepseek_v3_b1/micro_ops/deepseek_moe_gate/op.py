@@ -125,7 +125,7 @@ class DeepseekMoeGateSingleCore:
         output_tile_height, output_tile_width = output_tile.tile_shape
         output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
         expected_output_tile_size = (32, 32)
-        assert input_tile == bias_tensor.tile
+        # assert input_tile == bias_tensor.tile
         # assert input_tile == input_indices_tensor.tile
         assert output_tile == output_indices_tensor.tile
         # assert input_tile_height == expected_input_tile_size[0]

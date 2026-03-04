@@ -54,7 +54,7 @@ def test_forward_pass(
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     # If testing old MoE gate, remove below two lines and uncomment the two lines in the weight_config
     if hasattr(reference_model, "e_score_correction_bias"):
-        reference_model.e_score_correction_bias.data = torch.zeros_like(reference_model.e_score_correction_bias.data)
+        reference_model.e_score_correction_bias.data = torch.randn_like(reference_model.e_score_correction_bias.data)
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
