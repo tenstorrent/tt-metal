@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -22,7 +23,10 @@ struct ExecuteRingAttentionAllGatherAsync {
         ttnn::ccl::Topology topology,
         uint32_t num_links = 1,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        CoreCoord core_grid_offset = CoreCoord(0, 0),
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy =
+            ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 };
 
 }  // namespace operations::experimental::ccl

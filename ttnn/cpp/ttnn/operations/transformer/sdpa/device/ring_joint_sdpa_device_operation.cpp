@@ -337,7 +337,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,
-        core_allocation_strategy};
+        core_allocation_strategy,
+        ccl_core_grid_offset};
     auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         {input_tensor_k, input_tensor_v}, {persistent_output_buffer_k, persistent_output_buffer_v}};
 

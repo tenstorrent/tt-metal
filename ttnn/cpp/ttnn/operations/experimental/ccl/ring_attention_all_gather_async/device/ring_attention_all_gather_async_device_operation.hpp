@@ -45,7 +45,10 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
         ttnn::ccl::Topology topology,
         uint32_t num_links,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        CoreCoord core_grid_offset = CoreCoord(0, 0),
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy =
+            ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 };
 
 }  // namespace ttnn::experimental::prim

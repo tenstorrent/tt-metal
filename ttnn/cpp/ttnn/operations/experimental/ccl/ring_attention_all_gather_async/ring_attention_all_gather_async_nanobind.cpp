@@ -39,7 +39,11 @@ void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_
                const MeshDevice& mesh_device,
                const std::optional<MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               CoreCoord ccl_core_grid_offset,
+               bool use_column_major_ccl) -> std::vector<ttnn::Tensor> {
+                auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                                                     : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
                 return self(
                     input_tensor,
                     persistent_output_buffer,
@@ -50,7 +54,9 @@ void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_
                     topology,
                     num_links,
                     memory_config,
-                    subdevice_id);
+                    subdevice_id,
+                    ccl_core_grid_offset,
+                    strategy);
             },
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer"),
@@ -62,7 +68,9 @@ void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_
             nb::arg("mesh_device"),
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology"),
-            nb::arg("subdevice_id") = nb::none()});
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("ccl_core_grid_offset") = CoreCoord(0, 0),
+            nb::arg("use_column_major_ccl") = false});
 }
 
 }  // namespace

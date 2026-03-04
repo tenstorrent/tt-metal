@@ -78,7 +78,9 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
                 operation_attributes.topology,
                 operation_attributes.semaphore,
                 operation_attributes.sub_device_id,
-                empty_fused_op_signaler);
+                empty_fused_op_signaler,
+                operation_attributes.core_grid_offset,
+                operation_attributes.core_allocation_strategy);
 
     shared_variables_t shared_variables{
         .worker_sender_reader_forward_kernel_id = worker_sender_reader_forward_kernel_id,

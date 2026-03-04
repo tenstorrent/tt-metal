@@ -160,6 +160,8 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         operation_attributes.cluster_axis,
+        operation_attributes.core_grid_offset,
+        operation_attributes.core_allocation_strategy,
         subdevice_core_range_set,
         tensor_args);
 }
@@ -177,7 +179,9 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
     const ttnn::ccl::Topology topology,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    CoreCoord core_grid_offset,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
@@ -210,6 +214,8 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
             multi_device_global_semaphore,
             sub_device_id,
             cluster_axis,
+            core_allocation_strategy,
+            core_grid_offset,
         },
         tensor_args_t{.input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }

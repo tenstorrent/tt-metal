@@ -34,6 +34,7 @@ struct RingAttentionAllGatherAsyncParams {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    CoreCoord core_grid_offset = CoreCoord(0, 0);
 };
 
 struct RingAttentionAllGatherAsyncInputs {
