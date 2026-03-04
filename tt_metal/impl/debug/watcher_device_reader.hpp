@@ -13,6 +13,7 @@
 
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "debug_helpers.hpp"
 
 namespace tt::tt_metal {
 
@@ -26,6 +27,13 @@ public:
     WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<std::string>& kernel_names);
     ~WatcherDeviceReader();
     void Dump(FILE* file = nullptr);
+    const std::vector<std::string>& get_cached_enable_symbols(HalProgrammableCoreType core_type) const {
+        TT_FATAL(
+            core_type < HalProgrammableCoreType::COUNT,
+            "Invalid HalProgrammableCoreType {}",
+            static_cast<int>(core_type));
+        return symbols_info_cache_.at(core_type).symbols;
+    }
 
 private:
     class Core;
@@ -34,6 +42,7 @@ private:
     ChipId device_id;
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
+    std::map<HalProgrammableCoreType, EnableSymbolsInfo> symbols_info_cache_;
 };
 
 }  // namespace tt::tt_metal
