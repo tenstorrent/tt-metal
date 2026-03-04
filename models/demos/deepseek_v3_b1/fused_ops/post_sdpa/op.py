@@ -73,7 +73,7 @@ def _filter_runtime_args(rt_args, core_range_set):
     return filtered
 
 
-def _extend_runtime_args(existing_rt_args, rt_args, core_range_set):
+def _extend_runtime_args(existing_rt_args, rt_args, core_range_set, print_flag=False):
     """Extend existing per-core runtime args with additional args for cores in core_range_set.
 
     For cores that already have runtime args (e.g., MLA args), appends the new args
@@ -82,9 +82,11 @@ def _extend_runtime_args(existing_rt_args, rt_args, core_range_set):
     """
     for coord, args in rt_args:
         if core_range_set.contains(coord):
-            print(f"extend {coord} {existing_rt_args[coord.x][coord.y]}")
+            if print_flag:
+                print(f"extend {coord} {existing_rt_args[coord.x][coord.y]}")
             existing_rt_args[coord.x][coord.y].extend(list(args))
-            print(f"after extend {coord} {existing_rt_args[coord.x][coord.y]}")
+            if print_flag:
+                print(f"after extend {coord} {existing_rt_args[coord.x][coord.y]}")
 
 
 class PostSDPA:

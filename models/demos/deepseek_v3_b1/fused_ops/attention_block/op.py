@@ -31,6 +31,11 @@ from models.demos.deepseek_v3_b1.utils import (
 )
 
 
+def extend_fabric_args(existing_rt_args, fabric_args):
+    """Use this to append fabric args that pass in arg_idx to the open_connection api"""
+    existing_rt_args.extend([len(fabric_args), *fabric_args])
+
+
 class AttentionBlock:
     """
     Attention block fused operation implementation using ttnn.generic_op.
@@ -3858,16 +3863,114 @@ class AttentionBlock:
                         fabric_args = ttnn.setup_routing_plane_connection(
                             ctx["fabric_node_id"], dst_nodes, [0], program, idx, broadcast_worker_core
                         )
-                        print(
-                            f"before extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
-                            writer_rt_args_ref,
-                        )
-                        writer_rt_args_ref.extend(fabric_args)
-                        print(
-                            f"after extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
-                            writer_rt_args_ref,
-                        )
+                        if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                            print(
+                                f"before extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
+                                writer_rt_args_ref,
+                            )
+                        extend_fabric_args(writer_rt_args_ref, fabric_args)
+
+                        if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                            print(
+                                f"after extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
+                                writer_rt_args_ref,
+                            )
                         break
+
+            # ==================================================================
+            # SDPA runtime args and fabric connection setup
+            # ==================================================================
+            if ctx["sdpa"]:
+                print_sdpa = mesh_coord == ttnn.MeshCoordinate(0, 0)
+                sdpa = ctx["sdpa"]
+                sdpa_forwarder_cores = ctx["sdpa_forwarder_cores"]
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
+                        crs = group.core_range_set
+                        _extend_runtime_args(
+                            program.kernels[group.ncrisc_kernel_index].runtime_args,
+                            sdpa["worker_ncrisc_rt_args"],
+                            crs,
+                            print_flag=print_sdpa,
+                        )
+                        _extend_runtime_args(
+                            program.kernels[group.brisc_kernel_index].runtime_args,
+                            sdpa["worker_brisc_rt_args"],
+                            crs,
+                            print_flag=print_sdpa,
+                        )
+                        if sdpa["worker_trisc_rt_args"] is not None:
+                            _extend_runtime_args(
+                                program.kernels[group.trisc_kernel_index].runtime_args,
+                                sdpa["worker_trisc_rt_args"],
+                                crs,
+                                print_flag=print_sdpa,
+                            )
+
+                sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
+                sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
+
+                for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
+                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_brisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    brisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["fwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                        print(
+                            f"before extend {mesh_coord} fwd_core {fwd_core}",
+                            sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y],
+                        )
+                    extend_fabric_args(sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y], brisc_fabric_args)
+                    if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                        print(
+                            f"after extend {mesh_coord} fwd_core {fwd_core}",
+                            sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y],
+                        )
+
+                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = list(
+                        sdpa["forwarder_ncrisc_base_args"][(fwd_core.x, fwd_core.y)]
+                    )
+                    ncrisc_fabric_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=sdpa["fabric_node_id"],
+                        dst_fabric_node_id=sdpa["bwd_fabric_node_id"],
+                        link_idx=fwd_idx,
+                        program_descriptor=program,
+                        worker_core=fwd_core,
+                    )
+                    if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                        print(
+                            f"before extend {mesh_coord} fwd_core {fwd_core}",
+                            sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y],
+                        )
+                    extend_fabric_args(sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y], ncrisc_fabric_args)
+                    if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                        print(
+                            f"after extend {mesh_coord} fwd_core {fwd_core}",
+                            sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y],
+                        )
+
+                for group in kernel_result.groups:
+                    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
+                        crs = group.core_range_set
+                        _extend_runtime_args(
+                            program.kernels[group.brisc_kernel_index].runtime_args,
+                            sdpa_forwarder_brisc_rt_args,
+                            crs,
+                            print_flag=print_sdpa,
+                        )
+                        _extend_runtime_args(
+                            program.kernels[group.ncrisc_kernel_index].runtime_args,
+                            sdpa_forwarder_ncrisc_rt_args,
+                            crs,
+                            print_flag=print_sdpa,
+                        )
 
             if ctx["ccl"]:
                 ccl = ctx["ccl"]
@@ -3914,9 +4017,11 @@ class AttentionBlock:
                     sender_brisc_kernel_idx,
                     ccl_sender_core,
                 )
-                print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
                 sender_brisc_rt_args_ref.extend(sender_fabric_args)
-                print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
 
                 receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
                 receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
@@ -3930,77 +4035,11 @@ class AttentionBlock:
                     receiver_ncrisc_kernel_idx,
                     gather_core,
                 )
-                print(f"before extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
-                receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
-                print(f"after extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
-            # ==================================================================
-            # SDPA runtime args and fabric connection setup
-            # ==================================================================
-            if ctx["sdpa"]:
-                sdpa = ctx["sdpa"]
-                sdpa_forwarder_cores = ctx["sdpa_forwarder_cores"]
-
-                for group in kernel_result.groups:
-                    if group.compile_time_arg_values.get("is_sdpa_worker_core") == 1:
-                        crs = group.core_range_set
-                        _extend_runtime_args(
-                            program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa["worker_ncrisc_rt_args"], crs
-                        )
-                        _extend_runtime_args(
-                            program.kernels[group.brisc_kernel_index].runtime_args, sdpa["worker_brisc_rt_args"], crs
-                        )
-                        print(
-                            f"before extend {mesh_coord} sdpa_worker_core {group.core_range_set}",
-                            sdpa["worker_ncrisc_rt_args"],
-                        )
-                        if sdpa["worker_trisc_rt_args"] is not None:
-                            _extend_runtime_args(
-                                program.kernels[group.trisc_kernel_index].runtime_args,
-                                sdpa["worker_trisc_rt_args"],
-                                crs,
-                            )
-                            print(
-                                f"after extend {mesh_coord} sdpa_worker_core {group.core_range_set}",
-                                sdpa["worker_trisc_rt_args"],
-                            )
-
-                sdpa_forwarder_brisc_rt_args = ttnn.RuntimeArgs()
-                sdpa_forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
-
-                for fwd_idx, fwd_core in enumerate(sdpa_forwarder_cores):
-                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = list(
-                        sdpa["forwarder_brisc_base_args"][(fwd_core.x, fwd_core.y)]
-                    )
-                    brisc_fabric_args = ttnn.setup_fabric_connection(
-                        src_fabric_node_id=sdpa["fabric_node_id"],
-                        dst_fabric_node_id=sdpa["fwd_fabric_node_id"],
-                        link_idx=fwd_idx,
-                        program_descriptor=program,
-                        worker_core=fwd_core,
-                    )
-                    sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
-
-                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = list(
-                        sdpa["forwarder_ncrisc_base_args"][(fwd_core.x, fwd_core.y)]
-                    )
-                    ncrisc_fabric_args = ttnn.setup_fabric_connection(
-                        src_fabric_node_id=sdpa["fabric_node_id"],
-                        dst_fabric_node_id=sdpa["bwd_fabric_node_id"],
-                        link_idx=fwd_idx,
-                        program_descriptor=program,
-                        worker_core=fwd_core,
-                    )
-                    sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
-
-                for group in kernel_result.groups:
-                    if group.compile_time_arg_values.get("is_sdpa_forwarder_core") == 1:
-                        crs = group.core_range_set
-                        _extend_runtime_args(
-                            program.kernels[group.brisc_kernel_index].runtime_args, sdpa_forwarder_brisc_rt_args, crs
-                        )
-                        _extend_runtime_args(
-                            program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa_forwarder_ncrisc_rt_args, crs
-                        )
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"before extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
+                extend_fabric_args(receiver_ncrisc_rt_args_ref, receiver_fabric_args)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"after extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 
