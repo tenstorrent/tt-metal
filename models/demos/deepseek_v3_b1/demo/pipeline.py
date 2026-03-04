@@ -56,8 +56,8 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
 def create_single_galaxy_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
 
@@ -67,8 +67,8 @@ def create_single_galaxy_pipeline_configuration(
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
         )
 
     return PipelineConfiguration(
@@ -84,10 +84,16 @@ def create_single_galaxy_pipeline_configuration(
 def create_single_pod_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> Dense(0,1,2) -> MoE(3..12) -> LMHead -> Token fwd."""
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> MoE(3..12) -> LMHead -> Token fwd.
+
+    If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
+    """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
@@ -95,8 +101,8 @@ def create_single_pod_pipeline_configuration(
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
         )
 
     # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
@@ -106,12 +112,15 @@ def create_single_pod_pipeline_configuration(
     def _moe_stage(layer_id: int):
         return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
 
+    dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
+    moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
+
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
-        1: _dense_stage(0),
-        2: _dense_stage(1),
-        3: _dense_stage(2),
-        **{i: _moe_stage(i - 1) for i in range(4, 14)},
+        1: _dense_stage(dense_ids[0]),
+        2: _dense_stage(dense_ids[1]),
+        3: _dense_stage(dense_ids[2]),
+        **{i: _moe_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
         14: stage_14,
         15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }
@@ -121,10 +130,16 @@ def create_single_pod_pipeline_configuration(
 def create_sp4_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """64-stage super-pod: Embed -> Dense(0,1,2) -> MoE(3..60) -> LMHead -> Token fwd."""
+    """64-stage super-pod: Embed -> Dense(0,1,2) -> MoE(3..60) -> LMHead -> Token fwd.
+
+    If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
+    """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
@@ -132,8 +147,8 @@ def create_sp4_pipeline_configuration(
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
         )
 
     # Stage i -> layer_id i-1 for decoder stages (stage 1 = layer 0, ..., stage 61 = layer 60)
@@ -143,12 +158,15 @@ def create_sp4_pipeline_configuration(
     def _moe_stage(layer_id: int):
         return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
 
+    dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
+    moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
+
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
-        1: _dense_stage(0),
-        2: _dense_stage(1),
-        3: _dense_stage(2),
-        **{i: _moe_stage(i - 1) for i in range(4, 62)},
+        1: _dense_stage(dense_ids[0]),
+        2: _dense_stage(dense_ids[1]),
+        3: _dense_stage(dense_ids[2]),
+        **{i: _moe_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
         62: stage_62,
         63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }
@@ -159,27 +177,33 @@ def create_pipeline_configuration_from_num_procs(
     num_procs: int,
     weight_provider: WeightProvider,
     *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod)."""
+    """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
         return create_single_galaxy_pipeline_configuration(
             weight_provider,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
         )
     if num_procs == 16:
         return create_single_pod_pipeline_configuration(
             weight_provider,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            dense_layer_id_override=dense_layer_id_override,
+            moe_layer_id_override=moe_layer_id_override,
         )
     if num_procs == 64:
         return create_sp4_pipeline_configuration(
             weight_provider,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            dense_layer_id_override=dense_layer_id_override,
+            moe_layer_id_override=moe_layer_id_override,
         )
     raise ValueError(f"Unsupported num_procs: {num_procs}")
 

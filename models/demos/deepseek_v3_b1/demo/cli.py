@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_fabric_router_config,
     create_pipeline_configuration_from_num_procs,
 )
-from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
 from models.demos.deepseek_v3_b1.prepare_weights import (
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
@@ -267,13 +267,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--cache-path",
         type=Path,
         required=True,
-        help="Path to the weight cache directory (for future real weights)",
+        help="Path to the weight cache directory (required for --weights real)",
     )
     parser.add_argument(
-        "--layer-id-offset",
-        type=int,
-        default=0,
-        help="Layer ID offset (for future multi-pod offset)",
+        "--weights",
+        type=str,
+        choices=("synthetic", "real"),
+        default="synthetic",
+        help="Use synthetic or real (cached) weights (default: synthetic)",
     )
     parser.add_argument(
         "--fp32",
@@ -286,6 +287,20 @@ def create_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use persistent mode for LMHead sampling kernel",
+    )
+    parser.add_argument(
+        "--dense-layer-id-override",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Force all dense stages to use this layer id (e.g. 0); default: use 0,1,2",
+    )
+    parser.add_argument(
+        "--moe-layer-id-override",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     return parser
 
@@ -300,19 +315,21 @@ def run_demo(
     max_new_tokens: int,
     tokenizer_name_or_path: str,
     cache_path: Path,
-    layer_id_offset: int = 0,
-    fp32: bool = True,
-    persistent_mode: bool = True,
+    use_real_weights: bool = False,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
     output_stream: TextIO,
 ) -> None:
-    """Run the pod pipeline (synthetic weights). Requires 4 or 16 distributed processes."""
+    """Run the pod pipeline. Requires 4 or 16 distributed processes."""
     iterations = max_new_tokens
     logger.info(
-        "Starting DeepSeek V3 B1 demo pod pipeline (iterations={}, layer_id_offset={}, fp32={}, persistent_mode={})",
+        "Starting DeepSeek V3 B1 demo pod pipeline (iterations={}, weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
         iterations,
-        layer_id_offset,
-        fp32,
-        persistent_mode,
+        "real" if use_real_weights else "synthetic",
+        lm_head_fp32_dest_acc_en,
+        lm_head_persistent_mode,
     )
     if not is_slow_dispatch():
         raise RuntimeError(
@@ -326,12 +343,14 @@ def run_demo(
         ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
         # Each host loads/creates only the weights for its stage via the provider.
-        provider: WeightProvider = SyntheticWeightProvider()
+        provider: WeightProvider = CacheWeightProvider(cache_path) if use_real_weights else SyntheticWeightProvider()
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
             provider,
-            fp32_dest_acc_en=fp32,
-            persistent_mode=persistent_mode,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            dense_layer_id_override=dense_layer_id_override,
+            moe_layer_id_override=moe_layer_id_override,
         )
 
         logger.info(f"Building pipeline")
@@ -341,20 +360,43 @@ def run_demo(
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            for iteration in range(iterations):
-                logger.info(f"Writing token for iteration {iteration}")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+            # Prefill + decode pattern per model.py: prefill(prompt) -> sample y0; decode_step(y_t) -> sample y_{t+1}.
+            tokenizer = load_tokenizer(tokenizer_name_or_path)
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
+            if not prompt_ids:
+                prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
+            page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
+            prompt_token_tensors = [
+                to_padded_input(
+                    torch.tensor([[tid]], dtype=torch.int32),
+                    batch_size=1,
+                    page_size_datums=page_size_datums,
                 )
-                pipeline.write_token(token_tensor)
-                pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                logger.info("Iteration {} output token: {}", iteration, got.item())
+                for tid in prompt_ids
+            ]
+            model = DeepSeekV3(
+                write_fn=pipeline.write_token,
+                read_fn=pipeline.read_output,
+                batch_size=1,
+            )
+            # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
+            last_output = model.prefill(prompt_token_tensors)
+            next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
+            generated = [next_token_id]
+            logger.info(
+                "Prefill done ({} prompt tokens); sampled y0: {}",
+                len(prompt_ids),
+                next_token_id,
+            )
+            # Generation loop: feed y[t], get output, sample y[t+1].
+            for step in range(iterations - 1):
+                output = model.decode_step(
+                    torch.tensor([[next_token_id]], dtype=torch.int32),
+                )
+                next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
+                generated.append(next_token_id)
+                logger.info("Decode step {} output token: {}", step + 1, next_token_id)
+            logger.info("Generated {} tokens total", len(generated))
 
         pipeline.barrier()
     logger.info("Pod pipeline complete")
@@ -370,9 +412,11 @@ def main(argv: list[str] | None = None) -> int:
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
         cache_path=args.cache_path,
-        layer_id_offset=args.layer_id_offset,
-        fp32=args.fp32,
-        persistent_mode=args.persistent_mode,
+        use_real_weights=(args.weights == "real"),
+        lm_head_fp32_dest_acc_en=args.fp32,
+        lm_head_persistent_mode=args.persistent_mode,
+        dense_layer_id_override=args.dense_layer_id_override,
+        moe_layer_id_override=args.moe_layer_id_override,
         output_stream=sys.stdout,
     )
     print(file=sys.stdout, flush=True)

@@ -176,12 +176,12 @@ class LMHeadStage(StageKind):
         self,
         weights: DeepSeekV3LMHeadWeights,
         *,
-        fp32_dest_acc_en: bool = True,
-        persistent_mode: bool = True,
+        lm_head_fp32_dest_acc_en: bool = True,
+        lm_head_persistent_mode: bool = True,
     ) -> None:
         self._weights = weights
-        self._fp32_dest_acc_en = fp32_dest_acc_en
-        self._persistent_mode = persistent_mode
+        self._lm_head_fp32_dest_acc_en = lm_head_fp32_dest_acc_en
+        self._lm_head_persistent_mode = lm_head_persistent_mode
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -366,7 +366,7 @@ class LMHeadStage(StageKind):
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
         }
-        if self._persistent_mode:
+        if self._lm_head_persistent_mode:
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
             self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
 
@@ -393,10 +393,10 @@ class LMHeadStage(StageKind):
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
             fabric_scratch_tensor=d["scratch_buffer"],
-            fp32_dest_acc_en=self._fp32_dest_acc_en,
+            fp32_dest_acc_en=self._lm_head_fp32_dest_acc_en,
             skip_ccl=False,
             socket_input=d["lmhead_input_socket"],
             socket_output=d["lmhead_output_socket"],
-            persistent_mode=self._persistent_mode,
+            persistent_mode=self._lm_head_persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
         )
