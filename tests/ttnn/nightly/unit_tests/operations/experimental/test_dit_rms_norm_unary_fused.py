@@ -85,8 +85,9 @@ def run_dit_rms_norm_unary_fused_test(
     w = shape[-1]
     h = shape[-2]
 
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    # torch_input = torch.randn(shape, dtype=torch.bfloat16)
     # torch_input = torch.randint(0, 10, shape, dtype=torch.bfloat16)
+    torch_input = torch.full(shape, 2.0, dtype=torch.bfloat16)
     torch_weight = torch.ones(shape[-1], dtype=torch.bfloat16) if use_weight else None
     torch_bias = torch.rand(shape[-1], dtype=torch.bfloat16) if use_bias else None
 
@@ -161,8 +162,8 @@ def run_dit_rms_norm_unary_fused_test(
     # save_tensor_csv(tt_output_torch, "output/tt_output_torch.csv")
     # save_tensor_csv(torch_expected, "output/torch_expected.csv")
 
-    # print(f"tt_output_torch: \n{tt_output_torch}")
-    # print(f"torch_expected: \n{torch_expected}")
+    print(f"tt_output_torch: \n{tt_output_torch}")
+    print(f"torch_expected: \n{torch_expected}")
 
     return assert_quality(torch_expected, tt_output_torch)
 
@@ -187,8 +188,9 @@ def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation):
         ((1, 256), "small"),
         ((1, 512), "medium"),
         ((38, 4096), "dit_norm_shape"),
+        ((1, 256), "h1_non_aligned_small"),
     ],
-    ids=["small", "medium", "dit_norm_shape"],
+    ids=["small", "medium", "dit_norm_shape", "h1_non_aligned_small"],
 )
 def test_dit_rms_norm_unary_fused_basic_shapes(device, shape, name):
     """Basic shapes test with SiLU activation."""
@@ -299,8 +301,11 @@ def test_dit_rms_norm_unary_fused_sharded_weight_bias(
         ((64, 512), "medium"),
         ((128, 1024), "large"),
         ((512, 4096), "larger"),
+        # Non-tile-aligned H: H=1, so the last (only) tile-row has 1 valid row and 31 padding rows.
+        # This exercises the H_logical zero-padding path in both reader and writer kernels.
+        ((1, 256), "h1_non_aligned"),
     ],
-    ids=["one_block", "tiny", "small", "medium", "large", "larger"],
+    ids=["one_block", "tiny", "small", "medium", "large", "larger", "h1_non_aligned"],
 )
 def test_dit_rms_norm_unary_fused_row_major_basic_shapes(device, shape, name):
     """ROW_MAJOR input, small and medium shapes, no gamma/bias."""

@@ -25,6 +25,7 @@
 //   arg[1] = Wt                (width in tiles)
 //   arg[2] = num_tile_rows     (number of tile-rows assigned to this core)
 //   arg[3] = tile_row_offset   (starting tile-row index, in tiles)
+//   arg[4] = H_logical         (total valid rows — skip writes beyond this to avoid OOB DRAM writes)
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -38,6 +39,7 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(1);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     const uint32_t tile_row_offset = get_arg_val<uint32_t>(3);  // in tiles
+    const uint32_t H_logical = get_arg_val<uint32_t>(4);        // total valid (non-padded) rows
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
@@ -61,6 +63,11 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < num_tile_rows; ncht++) {
         const uint32_t abs_row_base = (tile_row_offset + ncht) * TILE_H;
 
+        // Clamp writes to valid rows only — rows >= H_logical are padding and must not
+        // be written to DRAM (doing so corrupts adjacent allocations).
+        const uint32_t num_valid_rows =
+            (abs_row_base >= H_logical) ? 0u : (H_logical - abs_row_base < TILE_H ? H_logical - abs_row_base : TILE_H);
+
         for (auto block : generic::blocks(Wt, blk)) {
             // Compute produces blk tiles (full_block_size) in cb_out_rm; the last block
             // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
@@ -72,7 +79,7 @@ void kernel_main() {
             // Number of valid bytes to write per row (only block.size() valid tiles).
             const uint32_t valid_bytes = block.size() * TILE_W * elem_size;
 
-            for (uint32_t r = 0; r < TILE_H; r++) {
+            for (uint32_t r = 0; r < num_valid_rows; r++) {
                 const uint32_t l1_src = l1_base + r * block_row_stride_bytes;
                 const uint64_t noc_dst = get_noc_addr(abs_row_base + r, dst_a) + col_byte_offset;
                 noc_async_write(l1_src, noc_dst, valid_bytes);

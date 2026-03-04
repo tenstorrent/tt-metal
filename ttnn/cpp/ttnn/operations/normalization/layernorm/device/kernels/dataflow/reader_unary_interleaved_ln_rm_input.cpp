@@ -78,6 +78,7 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W_logical = get_arg_val<uint32_t>(9);
+    const uint32_t H_logical = get_arg_val<uint32_t>(10);  // total valid (non-padded) rows
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -141,7 +142,7 @@ void kernel_main() {
         // Push one column block of ROW_MAJOR input into cb_in_rm per iteration.
         // The compute kernel tilizes each block before the existing computation.
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride, H_logical);
 
         print_cb_tile(cb_id_in_rm, 7);
 

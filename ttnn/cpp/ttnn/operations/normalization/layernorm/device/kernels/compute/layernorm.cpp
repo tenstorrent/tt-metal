@@ -105,6 +105,12 @@ void kernel_main() {
     constexpr int dst1 = 1;
     constexpr auto scaler0 = 0;
 
+    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
+    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
+    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
+    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
+    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
+
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
@@ -184,16 +190,14 @@ void kernel_main() {
             //     j_debug++;
             // }
 
-            for (auto i : block.local()) {
-                DPRINT_PACK(DPRINT << "[layernorm] print tile i=" << i << ENDL();)
-                print_cb_tile(cb_in_rm, i);
-            }
+            // for (auto i : block.local()) {
+            //     DPRINT_PACK(DPRINT << "[layernorm] print tile i=" << i << ENDL();)
+            //     print_cb_tile(cb_in_rm, i);
+            // }
             tilize_block(cb_in_rm, block.full_block_size(), cb_in);
 
-            // PACK(
-            //     DPRINT << "[layernorm] cb_in tile 0:" << ENDL();
-            // );
-            // print_cb_tile(cb_in, 0);
+            PACK(DPRINT << "[layernorm] cb_in tile 0:" << ENDL(););
+            print_cb_tile(cb_in, 0);
 
             cb_push_back(cb_in, block.full_block_size());
             cb_pop_front(cb_in_rm, block.full_block_size());

@@ -27,6 +27,7 @@
 //   arg[7] = beta_dram_addr
 //   arg[8] = b_dram_addr       (residual, unused if no FUSE_PRE_ADD)
 //   arg[9] = W                 (logical width in elements)
+//   arg[10] = H_logical        (total valid rows — avoids OOB reads when H % 32 != 0)
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -48,6 +49,7 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W = get_arg_val<uint32_t>(9);
+    const uint32_t H_logical = get_arg_val<uint32_t>(10);  // total valid (non-padded) rows
 
     // constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0; // Unused
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -109,7 +111,7 @@ void kernel_main() {
 #ifndef RMSNORM
         // Data for Calculating E[X]
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride, H_logical);
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
@@ -119,7 +121,7 @@ void kernel_main() {
 #endif
         // Pass 1 for TILIZE_IN: variance calculation
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride, H_logical);
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
@@ -132,13 +134,33 @@ void kernel_main() {
         //   INSIDE the same per-block loop that drains cb_in_rm.  Once compute finishes
         //   the x/sqrt(var+eps) step it blocks on cb_gamma, while the reader is still
         //   blocked on cb_in_rm for the next block — circular wait.
+        // Number of valid rows for this tile-row (same for all blocks within the ncht).
+        // TODO: Simplify num_valid_rows_pass2 logic
+        const uint32_t abs_row_start = abs_tile_row * TILE_H;
+        const uint32_t num_valid_rows_pass2 =
+            (abs_row_start >= H_logical) ? 0u
+                                         : (H_logical - abs_row_start < TILE_H ? H_logical - abs_row_start : TILE_H);
+
         for (auto block : generic::blocks(Wt, block_size)) {
             // Pass 2 input for this block
             const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
             const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
             cb_reserve_back(cb_id_in_rm, block.full_block_size());
-            uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
-            for (uint32_t row = 0; row < TILE_H; ++row) {
+            // TODO: Move to separate function
+            uint32_t l1_base = get_write_ptr(cb_id_in_rm);
+
+            // Zero-fill padding rows so tilize_block sees 0 instead of stale L1 data.
+            if (num_valid_rows_pass2 < TILE_H) {
+                volatile tt_l1_ptr uint32_t* p =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + num_valid_rows_pass2 * full_row_stride);
+                const uint32_t pad_words = (TILE_H - num_valid_rows_pass2) * full_row_stride / sizeof(uint32_t);
+                for (uint32_t i = 0; i < pad_words; ++i) {
+                    p[i] = 0;
+                }
+            }
+
+            uint32_t l1_ptr = l1_base;
+            for (uint32_t row = 0; row < num_valid_rows_pass2; ++row) {
                 const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
                 noc_async_read(noc_addr, l1_ptr, row_read_bytes);
                 l1_ptr += full_row_stride;
