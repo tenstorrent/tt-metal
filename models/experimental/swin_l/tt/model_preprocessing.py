@@ -87,7 +87,7 @@ def _unfold_to_concat_perm(C: int) -> torch.Tensor:
 
 
 def load_backbone_weights(
-    checkpoint_path: str,
+    checkpoint_path_or_state_dict,
     device: ttnn.Device,
     embed_dim: int = 192,
     depths: Tuple[int, ...] = (2, 2, 18, 2),
