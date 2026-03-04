@@ -14,15 +14,31 @@ Stage 2+ (if applicable):
   passive forwarding, no downstream op
 """
 
+from typing import Any
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.demo.stage import (
+    ACTIVATION_DIM,
+    ACTIVATION_FIFO_SIZE,
+    ACTIVATION_PAGE_SIZE_BYTES,
+    PIPELINE_CORE_COORD,
+    StageContext,
+    StageKind,
+)
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    DeepSeekV3MoELayerWeights,
+    create_gate_indices_tensor,
+    prepare_moe_layer_weights,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
@@ -416,3 +432,441 @@ def test_bcast_moe_two_stage_pipeline(
     logger.info(f"[rank={my_mesh_id}] programs terminated")
 
     logger.info(f"[rank={my_mesh_id}] test PASSED")
+
+
+# =============================================================================
+# MoEDecoderStage: StageKind implementation for bcast + MoE + reduce-to-one
+# =============================================================================
+
+
+class MoEDecoderStage(StageKind):
+    """Decoder stage that runs bcast + fused MoE + reduce-to-one. Uses DeepSeekV3MoELayerWeights."""
+
+    MOE_SENDER_CORE = ttnn.CoreCoord(12, 9)
+    M = 1
+    K = ACTIVATION_DIM
+    SHARED_K_PARALLEL = 8
+    SHARED_N_PARALLEL = 8
+    FINAL_OUTPUT_WIDTH_PER_CORE = 1024
+    TILE_1x32 = ttnn.Tile([1, 32])
+    TILE_1x16 = ttnn.Tile([1, 16])
+
+    def __init__(
+        self,
+        weights: DeepSeekV3MoELayerWeights,
+        *,
+        use_hardcoded_expert_index: bool = True,
+        is_torus: bool = False,
+    ) -> None:
+        self._weights = weights
+        self._use_hardcoded_expert_index = use_hardcoded_expert_index
+        self._is_torus = is_torus
+        self._moe_state: dict[str, Any] = {}
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        my_mesh_id = ctx.my_mesh_id
+        pipeline_config = ctx.pipeline_config
+        entry_node_coord = pipeline_config[my_mesh_id].entry_node_coord
+        exit_node_coord = pipeline_config[my_mesh_id].exit_node_coord
+
+        gate_proj_noc = ttnn.NOC.NOC_0
+        gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+        gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
+        shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+        aggregator_core = shard_cores_list[0]
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            entry_node_downstream=ttnn.MeshCoreCoord(entry_node_coord, MoEDecoderStage.MOE_SENDER_CORE),
+            exit_node_upstream=ttnn.MeshCoreCoord(exit_node_coord, aggregator_core),
+        )
+
+    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        mesh_device = ctx.mesh_device
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+        moe_worker_core_grid = build_worker_grid_excluding_core(device_grid, PIPELINE_CORE_COORD)
+        sender_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(MoEDecoderStage.MOE_SENDER_CORE, MoEDecoderStage.MOE_SENDER_CORE)]
+        )
+
+        # Gate indices (gate_bias is already in weights)
+        ttnn_gate_indices = create_gate_indices_tensor(mesh_device, sender_core_grid, mesh_mapper=mesh_mapper)
+
+        # Gate output buffers (scores and indices on sender core)
+        gate_output_shard_spec = ttnn.ShardSpec(sender_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+        gate_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
+        )
+        gate_output_scores_tensor = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=gate_output_mem_config,
+            tile=MoEDecoderStage.TILE_1x16,
+            mesh_mapper=mesh_mapper,
+        )
+        gate_output_indices_tensor = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.uint16),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=gate_output_mem_config,
+            tile=MoEDecoderStage.TILE_1x16,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # SDPA overlap buffers
+        kv_cache_shard_height = 256
+        kvpe_dim = 576
+        num_mcast_cores = moe_worker_core_grid.num_cores()
+        kv_cache_shard_spec = ttnn.ShardSpec(
+            moe_worker_core_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        sdpa_kv_cache_buffer = ttnn.from_torch(
+            torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+            ),
+        )
+        sdpa_out_interm_shard_height = 40
+        sdpa_out_interm_shard_width = 544
+        num_worker_cores = moe_worker_core_grid.num_cores()
+        sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+            moe_worker_core_grid,
+            (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sdpa_out_interm_buffer = ttnn.from_torch(
+            torch.zeros(
+                (sdpa_out_interm_shard_height * num_worker_cores, sdpa_out_interm_shard_width),
+                dtype=torch.bfloat16,
+            ),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_out_interm_shard_spec
+            ),
+            tile=ttnn.Tile([8, 32]),
+        )
+
+        # Reduce-to-one: gate_proj core layout and final output dimensions
+        gate_proj_noc = ttnn.NOC.NOC_0
+        gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+        num_gate_proj_cores = len(gate_proj_worker_cores)
+        gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
+        final_output_total_width = MoEDecoderStage.FINAL_OUTPUT_WIDTH_PER_CORE * num_gate_proj_cores
+        final_output_shard_spec = ttnn.ShardSpec(
+            gate_proj_core_ranges,
+            (1, MoEDecoderStage.FINAL_OUTPUT_WIDTH_PER_CORE),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        final_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
+        )
+
+        reduce_mesh_mapper_config = ttnn.MeshMapperConfig(
+            [ttnn.PlacementShard(0), ttnn.PlacementShard(1)], mesh_device.shape
+        )
+        reduce_mesh_mapper = ttnn.create_mesh_mapper(mesh_device, reduce_mesh_mapper_config)
+
+        reduce_intermediate_tensors = []
+        for _ in range(3):
+            intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+            intermediate_tensor = ttnn.from_torch(
+                intermediate_data,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=final_output_mem_config,
+                tile=MoEDecoderStage.TILE_1x32,
+                mesh_mapper=reduce_mesh_mapper,
+            )
+            reduce_intermediate_tensors.append(intermediate_tensor)
+
+        compute_grid = mesh_device.compute_with_storage_grid_size()
+        reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+        reduce_output_shard_spec = ttnn.ShardSpec(
+            reduce_output_shard_grid,
+            (1, final_output_total_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        reduce_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, reduce_output_shard_spec
+        )
+        reduce_output_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+        reduce_output_tensor = ttnn.from_torch(
+            reduce_output_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=reduce_output_mem_config,
+            tile=MoEDecoderStage.TILE_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+
+        num_cores = compute_grid.x * compute_grid.y
+        reduce_available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+        reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_available_cores, 0) for _ in range(4)]
+
+        # Final output tensor for MoE (same sharding as reduce intermediate)
+        final_output_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 1, final_output_total_width], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=final_output_mem_config,
+            tile=MoEDecoderStage.TILE_1x32,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Bcast tensors and residual (same buffer for residual + bcast_intermediate)
+        bcast_shard_spec = ttnn.ShardSpec(
+            sender_core_grid, (MoEDecoderStage.M, MoEDecoderStage.K), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        bcast_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bcast_shard_spec
+        )
+        bcast_input_tensor = ttnn.from_torch(
+            torch.zeros((MoEDecoderStage.M, MoEDecoderStage.K), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=bcast_mem_config,
+            tile=MoEDecoderStage.TILE_1x32,
+            mesh_mapper=mesh_mapper,
+        )
+        residual_mcast_src = ttnn.from_torch(
+            torch.zeros((MoEDecoderStage.M, MoEDecoderStage.K), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=bcast_mem_config,
+            tile=MoEDecoderStage.TILE_1x32,
+            mesh_mapper=mesh_mapper,
+        )
+
+        bcast_semaphores = [ttnn.create_global_semaphore(mesh_device, moe_worker_core_grid, 0) for _ in range(3)]
+        moe_semaphores = MoeOp.create_semaphores(mesh_device)
+
+        recv_socket = pipeline_block.get_downstream_socket()
+        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+
+        self._moe_state = {
+            "ttnn_gate_indices": ttnn_gate_indices,
+            "gate_output_scores_tensor": gate_output_scores_tensor,
+            "gate_output_indices_tensor": gate_output_indices_tensor,
+            "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
+            "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
+            "reduce_intermediate_tensors": reduce_intermediate_tensors,
+            "reduce_output_tensor": reduce_output_tensor,
+            "reduce_semaphores": reduce_semaphores,
+            "final_output_tensor": final_output_tensor,
+            "bcast_input_tensor": bcast_input_tensor,
+            "residual_mcast_src": residual_mcast_src,
+            "bcast_semaphores": bcast_semaphores,
+            "moe_semaphores": moe_semaphores,
+            "recv_socket": recv_socket,
+            "downstream_socket": downstream_socket,
+            "moe_worker_core_grid": moe_worker_core_grid,
+        }
+
+    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        d = self._moe_state
+        my_mesh_id = ctx.my_mesh_id
+        pipeline_config = ctx.pipeline_config
+        bcast_sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+
+        MoeOp.op(
+            d["residual_mcast_src"],
+            gate_mm_weights_tensor=self._weights.gate_mm,
+            gate_bias_tensor=self._weights.gate_bias,
+            gate_indices_tensor=d["ttnn_gate_indices"],
+            gate_output_scores_tensor=d["gate_output_scores_tensor"],
+            gate_output_indices_tensor=d["gate_output_indices_tensor"],
+            gate_proj_weights_tensor=self._weights.routed_gate_proj[0],
+            up_proj_weights_tensor=self._weights.routed_up_proj[0],
+            down_proj_weights_tensor=self._weights.routed_down_proj[0],
+            final_output_tensor=d["final_output_tensor"],
+            rmsnorm_gamma_tensor=self._weights.ffn_norm,
+            shared_gate_weights_overlapped=self._weights.shared_gate_proj,
+            shared_up_weights_overlapped=self._weights.shared_up_proj,
+            shared_down_weights_tensor=self._weights.shared_down_proj,
+            shared_k_parallel=MoEDecoderStage.SHARED_K_PARALLEL,
+            shared_n_parallel=MoEDecoderStage.SHARED_N_PARALLEL,
+            use_hardcoded_expert_index=self._use_hardcoded_expert_index,
+            sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
+            sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
+            num_iterations=1,
+            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+            reduce_output_tensor=d["reduce_output_tensor"],
+            reduce_semaphores=d["reduce_semaphores"],
+            reduce_root_coord=reduce_root_coord,
+            bcast_input_tensor=d["bcast_input_tensor"],
+            bcast_intermediate_tensor=d["residual_mcast_src"],
+            bcast_semaphores=d["bcast_semaphores"],
+            bcast_sender_coord=bcast_sender_coord,
+            socket=d["recv_socket"],
+            semaphores=d["moe_semaphores"],
+            worker_core_grid=d["moe_worker_core_grid"],
+            is_torus=self._is_torus,
+            downstream_socket=d["downstream_socket"],
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 573440,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
+@pytest.mark.parametrize("token_id", [0])
+@pytest.mark.timeout(1200)
+def test_bcast_moe_two_stage_pipeline_refactored(
+    mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict
+):
+    """Same as test_bcast_moe_two_stage_pipeline but uses MoEDecoderStage + prepare_moe_layer_weights."""
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs < 2:
+        pytest.skip(f"Requires at least 2 distributed processes, got {num_procs}")
+
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if device_grid.x < 13 or device_grid.y < 10:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
+
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    assert len(pipeline_config) == num_procs + 1
+
+    is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    is_stage0 = my_mesh_id == 0
+
+    # Create weights via prepare_weights API
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=256,
+        include_global=False,
+    )
+    bdw = BlitzDecodeWeights(mesh_device)
+    moe_weights = prepare_moe_layer_weights(
+        bdw,
+        state_dict,
+        ROUTED_EXPERT_LAYER_IDX,
+        num_routed_experts=256,
+        move_to_device=True,
+    )
+
+    ctx = StageContext(
+        mesh_device=mesh_device,
+        pipeline_config=pipeline_config,
+        my_mesh_id=my_mesh_id,
+    )
+    moe_stage = MoEDecoderStage(moe_weights, is_torus=is_torus)
+
+    embedding_size_bytes = embedding_dim * dtype_size(ttnn.bfloat16)
+    token_size_bytes = 64
+
+    if is_stage0:
+        torch_embedding = (
+            torch.arange(vocab_size * embedding_dim, dtype=torch.float32)
+            .reshape(1, 1, vocab_size, embedding_dim)
+            .to(torch.bfloat16)
+        )
+        embedding_tensor = ttnn.from_torch(
+            torch_embedding,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        pipeline_block = PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            h2d_socket_fifo_size=token_size_bytes * 2,
+            d2h_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            d2h_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            embedding_tensor=embedding_tensor,
+        )
+    else:
+        pipeline_block = moe_stage.create_pipeline_block(ctx)
+        moe_stage.setup(ctx, pipeline_block)
+
+    logger.info(f"[rank={my_mesh_id}] pipeline block created (refactored)")
+    pipeline_block.run()
+    logger.info(f"[rank={my_mesh_id}] pipeline programs launched")
+
+    ttnn.distributed_context_barrier()
+
+    if is_stage0:
+        token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
+        torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
+        torch_token[0, 0] = token_id
+        token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        pipeline_block.write_token(token_tensor)
+        logger.info(f"[rank=0] token {token_id} injected")
+
+    ttnn.distributed_context_barrier()
+
+    if my_mesh_id >= 1:
+        logger.info(f"[rank={my_mesh_id}] launching MoE bcast + reduce (refactored, num_iterations=1)")
+        moe_stage.launch_compute(ctx, pipeline_block)
+        logger.info(f"[rank={my_mesh_id}] MoE + reduce completed")
+
+    if is_stage0:
+        logger.info("[rank=0] waiting for D2H result from pipeline loopback")
+        num_elements = embedding_size_bytes // 2
+        received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
+        d2h_output_tensor = ttnn.from_torch(
+            received_tensor_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        pipeline_block.read_output(d2h_output_tensor)
+        d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
+        logger.info(f"[rank=0] D2H read complete, shape={d2h_result_torch.shape}")
+        logger.info(f"[rank=0] D2H first 5 values: {d2h_result_torch[0, :5]}")
+        d2h_nonzero = torch.count_nonzero(d2h_result_torch)
+        logger.info(f"[rank=0] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
+        assert d2h_nonzero > 0, "D2H output is all zeros — reduce or D2D0 pipeline failed"
+
+    ttnn.distributed_context_barrier()
+
+    logger.info(f"[rank={my_mesh_id}] waiting for pipeline block termination")
+    pipeline_block.terminate()
+    logger.info(f"[rank={my_mesh_id}] programs terminated")
+    logger.info(f"[rank={my_mesh_id}] test_bcast_moe_two_stage_pipeline_refactored PASSED")
