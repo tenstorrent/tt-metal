@@ -16,25 +16,101 @@ Tensor layout convention (FLA style):
 """
 
 import math
-import torch
 import ttnn
 
 
-def _get_binary_core_grid(grid_size=None):
-    """Create CoreRangeSet for binary operations (multiply, add, subtract, etc.).
+def _create_eye_matrix_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Create identity matrix directly on device using TTNN operations.
 
     Args:
-        grid_size: Optional (cores_x, cores_y) tuple. If None, returns None (auto-config).
+        size: Size of the square identity matrix
+        device: TTNN device
+        dtype: Data type (default: ttnn.float32)
+        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
 
     Returns:
-        CoreRangeSet or None if auto-config is better
+        TTNN tensor of shape [size, size] with identity matrix
     """
-    if grid_size is None:
-        return None
+    # Create ones matrix and apply both tril and triu to get identity
+    ones = ttnn.ones(
+        shape=(size, size),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    # Identity = tril(triu(ones)) where both use diagonal=0
+    eye = ttnn.tril(ttnn.triu(ones, diagonal=0), diagonal=0, memory_config=memory_config)
+    return eye
 
-    cores_x, cores_y = grid_size
-    # Create a CoreRangeSet from (0,0) to (cores_x-1, cores_y-1)
-    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_x - 1, cores_y - 1))})
+
+def _create_triu_ones_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Create upper triangular ones matrix directly on device using TTNN operations.
+
+    Args:
+        size: Size of the square matrix
+        device: TTNN device
+        dtype: Data type (default: ttnn.float32)
+        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
+
+    Returns:
+        TTNN tensor of shape [size, size] with upper triangular ones
+    """
+    ones = ttnn.ones(
+        shape=(size, size),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    triu_ones = ttnn.triu(ones, diagonal=0, memory_config=memory_config)
+    return triu_ones
+
+
+def _create_tril_ones_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Create lower triangular ones matrix directly on device using TTNN operations.
+
+    Args:
+        size: Size of the square matrix
+        device: TTNN device
+        dtype: Data type (default: ttnn.float32)
+        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
+
+    Returns:
+        TTNN tensor of shape [size, size] with lower triangular ones
+    """
+    ones = ttnn.ones(
+        shape=(size, size),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    tril_ones = ttnn.tril(ones, diagonal=0, memory_config=memory_config)
+    return tril_ones
+
+
+def _create_strict_lower_tril_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Create strict lower triangular ones matrix (diagonal=-1) directly on device.
+
+    Args:
+        size: Size of the square matrix
+        device: TTNN device
+        dtype: Data type (default: ttnn.float32)
+        memory_config: Memory configuration (default: L1_MEMORY_CONFIG)
+
+    Returns:
+        TTNN tensor of shape [size, size] with strict lower triangular ones (diagonal excluded)
+    """
+    ones = ttnn.ones(
+        shape=(size, size),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    strict_lower = ttnn.tril(ones, diagonal=-1, memory_config=memory_config)
+    return strict_lower
 
 
 def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
@@ -74,6 +150,7 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
         # Only use manual configs for larger matmuls where we're confident they help
         if m_tiles == 2 and n_tiles == 2:
             # 64x64 matmuls - let auto-config handle it (performs better)
+            # grid_size = (2, 2)
             return None
         elif m_tiles == 2 and n_tiles == 4:
             # 64x128 matmuls - let auto-config handle it (may perform better)
@@ -533,10 +610,8 @@ def chunk_gated_delta_rule_ttnn(
     g_c = ttnn.reshape(g, [batch, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # --- Cumsum via matmul with upper-triangular ones ---
-    triu_torch = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
-    triu_ones = ttnn.from_torch(
-        triu_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    # Create upper triangular ones directly on device (no host transfer overhead)
+    triu_ones = _create_triu_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -558,10 +633,8 @@ def chunk_gated_delta_rule_ttnn(
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
     L_diff = ttnn.subtract(decay_col, decay_row, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    tril_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
-    tril_mask = ttnn.from_torch(
-        tril_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    # Create lower triangular ones directly on device (no host transfer overhead)
+    tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -580,23 +653,17 @@ def chunk_gated_delta_rule_ttnn(
         kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     M = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
-    strict_lower_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32), diagonal=-1)
-    strict_lower = ttnn.from_torch(
-        strict_lower_torch,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+    # Create strict lower triangular ones directly on device (no host transfer overhead)
+    strict_lower = _create_strict_lower_tril_ttnn(
+        chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
     M = ttnn.multiply(M, strict_lower, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # --- Woodbury via repeated-squaring Neumann series ---
     # Compute (I - M)^{-1} = I + M + M^2 + ... for nilpotent M
-    eye_torch = torch.eye(chunk_size, dtype=torch.float32)
-    eye = ttnn.from_torch(
-        eye_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    # Create identity matrix directly on device (no host transfer overhead)
+    eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     R = ttnn.add(M, eye, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -641,14 +708,8 @@ def chunk_gated_delta_rule_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    lower_causal_torch = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.float32))
-    lower_causal = ttnn.from_torch(
-        lower_causal_torch,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    # Create lower triangular ones directly on device (no host transfer overhead)
+    lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     S = ttnn.zeros(
         [BH, K, V], device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -671,12 +732,6 @@ def chunk_gated_delta_rule_ttnn(
     # Optional: Pre-compute core grids for binary operations
     # Note: Binary operations typically work well with auto-config, but manual grids
     # can be specified for consistency or experimentation. For element-wise ops,
-    # auto-config usually performs well, so this is optional.
-    # To enable manual core grids, uncomment and set a grid size, e.g.:
-    # binary_core_grid = _get_binary_core_grid((8, 4))  # 32 cores (8x4 grid)
-    # For most cases, auto-config (None) performs well for binary operations.
-    binary_core_grid = None
-
     outputs = []
     for i in range(num_chunks):
         # Slice and re-tilize (slicing from 4D may lose TILE_LAYOUT)
@@ -699,12 +754,8 @@ def chunk_gated_delta_rule_ttnn(
             qk = ttnn.matmul(q_i, k_i_t, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Combine two multiplies into one by pre-multiplying masks
         # This reduces one BinaryNgDeviceOperation (reduces from 46 to fewer ops)
-        # Optional: Use manual core grid for binary operations (typically auto-config works well)
-        multiply_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG}
-        if binary_core_grid is not None:
-            multiply_kwargs["sub_core_grids"] = binary_core_grid
-        combined_mask = ttnn.multiply(L_mask_i, lower_causal, **multiply_kwargs)
-        intra_attn = ttnn.multiply(qk, combined_mask, **multiply_kwargs)
+        combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
+        intra_attn = ttnn.multiply(qk, combined_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Cross-chunk: read from state
         # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)
@@ -714,11 +765,7 @@ def chunk_gated_delta_rule_ttnn(
             v_prime = ttnn.matmul(k_cum_i, S, program_config=prog_config_vprime, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             v_prime = ttnn.matmul(k_cum_i, S, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # Optional: Use manual core grid for binary operations
-        subtract_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG}
-        if binary_core_grid is not None:
-            subtract_kwargs["sub_core_grids"] = binary_core_grid
-        v_new = ttnn.subtract(v_i, v_prime, **subtract_kwargs)
+        v_new = ttnn.subtract(v_i, v_prime, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         decay_i_exp = ttnn.reshape(
             ttnn.exp(decay_i, memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -727,7 +774,7 @@ def chunk_gated_delta_rule_ttnn(
         )
         # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)
         # Shape: chunk_size x K x V (e.g., 64 x 64 x 256)
-        q_decay = ttnn.multiply(q_i, decay_i_exp, **multiply_kwargs)
+        q_decay = ttnn.multiply(q_i, decay_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Use pre-computed program_config to avoid recreation overhead
         if prog_config_o_inter:
             o_inter = ttnn.matmul(q_decay, S, program_config=prog_config_o_inter, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -744,11 +791,7 @@ def chunk_gated_delta_rule_ttnn(
         else:
             intra_v = ttnn.matmul(intra_attn, v_new, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Optional: Use manual core grid for binary operations
-        add_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG}
-        if binary_core_grid is not None:
-            add_kwargs["sub_core_grids"] = binary_core_grid
-        o_i = ttnn.add(o_inter, intra_v, **add_kwargs)
+        o_i = ttnn.add(o_inter, intra_v, memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG))
 
         # Update state
@@ -756,10 +799,10 @@ def chunk_gated_delta_rule_ttnn(
         dl_i_exp = ttnn.reshape(
             ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        S = ttnn.multiply(S, dl_i_exp, **multiply_kwargs)
+        S = ttnn.multiply(S, dl_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         dl_i_2d = ttnn.reshape(dl_i, [BH, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        decay_diff = ttnn.subtract(dl_i_2d, decay_i, **subtract_kwargs)
+        decay_diff = ttnn.subtract(dl_i_2d, decay_i, memory_config=ttnn.L1_MEMORY_CONFIG)
         k_decay = ttnn.multiply(
             k_i,
             ttnn.reshape(
@@ -767,7 +810,7 @@ def chunk_gated_delta_rule_ttnn(
                 [BH, chunk_size, 1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             ),
-            **multiply_kwargs,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Optimize: (BH, K, chunk_size) @ (BH, chunk_size, V) -> (BH, K, V)
@@ -779,7 +822,7 @@ def chunk_gated_delta_rule_ttnn(
             )
         else:
             state_update = ttnn.matmul(k_decay_t, v_new, memory_config=ttnn.L1_MEMORY_CONFIG)
-        S = ttnn.add(S, state_update, **add_kwargs)
+        S = ttnn.add(S, state_update, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     o = ttnn.concat(outputs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.reshape(o, [BH, L, V], memory_config=ttnn.L1_MEMORY_CONFIG)
