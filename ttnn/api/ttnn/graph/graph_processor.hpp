@@ -157,7 +157,7 @@ private:
     void track_device(const tt::tt_metal::IDevice* device);
 
 public:
-    static void begin_graph_capture(RunMode mode);
+    static void begin_graph_capture(RunMode mode = RunMode::NORMAL);
     static nlohmann::json end_graph_capture();
 
     static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
