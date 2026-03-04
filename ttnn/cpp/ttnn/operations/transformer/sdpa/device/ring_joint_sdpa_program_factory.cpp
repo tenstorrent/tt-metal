@@ -147,8 +147,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
         args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
+    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
+        std::swap(num_targets_forward, num_targets_backward);
+    }
 
-    // This is how ring_joint_sdpa expects the number of forward and backward writes
     uint32_t forward_writes_expected, backward_writes_expected;
     if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         forward_writes_expected = num_targets_backward;
@@ -157,8 +159,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         TT_FATAL(
             args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring,
             "Topology must be Linear or Ring");
-        forward_writes_expected = num_targets_forward - 1;
-        backward_writes_expected = num_targets_backward - 1;
+        forward_writes_expected = num_targets_forward;
+        backward_writes_expected = num_targets_backward;
     }
     // Minimally use matmul fused op signaler
     sdpa_fused_op_signaler->init_all_gather(
