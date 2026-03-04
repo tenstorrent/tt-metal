@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
 from glob import glob
 from pathlib import Path
 
@@ -120,6 +121,29 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
+        "--mtp",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control MTP usage: auto (default), on (force enable), off (disable).",
+    )
+    p.add_argument(
+        "--min-mtp-accept-rate",
+        type=float,
+        default=None,
+        help="If set, require MTP accept rate to be at least this value.",
+    )
+    p.add_argument(
+        "--mtp-skip-on-accept",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control MTP skip-on-accept behavior: auto (env/default), on (force), off (disable).",
+    )
+    p.add_argument(
+        "--compare-output",
+        type=str,
+        help="Path to a baseline output JSON to compare against (prompt+generated text only).",
     )
     p.add_argument(
         "--repeat-batches",
@@ -260,6 +284,10 @@ def run_demo(
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
+    force_recalculate: bool = False,
+    mtp: str = "auto",
+    min_mtp_accept_rate: float | None = None,
+    mtp_skip_on_accept: str = "auto",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -343,6 +371,12 @@ def run_demo(
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":
+            if mtp_skip_on_accept == "on":
+                mtp_skip_on_accept_override = True
+            elif mtp_skip_on_accept == "off":
+                mtp_skip_on_accept_override = False
+            else:
+                mtp_skip_on_accept_override = None
             gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
                 model_path=model_path,
@@ -359,6 +393,10 @@ def run_demo(
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
                 profile_decode=profile_decode,
+                force_recalculate=force_recalculate,
+                mtp_mode=mtp,
+                min_mtp_accept_rate=min_mtp_accept_rate,
+                mtp_skip_on_accept=mtp_skip_on_accept_override,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -382,14 +420,72 @@ def run_demo(
                 prompt_list = prompts
 
         # Multi-prompt generation
-        generations, statistics = gen.generate(
-            prompt_list,
-            max_new_tokens=max_new_tokens,
-            teacher_forcing=token_acc,
-            early_print_first_user=early_print_first_user,
-            repeat_batches=repeat_batches,
-            pre_tokenized=pre_tokenized_prompts,
-        )
+        use_mtp_path = gen.enable_mtp and token_acc is None and max_new_tokens > 1
+        max_prompts_per_batch = gen.batch_size
+        if use_mtp_path:
+            max_prompts_per_batch = max(1, gen.batch_size // 2)
+
+        if use_mtp_path and len(prompt_list) > max_prompts_per_batch:
+            logger.info(
+                f"MTP enabled with {len(prompt_list)} prompts; running in batches of up to {max_prompts_per_batch} "
+                "to reserve lanes for verify batching."
+            )
+            all_generations = []
+            all_stats = []
+            for start in range(0, len(prompt_list), max_prompts_per_batch):
+                batch_prompts = prompt_list[start : start + max_prompts_per_batch]
+                batch_pre_tokenized = (
+                    pre_tokenized_prompts[start : start + max_prompts_per_batch]
+                    if pre_tokenized_prompts is not None
+                    else None
+                )
+                batch_generations, batch_stats = gen.generate(
+                    batch_prompts,
+                    max_new_tokens=max_new_tokens,
+                    teacher_forcing=token_acc,
+                    early_print_first_user=early_print_first_user,
+                    repeat_batches=repeat_batches,
+                    pre_tokenized=batch_pre_tokenized,
+                )
+                all_generations.extend(batch_generations)
+                all_stats.append(batch_stats)
+
+            generations = all_generations
+            statistics = all_stats[-1] if all_stats else {}
+            if all_stats:
+                statistics["batch_count"] = len(all_stats)
+                mtp_accepts = [s.get("mtp_accepts") for s in all_stats if s.get("mtp_accepts") is not None]
+                mtp_passes = [
+                    s.get("decode_forward_passes") for s in all_stats if s.get("decode_forward_passes") is not None
+                ]
+                if mtp_accepts and mtp_passes:
+                    total_accepts = sum(int(x) for x in mtp_accepts)
+                    total_verifies = sum(int(x) for x in mtp_passes)
+                    statistics["mtp_accepts"] = total_accepts
+                    statistics["mtp_accept_rate"] = (total_accepts / total_verifies) if total_verifies > 0 else 0.0
+                else:
+                    mtp_rates = [s.get("mtp_accept_rate") for s in all_stats if s.get("mtp_accept_rate") is not None]
+                    if mtp_rates:
+                        statistics["mtp_accept_rate"] = sum(mtp_rates) / len(mtp_rates)
+                for key in (
+                    "preparing_prefill_config",
+                    "preparing_decode_config",
+                    "inference_prefill",
+                    "inference_decode",
+                    "decode_forward_passes",
+                    "Full demo runtime",
+                ):
+                    if any(key in s for s in all_stats):
+                        statistics[key] = sum(float(s.get(key, 0) or 0) for s in all_stats)
+        else:
+            generations, statistics = gen.generate(
+                prompt_list,
+                max_new_tokens=max_new_tokens,
+                teacher_forcing=token_acc,
+                early_print_first_user=early_print_first_user,
+                repeat_batches=repeat_batches,
+                pre_tokenized=pre_tokenized_prompts,
+            )
 
         # Process all generations
         results = []
@@ -461,6 +557,9 @@ def main() -> None:
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
+        mtp=args.mtp,
+        min_mtp_accept_rate=args.min_mtp_accept_rate,
+        mtp_skip_on_accept=args.mtp_skip_on_accept,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
@@ -533,6 +632,95 @@ def main() -> None:
 
     # Print performance metrics if available
     _print_performance_metrics(results)
+
+    if args.compare_output:
+        baseline_path = Path(args.compare_output)
+        if not baseline_path.exists():
+            raise SystemExit(f"Baseline output file does not exist: '{baseline_path}'")
+        try:
+            with open(baseline_path, "r", encoding="utf-8") as f:
+                baseline = json.load(f)
+        except Exception as e:
+            raise SystemExit(f"Failed to read baseline output '{baseline_path}': {e}")
+        baseline_prompts = baseline.get("prompts", [])
+        baseline_generations = baseline.get("generations", [])
+        current_generations = results.get("generations", [])
+        current_prompts = args.prompts or []
+        if args.output_path:
+            compare_base_path = Path(args.output_path)
+        elif prompts_file_path:
+            compare_base_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+        else:
+            logs_dir = Path("logs")
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            compare_base_path = logs_dir / f"deepseek_compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        compare_log_path = compare_base_path.parent / f"{compare_base_path.stem}_compare.json"
+
+        mismatch_reason = None
+        if baseline_prompts and baseline_prompts != current_prompts:
+            mismatch_reason = "Output mismatch: baseline and current prompts differ."
+        if mismatch_reason is None and (
+            len(baseline_generations) != len(current_generations) or len(current_prompts) != len(current_generations)
+        ):
+            mismatch_reason = (
+                "Baseline/current generation counts do not match prompt count "
+                f"({len(baseline_generations)} baseline vs {len(current_generations)} current vs {len(current_prompts)} prompts)."
+            )
+
+        max_len = max(len(baseline_generations), len(current_generations), len(current_prompts))
+        compare_entries = []
+        for i in range(max_len):
+            base_gen = baseline_generations[i] if i < len(baseline_generations) else {}
+            cur_gen = current_generations[i] if i < len(current_generations) else {}
+            base_prompt = base_gen.get("prompt")
+            if base_prompt is None and i < len(baseline_prompts):
+                base_prompt = baseline_prompts[i]
+            cur_prompt = current_prompts[i] if i < len(current_prompts) else None
+            base_text = base_gen.get("text") if base_gen else None
+            cur_text = cur_gen.get("text") if cur_gen else None
+            prompt_match = None
+            text_match = None
+            if base_prompt is not None and cur_prompt is not None:
+                prompt_match = base_prompt == cur_prompt
+            if base_text is not None and cur_text is not None:
+                text_match = base_text == cur_text
+            if mismatch_reason is None:
+                if prompt_match is False:
+                    mismatch_reason = f"Output mismatch at generation {i}: baseline and current prompts differ."
+                elif text_match is False:
+                    mismatch_reason = f"Output mismatch at generation {i}: baseline and current text differ."
+            compare_entries.append(
+                {
+                    "index": i + 1,
+                    "baseline_prompt": base_prompt,
+                    "current_prompt": cur_prompt,
+                    "baseline_text": base_text,
+                    "current_text": cur_text,
+                    "prompt_match": prompt_match,
+                    "text_match": text_match,
+                }
+            )
+
+        compare_log = {
+            "baseline_path": str(baseline_path),
+            "current_output_path": str(compare_base_path),
+            "baseline_count": len(baseline_generations),
+            "current_count": len(current_generations),
+            "prompt_count": len(current_prompts),
+            "mismatch_reason": mismatch_reason,
+            "entries": compare_entries,
+        }
+        try:
+            with open(compare_log_path, "w", encoding="utf-8") as f:
+                json.dump(compare_log, f, indent=2, ensure_ascii=False)
+            logger.info(f"Comparison log saved to '{compare_log_path}'")
+            print(f"\nComparison log saved to '{compare_log_path}'\n")
+        except Exception as e:
+            raise SystemExit(f"Failed to write comparison log '{compare_log_path}': {e}")
+
+        if mismatch_reason is not None:
+            raise SystemExit(mismatch_reason)
+        logger.info("Output comparison passed: prompt+generated text content matches exactly.")
 
 
 if __name__ == "__main__":

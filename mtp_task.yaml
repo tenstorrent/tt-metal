@@ -1,0 +1,51 @@
+prompt: |
+  The goal is to **implement multi token prediction for deepseek R1**. Please read the deepseek code in models/demos/deepseek_v3. The goal is to add support for the second token prediction and make it work end to end including batching the predicted token and the speculated token (next-next token) in the following fwd pass, the acceptance/rejection logic, and skipping the unnecessary decode step in case of acceptance of the previous speculated token. Make sure to test the model after integration of the multi token extension and verify that the accuracy is good and that there are no hangs. Add trace support for MTP on. There are three verifications steps to make sure the MTP is working, use trace mode to verify:
+  1. Verify that the current branch, with MTP disabled, produces the exact same outputs as the reference commit off main f250fa343767e85500afd3db46f3a7f3d31b11ff. The full demo outputs for that run are stored in the log file logs/deepseek_demo_baseline_f250fa_20260216_195652.json.
+  2. Verify that the current branch with MTP enabled produces the exact same outputs as MTP disabled using the full demo
+  3. Verify that the acceptance rate it >= 75% to make sure that the MTP is actually working and used to produce the outputs.
+  4. Verify that the *acceptance of a previous speculated token is used to skip that decode step*, and the *previous speculated token is used to produce the next prediction and speculation*.
+
+  Additional verification checks (required):
+  5. Reference integrity check: verify that `logs/deepseek_demo_baseline_f250fa_20260216_195652.json` has not changed by comparing sha256 before/after runs.
+  6. Content-only parity check: when comparing output JSONs, compare only prompt and generated text content (ignore runtime/statistics metadata fields that are expected to differ).
+  7. Deterministic run settings: use greedy decode and fixed prompts for both MTP off/on runs so comparisons are meaningful.
+  8. Trace-based skip proof for step 4: in MTP-on trace logs, show explicit evidence that skip path executed (skip count > 0) and that accepted speculated tokens feed the next prediction/speculation step.
+  9. No-hang/completion check: each verification run must complete within timeout, exit cleanly (exit code 0), and print final verification summary lines.
+  10. Skip-path A/B safety check: run once with skip path disabled (env toggle) and confirm output parity still holds; only decode-step behavior/performance should differ.
+
+  Read instructions in .agents/skills.
+
+  Use the following command for testing:
+  To run the full demo for a verification of outputs to match with/without MTP (runtime ~20 mins, use 30 mins timeout), use 8 users for a reduced faster test:
+  ```bash
+  /home/shared/scripts/ds-run python /home/jrock/wa/tt-metal/models/demos/deepseek_v3/demo/demo.py --prompts-file /home/jrock/
+  wa/tt-metal/models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 8 --output-path /home/jrock/wa/tt-metal/logs/
+  deepseek_demo_$(date +%Y%m%d_%H%M%S).json --max-new-tokens 32 --cache-dir /mnt/MLPerf/tt_dnn-models/
+  deepseek-ai/DeepSeek-R1-0528-Cache/CI --model-path /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 2>&1 | tee /home/jrock/
+  wa/tt-metal/logs/deepseek_deo_log_$(date +%Y%m%d_%H%M%S).log
+  ```
+  Note: The demo will run for 20-30 minutes, so make sure to check back in 5 min. intervals and wait until the demo is done. Do not end the session prematurely.
+
+  If there are machine issues, reset the machine using:
+  `/home/shared/scripts/reset.sh`
+
+set_up: |
+  Run the following commands to set up the environment:
+  source ../setup_metal.sh
+  export DEEPSEEK_V3_MAX_SEQ_LEN=128
+
+  Familiarize yourself with the deepseek code in /home/jrock/wa/tt-metal/models/demos/deepseek_v3 and read the skills collection in .agents/skills.
+
+check: |
+  Check the agent's output and assess whether the agent needs to follow up on the task or whether it thinks the task is complete. If it thinks the task is complete, check the verification steps and give a summary of the results. Check also that the reference file in filepath logs/deepseek_demo_baseline_f250fa_20260216_195652.json has not been changed. If it needs to follow up, give the follow up instructions. If you think the agent is stuck, try to unblock it by brainstorming with it, if you still can't unblock it, prompt the user to help.
+
+on_success: |
+  Give a summary of the results and the verification steps. Update the .agents/skills/MTP/SKILL.md file with learnings for future reference.
+
+on_failure: |
+  Update the .agents/skills/MTP/SKILL.md file with learnings for future reference.
+
+tear_down: |
+  Nothing to tear down.
+
+max_iterations: 20  # Optional (default is 10). 0 means unlimited.

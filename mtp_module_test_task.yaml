@@ -1,0 +1,36 @@
+prompt: |
+  Write a module test for the MTP module in deepseek_v3/tt/mtp.py that verifies correctness fo the MTP module. Since there is no pytorch reference for that module, use the full model inputs/outputs for verification. THe idea is the following:
+  - MTP uses the full-model output hidden state and the predicted next token as the input for the MTP module
+  - MTP module speculates the next-next token
+  We can test this by recording the full-model output hidden state and the predicted next token for a sequence of tokens (128 tokens should be enough for now). Then we can run the MTP module with the recorded hidden state and predicted next token as inputs, and verify that the output is equal to the recorded next-next token. The verification criteria is the acceptance rate of the MTP module (MTP prediction of the next-next token compared to the grount truth next-next token based on the full-model).
+
+  Add a pytest (skipped by default except when generating the reference outputs) in the test file that will run the full model and record the hidden state and predicted next token for a sequence of 128 tokens. This input/output data is stored in deepseek/v3/tests/reference_io (create a new reference_io folder for this). Use these inputs/outputs for the MTP module test.
+  The module test needs a to validate the acceptance rate of the MTP module (use pytest params for this; accept rate should be >=75%) and an e2e perf check. Also add an option to run the MTP module with/without tracing.
+
+  Generate the reference outputs, run the MTP mdoule test and verify that the acceptance rate is >=75%.
+
+  If there are machine issues, reset the machine using:
+  `/home/shared/scripts/reset.sh`
+
+  Run the test using the following command:
+  `/home/shared/scripts/ds-run pytest models/demos/deepseek_v3/tests/test_mtp.py`
+
+set_up: |
+  Run the following commands to set up the environment:
+  source ../setup_metal.sh
+
+  Familiarize yourself with the deepseek code in /home/jrock/wa/tt-metal/models/demos/deepseek_v3 and read the skills collection in .agents/skills.
+
+check: |
+  Check the agent's output and assess whether the agent needs to follow up on the task or whether it thinks the task is complete. If it thinks the task is complete, verify that the module tests fulfils the requirements and whether it passes. If the agent needs to follow up, give the follow up instructions.
+
+on_success: |
+  Give a summary of the results and the verification steps.
+
+on_failure: |
+  Nothing to do.
+
+tear_down: |
+  Nothing to tear down.
+
+max_iterations: 20  # Optional (default is 10). 0 means unlimited.

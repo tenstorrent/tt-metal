@@ -1262,8 +1262,7 @@ class MLA1D(AbstractModule):
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
         assert page_table.numel() == paged_config.max_num_blocks
-
-        return ttnn.from_torch(
+        page_table_tt = ttnn.from_torch(
             page_table,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1271,6 +1270,31 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        try:
+            alias_mask = cls._compute_alias_mask_from_host(page_table)
+            cache = getattr(cls, "_mtp_alias_mask_cache", None)
+            if cache is None:
+                cache = {}
+                setattr(cls, "_mtp_alias_mask_cache", cache)
+            cache[id(page_table_tt)] = alias_mask
+        except Exception as exc:
+            logger.debug("Failed to precompute alias mask for page table: {}", exc)
+        return page_table_tt
+
+    @staticmethod
+    def _compute_alias_mask_from_host(page_table_host: torch.Tensor) -> torch.Tensor:
+        if page_table_host.dim() != 2:
+            raise RuntimeError(f"Unexpected page table rank for alias mask: {tuple(page_table_host.shape)}")
+        num_rows = int(page_table_host.shape[0])
+        alias_mask = torch.zeros((num_rows,), dtype=torch.bool)
+        seen: dict[tuple[int, ...], int] = {}
+        for i in range(num_rows):
+            row = tuple(int(v) for v in page_table_host[i].tolist())
+            if row in seen:
+                alias_mask[i] = True
+            else:
+                seen[row] = i
+        return alias_mask
 
     @classmethod
     def create_state(
@@ -1845,15 +1869,368 @@ class MLA1D(AbstractModule):
         mesh_shape: tuple[int, int],
         row_idx: int | None,
     ) -> None:
-        # Update KVPE Cache
-        # 1,4,1(32),576 height sharded 1x4 [32,576]
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache,
-            tt_kvpe,
-            update_idxs_tensor=position_idxs,
-            page_table=page_table,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+        def _get_alias_mask(page_table_tensor: ttnn.Tensor) -> torch.Tensor:
+            cache = getattr(cls, "_mtp_alias_mask_cache", None)
+            if cache is None:
+                cache = {}
+                setattr(cls, "_mtp_alias_mask_cache", cache)
+            key = id(page_table_tensor)
+            if key in cache:
+                return cache[key]
+            mesh_device = page_table_tensor.device()
+            if mesh_device is None:
+                raise RuntimeError("Page table tensor is missing mesh device for alias mask.")
+            page_table_host = ttnn.to_torch(
+                page_table_tensor,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            )
+            num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+            if num_devices > 1 and page_table_host.shape[0] % num_devices == 0:
+                rows_per_device = page_table_host.shape[0] // num_devices
+                page_table_host = page_table_host.reshape(num_devices, rows_per_device, -1)[0]
+            alias_mask = cls._compute_alias_mask_from_host(page_table_host)
+            cache[key] = alias_mask
+            return alias_mask
+
+        debug_enabled = os.getenv("DEEPSEEK_MTP_KV_DEBUG", "0") == "1"
+        debug_max_calls = int(os.getenv("DEEPSEEK_MTP_KV_DEBUG_MAX_CALLS", "1"))
+        debug_active = False
+        if debug_enabled:
+            call_count = int(getattr(cls, "_kv_debug_call_count", 0))
+            if call_count < debug_max_calls:
+                setattr(cls, "_kv_debug_call_count", call_count + 1)
+                debug_active = True
+                cls._debug_kv_cache_snapshot(
+                    kvpe_cache=kvpe_cache,
+                    position_idxs=position_idxs,
+                    page_table=page_table,
+                    mesh_shape=mesh_shape,
+                    stage="before",
+                )
+
+        mask_debug_enabled = os.getenv("DEEPSEEK_MTP_UPDATE_MASK_DEBUG", "0") == "1"
+        mask_debug_max_calls = int(os.getenv("DEEPSEEK_MTP_UPDATE_MASK_DEBUG_MAX_CALLS", "1"))
+        mask_debug_active = False
+        if mask_debug_enabled:
+            call_count = int(getattr(cls, "_kv_mask_debug_call_count", 0))
+            if call_count < mask_debug_max_calls:
+                setattr(cls, "_kv_mask_debug_call_count", call_count + 1)
+                mask_debug_active = True
+
+        mesh_device = kvpe_cache.device()
+        if mesh_device is None:
+            raise RuntimeError("Paged update cache requires a valid mesh device.")
+
+        # Split KVPE cache updates into prompt and speculation lanes to avoid aliasing races.
+        alias_mask = _get_alias_mask(page_table)
+        per_shard = int(alias_mask.numel())
+        num_devices = mesh_shape[1] if row_idx is not None else (mesh_shape[0] * mesh_shape[1])
+        logical_shape = (
+            position_idxs.logical_shape() if hasattr(position_idxs, "logical_shape") else position_idxs.shape
         )
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        is_sharded = position_idxs.is_sharded() if hasattr(position_idxs, "is_sharded") else False
+        num_devices_eff = num_devices
+        if not is_sharded and per_shard > 0 and total_elems % per_shard == 0:
+            candidate = total_elems // per_shard
+            if candidate > 0 and candidate <= num_devices:
+                num_devices_eff = candidate
+
+        if mask_debug_active:
+            try:
+                alias_mask_list = alias_mask.to(torch.int32).tolist()
+            except Exception:
+                alias_mask_list = "<unavailable>"
+            logger.info(
+                "MTP update mask setup: alias_mask={} per_shard={} total_elems={} logical_shape={} num_devices={} "
+                "num_devices_eff={} is_sharded={} row_idx={}",
+                alias_mask_list,
+                per_shard,
+                total_elems,
+                tuple(int(dim) for dim in logical_shape),
+                num_devices,
+                num_devices_eff,
+                is_sharded,
+                row_idx,
+            )
+
+        def _log_split_fallback(reason: str) -> None:
+            if getattr(cls, "_mtp_split_debug_logged", False):
+                return
+            setattr(cls, "_mtp_split_debug_logged", True)
+            try:
+                logical_shape_str = str(logical_shape)
+            except Exception:
+                logical_shape_str = "<unavailable>"
+            try:
+                shape_str = str(position_idxs.shape)
+            except Exception:
+                shape_str = "<unavailable>"
+            try:
+                is_sharded = position_idxs.is_sharded() if hasattr(position_idxs, "is_sharded") else None
+            except Exception:
+                is_sharded = "<error>"
+            shard_spec = None
+            try:
+                mem_cfg = position_idxs.memory_config() if hasattr(position_idxs, "memory_config") else None
+                if mem_cfg is not None and hasattr(mem_cfg, "is_sharded") and mem_cfg.is_sharded():
+                    shard_spec = getattr(mem_cfg, "shard_spec", None)
+            except Exception:
+                shard_spec = "<error>"
+            logger.warning(
+                "MTP split update fallback ({}): logical_shape={} shape={} per_shard={} num_devices={} num_devices_eff={} "
+                "total_elems={} row_idx={} is_sharded={} shard_spec={}",
+                reason,
+                logical_shape_str,
+                shape_str,
+                per_shard,
+                num_devices,
+                num_devices_eff,
+                total_elems,
+                row_idx,
+                is_sharded,
+                shard_spec,
+            )
+
+        if per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
+            _log_split_fallback("divisibility")
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        else:
+            per_shard_padded = total_elems // num_devices_eff
+            if per_shard_padded < per_shard:
+                _log_split_fallback("per_shard_padded")
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=position_idxs,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+            else:
+                prompt_row = (~alias_mask).to(torch.int32)
+                spec_row = alias_mask.to(torch.int32)
+                prompt_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+                spec_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+                for d in range(num_devices_eff):
+                    start = d * per_shard_padded
+                    prompt_mask_host[start : start + per_shard] = prompt_row
+                    spec_mask_host[start : start + per_shard] = spec_row
+                mask_shape = tuple(int(dim) for dim in logical_shape)
+                prompt_mask_host = prompt_mask_host.reshape(mask_shape)
+                spec_mask_host = spec_mask_host.reshape(mask_shape)
+
+                if mask_debug_active:
+                    try:
+                        prompt_mask_list = prompt_mask_host.reshape(num_devices_eff, -1).tolist()
+                        spec_mask_list = spec_mask_host.reshape(num_devices_eff, -1).tolist()
+                    except Exception:
+                        prompt_mask_list = "<unavailable>"
+                        spec_mask_list = "<unavailable>"
+                    logger.info(
+                        "MTP update mask prompt_mask (devices={}, per_shard_padded={}): {}",
+                        num_devices_eff,
+                        per_shard_padded,
+                        prompt_mask_list,
+                    )
+                    logger.info(
+                        "MTP update mask spec_mask (devices={}, per_shard_padded={}): {}",
+                        num_devices_eff,
+                        per_shard_padded,
+                        spec_mask_list,
+                    )
+
+                mask_mesh_mapper = (
+                    ttnn.ShardTensorToMesh(mesh_device, dim=0)
+                    if is_sharded
+                    else ttnn.ReplicateTensorToMesh(mesh_device)
+                )
+                tt_prompt_mask = ttnn.from_torch(
+                    prompt_mask_host,
+                    device=mesh_device,
+                    mesh_mapper=mask_mesh_mapper,
+                    dtype=ttnn.int32,
+                )
+                tt_spec_mask = ttnn.from_torch(
+                    spec_mask_host,
+                    device=mesh_device,
+                    mesh_mapper=mask_mesh_mapper,
+                    dtype=ttnn.int32,
+                )
+
+                one = ttnn.full_like(position_idxs, fill_value=1)
+                neg_one = ttnn.full_like(position_idxs, fill_value=-1)
+
+                inv_prompt_mask = ttnn.subtract(one, tt_prompt_mask)
+                inv_spec_mask = ttnn.subtract(one, tt_spec_mask)
+
+                tt_prompt_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, tt_prompt_mask),
+                    ttnn.multiply(neg_one, inv_prompt_mask),
+                )
+                tt_spec_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, tt_spec_mask),
+                    ttnn.multiply(neg_one, inv_spec_mask),
+                )
+
+                # Update KVPE Cache (prompt lanes first, spec lanes second)
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_prompt_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_spec_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+
+                for tensor in (
+                    tt_prompt_mask,
+                    tt_spec_mask,
+                    one,
+                    neg_one,
+                    inv_prompt_mask,
+                    inv_spec_mask,
+                    tt_prompt_pos,
+                    tt_spec_pos,
+                ):
+                    ttnn.deallocate(tensor)
+
+        if debug_active:
+            cls._debug_kv_cache_snapshot(
+                kvpe_cache=kvpe_cache,
+                position_idxs=position_idxs,
+                page_table=page_table,
+                mesh_shape=mesh_shape,
+                stage="after",
+            )
+
+    @staticmethod
+    def _debug_kv_cache_snapshot(
+        kvpe_cache: ttnn.Tensor,
+        position_idxs: ttnn.Tensor,
+        page_table: ttnn.Tensor,
+        mesh_shape: tuple[int, int],
+        stage: str,
+    ) -> None:
+        try:
+            prompt_idx = int(os.getenv("DEEPSEEK_MTP_KV_DEBUG_PROMPT_IDX", "0"))
+            spec_idx = int(os.getenv("DEEPSEEK_MTP_KV_DEBUG_SPEC_IDX", "1"))
+            dump_dir = os.getenv("DEEPSEEK_MTP_KV_DUMP_DIR", "")
+            mesh_device = kvpe_cache.device()
+            if mesh_device is None:
+                logger.warning("KV debug: mesh device unavailable; skipping snapshot.")
+                return
+            ttnn.synchronize_device(mesh_device)
+
+            pos_host = ttnn.to_torch(
+                position_idxs,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            ).flatten()
+
+            page_table_host = ttnn.to_torch(
+                page_table,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            )
+
+            num_devices = int(mesh_shape[0] * mesh_shape[1])
+            if page_table_host.shape[0] % max(num_devices, 1) == 0:
+                rows_per_replica = page_table_host.shape[0] // max(num_devices, 1)
+            else:
+                rows_per_replica = page_table_host.shape[0]
+            page_table_host = page_table_host[:rows_per_replica]
+
+            block_size = int(kvpe_cache.shape[2])
+            kv_dim = int(kvpe_cache.shape[3])
+            call_id = int(getattr(MLA1D, "_kv_debug_call_count", 0))
+
+            def _dump_lane(lane_idx: int, label: str) -> None:
+                if lane_idx < 0 or lane_idx >= pos_host.numel():
+                    logger.warning("KV debug: lane %s idx %d out of range for positions", label, lane_idx)
+                    return
+
+                pos_val = int(pos_host[lane_idx].item())
+                row = lane_idx % rows_per_replica
+                block_col = pos_val // block_size
+                if block_col < 0 or block_col >= page_table_host.shape[1]:
+                    logger.warning(
+                        "KV debug: lane %s pos %d out of range for block cols (rows=%d, cols=%d)",
+                        label,
+                        pos_val,
+                        rows_per_replica,
+                        int(page_table_host.shape[1]),
+                    )
+                    return
+
+                block_idx = int(page_table_host[row, block_col].item())
+                offset = pos_val % block_size
+
+                block_slice = ttnn.slice(
+                    kvpe_cache,
+                    [block_idx, 0, 0, 0],
+                    [block_idx + 1, 1, block_size, kv_dim],
+                )
+                try:
+                    block_host = ttnn.to_torch(
+                        block_slice,
+                        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+                    )
+                finally:
+                    ttnn.deallocate(block_slice)
+
+                if block_host.numel() == 0:
+                    logger.warning("KV debug: empty block host tensor for lane %s", label)
+                    return
+
+                block_host = block_host.reshape(-1, block_size, kv_dim)
+                block_host = block_host[0].to(torch.float32)
+                vec = block_host[offset]
+                vec_norm = float(torch.norm(vec).item())
+                vec_mean = float(torch.mean(vec).item())
+                logger.info(
+                    "KV debug %s: lane=%s idx=%d pos=%d block=%d offset=%d norm=%.6f mean=%.6f",
+                    stage,
+                    label,
+                    lane_idx,
+                    pos_val,
+                    block_idx,
+                    offset,
+                    vec_norm,
+                    vec_mean,
+                )
+
+                if dump_dir:
+                    dump_path = Path(dump_dir)
+                    dump_path.mkdir(parents=True, exist_ok=True)
+                    payload = {
+                        "stage": stage,
+                        "lane": label,
+                        "lane_idx": lane_idx,
+                        "position": pos_val,
+                        "block_idx": block_idx,
+                        "offset": offset,
+                        "block": block_host.cpu(),
+                        "vector": vec.cpu(),
+                    }
+                    fname = f"kv_debug_call{call_id}_{label}_pos{pos_val}_block{block_idx}_{stage}.pt"
+                    torch.save(payload, dump_path / fname)
+
+            _dump_lane(prompt_idx, "prompt")
+            _dump_lane(spec_idx, "spec")
+        except Exception as exc:
+            logger.warning(f"KV debug snapshot failed: {exc}")
 
     @classmethod
     def _fwd_decode_q_rope_nope(
