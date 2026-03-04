@@ -60,6 +60,7 @@ def sharded_cross_entropy_loss(
     """
     ctx = ttml.autograd.AutoContext.get_instance()
     device = ctx.get_device()
+    print(f"device: {device}")
     x = logits.get_value()
     shape = logits.shape()
     B, S, local_V = int(shape[0]), int(shape[2]), int(shape[3])
@@ -96,35 +97,26 @@ def sharded_cross_entropy_loss(
     log_normalizer = ttnn.add(global_max, ttnn.log(global_sum))  # float32, [B,1,S,1]
 
     # 4. Extract the logit value at the target position.
-    #    Build a per-device one-hot mask on CPU, shard it, then dot-product.
+    #    One-hot on full vocab, then shard along vocab dim to devices.
+    global_B = dp_size * B
+    padded_vocab = tp_size * local_V
+    onehot = np.zeros((global_B, 1, S, padded_vocab), dtype=np.float32)
+    np.put_along_axis(
+        onehot, targets_np.astype(np.int64).reshape(global_B, 1, S, 1), 1.0, axis=3
+    )
+    # Split vocab into tp shards and stack per-device along dim 0 (to match x's layout)
+    onehot = onehot.reshape(dp_size, B, 1, S, tp_size, local_V)
+    onehot = np.ascontiguousarray(onehot.transpose(0, 4, 1, 2, 3, 5))
+    onehot = onehot.reshape(dp_size * tp_size * B, 1, S, local_V)
     if dp_size > 1:
-        num_devices = dp_size * tp_size
-        onehot_np = np.zeros((num_devices * B, 1, S, local_V), dtype=np.float32)
-        for d in range(dp_size):
-            for k in range(tp_size):
-                offset = k * local_V
-                dev_idx = d * tp_size + k
-                for b in range(B):
-                    for s in range(S):
-                        t = int(targets_np[d * B + b, s])
-                        if offset <= t < offset + local_V:
-                            onehot_np[dev_idx * B + b, 0, s, t - offset] = 1.0
         shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
     else:
-        onehot_np = np.zeros((tp_size * B, 1, S, local_V), dtype=np.float32)
-        for k in range(tp_size):
-            offset = k * local_V
-            for b in range(B):
-                for s in range(S):
-                    t = int(targets_np[b, s])
-                    if offset <= t < offset + local_V:
-                        onehot_np[k * B + b, 0, s, t - offset] = 1.0
         shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
             device, 0, cluster_axis=tp_axis
         )
 
     onehot_val = ttml.autograd.Tensor.from_numpy(
-        onehot_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, shard_mapper
+        onehot, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, shard_mapper
     ).get_value()  # [B,1,S,V/tp]
 
     target_logit_local = ttnn.sum(
@@ -161,10 +153,8 @@ def sharded_cross_entropy_loss(
 
     def backward():
         grad_out = loss.get_grad()  # [1,1,1,1]
-        # saved_shifted and saved_global_sum are already float32 from the forward pass.
-        # Re-computing exp in float32 keeps the softmax gradient numerically stable.
-        softmax_k = ttnn.multiply(
-            ttnn.exp(saved_shifted), ttnn.reciprocal(saved_global_sum)
+        softmax_k = ttnn.exp(
+            ttnn.subtract(saved_shifted, ttnn.log(saved_global_sum))
         )  # float32
         diff = ttnn.subtract(
             softmax_k, ttnn.typecast(saved_onehot, ttnn.DataType.FLOAT32)

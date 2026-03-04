@@ -23,6 +23,11 @@ import argparse
 import os
 import sys
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_QWEN3_ROOT = os.path.dirname(_SCRIPT_DIR)
+if _QWEN3_ROOT not in sys.path:
+    sys.path.insert(0, _QWEN3_ROOT)
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -85,14 +90,12 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     total_devices = dp_size * tp_size
     distributed = total_devices > 1
     global_batch = dp_size * batch_size
-    local_V = vocab_size // tp_size
-
-    assert vocab_size % tp_size == 0
+    raw_local_V = vocab_size // tp_size
 
     print(f"\n{'=' * 70}")
     print(
         f"Test: sharded_cross_entropy_loss  (mesh=[{dp_size},{tp_size}], "
-        f"B={batch_size}, S={seq_len}, V={vocab_size})"
+        f"B={batch_size}, S={seq_len}, V={vocab_size}, local_V={raw_local_V})"
     )
     print(f"{'=' * 70}")
 
@@ -139,7 +142,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
                     d * batch_size : (d + 1) * batch_size,
                     :,
                     :,
-                    k * local_V : (k + 1) * local_V,
+                    k * raw_local_V : (k + 1) * raw_local_V,
                 ]
                 per_device_chunks.append(chunk)
         logits_stacked = np.concatenate(per_device_chunks, axis=0)
@@ -231,6 +234,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
             )
 
             # Reconstruct full gradient from per-device shards
+            # grad slabs may be tile-padded wider than raw_local_V
             grad_full = np.zeros_like(logits_np)
             for d in range(dp_size):
                 for k in range(tp_size):
@@ -240,8 +244,8 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
                         d * batch_size : (d + 1) * batch_size,
                         :,
                         :,
-                        k * local_V : (k + 1) * local_V,
-                    ] = slab
+                        k * raw_local_V : (k + 1) * raw_local_V,
+                    ] = slab[:, :, :, :raw_local_V]
 
             # Average gradients across DP groups to match global mean
             # (mirrors synchronize_gradients in training)
@@ -296,11 +300,20 @@ def main():
     )
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--seq_len", type=int, default=32)
-    parser.add_argument("--vocab_size", type=int, default=64)
+    parser.add_argument(
+        "--vocab_size",
+        type=int,
+        nargs="+",
+        default=[64, 240, 1024],
+        help="Vocab sizes to test (supports non-tile-aligned). Default: 64 240 1024",
+    )
     args = parser.parse_args()
 
-    ok = run_test(args.mesh_shape, args.batch_size, args.seq_len, args.vocab_size)
-    sys.exit(0 if ok else 1)
+    all_ok = True
+    for vs in args.vocab_size:
+        ok = run_test(args.mesh_shape, args.batch_size, args.seq_len, vs)
+        all_ok = all_ok and ok
+    sys.exit(0 if all_ok else 1)
 
 
 if __name__ == "__main__":
