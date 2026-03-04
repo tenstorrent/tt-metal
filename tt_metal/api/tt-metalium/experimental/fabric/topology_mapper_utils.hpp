@@ -305,6 +305,15 @@ struct LogicalMultiMeshGraph {
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
 
 /**
+ * @brief Build logical multi-mesh adjacency graph from MeshGraphDescriptor
+ *
+ * Same as above but takes MeshGraphDescriptor instead of MeshGraph. Prefer this overload when
+ * the descriptor is already available to avoid constructing a MeshGraph.
+ */
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
+    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
+
+/**
  * @brief Represents a physical mesh node in a 2-layer adjacency graph
  *
  * Simplified to just be a MeshId. The internal adjacency graph is accessed via

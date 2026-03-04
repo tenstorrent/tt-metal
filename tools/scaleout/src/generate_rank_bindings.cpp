@@ -259,12 +259,13 @@ TopologyMappingResult run_topology_mapping(
     PhysicalMultiMeshGraph physical_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
     // Build logical multi-mesh graph from MGD
-    // Need to create MeshGraph from cluster and MGD path
     log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph...");
+    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mgd);
+
+    // MeshGraph still needed for config (validation modes) and extract_rank_bindings
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto& cluster = context.get_cluster();
     MeshGraph mesh_graph(cluster, mgd_path.string());
-    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     // Print adjacency maps
     print_logical_adjacency_map(logical_graph);

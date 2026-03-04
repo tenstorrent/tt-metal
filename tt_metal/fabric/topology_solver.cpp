@@ -6,10 +6,101 @@
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
+
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraphDescriptor& mgd) {
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>::AdjacencyMap> adjacency_maps;
+
+    // Collect all mesh and switch instances (same order as MeshGraph: meshes then switches)
+    std::vector<GlobalNodeId> mesh_and_switch_instances;
+    for (GlobalNodeId id : mgd.all_meshes()) {
+        mesh_and_switch_instances.push_back(id);
+    }
+    for (GlobalNodeId id : mgd.all_switches()) {
+        mesh_and_switch_instances.push_back(id);
+    }
+
+    // Initialize nodes for each mesh/switch
+    for (GlobalNodeId mesh_global_id : mesh_and_switch_instances) {
+        const auto& instance = mgd.get_instance(mesh_global_id);
+        MeshId mesh_id(instance.local_id);
+        AdjacencyGraph<FabricNodeId>::AdjacencyMap& adj = adjacency_maps[mesh_id];
+        for (GlobalNodeId device_global_id : instance.sub_instances) {
+            const auto& device_inst = mgd.get_instance(device_global_id);
+            adj[FabricNodeId(mesh_id, device_inst.local_id)] = std::vector<FabricNodeId>();
+        }
+    }
+
+    // Add intra-mesh edges from FABRIC connections (device-device, same mesh)
+    if (mgd.has_connections_of_type("FABRIC")) {
+        for (ConnectionId conn_id : mgd.connections_by_type("FABRIC")) {
+            const auto& conn = mgd.get_connection(conn_id);
+            const auto& src_inst = mgd.get_instance(conn.nodes[0]);
+            const auto& dst_inst = mgd.get_instance(conn.nodes[1]);
+            if (src_inst.kind != NodeKind::Device || dst_inst.kind != NodeKind::Device) {
+                continue;
+            }
+            GlobalNodeId src_mesh_global = src_inst.hierarchy.back();
+            GlobalNodeId dst_mesh_global = dst_inst.hierarchy.back();
+            if (src_mesh_global != dst_mesh_global) {
+                continue;
+            }
+            const auto& mesh_inst = mgd.get_instance(src_mesh_global);
+            MeshId mesh_id(mesh_inst.local_id);
+            FabricNodeId src_node(mesh_id, src_inst.local_id);
+            FabricNodeId dst_node(mesh_id, dst_inst.local_id);
+            if (src_node == dst_node) {
+                continue;
+            }
+            auto it = adjacency_maps.find(mesh_id);
+            if (it != adjacency_maps.end()) {
+                for (uint32_t i = 0; i < conn.count; ++i) {
+                    it->second[src_node].push_back(dst_node);
+                }
+            }
+        }
+    }
+
+    // Add intra-mesh edges from MESH connections (device-device within a mesh, populated by descriptor)
+    if (mgd.has_connections_of_type("MESH")) {
+        for (ConnectionId conn_id : mgd.connections_by_type("MESH")) {
+            const auto& conn = mgd.get_connection(conn_id);
+            const auto& src_inst = mgd.get_instance(conn.nodes[0]);
+            const auto& dst_inst = mgd.get_instance(conn.nodes[1]);
+            if (src_inst.kind != NodeKind::Device || dst_inst.kind != NodeKind::Device) {
+                continue;
+            }
+            GlobalNodeId src_mesh_global = src_inst.hierarchy.back();
+            GlobalNodeId dst_mesh_global = dst_inst.hierarchy.back();
+            if (src_mesh_global != dst_mesh_global) {
+                continue;
+            }
+            const auto& mesh_inst = mgd.get_instance(src_mesh_global);
+            MeshId mesh_id(mesh_inst.local_id);
+            FabricNodeId src_node(mesh_id, src_inst.local_id);
+            FabricNodeId dst_node(mesh_id, dst_inst.local_id);
+            if (src_node == dst_node) {
+                continue;
+            }
+            auto it = adjacency_maps.find(mesh_id);
+            if (it != adjacency_maps.end()) {
+                for (uint32_t i = 0; i < conn.count; ++i) {
+                    it->second[src_node].push_back(dst_node);
+                }
+            }
+        }
+    }
+
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> result;
+    for (auto& [mesh_id, adj_map] : adjacency_maps) {
+        result[mesh_id] = AdjacencyGraph<FabricNodeId>(std::move(adj_map));
+    }
+    return result;
+}
 
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph) {
     std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
