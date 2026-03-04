@@ -548,7 +548,11 @@ def test_persistent_moe_15_stages(
 
         downstream_socket = None
         if my_mesh_id >= 1:
-            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+            # downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+            if my_mesh_id == num_procs - 1:
+                downstream_socket = pipeline_block.host_io.get_upstream_socket()
+            else:
+                downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
 
         # ── MoE tensors (MoE stages only) ──
         state_dict = get_reference_model_state_dict(
@@ -742,7 +746,8 @@ def test_persistent_moe_15_stages(
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
 
         # ── Stage 0: drive pipeline with multiple tokens ──
-        if is_stage0:
+        # if is_stage0:
+        if my_mesh_id == 15:
             token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
             num_elements = embedding_size_bytes // 2
 
@@ -766,14 +771,14 @@ def test_persistent_moe_15_stages(
 
                 d2h_nonzero = torch.count_nonzero(d2h_result)
                 logger.info(
-                    f"[rank=0] iteration {iteration}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
+                    f"[rank={my_mesh_id}] iteration {iteration}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
                     f"first 5={d2h_result[0, :5]}"
                 )
                 assert (
                     d2h_nonzero > 0
                 ), f"D2H output is all zeros at iteration {iteration} — persistent MoE 15-stage pipeline failed"
 
-            logger.info(f"[rank=0] all {iterations} iterations passed")
+            logger.info(f"[rank={my_mesh_id}] all {iterations} iterations passed")
 
         logger.info(f"[rank={my_mesh_id}] waiting for barrier")
         ttnn.distributed_context_barrier()
