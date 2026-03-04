@@ -75,6 +75,26 @@ class PerCoreCompileTimeDescriptor:
 
 
 @dataclass
+class PerCorePositionalCTADescriptor:
+    """
+    Descriptor for per-core positional compile-time args (list of uint32 values).
+
+    Each core can have a different list of positional CTAs. Cores with the same
+    values are grouped together and share a kernel descriptor.
+
+    Use case: Compressed tensor format arrays that differ per shard.
+
+    Args:
+        core_values: List of (CoreCoord, list[int]) tuples. Each list[int] is the
+                     positional CTAs for that core.
+        other_value: Positional CTAs for cores NOT in core_values (default empty).
+    """
+
+    core_values: list  # List of (CoreCoord, list[int]) tuples
+    other_value: list = field(default_factory=list)  # Default positional CTAs
+
+
+@dataclass
 class PerCoreRuntimeArgsDescriptor:
     """
     Descriptor for per-core runtime args for each RISC processor.
@@ -165,6 +185,7 @@ class UnifiedKernelDescriptor:
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
     per_core_compile_time_descriptors: list = field(default_factory=list)  # List of PerCoreCompileTimeDescriptor
+    per_core_positional_cta_descriptor: Optional[PerCorePositionalCTADescriptor] = None  # Per-core positional CTAs
     per_core_runtime_args_descriptor: Optional[
         PerCoreRuntimeArgsDescriptor
     ] = None  # Per-core runtime args for all RISCs
@@ -240,7 +261,11 @@ class UnifiedKernelDescriptor:
             - kernels: List of KernelDescriptor objects
             - groups: List of KernelGroup objects for identifying kernels by role
         """
-        if not self.unified_compile_time_core_descriptors and not self.per_core_compile_time_descriptors:
+        if (
+            not self.unified_compile_time_core_descriptors
+            and not self.per_core_compile_time_descriptors
+            and not self.per_core_positional_cta_descriptor
+        ):
             # Simple case: no per-core compile-time arg overrides
             return self._get_simple_kernel_descriptors()
 
@@ -342,7 +367,15 @@ class UnifiedKernelDescriptor:
                 arg_lookup[(core_coord.x, core_coord.y)] = value
             per_core_lookup[desc.named_compile_time_arg] = (arg_lookup, desc.other_value)
 
-        # Step 2: For each core, compute its complete named compile-time args
+        # Preprocess per-core positional CTAs
+        positional_cta_lookup = {}  # {(x, y): tuple(list[int])}
+        positional_cta_default = tuple(self.trisc_compile_time_args)
+        if self.per_core_positional_cta_descriptor is not None:
+            positional_cta_default = tuple(self.per_core_positional_cta_descriptor.other_value)
+            for core_coord, values in self.per_core_positional_cta_descriptor.core_values:
+                positional_cta_lookup[(core_coord.x, core_coord.y)] = tuple(values)
+
+        # Step 2: For each core, compute its complete named compile-time args + positional CTAs
         core_to_args = {}
         for core_coord in all_cores:
             args = {}
@@ -361,23 +394,32 @@ class UnifiedKernelDescriptor:
                 else:
                     args[arg_name] = other_value
 
-            # Convert to frozen (hashable) form, use (x, y) tuple as key
-            core_to_args[(core_coord.x, core_coord.y)] = tuple(sorted(args.items()))
+            # Get per-core positional CTAs
+            pos_ctas = positional_cta_lookup.get(core_key, positional_cta_default)
 
-        # Step 3: Group cores by their unique arg combinations
+            # Convert to frozen (hashable) form, include positional CTAs in key
+            frozen_named = tuple(sorted(args.items()))
+            core_to_args[(core_coord.x, core_coord.y)] = (frozen_named, pos_ctas)
+
+        # Step 3: Group cores by their unique arg combinations (named + positional)
         args_to_cores = {}
-        for core_tuple, frozen_args in core_to_args.items():
-            args_to_cores.setdefault(frozen_args, []).append(core_tuple)
+        for core_tuple, frozen_key in core_to_args.items():
+            args_to_cores.setdefault(frozen_key, []).append(core_tuple)
 
         # Step 4: Create kernel descriptors for each unique group
         descriptors = []
         groups = []
         compute_config = self.trisc_compute_config or ttnn.ComputeConfigDescriptor()
 
-        for frozen_args, core_tuples in args_to_cores.items():
+        for (frozen_named, pos_ctas), core_tuples in args_to_cores.items():
             # Convert frozen args to list of tuples and dict
-            unified_named_args = list(frozen_args)
-            arg_values_dict = dict(frozen_args)
+            unified_named_args = list(frozen_named)
+            arg_values_dict = dict(frozen_named)
+
+            # Per-group positional CTAs (override trisc_compile_time_args if per-core descriptor exists)
+            group_trisc_positional = (
+                list(pos_ctas) if self.per_core_positional_cta_descriptor is not None else self.trisc_compile_time_args
+            )
 
             # Combine with common named_compile_time_args for each RISC
             ncrisc_named_compile_time_args_merged = list(self.ncrisc_named_compile_time_args) + unified_named_args
@@ -438,7 +480,7 @@ class UnifiedKernelDescriptor:
                     kernel_source=self.kernel_source,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_range_set,
-                    compile_time_args=self.trisc_compile_time_args,
+                    compile_time_args=group_trisc_positional,
                     named_compile_time_args=trisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.trisc_common_runtime_args,
