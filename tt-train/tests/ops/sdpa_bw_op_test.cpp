@@ -483,7 +483,7 @@ struct SDPABackwardTestConfig {
     float atol = 3e-2F;
     float rtol = 3e-2F;
     std::string test_name = "SDPA Backward Test";
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
 };
 
 void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
