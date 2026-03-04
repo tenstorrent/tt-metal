@@ -131,7 +131,7 @@ The diagram below illustrates that using HEIGHT_SHARDED for the first convolutio
    - Next, execute the command: ./tools/tracy/profile_this.py -n <Folder_name> -c "pytest <path_to_test_file>".
    - Download the generated CSV file (the file path will be displayed in the terminal).
 2. Access the Analysis Tool:
-   - Go through this [comment](https://github.com/tenstorrent/tt-metal/issues/12468#issuecomment-2341711534).
+   - Go throught this [comment](https://github.com/tenstorrent/tt-metal/issues/12468#issuecomment-2341711534).
    - Open the deployment link there.
 3. Select Device:
    - When prompted for Grayskull/Wormhole, choose the device you used.
@@ -1358,9 +1358,9 @@ class TtNeck:
         pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
         pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
         pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
-        pool_1 = ttnn.to_layout(pool_1, layout=ttnn.TILE_LAYOUT)  # This is because output_tensor is in TILE_LAYOUT
-        pool_2 = ttnn.to_layout(pool_2, layout=ttnn.TILE_LAYOUT)  # This is because output_tensor is in TILE_LAYOUT
-        pool_3 = ttnn.to_layout(pool_3, layout=ttnn.TILE_LAYOUT)  # This is because output_tensor is in TILE_LAYOUT
+        pool_1 = ttnn.to_layout(pool_1, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
+        pool_2 = ttnn.to_layout(pool_2, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
+        pool_3 = ttnn.to_layout(pool_3, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = ttnn.concat([pool_3, pool_2, pool_1, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)

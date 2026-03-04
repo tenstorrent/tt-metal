@@ -23,7 +23,7 @@ namespace tt::tt_metal::experimental::udm {
  * local coordinate systems. MeshBuilder solves this by constructing a unified
  * global view where:
  * - A Mesh represents the arrangement of devices (e.g., 2x4 device grid)
- * - A Grid represents a single device's compute cores (Currently in 2D dimensions, same as the physical grid dimension)
+ * - A Grid represents a single device's compute cores (Currenlty in 2D dimensions, same as the physical grid dimension)
  * - A GlobalCore provides a single identifier for any core across all devices,
  *   abstracting away the device boundary and local coordinates
  *

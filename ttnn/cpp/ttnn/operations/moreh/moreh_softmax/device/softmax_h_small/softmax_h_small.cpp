@@ -71,7 +71,7 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
             {tt::CBIndex::c_28, 1, intermed_data_format}    // tmp
         });
 
-    // create read/write kernel
+    // create read/wrtie kernel
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

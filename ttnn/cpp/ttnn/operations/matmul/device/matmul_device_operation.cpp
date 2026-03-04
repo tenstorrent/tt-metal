@@ -139,7 +139,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
-            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}",
+            "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
             optional_output_tensor_shape,
             output_tensor_spec.logical_shape());
         TT_FATAL(

@@ -175,7 +175,7 @@ FORCE_INLINE void write_perf_recording_window_results<LowResolutionBandwidthTele
     // For the time being, this telemetry mode records elapsed elapsed (busy) cycles, not start/end, because
     // we want to exclude large idle times from the bandwidth calculation
     buffer_ptr->timestamp_start.full = added_cycles;
-    // Skip end timestamp
+    // Skip end timstamp
     buffer_ptr->num_words_sent = buffer_ptr->num_words_sent + perf_telemetry_collector.num_words_sent;
     buffer_ptr->num_packets_sent = buffer_ptr->num_packets_sent + perf_telemetry_collector.num_packets_sent;
 }

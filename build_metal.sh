@@ -412,7 +412,7 @@ if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
 fi
 
-# toolchain and cxx_compiler settings would conflict with each other
+# toolchain and cxx_compiler settings would conflict with eachother
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
