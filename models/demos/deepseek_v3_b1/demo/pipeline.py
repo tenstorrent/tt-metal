@@ -13,8 +13,10 @@ from typing import Any, Callable, Protocol
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
+    DenseDecoderStage,
     EmbeddingStage,
     LMHeadStage,
+    MoEDecoderStage,
     PassthroughPayload,
     PassthroughStage,
     StageContext,
@@ -22,6 +24,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 )
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
@@ -38,6 +41,9 @@ class WeightProvider(Protocol):
         ...
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        ...
+
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         ...
 
 
@@ -69,8 +75,8 @@ def create_single_galaxy_pipeline_configuration(
         {
             0: stage_0,
             1: stage_1,
-            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
-            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            2: lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=0, device=d)),
+            3: lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=3, device=d)),
         }
     )
 
@@ -81,7 +87,7 @@ def create_single_pod_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> 13x Activation fwd -> LMHead -> Token fwd."""
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> MoE(3..12) -> LMHead -> Token fwd."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
@@ -93,10 +99,19 @@ def create_single_pod_pipeline_configuration(
             persistent_mode=persistent_mode,
         )
 
-    passthrough_activation = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
+    # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
+    def _dense_stage(layer_id: int):
+        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+
+    def _moe_stage(layer_id: int):
+        return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
-        **{i: passthrough_activation for i in range(1, 14)},
+        1: _dense_stage(0),
+        2: _dense_stage(1),
+        3: _dense_stage(2),
+        **{i: _moe_stage(i - 1) for i in range(4, 14)},
         14: stage_14,
         15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }
@@ -109,7 +124,7 @@ def create_sp4_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
-    """64-stage super-pod: Embed -> 63x Activation fwd -> LMHead -> Token fwd."""
+    """64-stage super-pod: Embed -> Dense(0,1,2) -> MoE(3..60) -> LMHead -> Token fwd."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
@@ -121,10 +136,19 @@ def create_sp4_pipeline_configuration(
             persistent_mode=persistent_mode,
         )
 
-    passthrough_activation = lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)
+    # Stage i -> layer_id i-1 for decoder stages (stage 1 = layer 0, ..., stage 61 = layer 60)
+    def _dense_stage(layer_id: int):
+        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+
+    def _moe_stage(layer_id: int):
+        return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
         0: stage_0,
-        **{i: passthrough_activation for i in range(1, 62)},
+        1: _dense_stage(0),
+        2: _dense_stage(1),
+        3: _dense_stage(2),
+        **{i: _moe_stage(i - 1) for i in range(4, 62)},
         62: stage_62,
         63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }

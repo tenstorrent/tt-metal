@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_fabric_router_config,
     create_pipeline_configuration_from_num_procs,
 )
-from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.prepare_weights import (
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_lm_head_weights,
     load_moe_decoder_layer,
     load_moe_routed_experts,
+    prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
@@ -89,6 +90,32 @@ def _build_synthetic_moe_state_dict(
     return state_dict
 
 
+def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
+    """Build a synthetic dense layer state dict with HF tensor shapes (randn for weights, ones for norms)."""
+    state_dict: dict[str, torch.Tensor] = {}
+    dtype = torch.bfloat16
+
+    # Attention weights (HF shapes)
+    state_dict[_layer_key(layer_id, "self_attn.q_a_proj.weight")] = torch.randn(1536, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.q_b_proj.weight")] = torch.randn(24576, 1536, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.kv_a_proj_with_mqa.weight")] = torch.randn(576, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.kv_b_proj.weight")] = torch.randn(32768, 512, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.o_proj.weight")] = torch.randn(7168, 16384, dtype=dtype)
+
+    # Norms (ones per plan)
+    state_dict[_layer_key(layer_id, "input_layernorm.weight")] = torch.ones(7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.q_a_layernorm.weight")] = torch.ones(1536, dtype=dtype)
+    state_dict[_layer_key(layer_id, "self_attn.kv_a_layernorm.weight")] = torch.ones(512, dtype=dtype)
+    state_dict[_layer_key(layer_id, "post_attention_layernorm.weight")] = torch.ones(7168, dtype=dtype)
+
+    # Single MLP (used for both shared and routed in dense)
+    state_dict[_layer_key(layer_id, "mlp.gate_proj.weight")] = torch.randn(2048, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "mlp.up_proj.weight")] = torch.randn(2048, 7168, dtype=dtype)
+    state_dict[_layer_key(layer_id, "mlp.down_proj.weight")] = torch.randn(7168, 2048, dtype=dtype)
+
+    return state_dict
+
+
 def _fabric_config_for_num_procs(num_procs: int):
     """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
     if num_procs == 4:
@@ -138,6 +165,8 @@ class CacheWeightProvider:
     """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
 
     def __init__(self, cache_path: Path) -> None:
+        assert cache_path.exists(), f"Cache path does not exist: {cache_path}"
+        assert cache_path.is_dir(), f"Cache path is not a directory: {cache_path}"
         self._path = cache_path
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
@@ -150,6 +179,9 @@ class CacheWeightProvider:
         with ttnn.device.setup_fast_dispatch(device):
             preloaded_experts = load_moe_routed_experts(self._path, device, layer_id)
         return load_moe_decoder_layer(self._path, device, layer_id, preloaded_routed_experts=preloaded_experts)
+
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+        return load_dense_decoder_layer(self._path, device, layer_id)
 
 
 class SyntheticWeightProvider:
@@ -178,6 +210,13 @@ class SyntheticWeightProvider:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         bdw = BlitzDecodeWeights(device)
         return prepare_moe_layer_weights(bdw, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+
+        sd = _build_synthetic_dense_state_dict(layer_id)
+        bdw = BlitzDecodeWeights(device)
+        return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
 
 
 def load_weights_from_cache(
@@ -304,11 +343,11 @@ def run_demo(
         if pipeline.my_mesh_id == 0:
             for iteration in range(iterations):
                 logger.info(f"Writing token for iteration {iteration}")
-                torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
                 torch_token[0, 0] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
-                    torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
