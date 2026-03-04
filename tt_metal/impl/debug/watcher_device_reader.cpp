@@ -743,19 +743,27 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-            assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+            assert_status.file_id() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
+            assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8 ||
+            assert_status.extra_info() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
-                "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
+                "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}, file_id "
+                "0x{:04x}, extra_info 0x{:02x}.",
                 virtual_coord_.str(),
                 assert_status.which(),
-                assert_status.line_num());
+                assert_status.line_num(),
+                assert_status.file_id(),
+                assert_status.extra_info());
         }
         return;  // no assert tripped, nothing to do
     }
     std::string error_msg =
         fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
-        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()), assert_status.line_num());
+        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
+        assert_status.line_num(),
+        assert_status.file_id(),
+        assert_status.extra_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
         TT_THROW(

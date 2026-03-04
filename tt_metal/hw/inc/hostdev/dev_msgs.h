@@ -246,8 +246,11 @@ enum debug_sanitize_noc_return_code_enum {
 
 struct debug_assert_msg_t {
     volatile uint16_t line_num;
+    volatile uint16_t file_id;
     volatile uint8_t tripped;
     volatile uint8_t which;
+    volatile uint8_t extra_info;
+    volatile uint8_t pad;  // CODEGEN:skip
 };
 
 enum debug_assert_type_t {
@@ -319,6 +322,27 @@ struct watcher_msg_t {
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[PROCESSOR_COUNT];
 };
+
+// FNV-1a hash functions for assert file/message identification.
+// Used by device-side ASSERT/LLK_ASSERT macros and host-side watcher to resolve assert locations.
+// Must be in #ifndef CODEGEN because codegen cannot handle constexpr functions.
+constexpr uint16_t debug_file_hash(const char* str) {
+    uint32_t hash = 2166136261u;
+    while (*str) {
+        hash ^= static_cast<uint32_t>(*str++);
+        hash *= 16777619u;
+    }
+    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
+}
+
+constexpr uint8_t debug_msg_hash(const char* str) {
+    uint32_t hash = 2166136261u;
+    while (*str) {
+        hash ^= static_cast<uint32_t>(*str++);
+        hash *= 16777619u;
+    }
+    return static_cast<uint8_t>(hash ^ (hash >> 8) ^ (hash >> 16) ^ (hash >> 24));
+}
 #endif
 
 // NOC aligment max from BH
