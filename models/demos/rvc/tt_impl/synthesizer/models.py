@@ -9,11 +9,17 @@ import math
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.attentions import FFN, MultiHeadAttention
 from models.demos.rvc.tt_impl.conv1d import TTConv1d
 from models.demos.rvc.tt_impl.convtranspose1d import TTConvTranspose1d
 from models.demos.rvc.tt_impl.linear import TTLinear
-from models.demos.rvc.tt_impl.modules import LRELU_SLOPE, LayerNorm, ResBlock1, ResBlock2, ResidualCouplingLayer
+from models.demos.rvc.tt_impl.synthesizer.attentions import FFN, MultiHeadAttention
+from models.demos.rvc.tt_impl.synthesizer.modules import (
+    LRELU_SLOPE,
+    LayerNorm,
+    ResBlock1,
+    ResBlock2,
+    ResidualCouplingLayer,
+)
 
 
 def _to_nlc(x: ttnn.Tensor) -> ttnn.Tensor:
