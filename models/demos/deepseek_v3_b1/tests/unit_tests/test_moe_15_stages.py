@@ -432,7 +432,7 @@ def test_bcast_moe_two_stage_pipeline(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
         }
@@ -449,18 +449,25 @@ def test_bcast_moe_two_stage_pipeline_real_weights(
     if not is_slow_dispatch():
         pytest.skip("requires slow dispatch")
 
+    logger.info(f"[rank={my_mesh_id}] test_bcast_moe_two_stage_pipeline_real_weights started")
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    logger.info(f"[rank={my_mesh_id}] asynchronous slow dispatch enabled")
 
     my_mesh_id = mesh_device.get_system_mesh_id()
+    logger.info(f"[rank={my_mesh_id}] my_mesh_id: {my_mesh_id}")
     num_procs = int(ttnn.distributed_context_get_size())
+    logger.info(f"[rank={my_mesh_id}] num_procs: {num_procs}")
     if num_procs < 2:
         pytest.skip(f"Requires at least 2 distributed processes, got {num_procs}")
 
     device_grid = mesh_device.compute_with_storage_grid_size()
+    logger.info(f"[rank={my_mesh_id}] device_grid: {device_grid}")
     if device_grid.x < 13 or device_grid.y < 10:
         pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for MoE (need >= 13x10)")
 
+    logger.info(f"[rank={my_mesh_id}] generating blitz decode pipeline")
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    logger.info(f"[rank={my_mesh_id}] pipeline_config: {pipeline_config}")
     assert len(pipeline_config) == num_procs + 1
 
     is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
@@ -471,6 +478,7 @@ def test_bcast_moe_two_stage_pipeline_real_weights(
     pipeline_core = ttnn.CoreCoord(12, 8)
     moe_sender_core = ttnn.CoreCoord(12, 9)
     moe_worker_core_grid = build_worker_grid_excluding_core(device_grid, pipeline_core)
+    logger.info(f"[rank={my_mesh_id}] moe_worker_core_grid: {moe_worker_core_grid}")
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
@@ -569,8 +577,15 @@ def test_bcast_moe_two_stage_pipeline_real_weights(
         assert len(weights.routed_down_proj) == NUM_ROUTED_EXPERTS
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-        rt = create_runtime_tensors(mesh_device, mesh_mapper=mesh_mapper, create_final_output=False)
-        logger.info(f"[rank={my_mesh_id}] Runtime tensors created")
+        rt = create_runtime_tensors(
+            mesh_device,
+            mesh_mapper=mesh_mapper,
+            create_final_output=False,
+            create_sdpa_buffers=False,
+        )
+        logger.info(
+            f"[rank={my_mesh_id}] Runtime tensors created (SDPA buffers created inline on moe_worker_core_grid)"
+        )
 
         mcast_grid = moe_worker_core_grid
         kv_cache_shard_height = 256

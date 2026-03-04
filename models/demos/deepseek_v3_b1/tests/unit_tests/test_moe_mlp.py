@@ -155,13 +155,14 @@ def load_moe_weights(cache_path, device, layer_idx=3):
     return load_moe_decoder_layer(cache_path, device, layer_idx, preloaded_routed_experts=experts)
 
 
-def create_runtime_tensors(device, mesh_mapper=None, create_final_output=False):
+def create_runtime_tensors(device, mesh_mapper=None, create_final_output=False, create_sdpa_buffers=True):
     """
-    Create non-weight tensors needed by MoeOp.op(): input, gate indices, output buffers, SDPA buffers.
+    Create non-weight tensors needed by MoeOp.op(): input, gate indices, output buffers, optionally SDPA buffers.
 
     Returns dict with: residual_mcast_src, gate_indices, gate_output_scores_tensor,
     gate_output_indices_tensor, final_output_tensor (or None), sdpa_kv_cache_buffer,
-    sdpa_out_interm_buffer, mcast_grid, final_output_total_width, final_output_mem_config.
+    sdpa_out_interm_buffer (both None when create_sdpa_buffers=False), mcast_grid,
+    final_output_total_width, final_output_mem_config.
     """
     M = 1
     K = 7168
@@ -264,43 +265,51 @@ def create_runtime_tensors(device, mesh_mapper=None, create_final_output=False):
             **from_torch_kwargs,
         )
 
-    # SDPA buffers for CB overlap
-    kv_cache_shard_height = 256
-    kvpe_dim = 576
-    num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
-    kv_cache_shard_spec = ttnn.ShardSpec(mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR)
-    sdpa_kv_cache_buffer = ttnn.from_torch(
-        torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
-        ),
-    )
-    sdpa_out_interm_shard_height = 40
-    sdpa_out_interm_shard_width = 544
-    full_device_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
-    )
-    num_full_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
-        full_device_grid,
-        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sdpa_out_interm_buffer = ttnn.from_torch(
-        torch.zeros((sdpa_out_interm_shard_height * num_full_cores, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            sdpa_out_interm_shard_spec,
-        ),
-        tile=ttnn.Tile([8, 32]),
-    )
+    # SDPA buffers for CB overlap (optional: caller may create their own on a different grid)
+    sdpa_kv_cache_buffer = None
+    sdpa_out_interm_buffer = None
+    if create_sdpa_buffers:
+        kv_cache_shard_height = 256
+        kvpe_dim = 576
+        num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
+        kv_cache_shard_spec = ttnn.ShardSpec(
+            mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        sdpa_kv_cache_buffer = ttnn.from_torch(
+            torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+            ),
+        )
+        sdpa_out_interm_shard_height = 40
+        sdpa_out_interm_shard_width = 544
+        full_device_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+        )
+        num_full_cores = device_grid_size.x * device_grid_size.y
+        sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+            full_device_grid,
+            (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sdpa_out_interm_buffer = ttnn.from_torch(
+            torch.zeros(
+                (sdpa_out_interm_shard_height * num_full_cores, sdpa_out_interm_shard_width),
+                dtype=torch.bfloat16,
+            ),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                sdpa_out_interm_shard_spec,
+            ),
+            tile=ttnn.Tile([8, 32]),
+        )
 
     return {
         "residual_mcast_src": residual_mcast_src,
