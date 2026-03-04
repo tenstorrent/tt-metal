@@ -210,8 +210,28 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
+    const auto& ref_nd_spec = ref_in_tensor.nd_shard_spec();
+    if (!ref_nd_spec.has_value()) {
+        return TensorSpec(
+            shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
+    }
+
+    // When ref input has ND sharding, build output memory config with derived NdShardSpec:
+    // same grid/orientation/strategy. Use first input's shard_shape for calculations.
+    const auto& first_spec = ref_nd_spec.value();
+    ttnn::Shape output_shard_shape = first_spec.shard_shape;
+
+    NdShardSpec output_nd_spec(
+        std::move(output_shard_shape), first_spec.grid, first_spec.orientation, first_spec.shard_distribution_strategy);
+    const MemoryConfig output_mem_config(ref_in_tensor.memory_config().buffer_type(), std::move(output_nd_spec));
+
+    // ensure correct memory config
+    if (args.output_mem_config == ttnn::DRAM_MEMORY_CONFIG ||   // default if it came empty
+        !args.output_mem_config.nd_shard_spec().has_value()) {  // output for nd sharding should be the same
+        const_cast<decltype(args.output_mem_config)&>(args.output_mem_config) = output_mem_config;
+    }
     return TensorSpec(
-        shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
+        shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), output_mem_config));
 }
 
 Tensor ConcatDeviceOperation::create_output_tensors(
