@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "layernorm_dataflow_utils.h"
 
@@ -235,6 +236,11 @@ void kernel_main() {
         }
         noc_async_read_barrier();
 
+        // DEBUG #37171: capture counters right after last read barrier
+        uint32_t dbg_rd_resp_pre = NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED);
+        uint32_t dbg_sw_pre = noc_reads_num_issued[noc_index];
+        DPRINT << "[37171] post-read-barrier: HW_RD_RESP=" << dbg_rd_resp_pre << " SW_ISSUED=" << dbg_sw_pre << ENDL();
+
         // Multicast
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
         cb_push_back(cb_ex_global, block_h * num_tiles_scaler);
@@ -258,6 +264,15 @@ void kernel_main() {
                 l1_read_addr_ex_global += num_tiles_scaler * num_tiles_bytes;
                 noc_async_write_barrier();
             }
+        }
+
+        // DEBUG #37171: capture counters after multicast writes complete
+        uint32_t dbg_rd_resp_post = NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED);
+        uint32_t dbg_sw_post = noc_reads_num_issued[noc_index];
+        DPRINT << "[37171] post-mcast-writes: HW_RD_RESP=" << dbg_rd_resp_post << " SW_ISSUED=" << dbg_sw_post
+               << ENDL();
+        if (dbg_rd_resp_post != dbg_sw_post) {
+            DPRINT << "[37171] MISMATCH! delta=" << (int)(dbg_rd_resp_post - dbg_sw_post) << ENDL();
         }
     };
 
