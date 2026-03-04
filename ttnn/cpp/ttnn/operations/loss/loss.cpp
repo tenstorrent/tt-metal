@@ -59,7 +59,7 @@ namespace ttnn {
 Tensor mse_loss(
     const Tensor& ref,
     const Tensor& prediction,
-    LossReductionMode mode,
+    operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
@@ -68,7 +68,7 @@ Tensor mse_loss(
 Tensor l1_loss(
     const Tensor& ref,
     const Tensor& prediction,
-    LossReductionMode mode,
+    operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
