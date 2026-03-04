@@ -53,6 +53,10 @@ def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_config, 
     hidden_states_sharded = ttnn.mul(hidden_states_sharded, scale, output_tensor=hidden_states_sharded)
     routing_weights_sharded = ttnn.mul(routing_weights_sharded, scale, output_tensor=routing_weights_sharded)
 
+    # Inputs are replaced by sharded outputs; release replicated tensors early.
+    hidden_states.deallocate(True)
+    routing_weights.deallocate(True)
+
     return hidden_states_sharded, routing_weights_sharded
 
 
@@ -151,8 +155,8 @@ def _process_prefill_chunk(
         down_input_list = [down_input]
         routing_weights_list = [routing_weights]
 
-    # Process each split
-    next_states_reduced_list = []
+    # Process each split and stream-concatenate to avoid holding all split outputs.
+    next_states_reduced_acc = None
     for i, down_input_split in enumerate(down_input_list):
         down = ttnn.sparse_matmul(
             down_input_split,
@@ -179,14 +183,16 @@ def _process_prefill_chunk(
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
-        next_states_reduced_list.append(next_states_reduced)
+        if next_states_reduced_acc is None:
+            next_states_reduced_acc = next_states_reduced
+        else:
+            next_states_concat = ttnn.concat([next_states_reduced_acc, next_states_reduced], dim=2)
+            next_states_reduced_acc.deallocate(True)
+            next_states_reduced.deallocate(True)
+            next_states_reduced_acc = next_states_concat
         routing_weights_list[i].deallocate(True)
 
-    # Concatenate splits
-    next_states_concat = ttnn.concat(next_states_reduced_list, dim=2)
-    # Note: Individual items from split may share underlying buffers, skip deallocating
-
-    return next_states_concat
+    return next_states_reduced_acc
 
 
 def prefill_forward(
@@ -259,8 +265,8 @@ def prefill_forward(
         hidden_states_chunks = [hidden_states]
         routing_weights_chunks = [routing_weights]
 
-    # Process each chunk
-    next_states_list = []
+    # Process each chunk and stream-concatenate to reduce peak DRAM usage.
+    next_states_acc = None
     for hidden_chunk, routing_chunk in zip(hidden_states_chunks, routing_weights_chunks):
         next_states = _process_prefill_chunk(
             hidden_chunk,
@@ -272,13 +278,16 @@ def prefill_forward(
             ep,
             tp,
         )
-        next_states_list.append(next_states)
+        if next_states_acc is None:
+            next_states_acc = next_states
+        else:
+            next_states_concat = ttnn.concat([next_states_acc, next_states], dim=2)
+            next_states_acc.deallocate(True)
+            next_states.deallocate(True)
+            next_states_acc = next_states_concat
         hidden_chunk.deallocate(True)
         routing_chunk.deallocate(True)
-
-    # Concatenate all chunks
-    next_states = ttnn.concat(next_states_list, dim=2)
-    # Note: Individual items from chunks may share underlying buffers, skip deallocating
+    next_states = next_states_acc
 
     # Expert parallel communication
     if ep > 1:

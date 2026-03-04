@@ -18,6 +18,7 @@ Owner:
 from dataclasses import dataclass
 import os
 import threading
+from typing import Callable
 
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
@@ -29,7 +30,7 @@ from ttexalens.memory_access import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
-from run_checks import RunChecks
+from run_checks import RunChecks, BlockType
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -93,6 +94,7 @@ class DispatcherData:
         self.lock = threading.Lock()
         self._mailboxes_cache: dict[OnChipCoordinate, ElfVariable] = {}
         self._core_data_cache: dict[tuple[OnChipCoordinate, str], DispatcherCoreData] = {}
+        self._get_block_type: Callable[[OnChipCoordinate], BlockType | None] = run_checks.get_block_type
 
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
@@ -263,38 +265,35 @@ class DispatcherData:
         return value
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
+        block_type = self._get_block_type(location)
         l1_mem_access = MemoryAccess.create_l1(location)
-        if location.device.get_block_type(location) == "functional_workers":
-            # For tensix, use the brisc elf
-            fw_elf = self._brisc_elf
-        elif location in location.device.idle_eth_block_locations:
-            # For idle eth, use the idle erisc elf
-            fw_elf = self._idle_erisc_elf
-        elif location in location.device.active_eth_block_locations:
-            # For active eth, use the active erisc elf
-            fw_elf = self._active_erisc_elf
-        else:
-            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
+        match block_type:
+            case "tensix":
+                fw_elf = self._brisc_elf
+            case "idle_eth":
+                fw_elf = self._idle_erisc_elf
+            case "active_eth":
+                fw_elf = self._active_erisc_elf
+            case _:
+                raise TTTriageError(f"Unsupported block type: {block_type}")
         return fw_elf.read_global("mailboxes", l1_mem_access)
 
     def get_core_data(
         self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
     ) -> DispatcherCoreData:
-        if location.device.get_block_type(location) == "functional_workers":
-            # For tensix, use the brisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_TENSIX
-            enum_values = self._enum_values_tenisx
-        elif location in location.device.idle_eth_block_locations:
-            # For idle eth, use the idle erisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
-            enum_values = self._enum_values_eth
-        elif location in location.device.active_eth_block_locations:
-            # For active eth, use the active erisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
-            enum_values = self._enum_values_eth
-        else:
-            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
-
+        block_type = self._get_block_type(location)
+        match block_type:
+            case "tensix":
+                programmable_core_type = self._ProgrammableCoreTypes_TENSIX
+                enum_values = self._enum_values_tenisx
+            case "idle_eth":
+                programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
+                enum_values = self._enum_values_eth
+            case "active_eth":
+                programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
+                enum_values = self._enum_values_eth
+            case _:
+                raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
         device_unique_id = location._device.unique_id
@@ -424,7 +423,7 @@ class DispatcherData:
             # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
             # ETH Blackhole: "EE" (2 ERISCs)
             # ETH Wormhole: "E" (1 ERISC)
-            if location.device.get_block_type(location) == "functional_workers":
+            if self._get_block_type(location) == "tensix":
                 symbols = "BNT"
             elif location.device.is_blackhole():
                 symbols = "EE"

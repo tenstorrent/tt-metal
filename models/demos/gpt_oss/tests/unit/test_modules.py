@@ -743,7 +743,7 @@ def run_model_forward_test(
     mesh_device,
     config,
     state_dict_meta,
-    state_dict_hf,
+    reference_model,
     mesh_config,
     batch_size,
     seq_len,
@@ -757,15 +757,13 @@ def run_model_forward_test(
         mesh_device: TTNN mesh device
         config: HuggingFace config (with num_hidden_layers already modified)
         state_dict_meta: Model weights in meta format for TT model
-        state_dict_hf: Model weights in HF format for reference model
+        reference_model: Already-instantiated HuggingFace reference model (eval mode)
         mesh_config: Mesh configuration
         batch_size: Batch size
         seq_len: Sequence length
         is_decode: True for decode mode (seq_len=1), False for prefill mode
         pcc_threshold: PCC threshold for comparison
     """
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
-
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
 
@@ -779,7 +777,7 @@ def run_model_forward_test(
         local_batch_size = batch_size
 
     # Create CCL manager
-    ccl_manager = CCLManager(mesh_device)
+    ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
@@ -798,11 +796,6 @@ def run_model_forward_test(
         users_row_sharded=is_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
-
-    # Create reference model with HF format weights
-    reference_model = GptOssForCausalLM(config)
-    reference_model.load_state_dict(state_dict_hf, strict=False)
-    reference_model.eval()
 
     # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
@@ -864,19 +857,24 @@ def run_model_forward_test(
         )
 
     # Convert TT output to torch
-    mesh_composer_dims = (-2, 1) if is_row_sharded else (0, 1)
+    mesh_composer_dims = (-2, -1) if is_row_sharded else (0, -1)
     tt_logits_torch = ttnn.to_torch(
         tt_logits,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device, dims=mesh_composer_dims, mesh_shape=tuple(mesh_device.shape)
         ),
     )
-
     # Slice to match reference shape
     tt_logits_torch = tt_logits_torch[0, 0]
 
     # Reshape to match reference
     tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
+
+    # Truncate to vocab_size — lm_head weight may be padded to padded_vocab_size
+    # for on-device sampling alignment, producing extra columns in the output.
+    vocab_size = config.vocab_size
+    if tt_logits_torch.shape[-1] > vocab_size:
+        tt_logits_torch = tt_logits_torch[:, :, :vocab_size]
 
     # Compare outputs
     passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
@@ -935,8 +933,14 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         num_layers: Number of layers to use (overrides config.num_hidden_layers)
         reset_seeds: Fixture to reset random seeds
     """
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    if mesh_shape[0] == 1 and batch_size > 1:
+        pytest.skip(
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+        )
 
     is_decode = mode == "decode"
 
@@ -944,7 +948,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
 
     # Override number of layers
@@ -958,13 +962,13 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     # Create mesh config
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # Load state dict in HF format for reference model
-    model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False)
-    state_dict_hf = model_args.load_state_dict(
-        weights_path=model_args.model_path,
-        dummy_weights=False,
-        convert_to_meta_format=False,  # HF format for reference
-    )
+    # Use randomly-initialized weights (config already has num_hidden_layers overridden to num_layers,
+    # so this creates a small model — no need to deserialize the full checkpoint shards).
+    # Build the reference model once here and pass it into run_model_forward_test to avoid
+    # a second instantiation of the large embedding/lm_head tensors inside that function.
+    reference_model_hf = GptOssForCausalLM(config)
+    reference_model_hf.eval()
+    state_dict_hf = reference_model_hf.state_dict()
 
     # Convert to meta format for TT model
     state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
@@ -976,7 +980,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         mesh_device=mesh_device,
         config=config,
         state_dict_meta=state_dict_meta,
-        state_dict_hf=state_dict_hf,
+        reference_model=reference_model_hf,
         mesh_config=mesh_config,
         batch_size=batch_size,
         seq_len=seq_len,

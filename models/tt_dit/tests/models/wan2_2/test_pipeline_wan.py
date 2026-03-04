@@ -5,7 +5,6 @@
 import numpy as np
 import pytest
 import torch
-from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.utils import export_to_video
 
 import ttnn
@@ -17,7 +16,7 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
@@ -66,10 +65,6 @@ def test_pipeline_inference(
     print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    scheduler = UniPCMultistepScheduler.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="scheduler", flow_shift=12.0
-    )
-
     pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
         sp_axis=sp_axis,
@@ -79,7 +74,6 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        scheduler=scheduler,
     )
 
     seed = 42

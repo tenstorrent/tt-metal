@@ -1,5 +1,7 @@
 name: DeepSeek V3 Multi-Host Tests
 on:
+  schedule:
+    - cron: '0 4 * * *'  # 11pm EST (4am UTC)
   workflow_dispatch:
     inputs:
       setup:
@@ -36,6 +38,19 @@ on:
         required: false
         default: false
         type: boolean
+      recalculate_weights_cache:
+        description: 'Recalculate weights cache in a new directory'
+        required: false
+        type: choice
+        default: "No"
+        options:
+          - "No"
+          - "Yes"
+      new_cache_dir:
+        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes.'
+        required: false
+        type: string
+        default: ''
       platform:
         required: false
         type: choice
@@ -76,7 +91,7 @@ jobs:
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+    if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0
@@ -104,6 +119,41 @@ jobs:
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
 
+      - name: Prepare custom weights cache directory
+        id: cache-config
+        run: |
+          CACHE_BASE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
+          if [[ "${{ inputs.recalculate_weights_cache }}" == "Yes" ]]; then
+            if [[ -z "${{ inputs.new_cache_dir }}" ]]; then
+              echo "::error::recalculate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
+              exit 1
+            fi
+            DIR_NAME="${{ inputs.new_cache_dir }}"
+            if [[ "${DIR_NAME}" =~ [/[:space:][:cntrl:]] || "${DIR_NAME}" == "." || "${DIR_NAME}" == ".." ]]; then
+              echo "::error::new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
+              exit 1
+            fi
+            if [[ "${DIR_NAME}" == "CI" ]]; then
+              echo "::error::new_cache_dir cannot be 'CI' — this would overwrite the production cache."
+              exit 1
+            fi
+            NEW_DIR="${CACHE_BASE}/${DIR_NAME}"
+            RESOLVED=$(realpath -m "${NEW_DIR}")
+            if [[ "${RESOLVED}" != "${CACHE_BASE}/"* || "${RESOLVED}" == "${CACHE_BASE}/CI" ]]; then
+              echo "::error::new_cache_dir resolves outside the allowed cache base or to the CI directory."
+              exit 1
+            fi
+            echo "Creating new cache directory: ${NEW_DIR}"
+            mkdir -p "${NEW_DIR}"
+            echo "Copying test_io_cache from CI directory..."
+            rm -rf "${NEW_DIR}/test_io_cache"
+            cp -r "${CACHE_BASE}/CI/test_io_cache" "${NEW_DIR}/test_io_cache"
+            chmod -R a+rwX "${NEW_DIR}"
+            echo "cache_override=${NEW_DIR}" >> $GITHUB_OUTPUT
+          else
+            echo "cache_override=" >> $GITHUB_OUTPUT
+          fi
+
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests
         if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
@@ -119,6 +169,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -143,6 +194,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -155,7 +207,7 @@ jobs:
 
       # ── DeepSeek V3 module tests ────────────────────────────────────────
       - name: Run dual DeepSeek V3 module tests
-        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ (inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -168,6 +220,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -179,7 +232,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
-        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ (inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -192,6 +245,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -204,7 +258,7 @@ jobs:
 
       # ── Teacher forced accuracy tests ───────────────────────────────────
       - name: Run dual teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ (inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -217,6 +271,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -228,7 +283,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
 
       - name: Upload dual teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-teacher-forced-accuracy-${{ github.run_id }}
@@ -238,7 +293,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -251,6 +306,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -262,7 +318,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
@@ -273,7 +329,7 @@ jobs:
 
       # ── Demo tests ──────────────────────────────────────────────────────
       - name: Run dual demo test (256 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 40
         with:
@@ -286,6 +342,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -297,7 +354,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
 
       - name: Upload dual demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-demo-output-${{ github.run_id }}
@@ -307,7 +364,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -320,6 +377,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -331,7 +389,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-output-${{ github.run_id }}
@@ -342,7 +400,7 @@ jobs:
 
       # ── Demo stress tests ───────────────────────────────────────────────
       - name: Run dual demo stress test (56 prompts, 20 batches)
-        if: ${{ inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 90
         with:
@@ -355,6 +413,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
@@ -366,7 +425,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
 
       - name: Upload dual demo stress output artifacts
-        if: ${{ always() && inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-demo-stress-output-${{ github.run_id }}
@@ -389,6 +448,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent

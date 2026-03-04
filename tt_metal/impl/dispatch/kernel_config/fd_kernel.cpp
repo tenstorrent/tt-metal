@@ -19,6 +19,8 @@
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/context_descriptor.hpp"
+// #include "impl/context/metal_context.hpp"
+#include "kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
 
