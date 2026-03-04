@@ -26,17 +26,44 @@ def _get_core_grid(device):
     return ttnn.CoreGrid(y=grid.y, x=grid.x)
 
 
+# Conservative max cores for sharded matmuls: backend may have fewer available
+# than device.compute_with_storage_grid_size() reports (e.g. 32 on small devices).
+# Use 32 so we never exceed typical small-device / sub-device core count.
+_MAX_CORES_SHARDED_MATMUL = 32
+
+
+_TILE_WIDTH = 32
+
+
+def _find_best_core_grid(device, V):
+    """
+    Find a core grid whose core count evenly divides V *in tiles* so each
+    shard is tile-aligned (shard_width = multiple of 32).  For V=256 (8 tiles)
+    this returns 8 cores, not 32.
+    """
+    grid = device.compute_with_storage_grid_size()
+    n_tiles = V // _TILE_WIDTH
+    max_cores = min(grid.x * grid.y, _MAX_CORES_SHARDED_MATMUL, n_tiles)
+    for num_cores in range(max_cores, 0, -1):
+        if n_tiles % num_cores != 0:
+            continue
+        x = min(num_cores, grid.x)
+        y = (num_cores + x - 1) // x
+        if y <= grid.y:
+            return ttnn.CoreGrid(y=y, x=x)
+    return ttnn.CoreGrid(y=1, x=1)
+
+
 def create_state_shard_config(h_shape, device):
     """
     Create L1 width-sharded memory config for state tensor h [B, H, K, V].
-    Shards the V dimension across cores. Uses ttnn 2D view: (B*H*K, V).
+    Shards the V dimension across cores (tile-aligned).
     """
     B, H, K, V = h_shape
-    core_grid = _get_core_grid(device)
+    core_grid = _find_best_core_grid(device, V)
     total_cores = core_grid.x * core_grid.y
-    if V % total_cores != 0:
+    if total_cores <= 1:
         return None
-    # shape as 2D for create_sharded_memory_config: (height, width)
     height, width = B * H * K, V
     return ttnn.create_sharded_memory_config(
         (height, width),
@@ -49,11 +76,11 @@ def create_state_shard_config(h_shape, device):
 def create_output_shard_config(B, H, V, device):
     """
     Create L1 width-sharded memory config for matmul outputs [B, H, 1, V].
-    Same sharding as state but for height B*H.
+    Same sharding as state but height = B*H.
     """
-    core_grid = _get_core_grid(device)
+    core_grid = _find_best_core_grid(device, V)
     total_cores = core_grid.x * core_grid.y
-    if V % total_cores != 0:
+    if total_cores <= 1:
         return None
     height, width = B * H, V
     return ttnn.create_sharded_memory_config(
@@ -64,29 +91,97 @@ def create_output_shard_config(B, H, V, device):
     )
 
 
-def create_matmul_1d_config(K, V, device):
+def create_matmul_1d_config(K, V, device, M=None):
     """
-    Create 1D multicast matmul program config for (1, K) @ (K, V) per batch,
-    with mcast_in0=True (in0 height-sharded, in1 width-sharded).
+    Create 1D multicast matmul program config for (M, K) @ (K, V).
+    mcast_in0=True, fuse_batch=True (requires in1 batch size 1).
+
+    _find_best_core_grid guarantees n_tiles % total_cores == 0, so
+    per_core_N = n_tiles / total_cores is always exact.
+    in0_block_w = K_tiles (process entire K in one block).
     """
-    grid = device.compute_with_storage_grid_size()
-    core_grid = _get_core_grid(device)
+    core_grid = _find_best_core_grid(device, V)
     total_cores = core_grid.x * core_grid.y
-    if total_cores == 0:
+    if total_cores <= 0:
         return None
-    in0_block_w = max(1, K // 32 // total_cores)
-    per_core_N = max(1, V // 32 // total_cores)
+    k_tiles = K // _TILE_WIDTH
+    n_tiles = V // _TILE_WIDTH
+    in0_block_w = max(1, k_tiles)
+    per_core_N = max(1, n_tiles // total_cores)
+
+    if M is not None:
+        per_core_M = (M + _TILE_WIDTH - 1) // _TILE_WIDTH
+    else:
+        per_core_M = 1
+
+    sub_h = min(per_core_M, 8)
+    sub_w = min(per_core_N, 8)
+    if sub_h * sub_w < 2:
+        if per_core_M >= 2:
+            sub_h = min(2, per_core_M)
+            sub_w = 1
+        elif per_core_N >= 2:
+            sub_h = 1
+            sub_w = min(2, per_core_N)
+
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
+        compute_with_storage_grid_size=(core_grid.x, core_grid.y),
         in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=min(per_core_N, 8),
-        out_block_h=1,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        out_block_h=per_core_M,
         out_block_w=per_core_N,
-        per_core_M=1,
+        per_core_M=per_core_M,
         per_core_N=per_core_N,
         fuse_batch=True,
         mcast_in0=True,
+    )
+
+
+def create_linear_m_tiled_config(M, K, N, device):
+    """
+    Create MatmulMultiCoreReuseProgramConfig for (M, K) @ (K, N) when N has
+    multiple tiles, so we can tile along M and N. For single-tile N (e.g.
+    a_proj/b_proj with output dim 4 → 1 tile), returns None; backend
+    MatmulMultiCoreReuseProgramConfig path requires N == per_core_N (one core
+    in N), and explicit config for that case is brittle, so use default.
+    M, K, N are sizes in elements (will be rounded to tiles).
+    """
+    grid = _get_core_grid(device)
+    total_cores = grid.x * grid.y
+    if total_cores <= 0:
+        return None
+    M_tiles = (M + 31) // 32
+    K_tiles = (K + 31) // 32
+    N_tiles = max(1, (N + 31) // 32)
+    if N_tiles <= 1:
+        return None
+    # Backend requires N_tiles == num_cores_x * per_core_N. Tile along M (y), then N (x).
+    num_cores_y = min(total_cores, M_tiles)
+    num_cores_x = max(1, min(total_cores // num_cores_y, N_tiles))
+    per_core_M = max(1, (M_tiles + num_cores_y - 1) // num_cores_y)
+    per_core_N = max(1, (N_tiles + num_cores_x - 1) // num_cores_x)
+    if num_cores_x * per_core_N != N_tiles:
+        num_cores_x = 1
+        per_core_N = N_tiles
+    if num_cores_y * per_core_M != M_tiles:
+        num_cores_y = 1
+        per_core_M = M_tiles
+    in0_block_w = max(1, K_tiles // num_cores_y)
+    sub_h = min(per_core_M, 8)
+    sub_w = min(per_core_N, 8)
+    if sub_h * sub_w < 2 and (per_core_M >= 2 or per_core_N >= 2):
+        if per_core_M >= 2:
+            sub_h, sub_w = min(2, per_core_M), 1
+        else:
+            sub_h, sub_w = 1, min(2, per_core_N)
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(num_cores_x, num_cores_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
     )
 
 
@@ -176,8 +271,17 @@ def recurrent_delta_rule_step_ttnn(
 
     # 5. Query state via matmul: o_t = q^T @ h
     q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
-    o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
-    o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
+    if use_sharded:
+        o_t = ttnn.matmul(
+            q_row,
+            h,
+            program_config=matmul_1d_config,
+            memory_config=output_shard_config,
+        )
+        o_t = ttnn.reshape(o_t, [B, H, V])
+    else:
+        o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
+        o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
 
     return o_t, h
 
@@ -245,10 +349,11 @@ def recurrent_gated_delta_rule_ttnn(
     beta = ttnn.typecast(beta, ttnn.float32)
     g = ttnn.typecast(g, ttnn.float32)
 
-    # L1 width-sharded configs for matmuls (when V divisible by core count)
-    state_shard_config = create_state_shard_config([B, H, K, V], device)
-    output_shard_config = create_output_shard_config(B, H, V, device)
-    matmul_1d_config = create_matmul_1d_config(K, V, device)
+    # L1 width-sharded configs for matmuls only when B*H==1 (1D mcast requires in1 batch size 1).
+    use_sharded_configs = (B * H) <= 1
+    state_shard_config = create_state_shard_config([B, H, K, V], device) if use_sharded_configs else None
+    output_shard_config = create_output_shard_config(B, H, V, device) if use_sharded_configs else None
+    matmul_1d_config = create_matmul_1d_config(K, V, device, M=B * H * 32) if use_sharded_configs else None
 
     # Initialize state in float32; use L1 sharded when config available
     if initial_state is not None:

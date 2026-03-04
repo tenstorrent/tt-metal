@@ -11,6 +11,7 @@ import ttnn
 from tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,
     chunk_gated_delta_rule_ttnn,
+    create_linear_m_tiled_config,
 )
 
 
@@ -199,10 +200,11 @@ def gated_deltanet_forward_ttnn(
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
 
-    # 1. Linear projections
-    q = ttnn.linear(hidden_states, q_proj_weight)
-    k = ttnn.linear(hidden_states, k_proj_weight)
-    v = ttnn.linear(hidden_states, v_proj_weight)
+    # 1. Linear projections (hidden_states in L1 avoids repeated DRAM reads)
+    hidden_states_l1 = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+    q = ttnn.linear(hidden_states_l1, q_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k = ttnn.linear(hidden_states_l1, k_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v = ttnn.linear(hidden_states_l1, v_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 2. Causal conv1d + SiLU
     q = causal_conv1d_ttnn(q, q_conv_weight, q_conv_bias, conv_kernel_size, device)
@@ -221,11 +223,20 @@ def gated_deltanet_forward_ttnn(
         k = ttnn.repeat_interleave(k, repeats, dim=2)
 
     # 4. Compute beta and g
-    beta = ttnn.sigmoid(ttnn.linear(hidden_states, b_proj_weight))
+    M_linear = B * T
+    K_linear = hidden_states.shape[2]
+    b_linear_config = (
+        create_linear_m_tiled_config(M_linear, K_linear, b_proj_weight.shape[1], device) if device else None
+    )
+    a_linear_config = (
+        create_linear_m_tiled_config(M_linear, K_linear, a_proj_weight.shape[1], device) if device else None
+    )
+
+    beta = ttnn.sigmoid(ttnn.linear(hidden_states_l1, b_proj_weight, program_config=b_linear_config))
     if allow_neg_eigval:
         beta = ttnn.multiply(beta, 2.0)
 
-    a = ttnn.linear(hidden_states, a_proj_weight)
+    a = ttnn.linear(hidden_states_l1, a_proj_weight, program_config=a_linear_config)
     # g = -A * softplus(a + dt_bias)
     a_biased = ttnn.add(a, dt_bias)
     sp = ttnn.softplus(a_biased)
@@ -258,7 +269,7 @@ def gated_deltanet_forward_ttnn(
 
     # 6. Output normalization
     if use_gate and g_proj_weight is not None:
-        gate = ttnn.linear(hidden_states, g_proj_weight)
+        gate = ttnn.linear(hidden_states_l1, g_proj_weight)
         gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim])
         o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps)
     else:
@@ -266,6 +277,6 @@ def gated_deltanet_forward_ttnn(
 
     # 7. Reshape and project output
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
-    o = ttnn.linear(o, o_proj_weight)
+    o = ttnn.linear(o, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o, new_state
