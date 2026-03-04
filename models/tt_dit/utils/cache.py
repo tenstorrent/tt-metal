@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
+import ttnn
+
 from ..layers.module import Module
 
 if TYPE_CHECKING:
@@ -99,11 +101,13 @@ def load_model(
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
         tt_model.load_torch_state_dict(get_torch_state_dict())
+        ttnn.distributed_context_barrier()
         return
 
     if Path(cache_dir).is_dir():
         logger.info(f"loading cache at '{cache_dir}'.")
         tt_model.load(cache_dir)
+        ttnn.distributed_context_barrier()
         return
 
     if get_torch_state_dict is None:
