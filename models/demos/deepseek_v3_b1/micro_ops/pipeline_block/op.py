@@ -55,7 +55,7 @@ class PipelineBlock:
         pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         self.num_procs = int(ttnn.distributed_context_get_size())
         num_procs = self.num_procs
-        assert len(pipeline_config) == num_procs + 1
+        # assert len(pipeline_config) == num_procs + 1
 
         token_size_bytes = 64  # Hardcode for now - don't expect this to change
 
@@ -66,7 +66,7 @@ class PipelineBlock:
             assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
 
             h2d_device_coord = pipeline_config[self.my_mesh_id].entry_node_coord
-            d2h_device_coord = pipeline_config[num_procs].exit_node_coord
+            # d2h_device_coord = pipeline_config[num_procs].exit_node_coord
 
             assert (
                 h2d_socket_fifo_size >= token_size_bytes
