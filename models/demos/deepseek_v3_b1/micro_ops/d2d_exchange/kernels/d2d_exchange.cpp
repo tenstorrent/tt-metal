@@ -80,7 +80,9 @@ FORCE_INLINE void send_pages_over_socket(
         uint32_t l1_read_addr_1 = l1_read_addr + page_size_per_link;
         uint64_t dst_addr_0 = dst_addr;
         uint64_t dst_addr_1 = dst_addr + page_size_per_link;
-
+        DPRINT << "NUm Whole packets: " << num_whole_fabric_packets_per_link
+               << " WHole packet size: " << whole_packet_size << ENDL();
+        DPRINT << "Partial packet size: " << partial_packet_size << ENDL();
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
             write_data_to_remote_core_with_ack<false>(
                 downstream_fabric_connection,
@@ -176,6 +178,12 @@ void kernel_main() {
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
 
+        DPRINT << "Set unicast route to mesh: " << downstream_enc.d2d.downstream_mesh_id
+               << " chip: " << downstream_enc.d2d.downstream_chip_id << ENDL();
+        DPRINT << "Downstream Bytes sent NOC Addr: " << downstream_bytes_sent_noc_addr << ENDL();
+        DPRINT << "Downstream NOC " << downstream_enc.d2d.downstream_noc_x << " " << downstream_enc.d2d.downstream_noc_y
+               << ENDL();
+
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
@@ -219,7 +227,7 @@ void kernel_main() {
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            DPRINT << "Send notifications downstream done" << ENDL();
+            DPRINT << "Send notifications upstream done" << ENDL();
         } else {
             socket_notify_sender(receiver_socket);
         }
