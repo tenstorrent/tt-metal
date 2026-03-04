@@ -142,7 +142,7 @@ class StatsReporter:
                         [
                             "Number of Cores",
                             "Total Bytes",
-                            "Wall Clock Time (cycles)",
+                            "Latency (cycles)",
                             "Combined Bandwidth (bytes/cycle)",
                         ]
                     )

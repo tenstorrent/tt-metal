@@ -6,6 +6,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <optional>
+
 #include "models/gpt2.hpp"
 #include "modules/distributed/gpt_block.hpp"
 #include "modules/distributed/linear.hpp"
@@ -26,7 +28,7 @@ private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
     std::shared_ptr<ttml::modules::ModuleBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::ModuleBase>> blocks;
+    std::vector<std::shared_ptr<ttml::modules::distributed::DistributedGPTBlock>> blocks;
     std::shared_ptr<ttml::modules::ModuleBase> ln_fc;
     std::shared_ptr<ttml::modules::ModuleBase> fc;
 
@@ -34,7 +36,7 @@ public:
     explicit DistributedTransformer(const TransformerConfig& config);
     virtual ~DistributedTransformer() = default;
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+        const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) override;
 };
 
 [[nodiscard]] std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config);
