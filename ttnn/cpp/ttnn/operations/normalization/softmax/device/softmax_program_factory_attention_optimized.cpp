@@ -110,12 +110,11 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     // Program specific checks
     if ((tensor_args.input_tensor.device()->l1_size_per_core() * 0.9) < cb_size_sum_bytes) {
         use_large_kernel = true;
-        uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
-        cb_length = large_kernel_cb_size;
-        in0_t = large_kernel_cb_size;
-        im4_t = large_kernel_cb_size;
-        im0_t = large_kernel_cb_size;
-        im3_t = large_kernel_cb_size;
+        cb_length = 80;
+        in0_t = 80;
+        im4_t = 80;
+        im0_t = 80;
+        im3_t = 80;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     if (!use_large_kernel) {
@@ -419,12 +418,11 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
 
     if (use_large_kernel) {
         // Use fixed sizes matching create() for large kernel
-        uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
-        in0_t = large_kernel_cb_size;
+        in0_t = 80;
         out0_t = block_size * 2;
-        im0_t = large_kernel_cb_size;
-        im3_t = large_kernel_cb_size;
-        im4_t = large_kernel_cb_size;
+        im0_t = 80;
+        im3_t = 80;
+        im4_t = 80;
     } else {
         // Standard calculation for regular kernel
         in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;

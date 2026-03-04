@@ -13,18 +13,18 @@ Compile arguments
 2. log_base_2_of_page_size: log base 2 of page size
 3. write_size_is_pow2: 1 if write size is power of 2 else 0
 4. log_base_2_of_page_size: log base 2 of page size
-5. needs_read_allignment: 1 if read needs allignment else 0
+5. needs_read_allignment: 1 if read needs alignment else 0
 //Needed if BRAM and page size is not multiple of 64 bytes
 
 Runtime arguments
 0. src_addr: source address
 1. dst_addr: destination address
-2. source_read_size_bytes: source read size in bytes
-3. read_start_page: read start page
-4. read_end_page: read end page
-5. write_start_page: write start page
-6. write_start_offset: write start offset
-7. nop: 1 if this core should be skipped
+2. source_page_size_bytes: source page size in bytes
+3. dest_page_size_bytes: destination page size in bytes
+4. source_read_size_bytes: source read size in bytes
+5. read_start_page: read start page
+6. read_end_page: read end page
+7. write_start_page: write start page
 */
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -32,7 +32,7 @@ Runtime arguments
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    //We are guranteed to be in 2D going to 2D
+    // We are guaranteed to be in 2D going to 2D
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -42,7 +42,7 @@ void kernel_main() {
     const uint32_t read_end_page = get_arg_val<uint32_t>(4);
     const uint32_t write_start_page = get_arg_val<uint32_t>(5);
     const uint32_t write_start_offset = get_arg_val<uint32_t>(6);
-    const uint32_t nop = get_arg_val<uint32_t>(7);
+    const uint32_t nop = get_arg_val<uint32_t>(9);
 
     constexpr bool src_aligned_to_64 = get_compile_time_arg_val(0) == 1;
     constexpr bool src_aligned_to_16 = get_compile_time_arg_val(1) == 1;
@@ -91,11 +91,11 @@ void kernel_main() {
             tt::data_movement::common::enhanced_noc_async_read<source_page_size_bytes, false>(
                 src_noc_addr, source_buffer, source_page_size_bytes);
             read_offset = 0;
-        } else if constexpr (src_args.is_dram) {  // DDR but not alligned to 64 (potentially also not alligned to 16)
+        } else if constexpr (src_args.is_dram) {  // DDR but not aligned to 64 (potentially also not aligned to 16)
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
                 src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_64;
-        } else {  // L1 but not alligned to 16
+        } else {  // L1 but not aligned to 16
             tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
                 src_noc_addr & MASK_16, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_16;

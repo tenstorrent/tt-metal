@@ -263,7 +263,7 @@ void kernel_main() {
                 page_table_addr,
                 page_table_page_size);
             page_table_ptr_u32 = page_table_ptr;
-        } else {  // Read page table from dyanmically allocated L1 buffer
+        } else {  // Read page table from dynamically allocated L1 buffer
             page_table_cb_wr_ptr =
                 get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
             page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
