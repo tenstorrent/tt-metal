@@ -3992,21 +3992,29 @@ class AttentionBlock:
                 ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
-                print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(
+                        f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref
+                    )
                 ccl_sender_ncrisc_rt_args_ref.extend(ccl["sender_ncrisc_common_rt_args"])
-                print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref)
                 ccl_sender_brisc_rt_args_ref = program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
-                print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
                 ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
-                print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
                 ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
                     gather_core.x
                 ][gather_core.y]
-                print(f"before extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"before extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
                 ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
-                print(f"after extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
+                if mesh_coord == ttnn.MeshCoordinate(0, 0):
+                    print(f"after extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
 
                 fabric_node_id = ccl["fabric_node_id"]
                 neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
@@ -4024,7 +4032,7 @@ class AttentionBlock:
                 )
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
                     print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
-                sender_brisc_rt_args_ref.extend(sender_fabric_args)
+                extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
                     print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
 
