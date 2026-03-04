@@ -383,6 +383,8 @@ def create_program_descriptor(
     compute_ct_args = [num_rows, Wt]
 
     compute_defines = []
+    if input_tensor.dtype == ttnn.float32:
+        compute_defines.append(("REDUCE_ENFORCE_FP32_ACCUMULATION", "1"))
     if bisect_phase != 99:
         compute_defines.append(("BISECT_PHASE", str(bisect_phase)))
 

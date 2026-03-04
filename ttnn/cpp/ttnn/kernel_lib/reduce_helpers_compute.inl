@@ -172,18 +172,15 @@ ALWI void reduce(
         pack_reconfig_data_format(output_cb);
     }
 
-    // Auto-detect FP32 dest accumulation mode from compile-time define
-    // NOTE: enforce_fp32_accumulation=true triggers a broken MOVD2B/MOVB2D hi16/lo16
-    // transpose path in the WH B0 reduce LLK (_llk_math_reduce_ in llk_math_reduce.h).
-    // The DEST addressing is wrong when fp32 mode is active during MOVB2D, causing
-    // corrupted output (only 8/32 rows populated, wrong row mapping).
-    // BH has the same code structure but works around it by toggling
-    // ALU_ACC_CTRL_Fp32_enabled_RMW around MOVD2B/B2D (Issue ##449); WH B0 needs
-    // additional fixes (bit 11 debug register + SrcA Float32 format interaction).
-    // With enforce_fp32_accumulation=false, the reduce still benefits from fp32 DEST
-    // accumulation in GAPOOL — only the transpose step falls back to fp16 precision,
-    // which is sufficient since inputs are bfloat16.
+    // enforce_fp32_accumulation controls the MOVD2B/MOVB2D transpose path in reduce LLK.
+    // When true, the reduce uses full fp32 precision in the transpose step.
+    // When false, the transpose falls back to fp16 precision (sufficient for bfloat16 inputs).
+    // Callers can define REDUCE_ENFORCE_FP32_ACCUMULATION=1 to enable for fp32 inputs.
+#ifdef REDUCE_ENFORCE_FP32_ACCUMULATION
+    constexpr bool enforce_fp32_accumulation = true;
+#else
     constexpr bool enforce_fp32_accumulation = false;
+#endif
 
     // Initialization
     reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb, output_cb);

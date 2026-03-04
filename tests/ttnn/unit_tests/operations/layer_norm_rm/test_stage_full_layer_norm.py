@@ -24,6 +24,17 @@ def pytorch_reference(input_tensor, gamma, beta):
     ).to(torch.bfloat16)
 
 
+def pytorch_reference_fp32(input_tensor, gamma, beta):
+    """PyTorch fp32 reference for this stage."""
+    return torch.nn.functional.layer_norm(
+        input_tensor.to(torch.float32),
+        [input_tensor.shape[-1]],
+        weight=gamma.flatten().to(torch.float32),
+        bias=beta.flatten().to(torch.float32),
+        eps=1e-5,
+    )
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -70,4 +81,53 @@ def test_full_layer_norm(device, shape):
         expected.float(),
         rtol=0.05,
         atol=0.05,
+    ), f"Max diff: {(torch_output.float() - expected.float()).abs().max()}"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param((1, 1, 32, 32), id="1x1x32x32"),
+        pytest.param((1, 1, 32, 128), id="1x1x32x128"),
+        pytest.param((1, 1, 64, 128), id="1x1x64x128"),
+        pytest.param((1, 1, 32, 256), id="1x1x32x256"),
+        pytest.param((4, 2, 64, 64), id="4x2x64x64"),
+    ],
+)
+def test_full_layer_norm_fp32(device, shape):
+    """Verify layer_norm_rm with float32 input tensors."""
+    torch.manual_seed(42)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    gamma = torch.randn(1, 1, 1, shape[-1], dtype=torch.float32)
+    beta = torch.randn(1, 1, 1, shape[-1], dtype=torch.float32)
+
+    expected = pytorch_reference_fp32(torch_input, gamma, beta)
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gamma = ttnn.from_torch(
+        gamma, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    beta = ttnn.from_torch(
+        beta, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    ttnn_output = layer_norm_rm(ttnn_input, gamma, beta)
+
+    # Shape check
+    expected_shape = list(shape)
+    assert list(ttnn_output.shape) == expected_shape, f"Shape: {list(ttnn_output.shape)} vs expected {expected_shape}"
+
+    # Numerical comparison
+    torch_output = ttnn.to_torch(ttnn_output)
+    assert torch.allclose(
+        torch_output.float(),
+        expected.float(),
+        rtol=0.01,
+        atol=0.01,
     ), f"Max diff: {(torch_output.float() - expected.float()).abs().max()}"

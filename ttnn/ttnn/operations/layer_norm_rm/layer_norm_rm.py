@@ -12,13 +12,13 @@ Computes:
     output[b,c,h,w] = gamma[w] * centered[b,c,h,w] * inv_std[b,c,h] + beta[w]
 
 Inputs:
-    input_tensor: RM interleaved bfloat16, rank >= 2, last 2 dims tile-aligned
-    gamma: RM interleaved bfloat16 (1, 1, 1, W)
-    beta:  RM interleaved bfloat16 (1, 1, 1, W)
+    input_tensor: RM interleaved bfloat16 or float32, rank >= 2, last 2 dims tile-aligned
+    gamma: RM interleaved, same dtype as input (1, 1, 1, W)
+    beta:  RM interleaved, same dtype as input (1, 1, 1, W)
     epsilon: float scalar (default 1e-5)
 
 Output:
-    Same shape as input, RM interleaved bfloat16
+    Same shape and dtype as input, RM interleaved
 """
 
 import ttnn
@@ -39,8 +39,8 @@ def layer_norm_rm(
     Layer normalization on row-major interleaved tensors.
 
     Args:
-        input_tensor: Input tensor (ROW_MAJOR, INTERLEAVED, bfloat16, rank>=2,
-                      last two dims multiples of 32)
+        input_tensor: Input tensor (ROW_MAJOR, INTERLEAVED, bfloat16 or float32,
+                      rank>=2, last two dims multiples of 32)
         gamma: Affine scale parameter, shape (1,1,1,W)
         beta:  Affine shift parameter, shape (1,1,1,W)
         epsilon: Numerical stability constant (default 1e-5)
@@ -95,12 +95,13 @@ def _validate_inputs(
         raise ValueError("layer_norm_rm: Beta must be row-major")
 
     # Dtype checks
-    if input_tensor.dtype != ttnn.bfloat16:
-        raise ValueError("layer_norm_rm: Input must be bfloat16")
-    if gamma.dtype != ttnn.bfloat16:
-        raise ValueError("layer_norm_rm: Gamma must be bfloat16")
-    if beta.dtype != ttnn.bfloat16:
-        raise ValueError("layer_norm_rm: Beta must be bfloat16")
+    allowed_dtypes = (ttnn.bfloat16, ttnn.float32)
+    if input_tensor.dtype not in allowed_dtypes:
+        raise ValueError("layer_norm_rm: Input must be bfloat16 or float32")
+    if gamma.dtype != input_tensor.dtype:
+        raise ValueError("layer_norm_rm: Gamma dtype must match input dtype")
+    if beta.dtype != input_tensor.dtype:
+        raise ValueError("layer_norm_rm: Beta dtype must match input dtype")
 
     # Rank check
     if len(input_tensor.shape) < 2:
