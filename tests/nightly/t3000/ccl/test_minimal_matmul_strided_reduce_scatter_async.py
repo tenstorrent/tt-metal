@@ -28,8 +28,8 @@ class MinimalMatmulStridedReduceScatterTestConfig:
     mm_block_m: int
     mm_block_k: int
     mm_block_n: int
-    mm_core_grid: object  # ttnn.CoreCoord
     chunk_width_in_mm_blocks: int
+    mm_core_grid: object = None  # ttnn.CoreCoord
     subblock_h: int = 1
     subblock_w: int = 1
     layout: object = None  # ttnn.Layout, set in __post_init__
@@ -358,7 +358,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 
 # @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8), (4, 8)], indirect=True, ids=["1x8", "4x8"])
-@pytest.mark.parametrize("num_links", [1, 4], ids=["1link", "4link"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0", "axis_1"])
 @pytest.mark.parametrize(
     "test_config",
@@ -627,6 +627,44 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 num_workers_per_link=4,
             ),
             id="non_div_Wt_large_5x6_cwimb2_rs4",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                # BH Galaxy production baseline: full 12-column grid.
+                # MM output per device: [1, 1, 9472, 5120]
+                # mm_core_grid=(12, 9): N on x, mm_N_full_block_wt=ceil(160/12)=14
+                # RS: ring_size=8, slice_Wt=20 > mm_N_full_block_wt=14 (misaligned, ~21% RS overhead)
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(12, 9),
+                chunk_width_in_mm_blocks=3,
+                num_workers_per_link=2,
+            ),
+            id="galaxy_9472_3456_5120_cwimb3_x12_y9_rs2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                # BH Galaxy RS-aligned: mm_cores_x=ring_size=8 for perfect alignment.
+                # MM output per device: [1, 1, 9472, 5120]
+                # mm_core_grid=(8, 9): N on x, mm_N_full_block_wt=160/8=20=slice_Wt (perfect alignment)
+                # Trades 4 unused MM columns for zero RS overhead.
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 9),
+                chunk_width_in_mm_blocks=3,
+                num_workers_per_link=2,
+            ),
+            id="galaxy_9472_3456_5120_cwimb3_x8_y9_rs2_aligned",
         ),
     ],
 )

@@ -181,7 +181,7 @@ def run_reduce_scatter_impl(
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
                 ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(*mesh_device.shape)
                 ),
             ),
         )
@@ -1595,4 +1595,307 @@ def test_strided_reduce_scatter_blocking_sweep_non_divisible_Ht(
         mm_block_wt=mm_block_wt,
         mm_N_full_block_wt=mm_N_full_block_wt,
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+    )
+
+
+def run_reduce_scatter_impl_galaxy(
+    mesh_device,
+    rs_input_shape,
+    dim,
+    num_links,
+    rs_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+    cluster_axis,
+    num_iters=1,
+    small_random_ints=False,
+    use_barrier=False,
+    use_persistent_buffers=True,
+    use_new=False,
+    use_strided=False,
+    verify_output_shape=True,
+    verify_output_pcc=True,
+    num_workers_per_link=None,
+    mm_cores_y=None,
+    mm_cores_x=None,
+    mm_block_ht=None,
+    mm_block_wt=None,
+    chunk_width_in_mm_blocks=None,
+):
+    """
+    Standalone RS test for 2D meshes (e.g. 4x8 Galaxy).
+
+    The RS forms independent rings of ring_size=mesh_device.shape[cluster_axis] devices along
+    cluster_axis.  The orthogonal axis is replicated, matching the fused matmul test where
+    ShardTensor2dMesh shards along cluster_axis and replicates the other axis.
+
+    Data distribution (mirrors fused matmul test):
+      - Global input shape: rs_input_shape with dim extended by ring_size
+      - Input mapper: PlacementReplicate (rows) x PlacementShard(dim) (cols)
+        -> each device (r, c) gets the same N-slice as every other row for that column
+      - Golden: reduce-scatter across ring_size devices (same for every row)
+
+    Output verification:
+      - ConcatMeshToTensor along dim produces a tensor of size (ring_size * num_rows) * output_per_device
+      - Chunk by num_total_devices to recover per-device outputs (each output_per_device wide)
+      - Devices are in row-major order: device index = row * ring_size + col
+      - All rows are equivalent (replicated input), so verify each row against the same golden
+    """
+    torch.manual_seed(0)
+
+    ring_size = mesh_device.shape[cluster_axis]
+    num_rows = mesh_device.shape[1 - cluster_axis]
+    num_total_devices = mesh_device.get_num_devices()
+
+    TILE_SIZE = 32
+    N_tiles = rs_input_shape[dim] // TILE_SIZE
+    mm_N_full_block_wt = (N_tiles + mm_cores_x - 1) // mm_cores_x if mm_cores_x is not None else None
+
+    mem_config_intermediate = mem_config_input
+
+    ##### Fabric setup #####
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    barrier_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+    ]
+
+    ##### Persistent output buffers #####
+    intermediate_shape = rs_input_shape[:]
+    intermediate_shape[0] = 1
+    rs_output_shape = rs_input_shape[:]
+    rs_output_shape[dim] //= ring_size
+
+    if use_persistent_buffers:
+        persistent_intermediate_buffers = [
+            ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_intermediate,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
+        persistent_output_buffers = [
+            ttnn.from_torch(
+                torch.zeros(rs_output_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_rs,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
+
+    ##### Input setup #####
+    # Global input: ring_size different slices along dim, replicated across rows.
+    # Matches fused matmul: ShardTensor2dMesh with shard_dims=[None, 0] along cluster_axis=1.
+    tt_input_tensor_mesh_list = []
+    torch_golden_scatter_list = []
+
+    for i in range(num_iters):
+        rs_global_input_shape = rs_input_shape[:]
+        rs_global_input_shape[dim] *= ring_size
+        if small_random_ints:
+            rs_input_tensor = torch.randint(0, 4, rs_global_input_shape).bfloat16()
+        else:
+            rs_input_tensor = torch.rand(rs_global_input_shape).bfloat16()
+
+        input_slices = torch.chunk(rs_input_tensor, ring_size, dim=dim)
+        reduce_output = torch.sum(torch.stack(input_slices), dim=0)
+        scatter_output = torch.chunk(reduce_output, ring_size, dim=dim)
+        torch_golden_scatter_list.append(scatter_output)
+
+        if cluster_axis == 0:
+            mesh_mapper_config = ttnn.MeshMapperConfig(
+                [ttnn.PlacementShard(dim), ttnn.PlacementReplicate()], ttnn.MeshShape(*mesh_device.shape)
+            )
+        else:
+            mesh_mapper_config = ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(*mesh_device.shape)
+            )
+
+        input_tensor_mesh = ttnn.from_torch(
+            rs_input_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
+        )
+        tt_input_tensor_mesh_list.append(input_tensor_mesh)
+
+    ##### Run the RS op #####
+    tt_reduce_scatter_output_list = []
+
+    def run_op(i):
+        if use_strided:
+            return ttnn.experimental.strided_reduce_scatter_async(
+                tt_input_tensor_mesh_list[i],
+                persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+                if use_persistent_buffers
+                else None,
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                num_links=num_links,
+                memory_config=mem_config_rs,
+                topology=rs_topology,
+                subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
+                num_workers_per_link=num_workers_per_link,
+                mm_cores_y=mm_cores_y,
+                mm_block_ht=mm_block_ht,
+                mm_block_wt=mm_block_wt,
+                mm_N_full_block_wt=mm_N_full_block_wt,
+                chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+            )
+        elif use_new:
+            return ttnn.reduce_scatter(
+                tt_input_tensor_mesh_list[i],
+                dim=dim,
+                num_links=num_links,
+                memory_config=mem_config_rs,
+                topology=rs_topology,
+                subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
+            )
+        else:
+            return ttnn.experimental.reduce_scatter_minimal_async(
+                tt_input_tensor_mesh_list[i],
+                persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+                if use_persistent_buffers
+                else None,
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                num_links=num_links,
+                memory_config=mem_config_rs,
+                topology=rs_topology,
+                subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
+                num_workers_per_link=num_workers_per_link,
+            )
+
+    for i in range(num_iters):
+        tt_reduce_scatter_output_tensor = run_op(i)
+        tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
+        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+        tt_reduce_scatter_output_tensor.deallocate(True)
+        tt_reduce_scatter_output_list.append(tt_rs_out)
+
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        logger.info(f"Done iteration {i}")
+
+    ##### Verify #####
+    # Devices are in row-major order: device index = row * ring_size + col.
+    # All rows are equivalent (replicated input), so compare each (row, col) device output
+    # against golden[col].
+    implementation_name = "strided" if use_strided else ("new" if use_new else "experimental")
+    logger.info(f"Verifying {implementation_name} reduce scatter output (galaxy 2D mesh)")
+
+    for i in range(num_iters):
+        tt_rs_out = tt_reduce_scatter_output_list[i]
+        golden_scatter = torch_golden_scatter_list[i]
+
+        tt_output_chunks = torch.chunk(tt_rs_out, num_total_devices, dim=dim)
+        assert len(tt_output_chunks) == num_total_devices
+
+        for row in range(num_rows):
+            for col in range(ring_size):
+                device_idx = row * ring_size + col
+                tt_output_tensor = tt_output_chunks[device_idx]
+                torch_output_tensor = golden_scatter[col]
+
+                eq, output = comp_pcc(tt_output_tensor, torch_output_tensor)
+                logger.info(f"{output}, row={row} col={col} (device {device_idx}), iteration {i}")
+
+                if verify_output_shape:
+                    assert tt_output_tensor.shape == torch_output_tensor.shape, (
+                        f"Shape mismatch at row={row} col={col}: "
+                        f"{tt_output_tensor.shape} != {torch_output_tensor.shape}"
+                    )
+                if verify_output_pcc:
+                    assert eq, f"iteration {i} row={row} col={col} FAILED: {output}"
+
+    logger.info("Done")
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize("chunk_width_in_mm_blocks", [2, 3], ids=["cwimb2", "cwimb3"])
+@pytest.mark.parametrize("num_workers_per_link", [2], ids=["2workers"])
+@pytest.mark.parametrize("mm_cores_y", [9], ids=["y9"])
+@pytest.mark.parametrize("mm_cores_x", [8, 12], ids=["x8", "x12"])
+@pytest.mark.parametrize(
+    "use_strided, use_new",
+    [
+        (True, False),
+        (False, False),
+        (False, True),
+    ],
+    ids=["strided", "experimental", "new"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}],
+    indirect=True,
+)
+def test_strided_reduce_scatter_async_galaxy(
+    mesh_device,
+    num_links,
+    chunk_width_in_mm_blocks,
+    num_workers_per_link,
+    mm_cores_y,
+    mm_cores_x,
+    use_strided,
+    use_new,
+    device_params,
+):
+    # Mirrors galaxy_9472_3456_5120 from the fused matmul test:
+    #   MM output per device: [1, 1, 9472, 5120]
+    #   mm_block_m=256, mm_block_n=256 -> mm_block_ht=8, mm_block_wt=8
+    #   mm_cores_x=8, N_tiles=160 -> mm_N_full_block_wt = 160 // 8 = 20
+    cluster_axis = 1
+    run_reduce_scatter_impl_galaxy(
+        mesh_device,
+        [1, 1, 9472, 5120],
+        3,  # dim
+        num_links,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.Topology.Ring,
+        cluster_axis,
+        num_iters=1,
+        small_random_ints=False,
+        use_barrier=True,
+        use_persistent_buffers=True,
+        use_strided=use_strided,
+        use_new=use_new,
+        verify_output_shape=True,
+        verify_output_pcc=True,
+        mm_cores_y=mm_cores_y,
+        mm_cores_x=mm_cores_x,
+        mm_block_ht=8,
+        mm_block_wt=8,
+        chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+        num_workers_per_link=num_workers_per_link,
     )
