@@ -132,3 +132,6 @@ models:
     bh_llmbox: 1200
     bh_loudbox: 1200
     bh_p300: 800
+  sweep:
+    wh_n150: 15
+    wh_llmbox_perf: 30
