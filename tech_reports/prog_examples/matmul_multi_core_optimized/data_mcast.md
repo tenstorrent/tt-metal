@@ -3,7 +3,7 @@
 **Note**: This example only works on Grayskull.
 
 Let\'s level up our code and show how you can leverage and fully customize METALIUM\'s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work.
-This example builds off of the data_reuse one, so we employ the same intermediate (partial) results handling scheme on-core. However, rather than map tile-work statically to your coregrid, we map in0\'s rows and in1\'s columns to the coregrid\'s edges, and cascade work core-to-core dynamically.
+This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core. However, rather than map tile-work statically to your coregrid, we map in0\'s rows and in1\'s columns to the coregrid\'s edges, and cascade work core-to-core dynamically.
 A fun tidbit: \"torrent\" in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.
 
 ## Additional Compile-Time Argument
@@ -55,7 +55,7 @@ Next, we define the mcast role of the entire coregrid, the uppermost edge, and t
         {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
     ```
 
--   **\`\`all_except_left_column\`\`**: Designates which cores will perform their share of in0 and in1 tile work, and calculate their partial results.
+-   **\`\`all_except_left_column\`\`**: Designates which cores will peform their share of in0 and in1 tile work, and calculate their partial results.
 
     ``` cpp
     CoreRange all_except_left_column(
@@ -70,7 +70,7 @@ CoreRange in0_sender_in1_sender(
     {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
 ```
 
-Then we mcast send in0 rows of work vertically down the coregrid's left_column (from DRAM into each of these core's L1). These left_column cores are responsible for disseminating the **same** in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section. We also ensure they are designated as receiver cores because they will also take on in1 column work.
+Then we mcast send in0 rows of work vertically down the coregrid's left_column (from DRAM into each of these core's L1). These left_column cores are responsible for disseminating the **same** in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section. We also ensure they are desginated as receiver cores because they will also take on in1 column work.
 
 ``` cpp
 CoreRange in0_sender_in1_receiver(
@@ -86,7 +86,7 @@ CoreRange in0_receiver_in1_sender(
     {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 ```
 
-The remaining tiles act as receivers for both in0 and in1 tile data.
+The remining tiles act as receivers for both in0 and in1 tile data.
 Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.
 
 ``` cpp
@@ -121,7 +121,7 @@ Please refer to the CircularBuffers page for further details.
 
 ## Multicast Reader/Writer Kernel Setup
 
-In datareuse, we spawned reader and writer kernels per core. In mcast, we have designated core ranges (or more generally speaking, `groups`), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
+In datareuse, we spawned reader and writer kernels per core. In mcast, we have desginated core ranges (or more generally speaking, `groups`), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
 
 Below, let's set some core ID\'s associated with a specific sender-receiver kernel. Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the
 [tt_metal/impl/kernels/data_types.hpp](../../../tt_metal/impl/kernels/data_types.hpp) file.
@@ -177,7 +177,7 @@ You can see there are many arguments with which to experiment with, such as mcas
 
 ## New Compute Kernel: Fused Bias Addition and Activation Functions
 
-Like all the examples preceding, we call our compute kernel as usual, except here we introduce a new one called `bmm_large_block_zm_fused_bias_activation`.
+Like all the examples preceeding, we call our compute kernel as usual, except here we introduce a new one called `bmm_large_block_zm_fused_bias_activation`.
 
 ``` cpp
 auto mm_kernel_id = tt_metal::CreateKernel(
@@ -241,7 +241,7 @@ auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores
 
 ## Kernel Runtime Arguments
 
-Recall that we just designated NCRISCs to handle our DRAM-\>CoreGrid L1 data movement. METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordinates.
+Recall that we just desginated NCRISCs to handle our DRAM-\>CoreGrid L1 data movement. METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordintates.
 
 ``` cpp
 std::vector<uint32_tmm_reader_args = {
@@ -287,7 +287,7 @@ for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
 ```
 
-At this point we can specify exactly which worker core plays which role for mcasting in0 and in1 data. Here we can map the physical core on device with:
+At this point we can specificy exactly which worker core plays which role for mcasting in0 and in1 data. Here we can map the physical core on device with:
 
 ``` cpp
 (std::uint32_t)  right_core_physical.x, // in0_mcast_dest_noc_start_x

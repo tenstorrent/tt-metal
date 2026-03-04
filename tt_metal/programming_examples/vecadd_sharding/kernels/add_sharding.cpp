@@ -9,9 +9,9 @@
 #include <cstdint>
 
 void kernel_main() {
-    // IMPORTANT: since there is no read kernel, and data is already in circular buffers
+    // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
     // do not call cb_wait_front() because there is no wait. And we ensured there is enough
-    // space in the circular buffers for the entirty of the computation.
+    // spece in the circular buffers for the entirty of the computation.
     // if calling cb_wait_front() here, the kernel will hang forever as no one is producing
     // data to the circular buffers.
 

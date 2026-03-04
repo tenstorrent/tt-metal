@@ -17,7 +17,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-//! SocDescriptor contains information regarding the SOC configuration targeted.
+//! SocDescriptor contains information regarding the SOC configuration targetted.
 /*!
     Should only contain relevant configuration for SOC
 */

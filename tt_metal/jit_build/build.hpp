@@ -172,7 +172,7 @@ public:
     }
 };
 
-// Extracts a slice of builds from JitBuildStates
+// Exracts a slice of builds from JitBuildStates
 // Used for parallel building a subset of the builds, builds all members in one call
 using JitBuildStateSubset = std::span<const JitBuildState>;
 

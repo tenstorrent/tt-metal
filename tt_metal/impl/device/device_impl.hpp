@@ -141,7 +141,7 @@ public:
     // Puts device into reset
     bool close() override;
 
-    // Program cache interface. Synchronize with worker threads before querying or
+    // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() override;
     void clear_program_cache() override;
@@ -164,7 +164,7 @@ public:
     };
 
 private:
-    // Deprecated overrides for sub_device_manager_tracker
+    // Depracated ovverrides for sub_device_manager_tracker
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;

@@ -437,7 +437,7 @@ void send_msg_to_eth_mailbox(
                     virtual_core.str(),
                     mailbox_val);
 
-                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware version is 18.10.0", device_id);
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.10.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         }
@@ -484,7 +484,7 @@ void send_msg_to_eth_mailbox(
                     virtual_core.str(),
                     mailbox_val);
 
-                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware version is 18.10.0", device_id);
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.10.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         } while (msg_status != done_message);

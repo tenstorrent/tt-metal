@@ -158,13 +158,13 @@
    - PR: #33039
 - Fix handling of scalar value shard_to_full
    - PR: #32048
-- Pjosipovic/conv2d ws preferred noc
+- Pjosipovic/conv2d ws prefered noc
    - PR: #33038
 - Add addrgen overload support for fabric unicast and multicast writes - Part 2
    - PR: #32415
 - remove irrelevant and long test from upstream test suite
    - PR: #32971
-- Fixing CI for triage non deterministic failures
+- Fixing CI for triage non determistic failures
    - PR: #33046
 - Fix profiler start messages shown when TT_METAL_DEVICE_PROFILER disabled
    - PR: #32440

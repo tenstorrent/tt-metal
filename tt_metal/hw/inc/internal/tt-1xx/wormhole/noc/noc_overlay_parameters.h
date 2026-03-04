@@ -8,7 +8,7 @@
 //                                                                                                             //
 // (echo '<% type=:c_header %>' && cat noc_overlay_parameters.erb) | erb -T - > noc_overlay_parameters.h     //
 // (echo '<% type=:cpp_header %>' && cat noc_overlay_parameters.erb) | erb -T - > noc_overlay_parameters.hpp //
-// Open noc_overlay_parameters.hpp and move static class variable definitions to noc_overlay_parameters.cpp    //
+// Open noc_overlay_parameters.hpp and move static class varaible definitions to noc_overlay_parameters.cpp    //
 // overriding existing ones.                                                                                   //
 //                                                                                                             //
 // to regenerate                                                                                               //
@@ -98,7 +98,7 @@
 #define DRAM_READS__TRANS_SIZE_WORDS_LO_WIDTH 12
 
 // Remote source phase (may be different from the destination stream phase.)
-// We use 20-bit phase ID, so phase count doesn't wrap until 1M phases.
+// We use 20-bit phase ID, so phase count doesnt wrap until 1M phases.
 // Dont-care unless REMOTE_SOURCE == 1.
 #define STREAM_REMOTE_SRC_PHASE_REG_INDEX 1
 #define DRAM_READS__SCRATCH_1_PTR 0
@@ -159,7 +159,7 @@
 // within a phase, so unlike the buffer, it never needs to wrap.
 //
 // The buffer is filled automatically by snooping for streams with remote source.
-// For source endpoints, the buffer is written explicitly (along with the data buffer), after which
+// For source enpoints, the buffer is written explicitly (along with the data buffer), after which
 // STREAM_NUM_MSGS_RECEIVED_INC is written to notify the stream that messages are available for
 // sending.
 //
@@ -226,7 +226,7 @@
 // set if REMOTE_RECEIVER==1 and the destination buffer is large enough to accept full phase data without wrapping:
 #define DEST_DATA_BUF_NO_FLOW_CTRL (DATA_BUF_NO_FLOW_CTRL + DATA_BUF_NO_FLOW_CTRL_WIDTH)
 #define DEST_DATA_BUF_NO_FLOW_CTRL_WIDTH 1
-// set if REMOTE_SOURCE==1 and has multicast enabled (i.e. this stream is part of a multicast group)
+// set if REMOTE_SOURCE==1 and has mulicast enabled (i.e. this stream is part of a multicast group)
 #define REMOTE_SRC_IS_MCAST (DEST_DATA_BUF_NO_FLOW_CTRL + DEST_DATA_BUF_NO_FLOW_CTRL_WIDTH)
 #define REMOTE_SRC_IS_MCAST_WIDTH 1
 // set if no need to flush outgoing remote data from previous phase
@@ -244,7 +244,7 @@
 
 // Pointer to the stream auto-config data. Initialized to the start of
 // the auto-config structure at workload start, automatically updated
-// subsequently.
+// subsequenty.
 // Specified as byte address, needs to be multiple of 4B.
 #define STREAM_PHASE_AUTO_CFG_PTR_REG_INDEX 12
 
@@ -295,7 +295,7 @@
 #define MSG_HEADER_WORD_CNT_BITS_WIDTH MEM_WORD_BIT_OFFSET_WIDTH
 
 // Number of received & stored messages (read-only).
-// To get the total number of messages pending in memory read
+// To get the total number of messages penidng in memory read
 // STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX
 #define STREAM_NUM_MSGS_RECEIVED_REG_INDEX 18
 
@@ -343,7 +343,7 @@
 #define STREAM_PHASE_ADVANCE_REG_INDEX 27
 
 // Available buffer space at the stream (in 16B words).
-// Source can't send data unless available space > 0.
+// Source cant send data unless available space > 0.
 #define STREAM_BUF_SPACE_AVAILABLE_REG_INDEX 28
 
 // For endpoints with SOURCE_ENDPOINT == 1, this register is for firmware
@@ -430,7 +430,7 @@
 // is disabled.
 // PHASE_NUM_INCR is phase number increment relative to the previous executed phase (or 0 right
 // after reset). The increment happens after auto-config is done, and before the phase is executed.
-// (Therefore reading  STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasn't started
+// (Therefore reading  STREAM_CURR_PHASE_REG while auto-config is ongoing, or if it hasnt started
 // yet, may return the old phase number.)
 // This enables up to 2^12-1 phases to be skipped. If more phases need to be skipped, it is
 // necessary to insert an intermediate phase with zero messages, whose only purpose is to provide
@@ -449,9 +449,9 @@
 #define CLOCK_GATING_EN_WIDTH 1
 #define CLOCK_GATING_HYST (CLOCK_GATING_EN + CLOCK_GATING_EN_WIDTH)
 #define CLOCK_GATING_HYST_WIDTH 7
-// PARTIAL_SEND_WORDS_THR controls the minimum number of 16-byte words of a tile to accumulate in a relay stream before
+// PARTIAL_SEND_WORDS_THR contols the minimum number of 16-byte words of a tile to accumulate in a relay stream before
 // sending it off to the destination. If the size of the tile is less than or equal to PARTIAL_SEND_WORDS_THR, then this
-// field is ignored. Default is 16 words
+// feild is ignored. Default is 16 words
 #define PARTIAL_SEND_WORDS_THR (CLOCK_GATING_HYST + CLOCK_GATING_HYST_WIDTH)
 #define PARTIAL_SEND_WORDS_THR_WIDTH 8
 
@@ -481,7 +481,7 @@
 // Returns 1 if the message info register can accept new message push (read-only).
 // Equivalent to checking the condition:
 //   (STREAM_MSG_INFO_FULL_REG_INDEX == 0) && (STREAM_MSG_INFO_PTR_REG_INDEX == STREAM_MSG_INFO_WR_PTR_REG_INDEX)
-// (I.e. there is free space in the msg info register, and we dont have any message info headers in the
+// (I.e. ther is free space in the msg info register, and we dont have any message info headers in the
 //  memory buffer about to be fetched.)
 #define STREAM_MSG_INFO_CAN_PUSH_NEW_MSG_REG_INDEX 41
 
@@ -525,7 +525,7 @@
 // Read-only. Tells you the number of tiles that have arrived in L1
 #define STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM_REG_INDEX 47
 
-// Bit mask of connected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.
+// Bit mask of connnected local source. Dont care if LOCAL_SOURCES_CONNECTED == 0.
 // Mask segments [23:0], [47:24], and [63:48] are at indexes STREAM_LOCAL_SRC_MASK_REG_INDEX,
 // STREAM_LOCAL_SRC_MASK_REG_INDEX+1, STREAM_LOCAL_SRC_MASK_REG_INDEX+2.
 #define STREAM_LOCAL_SRC_MASK_REG_INDEX 48
@@ -539,7 +539,7 @@
 
 // Available buffer space at remote destination stream(s).
 // Dont care unless REMOTE_RECEIVER == 1.
-// Source can't send data unless WORDS_FREE > 0.
+// Source cant send data unless WORDS_FREE > 0.
 // Read-only; updated automatically to maximum value when
 // STREAM_REMOTE_DEST_BUF_SIZE_REG is updated.
 // For multicast streams, values for successive destinations are at
@@ -605,7 +605,7 @@
 #define NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH 1
 #define NCRISC_CMD_ID (NCRISC_TRANS_EN_IRQ_ON_BLOB_END + NCRISC_TRANS_EN_IRQ_ON_BLOB_END_WIDTH)
 #define NCRISC_CMD_ID_WIDTH 3
-// Kept for compatibility with grayskull, but doesn't exist anymore in wormhole
+// Kept for compatibility with grayskull, but doesnt not exist anymore in wormhole
 #define NEXT_NRISC_PIC_INT_ON_PHASE (NCRISC_CMD_ID + NCRISC_CMD_ID_WIDTH)
 #define NEXT_NRISC_PIC_INT_ON_PHASE_WIDTH 19
 
@@ -648,7 +648,7 @@
 #define STREAM_SCRATCH_5_REG_INDEX 253
 #define DRAM_FIFO_BASE_ADDR_WORDS_HI 0
 #define DRAM_FIFO_BASE_ADDR_WORDS_HI_WIDTH 16
-// Processes the read or write operation to completion without processing other dram streams in the meantime
+// Processes the read or write operation to completeion without processing other dram streams in the meantime
 #define DRAM_EN_BLOCKING (DRAM_FIFO_BASE_ADDR_WORDS_HI + DRAM_FIFO_BASE_ADDR_WORDS_HI_WIDTH)
 #define DRAM_EN_BLOCKING_WIDTH 1
 // Fifo structure in dram holds a dram pointer and size that is used as indirection to a tile in dram

@@ -62,6 +62,6 @@ static_assert(NUM_NOCS == 1);
 #else
 static_assert(NUM_NOCS == 2);
 #endif
-// "Scratch" in L1 has space allocated for 256 DRAM and L1 entries, to store offsets and NOC XY data.
+// "Scratch" in L1 has space allocated for 256 DRAM and L1 enteries, to store offsets and NOC XY data.
 // (MEM_BANK_TO_NOC_XY_SCRATCH and MEM_BANK_OFFSET_SCRATCH)
 static_assert((NUM_DRAM_BANKS + NUM_L1_BANKS) <= 256);

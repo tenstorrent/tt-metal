@@ -135,7 +135,7 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             (operation_attributes.num_tokens.has_value() and operation_attributes.transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(operation_attributes.num_tokens.value() % 32 == 0, "Number of tokens must be divisible by 32!");
+        TT_FATAL(operation_attributes.num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
         read_from_kv_cache = true;
     }
 

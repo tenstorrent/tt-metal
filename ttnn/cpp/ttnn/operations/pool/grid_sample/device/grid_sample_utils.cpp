@@ -43,7 +43,7 @@ bool should_use_split_reader(
     }
 
     // On blackhole, for a lower number of channels, the bottleneck is the reading of the input image, so split reader
-    // is beneficial On higher number of channels, the bottleneck is on the unpacker side, where using split reader also
+    // is benefitial On higher number of channels, the bottleneck is on the unpacker side, where using split reader also
     // adds additional overhead, so it slows down the program
     if (arch == tt::ARCH::BLACKHOLE) {
         const uint32_t input_channels = input_tensor.padded_shape()[-1];

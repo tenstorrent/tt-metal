@@ -83,7 +83,7 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 void init_sync_registers() {
-    // TODO: check if this is needed with transition to DFBs
+    // TODO: check if this is needed with tranistion to DFBs
     // https://github.com/tenstorrent/tt-metal/issues/36889
     // volatile tt_reg_ptr uint* tiles_received_ptr;
     // volatile tt_reg_ptr uint* tiles_acked_ptr;

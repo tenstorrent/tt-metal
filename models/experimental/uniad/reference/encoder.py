@@ -360,7 +360,7 @@ class BEVFormerLayer(nn.Module):
                 query = self.norms[norm_index](query)
                 norm_index += 1
 
-            # spatial cross attention
+            # spaital cross attention
             elif layer == "cross_attn":
                 query = self.attentions[attn_index](
                     query,

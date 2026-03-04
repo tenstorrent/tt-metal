@@ -160,7 +160,7 @@ public:
     // Puts device into reset
     virtual bool close() = 0;
 
-    // Program cache interface. Synchronize with worker threads before querying or
+    // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
     virtual void clear_program_cache() = 0;

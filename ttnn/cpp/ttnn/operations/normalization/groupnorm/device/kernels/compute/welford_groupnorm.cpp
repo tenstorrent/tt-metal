@@ -40,7 +40,7 @@ void kernel_main() {
      * ...last: If num_out_blocks does not divides block_h, the leftovers are put into a chunk of
      *          length last.
      *
-     * This is a high level description of the stages of this kernel, tags will be added to show
+     * This is a high level desciption of the stages of this kernel, tags will be added to show
      * where in the code each stage starts and ends.
      *
      * Welford's Online Algorithm for Group Normalization:

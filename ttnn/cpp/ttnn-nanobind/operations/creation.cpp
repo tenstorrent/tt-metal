@@ -94,7 +94,7 @@ auto create_nanobind_from_buffer_overload() {
             // Overloading this with templates is not working quite as expected,
             // the problem is that the buffer is a nb::object, so we can't deduce the type of the data.
             // and sometimes the wrong type is handling the data.
-            // For instance, a list of int16 can be interpreted as a list of int32 and the data will be a mismatch
+            // For instance, a list of int16 can be interpreted as a list of int32 and the data will be a missmatch
             // in further validations.
             switch (dtype) {
                 case DataType::UINT8: {

@@ -173,7 +173,7 @@ public:
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                     }
                     break;
-                default: TT_THROW("Unknown processor id {}", params.processor_id);
+                default: TT_THROW("Unkown processor id {}", params.processor_id);
             }
         }
         return srcs;

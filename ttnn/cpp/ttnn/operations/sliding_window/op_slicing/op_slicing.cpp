@@ -66,7 +66,7 @@ static uint32_t compute_L1_usage_for_slice_config(
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
         if (this_output_slice_dim == 0) {
-            // No work to be done in this iteration, so skip it.
+            // No work to be done in this interation, so skip it.
             slice_index++;
             continue;
         }
@@ -90,7 +90,7 @@ static uint32_t compute_L1_usage_for_slice_config(
             input_slice_height_start = std::max<int>(0, input_slice_height_start);
             input_slice_height_end = std::min<int>(input_height, input_slice_height_end);
             if (input_slice_height_start >= input_slice_height_end) {
-                // No work to be done in this iteration, so skip it.
+                // No work to be done in this interation, so skip it.
                 slice_index++;
                 continue;
             }
@@ -110,7 +110,7 @@ static uint32_t compute_L1_usage_for_slice_config(
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 
             if (input_slice_width_start >= input_slice_width_end) {
-                // No work to be done in this iteration, so skip it.
+                // No work to be done in this interation, so skip it.
                 slice_index++;
                 continue;
             }
@@ -391,7 +391,7 @@ void run_sliced_op(
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
         if (this_output_slice_dim == 0) {
-            // No work to be done in this iteration, so skip it.
+            // No work to be done in this interation, so skip it.
             slice_index++;
             continue;
         }
@@ -415,7 +415,7 @@ void run_sliced_op(
             input_slice_height_start = std::max<int>(0, input_slice_height_start);
             input_slice_height_end = std::min<int>(input_height, input_slice_height_end);
             if (input_slice_height_start >= input_slice_height_end) {
-                // No work to be done in this iteration, so skip it.
+                // No work to be done in this interation, so skip it.
                 slice_index++;
                 continue;
             }
@@ -437,7 +437,7 @@ void run_sliced_op(
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 
             if (input_slice_width_start >= input_slice_width_end) {
-                // No work to be done in this iteration, so skip it.
+                // No work to be done in this interation, so skip it.
                 slice_index++;
                 continue;
             }
