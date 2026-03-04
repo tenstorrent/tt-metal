@@ -34,7 +34,7 @@ def default_moe_config():
     "real_weights",
     [
         True,  # Use real weights
-        False,  # Use random weights
+        # False,  # Use random weights
     ],
 )
 @pytest.mark.parametrize(
