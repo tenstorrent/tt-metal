@@ -81,6 +81,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_event.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
+    api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
@@ -92,6 +93,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/queue_id.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
     api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
+    api/tt-metalium/experimental/fabric/topology_solver.hpp
+    api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
@@ -111,6 +114,25 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
+    api/tt-metalium/experimental/tensor/host_tensor.hpp
+    api/tt-metalium/experimental/tensor/device_tensor.hpp
+    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/experimental/udm/mesh_builder.hpp
+    api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
+    api/tt-metalium/experimental/udm/mesh_kernel.hpp
+    api/tt-metalium/experimental/udm/mesh_program.hpp
+    api/tt-metalium/experimental/udm/mesh_semaphore.hpp
+    api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
+    api/tt-metalium/experimental/udm/mesh_utils.hpp
 )
 target_sources(
     tt_metal
@@ -147,8 +169,10 @@ file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
+    third_party/tt_llk/common/*.h
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
+    third_party/tt_llk/tt_llk_quasar/**/*.h
 )
 
 target_sources(
@@ -172,6 +196,7 @@ target_sources(
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
@@ -190,6 +215,7 @@ target_sources(
             ${FABRIC_HW_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
+            impl/dispatch/kernels/cq_prefetch.hpp
             impl/dispatch/kernels/cq_relay.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             ${COMPUTE_KERNEL_API}
@@ -198,6 +224,8 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
             tools/profiler/noc_event_profiler.hpp
+            tools/profiler/noc_debugging_profiler.hpp
+            tools/profiler/noc_debugging_metadata.hpp
             tools/profiler/cpp_device_analyses.json
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
@@ -214,6 +242,8 @@ target_sources(
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
             ${TT_LLK_HEADERS}
+            # SFPI Version for kernel caching
+            sfpi-version
 )
 
 include(CheckFunctionExists)
@@ -238,7 +268,6 @@ target_link_libraries(
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
-        Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
@@ -254,6 +283,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
+        Reflect::Reflect
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
@@ -301,7 +331,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
-add_subdirectory(experimental/udm)
+add_subdirectory(impl/experimental/udm)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

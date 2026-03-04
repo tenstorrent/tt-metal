@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -78,13 +79,19 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 // to run a CCL over the unit-meshes.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
 
+enum class CoreAllocationStrategy {
+    ROW_MAJOR,
+    COL_MAJOR,
+};
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
 class EriscDatamoverBuilder;
 
@@ -738,7 +745,6 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 
 // Forward/backward devices are assumed to be neighbors for 1D fabric for now
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
-    Topology topology,
     const distributed::MeshCoordinate& src_device_coord,
     const std::optional<distributed::MeshCoordinate>& forward_device_coord,
     const std::optional<distributed::MeshCoordinate>& backward_device_coord,
@@ -749,12 +755,32 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 
 // Forward/backward devices are assumed to be neighbors for 1D fabric for now
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
-    Topology topology,
     const distributed::MeshCoordinate& src_device_coord,
     const std::optional<distributed::MeshCoordinate>& forward_device_coord,
     const std::optional<distributed::MeshCoordinate>& backward_device_coord,
     uint32_t num_targets_forward,
     uint32_t num_targets_backward,
     distributed::MeshDevice* mesh_device);
+
+
+void fabric_mux_connection_ct_args(
+    uint32_t num_workers_per_direction,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args);
+
+void fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> = std::nullopt);
+
 
 }  // namespace ttnn::ccl

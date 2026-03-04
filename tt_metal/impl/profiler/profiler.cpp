@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "core_coord.hpp"
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
@@ -24,7 +25,6 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
@@ -50,6 +50,7 @@
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"
 #include "debug/noc_debugging.hpp"
+#include "tools/profiler/noc_debugging_metadata.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -86,7 +87,11 @@ NOCDebugEvent make_noc_debug_event(
         case EMD::NocEventType::WRITE_: [[fallthrough]];
         case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
-        case EMD::NocEventType::SEMAPHORE_SET_REMOTE:
+        case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
+            bool is_semaphore = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST ||
+                                event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_REMOTE;
+            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST ||
+                            event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST;
             return NOCDebugEvent(NocWriteEvent{
                 trailer.getSrcAddr(),
                 trailer.getDstAddr(),
@@ -97,7 +102,12 @@ NOCDebugEvent make_noc_debug_event(
                 event.dst_x,
                 event.dst_y,
                 static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1});
+                event.noc_type == EMD::NocType::NOC_1,
+                is_semaphore,
+                is_mcast,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y});
+        }
         case EMD::NocEventType::READ_BARRIER_END:
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
@@ -555,6 +565,13 @@ auto coalesceFabricEvents(
         std::unordered_map<CoreCoord, std::queue<tracy::TTDeviceMarker>> fabric_mux_markers;
 
         for (size_t i = 0; i < markers.size(); /* manual increment */) {
+            // Scoped lock events (CB_LOCK, CB_UNLOCK, MEM_LOCK, MEM_UNLOCK) use different metadata; pass through as-is.
+            // marker_id is full timer_id; static ID is the low 16 bits.
+            if ((markers[i].marker_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
+                coalesced_events_by_op[program_execution_uid].push_back(markers[i]);
+                i += 1;
+                continue;
+            }
             // If it is a zone, simply copy existing event as-is
             auto current_event = EMD(markers[i].data).getContents();
             TT_FATAL(
@@ -758,6 +775,23 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         {"zone_phase", enchantum::to_string(zone_phase)},
                         {"sx", device_marker.core_x},
                         {"sy", device_marker.core_y},
+                        {"timestamp", device_marker.timestamp},
+                    });
+                } else if ((device_marker.marker_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
+                    NocDebuggingEventMetadata ev_md(device_marker.data);
+                    json_events_by_op[program_execution_uid].push_back(nlohmann::ordered_json{
+                        {"run_host_id", device_marker.runtime_host_id},
+                        {"op_name", device_marker.op_name},
+                        {"proc", enchantum::to_string(device_marker.risc)},
+                        {"src_device_id", device_marker.chip_id},
+                        {"sx", device_marker.core_x},
+                        {"sy", device_marker.core_y},
+                        {"type", "scoped_lock"},
+                        {"event_type",
+                         enchantum::to_string(
+                             static_cast<NocDebuggingEventMetadata::NocDebugEventType>(ev_md.event_type))},
+                        {"locked_addr", ev_md.getLockedAddressBase()},
+                        {"num_bytes", ev_md.getNumBytes()},
                         {"timestamp", device_marker.timestamp},
                     });
                 } else if (std::holds_alternative<EMD::LocalNocEvent>(EMD(device_marker.data).getContents())) {
@@ -1350,6 +1384,8 @@ void DeviceProfiler::resetControlBuffers(
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
         writeToCoreControlBuffer(mesh_device, device, virtual_core, control_buffer_reset, force_slow_dispatch);
     }
+
+    this->resetActiveDramBufferIndices();
 }
 
 void DeviceProfiler::readProfilerBuffer(
@@ -1760,6 +1796,29 @@ void DeviceProfiler::readDeviceMarkerData(
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
+
+#if defined(TRACY_ENABLE)
+    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
+        NOCDebugState* noc_debug_state = MetalContext::instance().noc_debug_state().get();
+        if (noc_debug_state) {
+            const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+            // disable linting here; slicing is __intended__
+            // NOLINTBEGIN
+            const CoreCoord virtual_core =
+                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+            // NOLINTEND
+
+            NocDebuggingEventMetadata ev_md(data);
+            ScopedLockEvent scoped_ev{
+                static_cast<int8_t>(virtual_core.x),
+                static_cast<int8_t>(virtual_core.y),
+                static_cast<NocDebuggingEventMetadata::NocDebugEventType>(ev_md.event_type),
+                ev_md.getLockedAddressBase(),
+                ev_md.getNumBytes()};
+            noc_debug_state->push_event(device_id, timestamp, get_processor_id(risc_type), NOCDebugEvent{scoped_ev});
+        }
+    }
+#endif
 }
 
 void DeviceProfiler::readTsData16BMarkerData(
@@ -2038,6 +2097,19 @@ void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_d
     this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
 }
 
+void DeviceProfiler::clearStateForDeviceReinit() {
+    this->core_control_buffers.clear();
+    this->core_l1_data_buffers.clear();
+    this->active_dram_buffer_per_core_risc_map.clear();
+    this->device_markers_per_core_risc_map.clear();
+}
+
+void DeviceProfiler::resetActiveDramBufferIndices() {
+    // Reset all active DRAM buffer indices to 0 for all cores and RISCs
+    // This keeps host state in sync when device-side profiler buffers are cleared
+    this->active_dram_buffer_per_core_risc_map.clear();
+}
+
 DeviceAddr DeviceProfiler::getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const {
     const auto base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     const auto offset = getProfileBufferBankSizeBytes() * active_dram_buffer_index;
@@ -2200,7 +2272,7 @@ void DeviceProfiler::readResults(
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
-    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 
     constexpr uint8_t default_dram_buffer_index = 0;
 
@@ -2717,7 +2789,7 @@ void DeviceProfiler::pollDebugDumpResults(
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 bool getDeviceDebugDumpEnabled() {
-    return MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    return MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 }
 
 }  // namespace tt::tt_metal

@@ -319,11 +319,17 @@ template <
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false>
+    bool SKIP_POSITIVE_CHECK = false,
+    bool CLAMP_NEGATIVE = true>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROXIMATION_MODE) {
-        _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
-            exp_base_scale_factor);
+        _calculate_exponential_<
+            APPROXIMATION_MODE,
+            SCALE_EN,
+            ITERATIONS,
+            FAST_APPROX,
+            SKIP_POSITIVE_CHECK,
+            CLAMP_NEGATIVE>(exp_base_scale_factor);
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -337,9 +343,9 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000, bool CLAMP_NEGATIVE = true>
 void exp_init() {
-    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
+    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale, CLAMP_NEGATIVE>();
 }
 
 }  // namespace sfpu

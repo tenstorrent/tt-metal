@@ -8,15 +8,15 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 // SPLIT REDUCE across Cores
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -102,7 +102,7 @@ void MAIN {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
+    constexpr uint32_t cb_im = do_gamma ? cb_x : (do_beta ? cb_fusion : cb_out);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
 // pre-add x + y
@@ -356,6 +356,16 @@ void MAIN {
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
                 mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
+                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
             }
             tile_regs_commit();
 
@@ -391,6 +401,15 @@ void MAIN {
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
                     mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    // Activation must be applied last. If do_beta != 0 then
+                    // activation will be applied after the beta addition.
+                    // Otherwise, we can apply the activation here.
+                    if constexpr (!do_beta) {
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+#endif
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -421,6 +440,10 @@ void MAIN {
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
                     add_tiles_bcast_rows(cb_fusion, cb_beta, index + index_h_offset, index, w);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -437,5 +460,3 @@ void MAIN {
         cb_wait_front(cb_out, num_tiles_per_block);
     }
 }
-
-}  // namespace NAMESPACE

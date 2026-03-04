@@ -51,6 +51,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
@@ -731,6 +732,8 @@ void InitDeviceProfiler(IDevice* device) {
         } else {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
         }
+    } else {
+        profiler_state_manager->device_profiler_map.at(device_id).clearStateForDeviceReinit();
     }
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
@@ -751,7 +754,7 @@ void InitDeviceProfiler(IDevice* device) {
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
 
-    if (MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled()) {
+    if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -1145,6 +1148,14 @@ void ReadMeshDeviceProfilerResults(
     if (getDeviceDebugDumpEnabled()) {
         if (auto& profiler_state_manager = MetalContext::instance().profiler_state_manager()) {
             profiler_state_manager->signal_debug_dump_read();
+        }
+        if (auto& noc_debug_state = MetalContext::instance().noc_debug_state()) {
+            noc_debug_state->process_accumulated_events_all_chips();
+            noc_debug_state->finish_cores();
+            // Only print when called by the user (state == normal) to avoid duplicate printing
+            if (state != ProfilerReadState::LAST_FD_READ) {
+                noc_debug_state->print_aggregated_errors();
+            }
         }
         return;
     }

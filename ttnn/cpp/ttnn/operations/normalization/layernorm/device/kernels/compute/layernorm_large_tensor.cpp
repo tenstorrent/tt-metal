@@ -9,13 +9,13 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -24,9 +24,7 @@ namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -46,7 +44,7 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;          // x minus mean
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
     constexpr auto cb_ex = tt::CBIndex::c_18;     // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;    // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;   // xmm^2
@@ -280,6 +278,15 @@ void MAIN {
             mul_tiles_init(cb_xmm, cb_ex2pe);
             for (auto i : block.local()) {
                 mul_tiles(cb_xmm, cb_ex2pe, i, 0, i);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
+                if constexpr (!(do_gamma == 1 || do_beta == 1)) {
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+#endif
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -308,6 +315,15 @@ void MAIN {
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    // Activation must be applied last. If do_beta != 0 then
+                    // activation will be applied after the beta addition.
+                    // Otherwise, we can apply the activation here.
+                    if constexpr (!(do_beta == 1)) {
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+#endif
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_gamma, block.full_block_size());
@@ -338,6 +354,10 @@ void MAIN {
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_beta, block.full_block_size());
@@ -361,4 +381,3 @@ void MAIN {
         cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }
-}  // namespace NAMESPACE

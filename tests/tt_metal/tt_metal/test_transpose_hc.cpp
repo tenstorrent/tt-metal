@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "common/device_fixture.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -16,7 +18,6 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 

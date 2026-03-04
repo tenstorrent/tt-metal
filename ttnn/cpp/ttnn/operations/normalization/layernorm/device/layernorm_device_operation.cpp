@@ -24,11 +24,6 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     return LayerNormMultiCoreProgramFactory{};
 }
 
-void LayerNormDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;
@@ -151,6 +146,18 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
             TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
         }
+        const auto shard_spec = a.shard_spec().value();
+        const auto bbox = shard_spec.grid.bounding_box();
+        uint32_t bbox_num_cores =
+            (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
+        TT_FATAL(
+            shard_spec.grid.num_cores() == bbox_num_cores,
+            "Sharded layernorm does not support non-rectangular core grids. "
+            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
+            shard_spec.grid.num_cores(),
+            bbox_num_cores,
+            bbox.end_coord.x - bbox.start_coord.x + 1,
+            bbox.end_coord.y - bbox.start_coord.y + 1);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -177,6 +184,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 stats.value().padded_shape()[-1] % TILE_WIDTH == 0,
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
+    }
+    if (operation_attributes.fused_activation.has_value()) {
+        TT_FATAL(
+            operation_attributes.norm_type == LayerNormType::RMSNORM,
+            "Fused activation only supported for fused rms norm + unary");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "Fused activation is not supported for distributed layernorm");
     }
     std::visit(
         [&](const auto& program_config) {
@@ -261,28 +276,30 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                         "Height sharded memory layout is not supported, got: {}",
                         a.memory_config().memory_layout());
                 } else {
+                    uint32_t num_cores_c = bbox.end_coord.x - bbox.start_coord.x + 1;
+                    uint32_t num_cores_r = bbox.end_coord.y - bbox.start_coord.y + 1;
                     if (row_wise) {
                         TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
+                            tt::div_up(Kt, num_cores_c) == program_config.block_w,
                             "block_w ({}) must equal to K (in tiles) / num_cores_c ({})",
                             program_config.block_w,
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)));
+                            tt::div_up(Kt, num_cores_c));
                         TT_FATAL(
-                            Mt / (bbox.end_coord.y + 1) == program_config.block_h,
+                            Mt / num_cores_r == program_config.block_h,
                             "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
                             program_config.block_h,
-                            Mt / (bbox.end_coord.y + 1));
+                            Mt / num_cores_r);
                     } else {
                         TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
+                            tt::div_up(Kt, num_cores_r) == program_config.block_w,
                             "block_w ({}) must equal to K (in tiles) / num_cores_r ({})",
                             program_config.block_w,
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)));
+                            tt::div_up(Kt, num_cores_r));
                         TT_FATAL(
-                            Mt / (bbox.end_coord.x + 1) == program_config.block_h,
+                            Mt / num_cores_c == program_config.block_h,
                             "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
                             program_config.block_h,
-                            Mt / (bbox.end_coord.x + 1));
+                            Mt / num_cores_c);
                     }
                 }
                 if (b.has_value()) {
@@ -418,7 +435,9 @@ Tensor layer_norm(
     const std::optional<DataType>& dtype,
     LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage,
-    const std::optional<const Tensor>& stats) {
+    const std::optional<const Tensor>& stats,
+    const std::optional<const Tensor>& recip_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -427,6 +446,7 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
+        .fused_activation = fused_activation,
     };
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
@@ -434,6 +454,7 @@ Tensor layer_norm(
         .weight = weight,
         .bias = bias,
         .stats = stats,
+        .recip_tensor = recip_tensor,
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

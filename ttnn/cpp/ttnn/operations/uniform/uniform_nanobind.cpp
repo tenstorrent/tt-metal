@@ -31,10 +31,24 @@ void bind_uniform_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The `input` tensor with updated values drawn from the specified uniform distribution.
 
-        Example:
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.ones(3, 3), dtype=torch.bfloat16)), device=device)
-            >>> ttnn.uniform(input)
+        Note:
+            This operation supports tensors according to the following data types and layouts:
 
+            .. list-table:: input tensor
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, FLOAT32
+                    - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, Block, and ND Sharded: DRAM and L1
+
+            Limitations:
+                -  The input tensor must be on the device.
+                -  The `from` parameter must be less than the `to` parameter.
         )doc";
 
     bind_registered_operation(

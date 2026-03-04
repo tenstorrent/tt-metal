@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -75,6 +74,9 @@ enum class FabricApiType : uint8_t {
     Mesh = 1,
 };
 
+std::vector<eth_chan_directions> get_neighbor_eth_directions(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+
 // Appends connection manager RT args for one or more routes.
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
@@ -96,7 +98,7 @@ void append_routing_plane_connection_manager_rt_args(
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
-    const std::vector<RoutingDirection>& attempted_directions,
+    const std::vector<eth_chan_directions>& attempted_directions,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
@@ -118,6 +120,20 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
 tt::tt_fabric::Topology get_fabric_topology();
+
+struct FabricEriscDatamoverKernelConfig {
+    tt::tt_metal::Program& program;
+    const std::string& kernel_path;
+    const tt::tt_metal::CoreCoord& eth_core;
+    tt::tt_metal::DataMovementProcessor risc_id;
+    tt::tt_metal::NOC noc_id;
+    const std::vector<uint32_t>& compile_time_args;
+    const std::unordered_map<std::string, uint32_t>& named_compile_time_args;
+    const std::vector<uint32_t>& runtime_args;
+    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level;
+};
+
+tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**
  * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.

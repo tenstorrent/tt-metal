@@ -13,7 +13,6 @@
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
@@ -135,11 +134,6 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
                 args.block_config.out_subblock_h_ntiles == 1,
             "Error");
     }
-}
-
-void Conv2dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(

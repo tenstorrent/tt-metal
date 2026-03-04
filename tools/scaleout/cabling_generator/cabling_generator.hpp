@@ -173,7 +173,15 @@ public:
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
+    // Method to emit merged cabling descriptor
+    void emit_cabling_descriptor(const std::string& output_path) const;
+
+    // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
+    void emit_deployment_descriptor(const std::string& output_path) const;
+
 private:
+    // Track which node_descriptors were explicitly present in source files (not inferred)
+    std::unordered_set<std::string> explicit_node_descriptors_;
     // Common initialization logic for all constructors
     void initialize_cluster(
         const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,

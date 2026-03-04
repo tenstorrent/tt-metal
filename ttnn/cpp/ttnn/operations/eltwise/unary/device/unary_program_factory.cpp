@@ -67,8 +67,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
-        ops_chain[0].type() == UnaryOpType::LOGIT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, input_cb_page_size);
@@ -140,7 +139,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
                 if (value1 > 0.5f) {
-                    unary_defines["WHERE"] = "where_tile";
+                    const char* data_format = (input.dtype() == DataType::FLOAT32) ? "Float32" : "Float16_b";
+                    unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
                     unary_defines["CLAMP"] = "clamp_tile";
                 } else if (value1 >= 0.0f) {
                     unary_defines["CLAMP"] = "clamp_tile";
@@ -310,7 +310,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, single_tile_size);

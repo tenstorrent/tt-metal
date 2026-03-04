@@ -19,11 +19,6 @@ RotaryEmbeddingLlamaDeviceOperation::program_factory_t RotaryEmbeddingLlamaDevic
     return RotaryEmbeddingLlamaMultiCore{};
 }
 
-void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -62,9 +57,7 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
 
     uint32_t head_dim = input_tensor.logical_shape()[-1];
     TT_FATAL(
-        head_dim <= 128 ||
-            std::get<ttnn::WormholeComputeKernelConfig>(operation_attributes.compute_kernel_config).fp32_dest_acc_en ==
-                false,
+        head_dim <= 128 || operation_attributes.compute_kernel_config.fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
     // Check that head_dim is less than 256
     TT_FATAL(head_dim <= 256, "Head dim must be less than 256");

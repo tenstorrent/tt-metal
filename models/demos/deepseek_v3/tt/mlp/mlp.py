@@ -189,7 +189,6 @@ class MLP(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP.ProgramConfigData(
@@ -206,7 +205,6 @@ class MLP(AbstractModule):
                 dim=3,  # We are scattering across the feature dimension (last one)
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -273,7 +271,6 @@ class MLP(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=input_memory_config,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -310,7 +307,6 @@ class MLP(AbstractModule):
             "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 dim=3,  # We are scattering across the feature dimension (last one)
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
@@ -429,17 +425,59 @@ class MLP(AbstractModule):
         return x6
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_compute_only(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig, mode: str) -> ttnn.Tensor:
+        """
+        Core MLP computation without CCL operations.
+        Used by SharedExpert since MoEDecoderBlock2D handles CCLs externally.
+
+        Args:
+            x: Input tensor (already gathered if needed)
+            cfg: Configuration for prefill or decode mode
+            mode: Either "prefill" or "decode"
+
+        Returns:
+            Output tensor without reduce_scatter applied
+        """
+        if mode == "prefill":
+            # For SharedExpert, we handle de-chunking here since no reduce_scatter follows
+            output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
+
+            # De-chunk the output if needed (for SharedExpert usage)
+            num_layers = x.shape[0]
+            _, num_chunks, _, output_dim = output.shape
+            if num_chunks > 1:
+                output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+                if pad_rows > 0:
+                    output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
+
+            return output
+        elif mode == "decode":
+            return cls._forward_decode_compute_only(x, cfg)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+    @classmethod
+    def _forward_prefill_compute_only(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig
+    ) -> tuple[ttnn.Tensor, tuple[int, int]]:
+        """
+        Prefill computation without CCL operations.
+
+        Returns:
+            Tuple of (output tensor, (original_seq_len, pad_rows))
+        """
         num_layers, _, seq_len, _ = x.shape
-
-        # CCL runtime initialization in execution order
-        ccl = cfg["ccl"]
-
-        # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        original_seq_len = seq_len
 
         # Chunk the input if needed
+        pad_rows = 0
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
+            if seq_len % cfg["max_rows"] != 0:
+                pad_rows = cfg["max_rows"] - (seq_len % cfg["max_rows"])
+                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                ttnn.deallocate(x)
+                x = x_padded
+                seq_len += pad_rows
             x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
             seq_len = cfg["max_rows"]
 
@@ -452,16 +490,12 @@ class MLP(AbstractModule):
         )
         ttnn.deallocate(x)
 
-        # Apply silu
-        # w1_out_activated = cls._silu_workaround(w1_out)
-        # ttnn.deallocate(w1_out)
-
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        # Down projection with dynamic program configs, no need to reshard as we are using dram activations
+        # Down projection with dynamic program configs
         output = ttnn.linear(
             activated,
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"]),
@@ -469,27 +503,12 @@ class MLP(AbstractModule):
         )
         ttnn.deallocate(activated)
 
-        # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
-
-        # De-chunk the output if the input was chunked
-        _, num_chunks, _, output_dim = output.shape
-        if num_chunks > 1:
-            output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
-
-        assert output.memory_config() == cfg["output_memory_config"]
-        return output
+        # Return output and chunking info for de-chunking after reduce_scatter
+        return output, (original_seq_len, pad_rows)
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        # CCL runtime initialization in execution order
-        ccl = cfg["ccl"]
-
-        # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
-
+    def _forward_decode_compute_only(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        """Decode computation without CCL operations."""
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
@@ -504,8 +523,49 @@ class MLP(AbstractModule):
         ttnn.deallocate(w3_out)
 
         # Down projection
-        w2_out = ttnn.linear(activated, **cfg["w2"])
+        output = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
+
+        return output
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        num_layers = x.shape[0]
+
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        # All gather for efficient matmuls
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+
+        # Perform the core computation
+        output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
+
+        # Reduce-scatter across devices to sum partial results
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
+
+        # De-chunk the output if the input was chunked
+        _, num_chunks, _, output_dim = output.shape
+        if num_chunks > 1:
+            output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+            if pad_rows > 0:
+                output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
+
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output
+
+    @classmethod
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        # All gather
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+
+        # Perform the core computation
+        w2_out = cls._forward_decode_compute_only(x, cfg)
 
         # Add reduce-scatter
         output = ttnn.experimental.reduce_scatter_minimal_async(

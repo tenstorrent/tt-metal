@@ -15,6 +15,9 @@
 constexpr uint32_t data_txq_id = get_compile_time_arg_val(0);
 constexpr uint32_t ack_txq_id = get_compile_time_arg_val(1);
 constexpr uint32_t PAYLOAD_SIZE = get_compile_time_arg_val(2);
+// mesh_id and device_id are not used in this test, but are required by the handshake API
+constexpr uint16_t my_mesh_id = 0;
+constexpr uint8_t my_device_id = 0;
 
 static constexpr uint32_t CREDITS_STREAM_ID = 0;
 static constexpr uint32_t ACK_STREAM_ID = 1;
@@ -41,9 +44,9 @@ void kernel_main() {
 
     // Handshake to make sure it's safe to start sending
     if (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_handshake(handshake_addr);
+        erisc::datamover::handshake::sender_side_handshake(handshake_addr, my_mesh_id, my_device_id);
     } else {
-        erisc::datamover::handshake::receiver_side_handshake(handshake_addr);
+        erisc::datamover::handshake::receiver_side_handshake(handshake_addr, my_mesh_id, my_device_id);
     }
 
     bool has_unsent_messages = true;

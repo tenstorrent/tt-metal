@@ -135,6 +135,12 @@ def compute_lead_models_matrix(modules, batch_size):
         for mesh_shape in runner_config["mesh_shapes"]:
             runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
 
+        # Route modules without a mesh suffix to the first (default) runner config,
+        # which is conventionally the single-chip N150 runner.
+        is_default_runner = runner_config == config[0]
+        if is_default_runner:
+            runner_modules.extend(unmatched_modules)
+
         if not runner_modules:
             continue
 
@@ -142,8 +148,17 @@ def compute_lead_models_matrix(modules, batch_size):
         # The VectorExportSource will automatically load mesh-variant JSONs
         base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
 
-        # Create batches for this runner using base module names
-        runner_batches = chunk_modules(base_modules, batch_size)
+        # For Galaxy runners (multi-chip), split into 3 parallel jobs
+        # For single-chip runners, use the standard batch size
+        is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
+        if is_galaxy:
+            galaxy_jobs = 3
+            galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
+            runner_batches = chunk_modules(base_modules, galaxy_batch_size)
+        else:
+            # Standard batching for single-chip
+            runner_batches = chunk_modules(base_modules, batch_size)
+
         batches.extend(runner_batches)
 
         # Create matrix entries
@@ -172,6 +187,12 @@ def compute_lead_models_matrix(modules, batch_size):
     for mesh_shape, mods in sorted(mesh_shape_modules.items()):
         unique_base = len(set(strip_mesh_suffix(m) for m in mods))
         print(f"  mesh {mesh_shape}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
+    if unmatched_modules:
+        unique_base = len(set(strip_mesh_suffix(m) for m in unmatched_modules))
+        print(
+            f"  no mesh suffix (default runner): {len(unmatched_modules)} vectors ({unique_base} unique modules)",
+            file=sys.stderr,
+        )
 
     return include_entries, batches, []  # No CCL batches for lead models
 
@@ -279,9 +300,14 @@ def main():
         is_comprehensive = True
     else:
         # Fallback to schedule-based detection when no explicit sweep is selected
-        if schedule_expr == "0 3 * * *":
+        # Schedule expressions must match ttnn-run-sweeps.yaml:
+        #   - "0 2 * * *"  -> lead models (2 AM daily)
+        #   - "0 3 * * *"  -> model traced (3 AM daily)
+        #   - "0 4 * * 3,6" -> comprehensive (4 AM Wed/Sat)
+        #   - "30 4 * * 0,1,2,4,5" -> nightly (falls through to else)
+        if schedule_expr == "0 2 * * *":
             is_lead_models = True
-        elif schedule_expr == "0 4 * * *":
+        elif schedule_expr == "0 3 * * *":
             is_model_traced = True
         elif schedule_expr == "0 4 * * 3,6":
             is_comprehensive = True

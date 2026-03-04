@@ -21,6 +21,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include "impl/kernels/kernel.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.

@@ -1,18 +1,17 @@
-cmake_minimum_required(VERSION 3.18...3.30)
+cmake_minimum_required(VERSION 3.18...4.2)
 include(cmake/compilers.cmake)
 
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-endif()
+# When building as a standalone top-level project, inherit the compiler from
+# tt-metal's CMakeCache.txt for ABI compatibility. This is necessary because
+# build systems like scikit-build-core (used by "pip install -e") set CC/CXX
+# to generic values that don't match tt-metal's compiler.
+#
+# To use a different compiler, disable inheritance:
+#   cmake -DTT_TRAIN_INHERIT_COMPILER=OFF -DCMAKE_C_COMPILER=gcc-12 ...
+option(TT_TRAIN_INHERIT_COMPILER "Inherit compiler from tt-metal's CMakeCache.txt" ON)
 
-if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
-    message(STATUS "Using specified C++ compiler: ${CMAKE_CXX_COMPILER}")
-    message(STATUS "Using specified C compiler: ${CMAKE_C_COMPILER}")
-else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    find_and_set_clang17()
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND TT_TRAIN_INHERIT_COMPILER)
+    inherit_compiler_from_tt_metal()
 endif()
 
 project(

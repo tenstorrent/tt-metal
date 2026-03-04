@@ -101,11 +101,14 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     uint32_t sharded_output_cb_index;
     CBHandle cb_sharded_output;
     if (out_sharded) {
+        // The kernel advances the write pointer by aligned_page_size (which may be
+        // larger than block_row_size due to buffer alignment padding), so the CB
+        // page size must match to avoid overflow.
         std::tie(sharded_output_cb_index, cb_sharded_output) = create_cb(
             tt::CBIndex::c_17,
             program,
             all_cores,
-            block_row_size,
+            aligned_page_size,
             num_output_rows_unpadded,
             output_cb_data_format,
             output.buffer());
@@ -151,7 +154,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     }
@@ -178,11 +181,9 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
-        compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (
-        !use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    } else if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         unpack_to_dest_mode[tt::CBIndex::c_0] =

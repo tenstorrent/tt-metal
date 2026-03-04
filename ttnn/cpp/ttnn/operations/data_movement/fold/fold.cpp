@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
-
 #include "ttnn/operation.hpp"
 
 #include "ttnn/operations/math.hpp"
@@ -193,9 +191,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "pad_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphw_mem_config =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3);
 
     log_debug(tt::LogOp, "transpose_hw_output: {}", tt_output_tensor.logical_shape());
 
@@ -213,9 +209,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "pad_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphc_mem_config =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", tt_output_tensor.logical_shape());
 
@@ -227,9 +221,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "reshape_hc_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphw_mem_config2 =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config2);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3);
 
     log_debug(tt::LogOp, "transpose_hw_output2: {}", tt_output_tensor.logical_shape());
 
@@ -241,9 +233,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     log_debug(tt::LogOp, "reshape_hw_output: {}", tt_output_tensor.logical_shape());
 
     // transpose
-    auto tphc_mem_config2 =
-        create_sharded_memory_config(tt_output_tensor.logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config2);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2);
 
     log_debug(tt::LogOp, "transpose_hc_output2: {}", tt_output_tensor.logical_shape());
 
@@ -333,8 +323,7 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, reshaped_tensor.memory_config(), false);
+    auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);
 
     // Reshape back to padded original dimensions
     ttnn::Shape padded_shape(

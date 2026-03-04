@@ -25,10 +25,6 @@
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
@@ -76,10 +72,6 @@ INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, tt
 
 TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     unsigned int num_devices = GetParam();
-    if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
-        GTEST_SKIP();
-    }
-
     ASSERT_TRUE(num_devices > 0);
     vector<ChipId> ids;
     for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
@@ -96,7 +88,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     unsigned int num_devices = GetParam();
     unsigned int num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-    if ((arch == tt::ARCH::GRAYSKULL && num_devices > 1) || (num_devices > num_pci_devices)) {
+    if (num_devices > num_pci_devices) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);

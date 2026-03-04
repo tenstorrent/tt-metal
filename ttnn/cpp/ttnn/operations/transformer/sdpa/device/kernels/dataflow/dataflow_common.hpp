@@ -155,6 +155,54 @@ uint32_t read_chunk_with_padding(
     }
 }
 
+// Read subblock_h rows of Q tiles and push to CB.
+// start_tile_id is passed by reference and advances across successive calls.
+// Used for interleaved Q subblock push to overlap Q reads with compute.
+template <uint32_t tile_bytes, typename ReaderType>
+FORCE_INLINE void read_q_subblock(
+    const ReaderType& reader,
+    const uint32_t cb_id,
+    uint32_t& start_tile_id,
+    const uint32_t sb_start_row,
+    const uint32_t subblock_h,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t dst_cols,
+    const uint32_t barrier_threshold) {
+    const uint32_t sb_tiles = subblock_h * dst_cols;
+    cb_reserve_back(cb_id, sb_tiles);
+    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+
+    uint32_t barrier_count = 0;
+    for (uint32_t row = sb_start_row; row < sb_start_row + subblock_h; ++row) {
+        const uint32_t local_row = row - sb_start_row;
+        uint32_t write_ptr = base_write_ptr + local_row * dst_cols * tile_bytes;
+
+        if (row < src_rows) {
+            for (uint32_t col = 0; col < src_cols; ++col) {
+                noc_async_read_tile(start_tile_id++, reader, write_ptr);
+                write_ptr += tile_bytes;
+                if (++barrier_count == barrier_threshold) {
+                    noc_async_read_barrier();
+                    barrier_count = 0;
+                }
+            }
+            // Zero-pad extra columns (src_cols < dst_cols case)
+            for (uint32_t col = src_cols; col < dst_cols; ++col) {
+                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+            }
+        } else {
+            // Entire row is padding
+            for (uint32_t col = 0; col < dst_cols; ++col) {
+                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+            }
+        }
+    }
+
+    noc_async_read_barrier();
+    cb_push_back(cb_id, sb_tiles);
+}
+
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
 void read_paged_chunk_with_padding(
     const ReaderType& reader,
@@ -207,30 +255,34 @@ void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t 
         noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
 }
 
+// Generic fill with -inf that works for all supported mask formats (bfp4, bfp8, bfloat16)
 template <uint32_t tile_bytes>
-void fill_neginf_tile_bfp4(uint32_t cb_id, uint32_t tile_id) {
+void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
-    constexpr uint32_t num_mantissas = tt::constants::TILE_HW / 2;
-    static_assert(
-        tile_bytes == num_exponents + num_mantissas, "tile_bytes must be equal to bfp4 num_exponents + num_mantissas");
+    constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
+    constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
+    constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
 
-    // Fill the first 64 bytes (16 uint32_t values) with 0xFFFFFFFF for exponents
-    constexpr uint32_t NEG_INF_EXP = 0xFFFFFFFF;
-    constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);  // 16 words
-
-    for (uint32_t i = 0; i < exp_words; i++) {
-        ptr[i] = NEG_INF_EXP;
-    }
-
-    // Fill the next 512 bytes (128 uint32_t values) with 0xCCCCCCCC for mantissas
-    constexpr uint32_t NEG_INF_MANT = 0xCCCCCCCC;
-    constexpr uint32_t mant_words = num_mantissas / sizeof(uint32_t);  // 128 words
-
-    for (uint32_t i = exp_words; i < exp_words + mant_words; i++) {
-        ptr[i] = NEG_INF_MANT;
+    if constexpr (tile_bytes == bf16_size) {
+        // BFLOAT16: fill with 0xFF80FF80 (-inf in bf16, two values per word)
+        for (uint32_t i = 0; i < total_words; i++) {
+            ptr[i] = 0xFF80FF80;
+        }
+    } else {
+        // BFP formats (bfp4, bfp8): first 64 bytes are exponents, rest are mantissas
+        constexpr uint32_t exp_words = num_exponents / sizeof(uint32_t);
+        for (uint32_t i = 0; i < exp_words; i++) {
+            ptr[i] = 0xFFFFFFFF;
+        }
+        // bfp4: 0xCC per nibble (sign + magnitude), bfp8: 0x80 per byte (sign bit set)
+        constexpr uint32_t mant_pattern = (tile_bytes == bfp4_size) ? 0xCCCCCCCC : 0x80808080;
+        for (uint32_t i = exp_words; i < total_words; i++) {
+            ptr[i] = mant_pattern;
+        }
     }
 }
 
@@ -579,7 +631,7 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::FULLY_MASKED:
                     if (inf_tile_idx == -1) {
-                        fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                        fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                         inf_tile_idx = in_mask_tile_id;
                     } else {
                         copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
@@ -607,8 +659,9 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     int zero_tile_idx = -1;
     int inf_tile_idx = -1;
     int vertical_tile_idx = -1;
-    const uint32_t unpadded_Sk_in_chunk =
-        unpadded_Sk % (Sk_chunk_t * tt::constants::TILE_WIDTH);  // TODO: constant for tile width
+    const uint32_t raw_mod = unpadded_Sk % (Sk_chunk_t * tt::constants::TILE_WIDTH);
+    // When raw_mod == 0, the last K chunk is fully valid (no padding) — treat as full chunk size
+    const uint32_t unpadded_Sk_in_chunk = (raw_mod == 0) ? (Sk_chunk_t * tt::constants::TILE_WIDTH) : raw_mod;
     uint32_t unpad_tile_col_in_chunk = unpadded_Sk_in_chunk / tt::constants::TILE_WIDTH;
     uint32_t unpad_col_in_tile = unpadded_Sk_in_chunk % tt::constants::TILE_WIDTH;
 
@@ -628,7 +681,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                 }
             } else if (do_inf) {
                 if (inf_tile_idx == -1) {
-                    fill_neginf_tile_bfp4<tile_bytes>(cb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<tile_bytes>(cb_mask_in, in_mask_tile_id);
                     inf_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);

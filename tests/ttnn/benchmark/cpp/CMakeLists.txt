@@ -1,11 +1,5 @@
-set(BENCHMARK_SRCS
-    "host_tilizer_untilizer/tilizer_untilizer.cpp"
-    "padding/pad_rm.cpp"
-    "operations/ternary/benchmark_where.cpp"
-    "benchmark_host_alloc_on_tensor_readback.cpp"
-    "benchmark_host_dtype_conversion.cpp"
-    "matmul/test_matmul_benchmark.cpp"
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})
     get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
@@ -41,4 +35,5 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
     )
     message(STATUS "TEST_TARGET: ${TEST_TARGET}")
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
+    target_precompile_headers(${TEST_TARGET} REUSE_FROM TTNN::PCH)
 endforeach()

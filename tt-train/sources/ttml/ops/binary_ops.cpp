@@ -8,6 +8,7 @@
 #include <memory>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
+#include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <vector>
 
@@ -40,8 +41,8 @@ bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad)
     return false;
 }
 
-ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
-    ttnn::SmallVector<int64_t> broadcast_dims;
+ttsl::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
+    ttsl::SmallVector<int64_t> broadcast_dims;
     auto input_shape = input->get_value().logical_shape();
     auto grad_shape = grad.logical_shape();
     for (size_t i = 0; i < input_shape.size(); ++i) {
@@ -54,6 +55,14 @@ ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& i
 }
 
 }  // namespace
+
+autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
+    auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
+    autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
+    auto links = autograd::get_links(a);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
@@ -120,12 +129,21 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
+    out->set_value(ttnn::multiply(
+        a->get_value(),
+        b->get_value(),
+        /* fast_and_approximate_mode*/ true));
     autograd::GradFunction grad = [a, b, out]() {
         tt::tt_metal::MemoryConfig mem_config;
         // TODO: support broadcasting (or not)
-        auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
-        auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
+        auto a_grad = ttnn::multiply(
+            out->get_grad(),
+            b->get_value(),
+            /* fast_and_approximate_mode*/ true);
+        auto b_grad = ttnn::multiply(
+            out->get_grad(),
+            a->get_value(),
+            /* fast_and_approximate_mode*/ true);
 
         a->add_grad(a_grad);
         b->add_grad(b_grad);
@@ -139,7 +157,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     auto out = autograd::create_tensor(ttnn::multiply(a->get_value(), b));
     autograd::GradFunction grad = [a, b, out]() {
-        auto a_grad = ttnn::multiply(out->get_grad(), b);
+        auto a_grad = ttnn::multiply(out->get_grad(), b, /* fast_and_approximate_mode*/ true);
 
         a->add_grad(a_grad);
     };
@@ -162,6 +180,10 @@ autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::Tens
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;
+}
+
+autograd::TensorPtr add(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
+    return a + b;
 }
 
 autograd::TensorPtr add(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {

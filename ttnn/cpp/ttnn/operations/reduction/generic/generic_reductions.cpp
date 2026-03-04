@@ -17,6 +17,17 @@
 
 namespace ttnn::operations::reduction {
 
+template <ReduceType reduce_type>
+Tensor reduce(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg = std::nullopt,
+    bool keepdim = false,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    float scalar = 1.0f,
+    bool correction = true,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
 std::tuple<ttnn::SmallVector<int>, ttnn::SmallVector<int>, ttnn::SmallVector<int>> get_slice_parameters(
@@ -425,7 +436,7 @@ Tensor non_height_width_reduce(
 }
 
 template <ReduceType reduce_type>
-Tensor Reduce<reduce_type>::invoke(
+Tensor reduce(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
     const bool keepdim,
@@ -496,10 +507,128 @@ Tensor pool_sum(
         /*sub_core_grids=*/std::nullopt);
 }
 
-template struct Reduce<ReduceType::Sum>;
-template struct Reduce<ReduceType::Mean>;
-template struct Reduce<ReduceType::Max>;
-template struct Reduce<ReduceType::Min>;
-template struct Reduce<ReduceType::Std>;
-template struct Reduce<ReduceType::Var>;
 }  // namespace ttnn::operations::reduction
+
+namespace ttnn {
+
+Tensor sum(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::reduce<operations::reduction::ReduceType::Sum>(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor mean(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::reduce<operations::reduction::ReduceType::Mean>(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor max(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::reduce<operations::reduction::ReduceType::Max>(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor min(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::reduce<operations::reduction::ReduceType::Min>(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor std(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::reduce<operations::reduction::ReduceType::Std>(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+Tensor var(
+    const Tensor& input_tensor_arg,
+    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    bool correction,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::reduction::reduce<operations::reduction::ReduceType::Var>(
+        input_tensor_arg,
+        dim_arg,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        correction,
+        sub_core_grids);
+}
+
+}  // namespace ttnn

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,6 +14,40 @@ import ttnn
 
 # Standard tile size - hardware constant
 TILE_SIZE = ttnn.TILE_SIZE  # 32
+
+
+def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
+    """
+    Create rotation transformation matrix for RoPE.
+
+    Constructs a permutation matrix that pairs adjacent dimensions with
+    signs (+1, -1) for the RoPE rotation:
+        [0, 1] → +1 at (0,1), -1 at (1,0)
+        [2, 3] → +1 at (2,3), -1 at (3,2)
+        ...
+
+    Used by ttnn.experimental.rotary_embedding_llama.
+
+    Args:
+        dhead: Matrix dimension. Must equal TILE_SIZE. Use TILE_SIZE for decode.
+
+    Returns:
+        torch.Tensor of shape [1, 1, dhead, dhead].
+    """
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
+def zeros_like_kv_cache(batch_size: int, n_kv_heads: int, max_seq_len: int, head_dim: int) -> torch.Tensor:
+    """Create zeros tensor for standard KV cache."""
+    return torch.zeros((batch_size, n_kv_heads, max_seq_len, head_dim))
+
+
+def zeros_like_paged_cache(paged_config, n_kv_heads: int, head_dim: int) -> torch.Tensor:
+    """Create zeros tensor for paged KV cache."""
+    return torch.zeros((paged_config.max_num_blocks, n_kv_heads, paged_config.block_size, head_dim))
 
 
 # todo)) add a on-device pad_dim_to_size function?
@@ -109,7 +143,7 @@ def compute_kernel_config_to_dict(compute_kernel_config: ttnn.WormholeComputeKer
         "fp32_dest_acc_en": bool(compute_kernel_config.fp32_dest_acc_en),
         "packer_l1_acc": bool(compute_kernel_config.packer_l1_acc),
         "dst_full_sync_en": bool(compute_kernel_config.dst_full_sync_en),
-        "throttle_level": compute_kernel_config.throttle_level,
+        "throttle_level": str(compute_kernel_config.throttle_level),
     }
 
 

@@ -8,13 +8,12 @@ from typing import Optional
 
 from loguru import logger
 from PIL import Image as PIL_Image
-from pkg_resources import resource_filename
 from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -436,7 +435,7 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward(
+                    logits = generator.decode_forward_llama_vision(
                         position_id,
                         next_token_tensor,
                         prefill_batch_xattn_masks,
@@ -446,6 +445,9 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         enable_trace=enable_trace,
                     )
+
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
 
                     next_tokens, next_texts = sampler(logits)
                     # Update next token

@@ -51,7 +51,8 @@ public:
     ~Tensor();
 
     // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
-    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -187,8 +188,14 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
+private:
+    // TODO(river):
+    // This will be removed as part of Metal Tensor split lowering (#37692).
+    // The function is removed publicly as the underlying storage of Tensor will be changed as part of the refactoring
+    // effort.
     const Storage& storage() const;
-    Storage& storage();
+
+public:
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
@@ -243,10 +250,7 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
-    }
+    auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 
@@ -261,42 +265,43 @@ private:
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
 
-    void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
     void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
 
-void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
+    Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
+[[deprecated("Use tt::tt_metal::(copy_to_device  or  copy_to_host)")]] void memcpy(
+    Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 
-}  // namespace tt::tt_metal
+std::ostream& operator<<(std::ostream& os, const Tensor& tensor);
 
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor);
+}  // namespace tt::tt_metal
 
 namespace ttnn {
 

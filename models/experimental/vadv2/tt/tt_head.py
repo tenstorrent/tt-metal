@@ -345,7 +345,9 @@ class TtVADHead:
             z = updated_z * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
 
             tmp_out = ttnn.concat(
-                [x, y, tmp[..., 2:4], z, tmp[..., 5:]], dim=-1  # 0  # 1  # 2:4 untouched  # 4  # 5:10 untouched
+                # 0  # 1  # 2:4 untouched  # 4  # 5:10 untouched
+                [x, y, tmp[..., 2:4], z, tmp[..., 5:]],
+                dim=-1,
             )
 
             #     # TODO: check if using sigmoid
@@ -443,7 +445,8 @@ class TtVADHead:
             if self.motion_det_score is not None:
                 motion_score = outputs_classes[-1]
                 max_motion_score = ttnn.max(max_motion_score, dim=-1)[0]
-                invalid_motion_idx = max_motion_score < self.motion_det_score  # [B, A]
+                # [B, A]
+                invalid_motion_idx = max_motion_score < self.motion_det_score
                 invalid_motion_idx = ttnn.unsqueeze(invalid_motion_idx, 2)
                 invalid_motion_idx = ttnn.repeat(invalid_motion_idx, (1, 1, self.fut_mode))
                 invalid_motion_idx = ttnn.reshape(
@@ -475,7 +478,8 @@ class TtVADHead:
                     (motion_coords.shape[0], motion_coords.shape[1] * motion_coords.shape[2], motion_coords.shape[3]),
                 )
                 map_query = ttnn.reshape(map_hs[-1], (batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1))
-                map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D]
+                # [B, P, pts, D] -> [B, P, D]
+                map_query = self.lane_encoder(map_query)
                 map_score = map_outputs_classes[-1]
                 map_pos = map_outputs_coords_bev[-1]
 
@@ -529,7 +533,8 @@ class TtVADHead:
             motion_hs = ttnn.reshape(motion_hs, (B, num_agent, self.fut_mode, D))  # [B, A, T, D]
             ca_motion_query = ttnn.reshape(ca_motion_query, (batch_size, num_agent, self.fut_mode, -1))  # [B, A, T, D]
 
-            motion_hs = ttnn.concat([motion_hs, ca_motion_query], dim=-1)  # [B, A, fut_mode, 2D]  #0.99
+            # [B, A, fut_mode, 2D]  #0.99
+            motion_hs = ttnn.concat([motion_hs, ca_motion_query], dim=-1)
         else:
             raise NotImplementedError("Not implement yet")
 
@@ -659,7 +664,7 @@ class TtVADHead:
         min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
         min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
         min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
+        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
         min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
@@ -822,7 +827,7 @@ class TtVADHead:
         min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
         min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
         min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
+        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx).long()
 
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
@@ -830,42 +835,49 @@ class TtVADHead:
         min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
         min_map_pos = ttnn.to_layout(min_map_pos, layout=ttnn.TILE_LAYOUT)
 
-        map_score = ttnn.sigmoid_accurate(map_score)
+        map_score = ttnn.sigmoid(map_score)
         map_max_score = ttnn.max(map_score, dim=-1)[0]
         map_max_score = ttnn.unsqueeze(map_max_score, 0)
         map_idx = map_max_score > map_thresh
         batch_max_pnum = 0
         for i in range(map_score.shape[0]):
-            pnum = ttnn.sum(map_idx[i])
+            pnum = int(ttnn.sum(map_idx[i]).item())
             if pnum > batch_max_pnum:
                 batch_max_pnum = pnum
+        batch_max_pnum = max(batch_max_pnum, 1)
         selected_map_query, selected_map_pos, selected_padding_mask = [], [], []
         for i in range(map_score.shape[0]):
             dim = map_query.shape[-1]
-            valid_pnum = ttnn.sum(map_idx[i])
+            valid_pnum = int(ttnn.sum(map_idx[i]).item())
             map_query = ttnn.to_torch(map_query)
             min_map_pos = ttnn.to_torch(min_map_pos)
             map_idx = ttnn.to_torch(map_idx, dtype=torch.bool)
-            valid_map_query = map_query[i, map_idx[i]]
-            valid_map_pos = min_map_pos[i, map_idx[i]]
-            valid_map_query = ttnn.from_torch(valid_map_query, dtype=ttnn.bfloat16, device=self.device)
-            valid_map_pos = ttnn.from_torch(valid_map_pos, dtype=ttnn.bfloat16, device=self.device)
-            pad_pnum = batch_max_pnum - valid_pnum
-            padding_mask = torch.tensor([False], device="cpu")
-            padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
-            padding_mask = ttnn.repeat(padding_mask, [int(batch_max_pnum.item())])
-            if pad_pnum.item() != 0:
-                valid_map_query = ttnn.concat(
-                    [valid_map_query, ttnn.zeros((pad_pnum, dim), device=self.device)],
-                    dim=0,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                valid_map_pos = ttnn.concat(
-                    [valid_map_pos, ttnn.zeros((pad_pnum, 2), device=self.device)],
-                    dim=0,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                padding_mask[valid_pnum:] = True
+            if valid_pnum > 0:
+                valid_map_query = map_query[i, map_idx[i]]
+                valid_map_pos = min_map_pos[i, map_idx[i]]
+                valid_map_query = ttnn.from_torch(valid_map_query, dtype=ttnn.bfloat16, device=self.device)
+                valid_map_pos = ttnn.from_torch(valid_map_pos, dtype=ttnn.bfloat16, device=self.device)
+                pad_pnum = batch_max_pnum - valid_pnum
+                padding_mask = torch.tensor([False], device="cpu")
+                padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
+                padding_mask = ttnn.repeat(padding_mask, [batch_max_pnum])
+                if pad_pnum != 0:
+                    valid_map_query = ttnn.concat(
+                        [valid_map_query, ttnn.zeros((pad_pnum, dim), device=self.device)],
+                        dim=0,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    valid_map_pos = ttnn.concat(
+                        [valid_map_pos, ttnn.zeros((pad_pnum, 2), device=self.device)],
+                        dim=0,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    padding_mask[valid_pnum:] = True
+            else:
+                valid_map_query = ttnn.zeros((batch_max_pnum, dim), device=self.device, dtype=ttnn.bfloat16)
+                valid_map_pos = ttnn.zeros((batch_max_pnum, 2), device=self.device, dtype=ttnn.bfloat16)
+                padding_mask = torch.ones(batch_max_pnum)
+                padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
             selected_map_query.append(valid_map_query)
             selected_map_pos.append(valid_map_pos)
             selected_padding_mask.append(padding_mask)
@@ -929,7 +941,7 @@ class TtVADHead:
     def select_and_pad_query(self, query, query_pos, query_score, score_thresh=0.5, use_fix_pad=True):
         # select & pad query for different batch using score_thresh
         query_score = ttnn.to_layout(query_score, layout=ttnn.TILE_LAYOUT)
-        query_score = ttnn.sigmoid_accurate(query_score)
+        query_score = ttnn.sigmoid(query_score)
         query_score = ttnn.to_layout(query_score, layout=ttnn.ROW_MAJOR_LAYOUT)
         query_score = ttnn.add(query_score, 0.0, dtype=ttnn.float32)
         query_score = ttnn.max(query_score, dim=-1)[0]
@@ -937,32 +949,41 @@ class TtVADHead:
         query_idx = query_score > score_thresh
         batch_max_qnum = 0
         for i in range(query_score.shape[0]):
-            qnum = ttnn.sum(query_idx[i])
+            qnum = int(ttnn.sum(query_idx[i]).item())
             if qnum > batch_max_qnum:
                 batch_max_qnum = qnum
+        batch_max_qnum = max(batch_max_qnum, 1)
 
         selected_query, selected_query_pos, selected_padding_mask = [], [], []
         for i in range(query_score.shape[0]):
             dim = query.shape[-1]
-            valid_qnum = ttnn.sum(query_idx[i])
+            valid_qnum = int(ttnn.sum(query_idx[i]).item())
             query = ttnn.to_torch(query)
             query_pos = ttnn.to_torch(query_pos)
             query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
-            valid_query = query[i, query_idx[i]]
-            valid_query_pos = query_pos[i, query_idx[i]]
-            valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
-            valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
+            if valid_qnum > 0:
+                valid_query = query[i, query_idx[i]]
+                valid_query_pos = query_pos[i, query_idx[i]]
+                valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
+                valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
 
-            pad_qnum = batch_max_qnum - valid_qnum
-            padding_mask = torch.tensor([False])
-            padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
-            padding_mask = ttnn.repeat(padding_mask, [int(batch_max_qnum.item())])
-            if pad_qnum.item() != 0:
-                valid_query = torch.cat([valid_query, torch.zeros((pad_qnum, dim), device=query_score.device)], dim=0)
-                valid_query_pos = torch.cat(
-                    [valid_query_pos, torch.zeros((pad_qnum, 2), device=query_score.device)], dim=0
-                )
-                padding_mask[valid_qnum:] = True
+                pad_qnum = batch_max_qnum - valid_qnum
+                padding_mask = torch.tensor([False])
+                padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
+                padding_mask = ttnn.repeat(padding_mask, [batch_max_qnum])
+                if pad_qnum != 0:
+                    valid_query = torch.cat(
+                        [valid_query, torch.zeros((pad_qnum, dim), device=query_score.device)], dim=0
+                    )
+                    valid_query_pos = torch.cat(
+                        [valid_query_pos, torch.zeros((pad_qnum, 2), device=query_score.device)], dim=0
+                    )
+                    padding_mask[valid_qnum:] = True
+            else:
+                valid_query = ttnn.zeros((batch_max_qnum, dim), device=self.device, dtype=ttnn.bfloat16)
+                valid_query_pos = ttnn.zeros((batch_max_qnum, 2), device=self.device, dtype=ttnn.bfloat16)
+                padding_mask = torch.ones(batch_max_qnum)
+                padding_mask = ttnn.from_torch(padding_mask, dtype=ttnn.bfloat16, device=self.device)
             selected_query.append(valid_query)
             selected_query_pos.append(valid_query_pos)
             selected_padding_mask.append(padding_mask)

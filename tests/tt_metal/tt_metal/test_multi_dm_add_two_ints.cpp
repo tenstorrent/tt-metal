@@ -47,14 +47,14 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = 5, .compile_args = {MEM_L1_UNCACHED_BASE}});
+            .num_threads_per_cluster = 5, .compile_args = {MEM_L1_UNCACHED_BASE}});
 
     KernelHandle kernel_1 = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
+            .num_threads_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
 
     SetRuntimeArgs(program, kernel_0, core, {100, 200});
     SetRuntimeArgs(program, kernel_1, core, {300, 400});
@@ -63,7 +63,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result{0, 0};
-    tt_metal::detail::ReadFromDeviceL1(dev, core, MEM_L1_UNCACHED_BASE, sizeof(int) * 2, result);
+    tt_metal::detail::ReadFromDeviceL1(dev, core, 0, sizeof(int) * 2, result);
 
     ASSERT_EQ(result[0], 300) << "Got the value " << result[0] << " instead of " << 300;
     ASSERT_EQ(result[1], 700) << "Got the value " << result[1] << " instead of " << 700;

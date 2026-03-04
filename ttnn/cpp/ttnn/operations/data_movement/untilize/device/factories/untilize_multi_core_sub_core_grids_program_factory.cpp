@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -122,8 +123,7 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
