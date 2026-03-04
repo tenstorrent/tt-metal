@@ -14,7 +14,7 @@ namespace {
 /*
     This function compares two subchunks of data - one chunk is one stick, and one subchunk
     is the maximal length of a stick that can fit as much L1 memory as possible - this length
-    is shared between rows of `elements`, `test_elements` and `output` tensors.
+    is shared betwen rows of `elements`, `test_elements` and `output` tensors.
 */
 template <typename elements_number_type>
 FORCE_INLINE void isin_subchunks(

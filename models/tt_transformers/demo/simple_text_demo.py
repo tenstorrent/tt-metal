@@ -164,7 +164,7 @@ def load_inputs(user_input, batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengths
+    # It clips the excerpt to the max length provided to allow testing different long context lengthts
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -212,6 +212,7 @@ def prepare_generator_args(
     paged_attention,
     num_layers,
     use_prefetcher,
+    use_hf_rope,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -242,6 +243,7 @@ def prepare_generator_args(
             state_dict=state_dict,
             num_layers=num_layers,
             use_prefetcher=use_prefetcher,
+            use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -743,7 +745,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-# NOTE: Please do not add new pytest parameters between optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
+# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -844,7 +846,8 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
-    enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    arg_enable_trace = request.config.getoption("--enable_trace")
+    enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
@@ -852,6 +855,7 @@ def test_demo_text(
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+    use_hf_rope = request.config.getoption("--use_hf_rope")
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -942,6 +946,7 @@ def test_demo_text(
         paged_attention=paged_attention,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Skip ci-eval tests on P100 devices

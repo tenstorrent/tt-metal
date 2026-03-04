@@ -179,7 +179,7 @@ private:
     // Flag for main thread to signal the print server thread to stop.
     std::atomic<bool> stop_print_server_ = false;
     // Flag for muting the print server. This doesn't disable reading print data from the device,
-    // but it suppresses the output of that print data the user.
+    // but it supresses the output of that print data the user.
     std::atomic<bool> mute_print_server_ = false;
     // Flag for signalling whether the print server thread has recently processed data (and is
     // therefore likely to continue processing data in the next round of polling).

@@ -502,12 +502,12 @@ int main(int argc, char** argv) {
     }
 
     log_info(tt::LogTest, "Workers done, terminating mux kernel");
-    std::vector<uint32_t> termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    std::vector<uint32_t> termiation_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termination_signal);
+        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termiation_signal);
 
     log_info(tt::LogTest, "Waiting for mux kernel to terminate");
-    // need to wait before terminating driver core otherwise the mux kernel will hang while closing connection
+    // need to wait before terminating driner core otherwise the mux kernel will hang while closing connection
     std::vector<uint32_t> mux_status(1, 0);
     while (mux_status[0] != tt::tt_fabric::EDMStatus::TERMINATED) {
         tt::tt_metal::detail::ReadFromDeviceL1(
@@ -516,7 +516,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Terminating drainer kernel");
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termination_signal);
+        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termiation_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
     tt::tt_metal::distributed::Finish(cq);
