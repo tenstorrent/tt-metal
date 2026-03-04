@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::prim {
 
@@ -127,6 +128,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
     std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
+    std::vector<uint32_t> num_pages_in_row_per_tensor(num_input_tensors, 1);
+    std::vector<uint32_t> size_of_valid_data_in_last_page_per_tensor(num_input_tensors);
 
     uint32_t num_accum_pages = 1;
     uint32_t scale_factor = 1;
@@ -159,14 +162,25 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            auto* buffer = input_tensors[i].buffer();
+            const auto& in = input_tensors[i];
+            auto* buffer = in.buffer();
             src_addr[i] = buffer->address();
             page_size_per_tensor[i] = buffer->page_size();
+            size_of_valid_data_in_last_page_per_tensor[i] = buffer->page_size();
+            if (in.is_sharded()) {
+                const uint32_t shard_width = in.shard_spec().has_value() ? in.shard_spec().value().shape[1]
+                                                                         : in.nd_shard_spec().value().shard_shape[-1];
+                const uint32_t logical_width = in.logical_shape()[-1];
+                num_pages_in_row_per_tensor[i] = tt::div_up(logical_width, shard_width);
+                const uint32_t unpadded_row_bytes = logical_width * in.element_size();
+                size_of_valid_data_in_last_page_per_tensor[i] =
+                    unpadded_row_bytes - (num_pages_in_row_per_tensor[i] - 1) * buffer->page_size();
+            }
             if (dim == num_dims - 1) {
-                num_pages_per_block[i] = num_accum_pages;
+                num_pages_per_block[i] = num_accum_pages * num_pages_in_row_per_tensor[i];
             } else {
-                uint32_t dim_pages = input_tensors[i].padded_shape()[dim];
-                num_pages_per_block[i] = num_accum_pages * dim_pages;
+                uint32_t dim_pages = in.padded_shape()[dim];
+                num_pages_per_block[i] = num_accum_pages * dim_pages * num_pages_in_row_per_tensor[i];
                 num_output_pages_per_block += num_accum_pages * dim_pages;
             }
         }
@@ -188,11 +202,18 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_pages_per_block.cbegin(), num_pages_per_block.cend());
 
-    // Reader compile-time args
-    // Data is 32 byte aligned
+    // Reader compile-time args (for RM: include per-tensor page params for sharded/ND-sharded inputs)
     std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_input_tensors};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
+    if (rm_layout) {
+        reader_compile_time_args.insert(
+            reader_compile_time_args.end(), num_pages_in_row_per_tensor.cbegin(), num_pages_in_row_per_tensor.cend());
+        reader_compile_time_args.insert(
+            reader_compile_time_args.end(),
+            size_of_valid_data_in_last_page_per_tensor.cbegin(),
+            size_of_valid_data_in_last_page_per_tensor.cend());
+    }
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
     }
@@ -203,9 +224,35 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         concat_defines["WIDTH_CONCAT"] = "1";
     }
 
+    uint32_t num_pages_in_row_out = 1;
+    uint32_t size_of_valid_data_in_last_page_out = dst_buffer->page_size();
+    const bool output_sharded_rm = rm_layout && output.is_sharded();
+    if (output_sharded_rm) {
+        const uint32_t shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
+                                                                     : output.nd_shard_spec().value().shard_shape[-1];
+        const uint32_t logical_width = output.logical_shape()[-1];
+        num_pages_in_row_out = tt::div_up(logical_width, shard_width);
+        const uint32_t unpadded_row_bytes = logical_width * output.element_size();
+        size_of_valid_data_in_last_page_out = unpadded_row_bytes - (num_pages_in_row_out - 1) * dst_buffer->page_size();
+        TT_FATAL(
+            dst_buffer->page_size() == dst_buffer->aligned_page_size(),
+            "Output row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
+            shard_width,
+            dst_buffer->page_size(),
+            hal::get_l1_alignment());
+    }
+
     std::vector<uint32_t> writer_compile_time_args;
     if (rm_layout) {
-        writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
+        if (output_sharded_rm) {
+            writer_compile_time_args = {
+                (std::uint32_t)src0_cb_index,
+                dst_buffer->page_size(),
+                num_pages_in_row_out,
+                size_of_valid_data_in_last_page_out};
+        } else {
+            writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
+        }
     } else {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index};
     }
@@ -221,11 +268,14 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args, concat_defines));
 
+    const bool use_concat_writer = rm_layout && output.is_sharded();
     writer_kernel_id = CreateKernel(
         program,
-        rm_layout
-            ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        use_concat_writer
+            ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/writer_concat_stick_layout.cpp"
+            : (rm_layout ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+                         : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                           "writer_unary_interleaved_start_id.cpp"),
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 
@@ -268,10 +318,11 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         reader_kernel_args[2] = curr_tensor_id;
         reader_kernel_args.insert(reader_kernel_args.end(), page_id_per_tensor.begin(), page_id_per_tensor.end());
 
+        const uint32_t writer_start_page_id =
+            rm_layout && output.is_sharded() ? num_pages_written * num_pages_in_row_out : num_pages_written;
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
-            writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
+            writer_kernel_args = {dst_buffer->address(), single_page_size, num_pages_per_core, writer_start_page_id};
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }

@@ -411,3 +411,307 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.99)
+
+
+# ------------------------------------------------------------------------------
+# ND-sharding concat tests (Step 8 of add-nd-sharding-support.md)
+# ------------------------------------------------------------------------------
+
+
+def _make_nd_sharded_tensor(
+    torch_tensor, shape, shard_shape, grid, device, dtype, orientation, layout=ttnn.ROW_MAJOR_LAYOUT
+):
+    """Create ND-sharded ttnn tensor from torch tensor. Supports ROW_MAJOR_LAYOUT and TILE_LAYOUT."""
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape=shard_shape, grid=grid, orientation=orientation)
+    mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+    spec = ttnn.TensorSpec(
+        shape=shape,
+        dtype=dtype,
+        layout=layout,
+        nd_shard_spec=nd_shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    return ttnn.from_torch(torch_tensor, spec=spec, device=device)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+@pytest.mark.parametrize(
+    "tensor_shapes, input_shard_shape, output_shard_shape, shard_grid, dim",
+    [
+        # ND -> ND: width concat (dim=3), same shard grid (tile-aligned for TILE_LAYOUT)
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (1, 1, 32, 16),
+            (1, 1, 32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+        (
+            [(1, 1, 64, 64), (1, 1, 64, 32)],
+            (1, 1, 32, 32),
+            (1, 1, 32, 48),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_nd_sharded_input_to_nd_sharded_output(
+    device,
+    tensor_shapes,
+    input_shard_shape,
+    output_shard_shape,
+    shard_grid,
+    dim,
+    dtype,
+    layout,
+    input_shard_orientation,
+):
+    """1. ND-sharded input -> ND-sharded output."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [
+        _make_nd_sharded_tensor(t, s, input_shard_shape, shard_grid, device, dtype, input_shard_orientation, layout)
+        for t, s in zip(torch_inputs, tensor_shapes)
+    ]
+    output_nd_spec = ttnn.NdShardSpec(
+        shard_shape=output_shard_shape, grid=shard_grid, orientation=input_shard_orientation
+    )
+    output_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_spec)
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+@pytest.mark.parametrize(
+    "tensor_shapes, input_shard_shape, shard_grid, dim",
+    [
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (1, 1, 32, 16),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+        (
+            [(1, 1, 64, 48), (1, 1, 64, 48)],
+            (1, 1, 32, 24),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_nd_sharded_input_to_interleaved_output(
+    device, tensor_shapes, input_shard_shape, shard_grid, dim, dtype, layout, input_shard_orientation
+):
+    """2. ND-sharded input -> interleaved output."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [
+        _make_nd_sharded_tensor(t, s, input_shard_shape, shard_grid, device, dtype, input_shard_orientation, layout)
+        for t, s in zip(torch_inputs, tensor_shapes)
+    ]
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shapes, output_shard_shape, shard_grid, dim",
+    [
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (1, 1, 32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+        (
+            [(1, 1, 64, 48), (1, 1, 64, 48)],
+            (1, 1, 32, 48),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_interleaved_input_to_nd_sharded_output(
+    device, tensor_shapes, output_shard_shape, shard_grid, dim, dtype
+):
+    """3. Interleaved input -> ND-sharded output."""
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    output_nd_spec = ttnn.NdShardSpec(
+        shard_shape=output_shard_shape, grid=shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_spec)
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shapes, input_shard_shape, output_shard_shape_2d, shard_grid, dim",
+    [
+        # Output (1,1,32,64), 2 cores HEIGHT_SHARDED -> (16, 64) per core
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (1, 1, 32, 16),
+            (16, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_nd_sharded_input_to_legacy_2d_sharded_output(
+    device, tensor_shapes, input_shard_shape, output_shard_shape_2d, shard_grid, dim, dtype
+):
+    """4. ND-sharded input -> legacy 2D sharded output (HEIGHT_SHARDED for width concat)."""
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [
+        _make_nd_sharded_tensor(t, s, input_shard_shape, shard_grid, device, dtype, ttnn.ShardOrientation.ROW_MAJOR)
+        for t, s in zip(torch_inputs, tensor_shapes)
+    ]
+    output_legacy_mem_config = ttnn.create_sharded_memory_config(
+        output_shard_shape_2d,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_legacy_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shapes, input_shard_shape_2d, output_shard_shape, shard_grid, dim",
+    [
+        # 2 cores, (1,1,32,32) each -> input (16, 32) per core; output ND (1,1,32,32) per core
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (16, 32),
+            (1, 1, 32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_legacy_2d_sharded_input_to_nd_sharded_output(
+    device, tensor_shapes, input_shard_shape_2d, output_shard_shape, shard_grid, dim, dtype
+):
+    """5. Legacy 2D sharded input -> ND-sharded output."""
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    # Legacy HEIGHT_SHARDED inputs
+    legacy_mem_config = ttnn.create_sharded_memory_config(
+        input_shard_shape_2d,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    input_tensors = [ttnn.to_memory_config(t, legacy_mem_config) for t in input_tensors]
+
+    output_nd_spec = ttnn.NdShardSpec(
+        shard_shape=output_shard_shape, grid=shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_spec)
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shapes, input_shard_shape_2d, shard_grid, dim",
+    [
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (16, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_legacy_2d_sharded_input_to_interleaved_output(
+    device, tensor_shapes, input_shard_shape_2d, shard_grid, dim, dtype
+):
+    """6. Legacy 2D sharded input -> interleaved output."""
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    legacy_mem_config = ttnn.create_sharded_memory_config(
+        input_shard_shape_2d,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    input_tensors = [ttnn.to_memory_config(t, legacy_mem_config) for t in input_tensors]
+
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shapes, output_shard_shape_2d, shard_grid, dim",
+    [
+        # Output (1,1,32,64), 2 cores HEIGHT_SHARDED -> (16, 64) per core
+        (
+            [(1, 1, 32, 32), (1, 1, 32, 32)],
+            (16, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            3,
+        ),
+    ],
+)
+def test_concat_interleaved_input_to_legacy_2d_sharded_output(
+    device, tensor_shapes, output_shard_shape_2d, shard_grid, dim, dtype
+):
+    """7. Interleaved input -> legacy 2D sharded output."""
+    torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
+    expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+
+    output_legacy_mem_config = ttnn.create_sharded_memory_config(
+        output_shard_shape_2d,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    output = ttnn.concat(input_tensors, dim=dim, memory_config=output_legacy_mem_config)
+    actual = ttnn.to_torch(output)
+    assert_equal(expected, actual)
