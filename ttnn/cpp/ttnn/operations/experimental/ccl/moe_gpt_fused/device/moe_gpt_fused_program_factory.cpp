@@ -181,6 +181,8 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
         {"combine_shard_width_tiles", combine_shard_width_tiles},
         {"tile_width", 32u},
         {"tile_width_size_bytes", 64u},
+        // TODO(T=128): Change to actual batch size when chunk loop is added
+        {"num_tokens_total", TOKENS_PER_CHUNK},
     };
 
     //=========================================================================

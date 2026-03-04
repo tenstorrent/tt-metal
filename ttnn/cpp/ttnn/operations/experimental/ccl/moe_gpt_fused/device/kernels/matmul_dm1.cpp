@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // DM1 (RISCV_0 / NOC_1) for moe_gpt_fused
-// Ring A2A + DRAM output write (same as moe_gpt dm1 with enable_dram_output)
+// Ring A2A + combine core output write (DeepSeek moe_compute layout)
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_gpt_fused_ring_common.h"
+
+namespace detail {
+inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
+}  // namespace detail
 
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -138,12 +142,21 @@ void kernel_main() {
     }
 
     //-------------------------------------------------------------------------
-    // Combine core output write
+    // Combine core output write (DeepSeek moe_compute layout)
     // Untilized ROW_MAJOR data from c_14 → combine core L1
+    //
+    // Each shard contains E expert blocks of max_tokens_per_height_shard rows.
+    // Tokens are distributed round-robin across height shards.
+    // Layout per shard: [E0 rows][E1 rows][E2 rows][E3 rows]
     //-------------------------------------------------------------------------
     constexpr uint32_t source_width_tiles = moe_gpt_fused_ring::SOURCE_WIDTH_TILES;  // 8
     constexpr uint32_t tokens_per_chunk = moe_gpt_fused_ring::TOKENS_PER_CHUNK;
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_gpt_fused_ring::RING_CORES_PER_COMBINE_COL;
+    constexpr uint32_t num_tokens_total = get_named_compile_time_arg_val("num_tokens_total");
+
+    // Expert block offset within each shard (same as DeepSeek dm1.cpp line 113)
+    constexpr uint32_t shard_offset_per_expert_bytes =
+        num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
 
     const uint32_t output_width_tiles_core = tiles_per_core;
     const uint32_t width_tile_base = moe_gpt_fused_ring::COMBINE_W_OFFSET_PER_CORE_A[ring_core_id];
@@ -152,10 +165,17 @@ void kernel_main() {
     // Semaphore for signaling combine cores
     uint32_t combine_semaphore_addr = get_semaphore(combine_semaphore_id);
 
-    // Each expert maps to one height shard (expert e → height_shard e)
-    // Shard layout: [TOKENS_PER_CHUNK, COMBINE_SHARD_WIDTH_TILES * tile_width] per shard
     for (uint32_t e = 0; e < num_experts; ++e) {
-        const uint32_t dest_height_shard = e;
+        // TODO(T=128): Replace with per-expert active token count from gather metadata
+        const uint32_t active_tokens = tokens_per_chunk;
+        const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
+        const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * e;
+
+        // TODO(T=128): Add chunk loop here. For chunk c:
+        //   dest_height_shard_start = (c * tile_height) / max_tokens_per_height_shard
+        //   shard_row_start = (c * tile_height) % max_tokens_per_height_shard
+        const uint32_t dest_height_shard_start = 0;
+        const uint32_t shard_row_start = 0;
 
         cb_wait_front(cb_c2s_out, tokens_per_chunk);  // 32 pages of untilized data
         const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
@@ -173,23 +193,35 @@ void kernel_main() {
                 combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
             const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
-            const auto dest_noc_x = output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
-            const auto dest_noc_y =
-                output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
-
-            const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
-            noc_async_write_one_packet_set_state</*posted=*/true>(
-                dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
+            // Token-by-token: dest core changes when height shard changes
+            // (follows DeepSeek dm1.cpp lines 282-308)
+            uint32_t dest_height_shard = dest_height_shard_start;
+            uint32_t shard_row = shard_row_start;
 
             for (uint32_t bt = 0; bt < tokens_per_chunk; ++bt) {
-                const uint32_t shard_row_offset_bytes = bt * combine_shard_width_tiles * tile_width_size_bytes;
+                const uint32_t shard_row_offset_bytes = shard_row * combine_shard_width_tiles * tile_width_size_bytes;
 
-                const uint32_t dest_l1_addr = output_base_l1_addr + dest_width_offset_bytes + shard_row_offset_bytes;
+                const auto dest_noc_x =
+                    output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
+                const auto dest_noc_y =
+                    output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
+
+                const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
+                noc_async_write_one_packet_set_state</*posted=*/true>(
+                    dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
+
+                const uint32_t dest_l1_addr =
+                    output_base_l1_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
 
                 const uint32_t source_l1_addr =
                     source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
                 noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
+
+                if (++shard_row == max_tokens_per_height_shard) {
+                    ++dest_height_shard;
+                    shard_row = 0;
+                }
             }
             width_tiles_sent += width_transfer_tiles;
             width_tiles_to_send -= width_transfer_tiles;

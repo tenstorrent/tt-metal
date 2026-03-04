@@ -74,7 +74,6 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
         ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in PAD_CORES else 0)
 
-    num_dram_banks = 12
     dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
@@ -189,17 +188,59 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
     )
 
     # --------------------------------------------------------------------------
+    # Verify output shard layout
+    # --------------------------------------------------------------------------
+    output_tensor = tt_outputs[0]
+    output_mem_config = output_tensor.memory_config()
+
+    # Assert BLOCK_SHARDED on L1
+    assert (
+        output_mem_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    ), f"Expected BLOCK_SHARDED, got {output_mem_config.memory_layout}"
+    assert output_mem_config.buffer_type == ttnn.BufferType.L1, f"Expected L1, got {output_mem_config.buffer_type}"
+
+    # TODO(T=128): Shard shape becomes [128, 960] = [E * T/height_shard_dim, K/width_shard_dim]
+    shard_spec = output_mem_config.shard_spec
+    expected_shard_shape = [total_tokens, H // 3]  # [32, 960]
+    assert (
+        list(shard_spec.shape) == expected_shard_shape
+    ), f"Expected shard shape {expected_shard_shape}, got {list(shard_spec.shape)}"
+
+    # Assert shard grid matches combine cores at CoreRange({1,0},{3,3})
+    shard_grid_ranges = shard_spec.grid.ranges()
+    assert len(shard_grid_ranges) == 1, f"Expected 1 core range, got {len(shard_grid_ranges)}"
+    actual_range = shard_grid_ranges[0]
+    assert (actual_range.start.x, actual_range.start.y) == (
+        1,
+        0,
+    ), f"Expected start (1,0), got ({actual_range.start.x},{actual_range.start.y})"
+    assert (actual_range.end.x, actual_range.end.y) == (
+        3,
+        3,
+    ), f"Expected end (3,3), got ({actual_range.end.x},{actual_range.end.y})"
+
+    logger.info(
+        f"Output layout verified: BLOCK_SHARDED L1, shard={list(shard_spec.shape)}, "
+        f"grid=({actual_range.start.x},{actual_range.start.y})->({actual_range.end.x},{actual_range.end.y})"
+    )
+
+    # --------------------------------------------------------------------------
     # Verify accuracy
     # --------------------------------------------------------------------------
     accuracy_metrics = {}
 
     if check_accuracy:
         # Output is BLOCK_SHARDED L1 ROW_MAJOR: [E * total_tokens, H] = [128, 2880]
-        tt_output_torch = ttnn.to_torch(tt_outputs[0])
-        logger.info(f"Output shape: {tt_output_torch.shape}, memory: {tt_outputs[0].memory_config()}")
+        # DeepSeek moe_compute layout: 4 shards × (E expert blocks × tokens_per_height_shard rows)
+        # Shard layout: [E0 T0..T7][E1 T0..T7][E2 T0..T7][E3 T0..T7]
+        tt_output_torch = ttnn.to_torch(output_tensor)
+        logger.info(f"Output shape: {tt_output_torch.shape}, memory: {output_mem_config}")
 
-        # Reshape to [E, total_tokens, H] for per-expert comparison
-        tt_output_torch = tt_output_torch.reshape(E, total_tokens, H)
+        # TODO(T=128): tokens_per_shard = T / height_shard_dim (= 32 for T=128)
+        height_shard_dim = 4
+        tokens_per_shard = total_tokens // height_shard_dim  # 8
+        tt_output_torch = tt_output_torch.reshape(height_shard_dim, E, tokens_per_shard, H)
+        tt_output_torch = tt_output_torch.permute(1, 0, 2, 3).reshape(E, total_tokens, H)
 
         for e in range(E):
             x = input_tokens.float()

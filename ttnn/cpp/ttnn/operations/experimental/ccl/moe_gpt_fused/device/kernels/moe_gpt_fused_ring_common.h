@@ -106,9 +106,11 @@ constexpr uint32_t NUM_A2A_ITERS_A = *std::max_element(
 // Max output tiles per expert per core (for legacy reference)
 constexpr uint32_t MAX_OUTPUT_TILES_PER_EXPERT = NUM_A2A_ITERS_A * 4;  // 8
 
-// Combine output constants
-// Each height shard = one expert = TOKENS_PER_CHUNK tokens
-// Shard shape: [TOKENS_PER_CHUNK, K / COMBINE_WIDTH_SHARD_DIM] = [32, 960]
+// Combine output constants (DeepSeek moe_compute layout)
+// Each height shard contains E expert blocks of TOKENS_PER_HEIGHT_SHARD rows each.
+// Shard shape: [E * TOKENS_PER_HEIGHT_SHARD, K / COMBINE_WIDTH_SHARD_DIM] = [32, 960]
+// TODO(T=128): Shard shape becomes [E * (T/height_shard_dim), K/width_shard_dim] = [128, 960]
+constexpr uint32_t TOKENS_PER_HEIGHT_SHARD = TOKENS_PER_CHUNK / COMBINE_HEIGHT_SHARD_DIM;  // 32/4 = 8
 constexpr uint32_t COMBINE_SHARD_WIDTH_TILES = K_TILES / COMBINE_WIDTH_SHARD_DIM;  // 90/3 = 30
 constexpr uint32_t SOURCE_WIDTH_TILES = IN2_TILES_PER_STEP_A;                      // 8 (max tiles per core)
 
