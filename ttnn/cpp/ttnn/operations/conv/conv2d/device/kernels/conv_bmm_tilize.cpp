@@ -76,7 +76,7 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
     // with activation reuse, the activation buffers are sized to fit one output image width only,
     // so we need to interleave waits and pops on the two buffers to allow parallelization;
     // we reserve back tilized CB to store whole act block h - and then we update write pointers so that
-    // we fill in first row of the first hald (NCRISC), first row of the second half (BRISC) and so on
+    // we fill in first row of the first half (NCRISC), first row of the second half (BRISC) and so on
     cb_reserve_back(out_cb_id, out_cb_tiles);
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
 
@@ -409,7 +409,7 @@ void kernel_main() {
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
-                            // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                            // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,

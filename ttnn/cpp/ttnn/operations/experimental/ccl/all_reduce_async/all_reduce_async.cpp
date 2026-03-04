@@ -97,7 +97,7 @@ Tensor local_sum(
     return sum_tensor;
 }
 
-// moreh sum does not support float32 datatye
+// moreh sum does not support float32 datatype
 Tensor local_sum_float32(
     const ttnn::Tensor& gathered_tensor,
     int reduce_dim,

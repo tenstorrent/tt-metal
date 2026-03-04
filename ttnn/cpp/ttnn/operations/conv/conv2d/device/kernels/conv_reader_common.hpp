@@ -232,7 +232,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
             uint16_t second_row_width = leftover_row_width, third_row_width = 0;
             if constexpr (!output_image_width_full_tile) {
                 // If the output image width is not a multiple of the tile width, the first 'image width' might be split
-                // between three rows since we padd image width to tile size; otherwise, it is always split between
+                // between three rows since we pad image width to tile size; otherwise, it is always split between
                 // maximum two rows
                 const uint16_t interval_width = end_ind - start_ind + 1;
                 if (leftover_row_width > interval_width) {
