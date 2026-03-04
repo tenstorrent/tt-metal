@@ -275,16 +275,16 @@ def recurrent_delta_rule_step_ttnn(
     decay = ttnn.reshape(decay, [B, H, 1, 1])
     h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    k_row = ttnn.reshape(k_t, [B, H, 1, K])
+    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v_read = ttnn.reshape(v_read, [B, H, V])
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1])
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    k_col = ttnn.reshape(k_t, [B, H, K, 1])
-    d_row = ttnn.reshape(delta, [B, H, 1, V])
+    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
 
