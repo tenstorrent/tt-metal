@@ -396,8 +396,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
              {1, 2, 0, 0},
              {1, 1, 0, 0}}};
 
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
             other_buffer_slot_options);
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {

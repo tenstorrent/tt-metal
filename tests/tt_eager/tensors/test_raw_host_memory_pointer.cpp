@@ -83,7 +83,7 @@ void test_raw_host_memory_pointer() {
     auto a_np_array = NDArray<bfloat16>(shape);
     void* a_np_array_data = a_np_array.data;
     HostBuffer a_cpu_buffer(
-        tt::stl::Span<bfloat16>(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
+        ttsl::Span<bfloat16>(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
     Tensor a_cpu = Tensor(std::move(a_cpu_buffer), shape, DataType::BFLOAT16, Layout::TILE);
     /* Borrow Data from Numpy End */
@@ -134,7 +134,7 @@ void test_raw_host_memory_pointer() {
         c_dev.device()->mesh_command_queue(), c_dev, storage_of_alternative_tensor_for_printing.get());
 
     HostBuffer alternative_tensor_for_printing_buffer(
-        tt::stl::Span<bfloat16>(
+        ttsl::Span<bfloat16>(
             reinterpret_cast<bfloat16*>(storage_of_alternative_tensor_for_printing.get()), shape.volume()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
 
@@ -151,7 +151,7 @@ void test_raw_host_memory_pointer() {
     auto d_np_array = NDArray<bfloat16>(shape);
     void* d_np_array_data = d_np_array.data;
     HostBuffer d_data_buffer(
-        tt::stl::Span<bfloat16>(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
+        ttsl::Span<bfloat16>(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
     Tensor d_cpu = Tensor(std::move(d_data_buffer), shape, DataType::BFLOAT16, Layout::TILE);
 

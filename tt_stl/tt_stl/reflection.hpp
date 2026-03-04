@@ -1683,10 +1683,4 @@ struct to_json_t {
 
 }  // namespace ttsl::json
 
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt
-
 // NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

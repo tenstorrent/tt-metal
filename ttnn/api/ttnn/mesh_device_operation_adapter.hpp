@@ -70,7 +70,7 @@ struct MeshDeviceOperationAdapter {
     // Returns type name of the underlying device operation.
     // Used for logging and debugging; in particular, Tracy profiler uses this to identify operations.
     static std::string get_type_name(const operation_attributes_t& /* attribute */) {
-        return std::string(tt::stl::get_type_name<device_operation_t>());
+        return std::string(ttsl::get_type_name<device_operation_t>());
     }
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
@@ -95,13 +95,13 @@ struct MeshDeviceOperationAdapter {
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return DeviceOperation::compute_program_hash(attrs, tensor_args);
         } else {
-            return tt::stl::hash::hash_objects_with_default_seed(
-                tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+            return ttsl::hash::hash_objects_with_default_seed(
+                ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
         }
     }
 
@@ -152,7 +152,7 @@ struct MeshDeviceOperationAdapter {
         }
     };
 
-    static tt::stl::hash::hash_t compute_mesh_workload_hash(
+    static ttsl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {

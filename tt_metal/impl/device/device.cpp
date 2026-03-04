@@ -80,7 +80,7 @@ Device::Device(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
     uint32_t /*completion_queue_reader_core*/,
@@ -141,7 +141,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    ttsl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     auto config = L1BankingAllocator::generate_config(
@@ -399,7 +399,7 @@ bool Device::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
     // Every initialization call should enable program cache
@@ -642,7 +642,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/) const {
     return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
@@ -723,7 +723,7 @@ SubDeviceManagerId Device::create_sub_device_manager(
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    ttsl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
     TT_FATAL(false, "create_sub_device_manager is deprecated for device");
     return SubDeviceManagerId{0U};
 }
@@ -752,7 +752,7 @@ const std::vector<SubDeviceId>& Device::get_sub_device_stall_group() const {
     return ids;
 }
 
-void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+void Device::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     TT_FATAL(false, "set_sub_device_stall_group is deprecated for device");
 }
 

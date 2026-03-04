@@ -433,7 +433,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .physical_shard_shape = tt::tt_metal::Shape{1, 64, 96},
                     .page_shape = tt::tt_metal::Shape2D{32, 32},
                     .bytes_per_element = 1.0625,  // Headers for block float amortized over elements
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
@@ -503,7 +503,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .page_shape = tt::tt_metal::Shape2D{32, 32},
                     .bytes_per_element = 2,
                     .grid = CoreRangeSet(
-                        tt::stl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
+                        ttsl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },

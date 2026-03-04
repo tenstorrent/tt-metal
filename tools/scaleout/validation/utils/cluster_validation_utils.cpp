@@ -584,13 +584,13 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
         serialized_link_metrics = tt::scaleout::validation::serialize_link_metrics_to_bytes(link_metrics);
         serialized_link_metrics_size = serialized_link_metrics.size();
         distributed_context.send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_link_metrics_size), sizeof(serialized_link_metrics_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         distributed_context.send(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
     } else {
@@ -599,14 +599,14 @@ void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_m
                 continue;
             }
             distributed_context.recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_link_metrics_size), sizeof(serialized_link_metrics_size)),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             serialized_link_metrics.resize(serialized_link_metrics_size);
             distributed_context.recv(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_link_metrics.data(), serialized_link_metrics.size())),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             std::vector<EthernetLinkMetrics> remote_link_metrics =
@@ -1223,8 +1223,8 @@ LinkMetricsResult send_traffic_and_validate_links(
             // Check if any rank experienced a hang/timeout
             bool any_rank_hung = false;
             distributed_context.all_reduce(
-                tt::stl::Span<bool>(&did_hang_locally, 1),
-                tt::stl::Span<bool>(&any_rank_hung, 1),
+                ttsl::Span<bool>(&did_hang_locally, 1),
+                ttsl::Span<bool>(&any_rank_hung, 1),
                 tt::tt_metal::distributed::multihost::ReduceOp::LOR);
 
             if (any_rank_hung) {
@@ -1254,13 +1254,13 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
     if (*distributed_context.rank() == reset_pair.src_rank) {
         int sync_msg = 1;
         distributed_context.ssend(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
             tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.dst_rank)},
             tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
     } else {
         int sync_msg = 0;
         distributed_context.recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
             tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.src_rank)},
             tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
     }
@@ -1313,24 +1313,24 @@ void forward_link_reset_metadata_from_controller(
             auto serialized_reset_pairs_size = serialized_reset_pairs.size();
 
             distributed_context.send(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
 
             distributed_context.send(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
@@ -1339,28 +1339,28 @@ void forward_link_reset_metadata_from_controller(
     } else {
         std::size_t serialized_exit_nodes_size = 0;
         distributed_context.recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         std::vector<uint8_t> serialized_exit_nodes(serialized_exit_nodes_size);
         distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         exit_nodes_to_reset =
             tt::scaleout::validation::deserialize_eth_chan_identifiers_from_bytes(serialized_exit_nodes);
         std::size_t serialized_reset_pairs_size = 0;
         distributed_context.recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         std::vector<uint8_t> serialized_reset_pairs(serialized_reset_pairs_size);
         distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
             tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
             tt::tt_metal::distributed::multihost::Tag{0});
         reset_pairs = tt::scaleout::validation::deserialize_reset_pairs_from_bytes(serialized_reset_pairs);

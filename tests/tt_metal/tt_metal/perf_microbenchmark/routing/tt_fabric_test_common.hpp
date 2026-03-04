@@ -1644,7 +1644,7 @@ public:
                 master_seed = std::random_device()();
                 for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
                     distributed_context->send(
-                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
                         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
                     );
@@ -1652,7 +1652,7 @@ public:
                 log_info(tt::LogTest, "Master seed sent: {}", master_seed);
             } else {
                 distributed_context->recv(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
                     tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
                     tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
                 );

@@ -31,7 +31,7 @@ static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 static const std::string SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME = ".SUCCESS";
 
 template <typename T>
-using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
+using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
 
 class JitBuildSettings;
 

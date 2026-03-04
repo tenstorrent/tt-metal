@@ -39,9 +39,9 @@ void HostBuffer::swap(HostBuffer& other) noexcept {
     swap(pinned_memory_, other.pinned_memory_);
 }
 
-tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
+ttsl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
 
-tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
+ttsl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
 
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     auto a_view = a.view_bytes();

@@ -72,7 +72,7 @@ void GlobalSemaphore::setup_buffer(
 IDevice* GlobalSemaphore::device() const { return device_; }
 
 std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
-    tt::stl::reflection::operator<<(os, global_semaphore);
+    ttsl::reflection::operator<<(os, global_semaphore);
     return os;
 }
 
@@ -102,7 +102,7 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
     const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
-    return tt::stl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
 }
 
 }  // namespace std

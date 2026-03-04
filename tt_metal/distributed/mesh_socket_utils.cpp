@@ -447,7 +447,7 @@ void validate_subordinate_descriptors(
         if (context->rank() == controller_rank) {
             int expected_subordinate_descriptor_size_bytes = 0;
             context->recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&expected_subordinate_descriptor_size_bytes),
                     sizeof(expected_subordinate_descriptor_size_bytes)),
                 rank,
@@ -460,21 +460,21 @@ void validate_subordinate_descriptors(
                 subordinate_descriptor_size_bytes);
             std::vector<uint8_t> serialized_subordinate_desc(subordinate_descriptor_size_bytes);
             context->recv(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_subordinate_desc.data(), serialized_subordinate_desc.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_subordinate_desc.data(), serialized_subordinate_desc.size())),
                 Rank{rank},
                 desc.exchange_tag);
             subordinate_desc = deserialize_from_bytes(serialized_subordinate_desc);
             validate_remote_desc(desc, subordinate_desc, true);
         } else {
             context->send(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_descriptor_size_bytes), sizeof(local_descriptor_size_bytes)),
                 controller_rank,
                 desc.exchange_tag);
             context->send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
                 controller_rank,
                 desc.exchange_tag);
         }
@@ -509,7 +509,7 @@ void forward_descriptor_to_peer(
         for (const auto& peer_rank : peer_mesh_id_ranks) {
             execute_with_timeout([&]() {
                 context->send(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&local_descriptor_size_bytes),
                         sizeof(local_descriptor_size_bytes)),
                     Rank{peer_rank},
@@ -519,8 +519,8 @@ void forward_descriptor_to_peer(
             // Send the serialized descriptor
             execute_with_timeout([&]() {
                 context->send(
-                    tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
+                    ttsl::as_writable_bytes(
+                        ttsl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
                     Rank{peer_rank},
                     desc.exchange_tag  // Forward this descriptor over the specified tag
                 );
@@ -554,7 +554,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     int expected_descriptor_size_bytes = 0;
     execute_with_timeout([&]() {
         context->recv(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
             Rank{peer_controller_rank},
             desc.exchange_tag  // Read the descriptor over the specified tag
@@ -573,8 +573,8 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     // Receive the serialized descriptor
     execute_with_timeout([&]() {
         context->recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
+            ttsl::as_writable_bytes(
+                ttsl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
             Rank{peer_controller_rank},
             desc.exchange_tag  // Read the descriptor over the specified tag
         );

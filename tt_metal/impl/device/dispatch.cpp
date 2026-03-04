@@ -104,8 +104,8 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
 
     while (size_bytes > 0) {

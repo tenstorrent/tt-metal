@@ -200,7 +200,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         system_shape);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
-    auto requested_mesh_fits = [&system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
+    auto requested_mesh_fits = [&system_offset, &system_shape](const ttsl::SmallVector<uint32_t>& rotated_shape) {
         for (int i = 0; i < system_shape.dims(); ++i) {
             if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
                 return false;
@@ -209,7 +209,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         return true;
     };
 
-    tt::stl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
+    ttsl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
     size_t rotations = 0;
     while (!requested_mesh_fits(rotated_shape) && rotations < system_dimensions) {
         std::rotate(rotated_shape.begin(), rotated_shape.begin() + 1, rotated_shape.end());
@@ -224,7 +224,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
             system_offset);
     }
 
-    tt::stl::SmallVector<uint32_t> end_coord;
+    ttsl::SmallVector<uint32_t> end_coord;
     for (int i = 0; i < system_dimensions; ++i) {
         end_coord.push_back(system_offset[i] + rotated_shape[i] - 1);
     }

@@ -64,7 +64,7 @@ struct ReadBufferDescriptor {
 namespace buffer_dispatch {
 
 struct BufferReadDispatchParams {
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
+    ttsl::Span<const uint32_t> expected_num_workers_completed;
     uint32_t cq_id = 0;
     IDevice* device = nullptr;
     uint32_t padded_page_size = 0;
@@ -113,30 +113,30 @@ bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed);
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed);
 
 void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t core_id,
     const BufferCorePageMapping& core_page_mapping,
     Buffer& buffer,
     ShardedBufferReadDispatchParams& dispatch_params,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreCoord core,
     CoreType dispatch_core_type);
 
 void copy_interleaved_buffer_to_completion_queue(
     BufferReadDispatchParams& dispatch_params,
     Buffer& buffer,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    ttsl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type,
     void* dst = nullptr,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
@@ -150,8 +150,8 @@ void copy_completion_queue_data_into_user_space(
     std::atomic<bool>& exit_condition);
 
 // Selects all sub-devices in the sub device stall group if none are specified
-tt::stl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids);
+ttsl::Span<const SubDeviceId> select_sub_device_ids(
+    IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids);
 
 std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);

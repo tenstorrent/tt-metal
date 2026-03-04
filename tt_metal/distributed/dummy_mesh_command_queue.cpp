@@ -25,7 +25,7 @@ bool DummyMeshCommandQueue::write_shard_to_device(
     const MeshCoordinate& /*device_coord*/,
     const void* /*src*/,
     const std::optional<BufferRegion>& /*region*/,
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/,
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/,
     std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/) {
     // No-op for inactive rank; no pinned memory used
     return false;
@@ -38,7 +38,7 @@ void DummyMeshCommandQueue::read_shard_from_device(
     std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/,
     const std::optional<BufferRegion>& /*region*/,
     std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     // No-op for inactive rank
 }
 
@@ -47,12 +47,12 @@ void DummyMeshCommandQueue::submit_memcpy_request(
     // No-op for inactive rank
 }
 
-void DummyMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+void DummyMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     // No-op for inactive rank
 }
 
 MeshEvent DummyMeshCommandQueue::enqueue_record_event_to_host_nolock(
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/, const std::optional<MeshCoordinateRange>& device_range) {
     // Return dummy event for inactive rank
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
@@ -62,13 +62,13 @@ void DummyMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& /*mesh_workload*
 }
 
 MeshEvent DummyMeshCommandQueue::enqueue_record_event(
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/, const std::optional<MeshCoordinateRange>& device_range) {
     // Return dummy event for inactive rank
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent DummyMeshCommandQueue::enqueue_record_event_to_host(
-    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     // Call the no-lock version since we don't need synchronization for inactive rank
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
@@ -77,7 +77,7 @@ void DummyMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& /*sync_event
     // No-op for inactive rank
 }
 
-void DummyMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+void DummyMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     // No-op for inactive rank
 }
 

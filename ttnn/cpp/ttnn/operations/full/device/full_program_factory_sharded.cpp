@@ -54,7 +54,7 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         auto all_dram_workers =
             output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
         ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
-        compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+        compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
         runtime_cores = ordered_cores_with_data;
     } else {
         if (num_compute_cores >
@@ -90,7 +90,7 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
                         : tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D);
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
             }
-            compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
             runtime_cores = ordered_cores_with_data;
 
         } else {

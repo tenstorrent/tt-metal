@@ -25,10 +25,10 @@ public:
     MeshShape(uint32_t s0, uint32_t s1);
     MeshShape(uint32_t s0, uint32_t s1, uint32_t s2);
 
-    explicit MeshShape(const tt::stl::SmallVector<uint32_t>& shape);
-    explicit MeshShape(tt::stl::SmallVector<uint32_t>&& shape);
+    explicit MeshShape(const ttsl::SmallVector<uint32_t>& shape);
+    explicit MeshShape(ttsl::SmallVector<uint32_t>&& shape);
     explicit MeshShape(std::initializer_list<uint32_t> ilist);
-    explicit MeshShape(tt::stl::Span<const uint32_t> span);
+    explicit MeshShape(ttsl::Span<const uint32_t> span);
 
     // Returns the dimensionality of the mesh.
     size_t dims() const;
@@ -56,7 +56,7 @@ private:
     using ShapeBase::size;
 
     void compute_strides();
-    tt::stl::SmallVector<size_t> strides_;
+    ttsl::SmallVector<size_t> strides_;
 };
 
 class MeshCoordinate {
@@ -68,7 +68,7 @@ public:
     MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2);
 
     // Constructs a generic N-dimensional coordinate.
-    explicit MeshCoordinate(tt::stl::Span<const uint32_t> coords);
+    explicit MeshCoordinate(ttsl::Span<const uint32_t> coords);
 
     // Returns a zero-initialized N-dimensional coordinate.
     static MeshCoordinate zero_coordinate(size_t dimensions);
@@ -77,7 +77,7 @@ public:
     size_t dims() const;
 
     // Returns the coordinate values as a span.
-    tt::stl::Span<const uint32_t> coords() const;
+    ttsl::Span<const uint32_t> coords() const;
 
     // Provides access to the coordinate value at the given index.
     // Supports negative indexing.
@@ -101,7 +101,7 @@ public:
     auto attribute_values() const { return std::forward_as_tuple(value_); }
 
 private:
-    tt::stl::SmallVector<uint32_t> value_;
+    ttsl::SmallVector<uint32_t> value_;
 };
 
 bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs);

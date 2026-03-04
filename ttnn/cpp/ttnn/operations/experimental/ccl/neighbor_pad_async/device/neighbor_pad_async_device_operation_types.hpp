@@ -60,7 +60,7 @@ struct NeighborPadAsyncParams {
         secondary_mesh_shape(secondary_mesh_shape ? std::make_optional(*secondary_mesh_shape) : std::nullopt) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("padding_left", padding_left);

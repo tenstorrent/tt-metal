@@ -27,7 +27,7 @@ namespace {
 
 // Returns the last valid coordinate for the provided `shape`.
 MeshCoordinate shape_back(const MeshShape& shape) {
-    tt::stl::SmallVector<uint32_t> coords;
+    ttsl::SmallVector<uint32_t> coords;
     for (int i = 0; i < shape.dims(); i++) {
         coords.push_back(shape[i] - 1);
     }
@@ -87,10 +87,10 @@ MeshShape::MeshShape(uint32_t s) : MeshShape({s}) {}
 MeshShape::MeshShape(uint32_t s0, uint32_t s1) : MeshShape({s0, s1}) {}
 MeshShape::MeshShape(uint32_t s0, uint32_t s1, uint32_t s2) : MeshShape({s0, s1, s2}) {}
 
-MeshShape::MeshShape(const tt::stl::SmallVector<uint32_t>& shape) : ShapeBase(shape) { compute_strides(); }
-MeshShape::MeshShape(tt::stl::SmallVector<uint32_t>&& shape) : ShapeBase(std::move(shape)) { compute_strides(); }
+MeshShape::MeshShape(const ttsl::SmallVector<uint32_t>& shape) : ShapeBase(shape) { compute_strides(); }
+MeshShape::MeshShape(ttsl::SmallVector<uint32_t>&& shape) : ShapeBase(std::move(shape)) { compute_strides(); }
 MeshShape::MeshShape(std::initializer_list<uint32_t> ilist) : ShapeBase(ilist) { compute_strides(); }
-MeshShape::MeshShape(tt::stl::Span<const uint32_t> span) : ShapeBase(span) { compute_strides(); }
+MeshShape::MeshShape(ttsl::Span<const uint32_t> span) : ShapeBase(span) { compute_strides(); }
 
 void MeshShape::compute_strides() {
     TT_FATAL(dims() > 0, "MeshShape cannot have 0 dimension.");
@@ -133,14 +133,14 @@ MeshCoordinate::MeshCoordinate(uint32_t c) : value_({c}) {}
 MeshCoordinate::MeshCoordinate(uint32_t c0, uint32_t c1) : value_({c0, c1}) {}
 MeshCoordinate::MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2) : value_({c0, c1, c2}) {}
 
-MeshCoordinate::MeshCoordinate(tt::stl::Span<const uint32_t> coords) : value_(coords.begin(), coords.end()) {}
+MeshCoordinate::MeshCoordinate(ttsl::Span<const uint32_t> coords) : value_(coords.begin(), coords.end()) {}
 
 MeshCoordinate MeshCoordinate::zero_coordinate(size_t dimensions) {
-    return MeshCoordinate(tt::stl::SmallVector<uint32_t>(dimensions, 0));
+    return MeshCoordinate(ttsl::SmallVector<uint32_t>(dimensions, 0));
 }
 
 size_t MeshCoordinate::dims() const { return value_.size(); }
-tt::stl::Span<const uint32_t> MeshCoordinate::coords() const { return value_; }
+ttsl::Span<const uint32_t> MeshCoordinate::coords() const { return value_; }
 uint32_t MeshCoordinate::operator[](int32_t dim) const { return value_[normalize_index(dim, dims())]; }
 uint32_t& MeshCoordinate::operator[](int32_t dim) { return value_[normalize_index(dim, dims())]; }
 
@@ -263,7 +263,7 @@ MeshCoordinate::BoundaryMode MeshCoordinateRange::get_boundary_mode() const {
 }
 
 MeshShape MeshCoordinateRange::shape() const {
-    tt::stl::SmallVector<uint32_t> shape_dims;
+    ttsl::SmallVector<uint32_t> shape_dims;
     if (!wraparound_shape_.has_value()) {
         for (size_t i = 0; i < dims(); ++i) {
             shape_dims.push_back(end_[i] - start_[i] + 1);
@@ -348,8 +348,8 @@ std::optional<MeshCoordinateRange> MeshCoordinateRange::intersection(const MeshC
                 maxc = c;
                 first = false;
             } else {
-                tt::stl::SmallVector<uint32_t> mins;
-                tt::stl::SmallVector<uint32_t> maxs;
+                ttsl::SmallVector<uint32_t> mins;
+                ttsl::SmallVector<uint32_t> maxs;
                 mins.reserve(c.dims());
                 maxs.reserve(c.dims());
                 for (size_t i = 0; i < c.dims(); ++i) {
@@ -484,8 +484,8 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
         for (auto it = ranges_.begin(); it != ranges_.end();) {
             if (check_mergeable(merged, *it)) {
                 // Can replace `it` + `merged` with a single new range.
-                tt::stl::SmallVector<uint32_t> new_start;
-                tt::stl::SmallVector<uint32_t> new_end;
+                ttsl::SmallVector<uint32_t> new_start;
+                ttsl::SmallVector<uint32_t> new_end;
                 for (size_t i = 0; i < merged.dims(); ++i) {
                     new_start.push_back(std::min(merged.start_coord()[i], it->start_coord()[i]));
                     new_end.push_back(std::max(merged.end_coord()[i], it->end_coord()[i]));
@@ -529,8 +529,8 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     // Do one final check to see if all ranges can collapse into a single range.
     if (ranges_.size() > 1) {
         // Calculate the bounding box of all ranges
-        tt::stl::SmallVector<uint32_t> bb_start;
-        tt::stl::SmallVector<uint32_t> bb_end;
+        ttsl::SmallVector<uint32_t> bb_start;
+        ttsl::SmallVector<uint32_t> bb_end;
 
         for (size_t dim = 0; dim < ranges_[0].dims(); ++dim) {
             uint32_t min_start = ranges_[0].start_coord()[dim];
@@ -591,8 +591,8 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
 
         // Left complement: portion before the intersection in diff_dim.
         if (parent.start_coord()[diff_dim] < intersection.start_coord()[diff_dim]) {
-            tt::stl::SmallVector<uint32_t> left_start;
-            tt::stl::SmallVector<uint32_t> left_end;
+            ttsl::SmallVector<uint32_t> left_start;
+            ttsl::SmallVector<uint32_t> left_end;
             for (size_t i = 0; i < parent.dims(); ++i) {
                 if (i == diff_dim) {
                     left_start.push_back(parent.start_coord()[i]);
@@ -607,8 +607,8 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
 
         // Right complement: portion after the intersection in diff_dim.
         if (intersection.end_coord()[diff_dim] < parent.end_coord()[diff_dim]) {
-            tt::stl::SmallVector<uint32_t> right_start;
-            tt::stl::SmallVector<uint32_t> right_end;
+            ttsl::SmallVector<uint32_t> right_start;
+            ttsl::SmallVector<uint32_t> right_end;
             for (size_t i = 0; i < parent.dims(); ++i) {
                 if (i == diff_dim) {
                     right_start.push_back(intersection.end_coord()[i] + 1);
@@ -664,15 +664,15 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_s
 
 size_t std::hash<tt::tt_metal::distributed::MeshCoordinate>::operator()(
     const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(coord.attribute_values());
 }
 
 size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRange>::operator()(
     const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(range.attribute_values());
 }
 
 size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRangeSet>::operator()(
     const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(range_set.attribute_values());
 }

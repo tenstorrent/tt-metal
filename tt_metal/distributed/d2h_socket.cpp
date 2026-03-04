@@ -39,7 +39,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 

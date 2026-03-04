@@ -51,37 +51,37 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_a
             // Loop over all entries of the map and send them to the other hosts
             std::size_t num_entries = asic_id_to_mesh_coord_map.size();
             distributed_context->broadcast(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
             for (auto& [asic_id, mesh_coord] : asic_id_to_mesh_coord_map) {
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(const_cast<tt_metal::AsicID*>(&asic_id)), sizeof(asic_id)),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
                     distributed::multihost::Rank{rank});
             }
         } else {
             // Receive the map from the other host
             std::size_t num_entries = 0;
             distributed_context->broadcast(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&num_entries), sizeof(num_entries)),
                 distributed::multihost::Rank{rank});
             for (auto i = 0; i < num_entries; i++) {
                 tt_metal::AsicID asic_id;
                 distributed::MeshCoordinate mesh_coord = distributed::MeshCoordinate(0, 0);
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&asic_id), sizeof(asic_id)),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&asic_id), sizeof(asic_id)),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[0])), sizeof(mesh_coord[0])),
                     distributed::multihost::Rank{rank});
                 distributed_context->broadcast(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&(mesh_coord[1])), sizeof(mesh_coord[1])),
                     distributed::multihost::Rank{rank});
                 asic_id_to_mesh_coord_map.emplace(asic_id, mesh_coord);
             }

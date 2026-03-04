@@ -361,7 +361,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, FullyReplicatedRoundtrip) {
     Tensor replicated_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
     MeshShape expected_shape = MeshShape(mesh_device_->num_devices());
-    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> expected_placements;
+    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> expected_placements;
     expected_placements.emplace_back(ttnn::distributed::MeshMapperConfig::Replicate{});
 
     EXPECT_EQ(replicated_tensor.tensor_topology().distribution_shape(), expected_shape);

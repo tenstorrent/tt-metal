@@ -28,8 +28,8 @@ struct CoreDispatchParams {
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
     CoreType dispatch_core_type{CoreType::COUNT};
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
+    ttsl::Span<const uint32_t> expected_num_workers_completed;
+    ttsl::Span<const SubDeviceId> sub_device_ids;
 };
 
 struct CoreReadDispatchParams : public CoreDispatchParams {};
@@ -46,8 +46,8 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);
 

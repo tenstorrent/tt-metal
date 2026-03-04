@@ -39,7 +39,7 @@ public:
         int trace_region_size = 0,
         int worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         std::string_view mock_cluster_desc_path = "") :
         num_cqs_(num_cqs),
         l1_small_size_(l1_small_size),
@@ -66,7 +66,7 @@ public:
     const DispatchCoreConfig& dispatch_core_config() const { return dispatch_core_config_; }
     bool is_mock_device() const { return !mock_cluster_desc_path_.empty(); }
     std::string_view mock_cluster_desc_path() const { return mock_cluster_desc_path_; }
-    const tt::stl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
+    const ttsl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
 
     tt::tt_fabric::FabricConfig fabric_config() const { return fabric_config_; }
     tt::tt_fabric::FabricReliabilityMode reliability_mode() const { return reliability_mode_; }
@@ -96,7 +96,7 @@ private:
         int trace_region_size = 0,
         int worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         std::string_view mock_cluster_desc_path = "") :
         hal_(&hal),
         cluster_(&cluster),
@@ -128,7 +128,7 @@ private:
     int trace_region_size_ = 0;
     int worker_l1_size_ = 0;
     DispatchCoreConfig dispatch_core_config_;
-    tt::stl::Span<const std::uint32_t> l1_bank_remap_;
+    ttsl::Span<const std::uint32_t> l1_bank_remap_;
     std::string_view mock_cluster_desc_path_;
 
     // Fabric

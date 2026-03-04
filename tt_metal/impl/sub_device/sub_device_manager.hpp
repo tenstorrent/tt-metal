@@ -32,9 +32,9 @@ class SubDeviceManager {
 public:
     // Constructor used for the default/global device
     SubDeviceManager(
-        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
+        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices);
     // Constructor used for regular sub-devices
-    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
+    SubDeviceManager(ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 
     SubDeviceManager(const SubDeviceManager& other) = delete;
     SubDeviceManager& operator=(const SubDeviceManager& other) = delete;
@@ -68,7 +68,7 @@ public:
     DeviceAddr local_l1_size() const;
 
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids);
     void reset_sub_device_stall_group();
 
 private:

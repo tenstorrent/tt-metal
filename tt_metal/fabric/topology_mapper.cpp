@@ -157,12 +157,12 @@ void wait_for_request_with_timeout(
 // Wrapper for all_gather operations
 void all_gather_with_timeout(
     const tt::tt_metal::distributed::multihost::DistributedContext& context,
-    tt::stl::Span<std::byte> send_buf,
-    tt::stl::Span<std::byte> recv_buf,
+    ttsl::Span<std::byte> send_buf,
+    ttsl::Span<std::byte> recv_buf,
     const std::string& operation_description,
     std::chrono::duration<float> topology_mapping_timeout) {
     execute_with_timeout(
-        [&context](tt::stl::Span<std::byte> send, tt::stl::Span<std::byte> recv) { context.all_gather(send, recv); },
+        [&context](ttsl::Span<std::byte> send, ttsl::Span<std::byte> recv) { context.all_gather(send, recv); },
         operation_description,
         topology_mapping_timeout,
         &context,
@@ -757,7 +757,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
         // Send count first (synchronous send to ensure receiver posted recv)
         std::uint32_t count_copy = count;
         distributed_context.ssend(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
             Rank{peer_rank},
             Tag{tag_base});
 
@@ -814,12 +814,12 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
             // Send size first, then data
             std::uint32_t record_size = static_cast<std::uint32_t>(record.size());
             distributed_context.ssend(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
                 Rank{peer_rank},
                 Tag{tag_size});
 
             distributed_context.ssend(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(record.data(), record.size())),
                 Rank{peer_rank},
                 Tag{tag_base});
         }
@@ -849,7 +849,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
     std::uint32_t count = 0;
     {
         auto req = distributed_context.irecv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
             Rank{static_cast<int>(source_rank)},
             Tag{tag_base});
 
@@ -883,7 +883,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
         std::uint32_t record_size = 0;
         {
             auto req = distributed_context.irecv(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
                 Rank{static_cast<int>(source_rank)},
                 Tag{tag_size});  // Use tag_size for size messages
 
@@ -905,7 +905,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
         // Allocate buffer of exact size
         std::vector<uint8_t> record(record_size);
         auto req = distributed_context.irecv(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(record.data(), record.size())),
             Rank{static_cast<int>(source_rank)},
             Tag{tag_base});  // Use tag_base for data messages
 
@@ -946,7 +946,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             for (std::uint32_t d = 0; d < coord_dims; ++d) {
                 coord_values[d] = read_u32_from(record, idx);
             }
-            mesh_coord = MeshCoordinate(tt::stl::Span<const uint32_t>(coord_values));
+            mesh_coord = MeshCoordinate(ttsl::Span<const uint32_t>(coord_values));
         }
 
         // mesh_host_rank

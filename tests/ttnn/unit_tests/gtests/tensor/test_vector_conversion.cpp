@@ -156,7 +156,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, InvalidSize) {
 
     ASSERT_NE(input.size(), shape.volume());
     EXPECT_ANY_THROW((void)Tensor::from_borrowed_data(
-        tt::stl::Span<TypeParam>(input),
+        ttsl::Span<TypeParam>(input),
         shape,
         /*on_creation_callback=*/[]() {},
         /*on_destruction_callback=*/[]() {}));
@@ -169,7 +169,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         int ctor_count = 0;
         int dtor_count = 0;
         auto tensor = Tensor::from_borrowed_data(
-            tt::stl::Span<TypeParam>(input),
+            ttsl::Span<TypeParam>(input),
             shape,
             /*on_creation_callback=*/[&]() { ctor_count++; },
             /*on_destruction_callback=*/[&]() { dtor_count++; });
@@ -201,7 +201,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     int ctor_count = 0;
     int dtor_count = 0;
     auto tensor = Tensor::from_borrowed_data(
-        tt::stl::Span<TypeParam>(input),
+        ttsl::Span<TypeParam>(input),
         shape,
         /*on_creation_callback=*/[&]() { ctor_count++; },
         /*on_destruction_callback=*/[&]() { dtor_count++; });
@@ -222,7 +222,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
     auto input = arange<TypeParam>(0, shape.volume(), 1);
 
     auto tensor = Tensor::from_borrowed_data(
-        tt::stl::Span<TypeParam>(input),
+        ttsl::Span<TypeParam>(input),
         shape,
         /*on_creation_callback=*/[]() {},
         /*on_destruction_callback=*/[]() {},

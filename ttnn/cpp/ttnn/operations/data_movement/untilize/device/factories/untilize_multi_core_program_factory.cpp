@@ -97,7 +97,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                 auto buffer_dist_spec = a.buffer()->buffer_distribution_spec().value();
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
                 has_ordered_cores_with_data = true;
-                compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
+                compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
             } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
                       // from the shard_spec.
                 auto buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
@@ -111,7 +111,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                         : ShardDistributionStrategy::ROUND_ROBIN_1D);
                 ordered_cores_with_data = buffer_dist_spec.cores_with_data();
                 has_ordered_cores_with_data = true;
-                compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
+                compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
             }
 
             full_compute_core_range = compute_core_range;

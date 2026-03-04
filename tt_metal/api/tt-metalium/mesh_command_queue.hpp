@@ -139,13 +139,13 @@ public:
         bool blocking);
 
     virtual MeshEvent enqueue_record_event(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual MeshEvent enqueue_record_event_to_host(
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
-    virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,

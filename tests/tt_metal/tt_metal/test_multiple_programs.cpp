@@ -197,14 +197,14 @@ TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
     tt::deprecated::Tensor<bfloat16> src0_tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto src0_activations_tile_layout =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(src0_tensor.get_values()));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(src0_tensor.get_values()));
     auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
     detail::WriteToBuffer(src0_dram_buffer, src0_activations);
 
     tt::deprecated::Tensor<bfloat16> src1_tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::ZEROS, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto src1_activations_tile_layout =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(src1_tensor.get_values()));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(src1_tensor.get_values()));
     auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
     detail::WriteToBuffer(src1_dram_buffer, src1_activations);
 
@@ -229,7 +229,7 @@ TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
 
     // Execute Program Two - matmul with identity
     auto identity = create_identity_matrix(32, 32, 32);
-    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity));
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     detail::WriteToBuffer(src1_dram_buffer, weights);
 

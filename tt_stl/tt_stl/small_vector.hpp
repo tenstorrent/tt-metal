@@ -17,12 +17,6 @@ struct SmallVector : public ttsl::detail::llvm::SmallVector<T, PREALLOCATED_SIZE
 
 }  // namespace ttsl
 
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt
-
 namespace ttnn {
 template <typename T, size_t PREALLOCATED_SIZE = ttsl::SMALL_VECTOR_SIZE>
 using SmallVector [[deprecated("Use ttsl::SmallVector instead")]] = ttsl::SmallVector<T, PREALLOCATED_SIZE>;

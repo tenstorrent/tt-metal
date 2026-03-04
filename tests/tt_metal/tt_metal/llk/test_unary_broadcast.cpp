@@ -137,7 +137,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp32v[i] = static_cast<float>(vBroadcast[i]);
             }
-            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(tempfp32v), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -151,7 +151,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
-            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(vBroadcast), true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(ttsl::make_const_span(vBroadcast), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }

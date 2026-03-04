@@ -124,7 +124,7 @@ public:
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const = 0;
 
     [[deprecated(
         "Storage-only cores do not exist. Cleanup code that calls this API.")]] virtual const std::set<CoreCoord>&
@@ -145,7 +145,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
     [[deprecated("This is an internal function. It will be removed.")]]
     virtual void init_command_queue_host() = 0;
@@ -183,7 +183,7 @@ public:
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
@@ -192,7 +192,7 @@ public:
     virtual CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const = 0;
     virtual const std::vector<SubDeviceId>& get_sub_device_ids() const = 0;
     virtual const std::vector<SubDeviceId>& get_sub_device_stall_group() const = 0;
-    virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
+    virtual void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;

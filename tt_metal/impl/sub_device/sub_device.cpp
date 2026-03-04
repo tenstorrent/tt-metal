@@ -24,7 +24,7 @@ SubDeviceImpl::SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCo
     this->validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores) {
+SubDeviceImpl::SubDeviceImpl(ttsl::Span<const CoreRangeSet> cores) {
     TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
     std::copy(cores.begin(), cores.end(), this->cores_.begin());
     this->validate();
@@ -63,7 +63,7 @@ const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) cons
 
 // SubDevice implementation
 
-SubDevice::SubDevice(tt::stl::Span<const CoreRangeSet> cores) : pimpl_(std::make_unique<SubDeviceImpl>(cores)) {}
+SubDevice::SubDevice(ttsl::Span<const CoreRangeSet> cores) : pimpl_(std::make_unique<SubDeviceImpl>(cores)) {}
 
 SubDevice::SubDevice(SubDeviceImpl&& impl) : pimpl_(std::make_unique<SubDeviceImpl>(std::move(impl))) {}
 

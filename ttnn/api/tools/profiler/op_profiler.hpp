@@ -93,14 +93,14 @@ inline auto compute_program_hash(
                       const typename device_operation_t::tensor_args_t& tensor_args) {
                       {
                           device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-                      } -> std::convertible_to<tt::stl::hash::hash_t>;
+                      } -> std::convertible_to<ttsl::hash::hash_t>;
                   }) {
         ZoneScopedN("Op profiler Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {
         ZoneScopedN("Op profiler Compute default program hash");
-        return tt::stl::hash::hash_objects_with_default_seed(
-            tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
     }
 }
 
@@ -145,7 +145,7 @@ private:
 inline RuntimeIDToOpName runtime_id_to_opname_{};
 
 class ProgramHashToOpName {
-    using KeyType = std::pair<ChipId, tt::stl::hash::hash_t>;
+    using KeyType = std::pair<ChipId, ttsl::hash::hash_t>;
 
 public:
     std::string find_if_exists(const KeyType& key) {
@@ -411,7 +411,7 @@ inline json get_base_json(
     j["global_call_count"] = operation_id;
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
-    std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
+    std::string opName = as_string(ttsl::get_type_name<device_operation_t>());
     if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
         opName = device_operation_t::get_type_name(operation_attributes);
     }
@@ -420,7 +420,7 @@ inline json get_base_json(
     j["op_code"] = opName;
 
     json attributesObj;
-    for (auto&& [name, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+    for (auto&& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
         std::string nameStr;
         nameStr = fmt::format("{}", name);
         attributesObj[nameStr] = fmt::format("{}", value);
@@ -428,12 +428,12 @@ inline json get_base_json(
     j["attributes"] = attributesObj;
 
     std::vector<json> input_tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](auto&& tensor) { input_tensors.push_back(get_tensor_json(tensor)); }, tensor_args);
     j["input_tensors"] = input_tensors;
 
     std::vector<json> output_tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&output_tensors](auto&& tensor) { output_tensors.push_back(get_tensor_json(tensor)); }, tensor_return_value);
     j["output_tensors"] = output_tensors;
 

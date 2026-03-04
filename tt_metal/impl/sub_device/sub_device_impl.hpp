@@ -18,7 +18,7 @@ public:
     // Constructors for internal tt_metal/ use
     explicit SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
     explicit SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
-    explicit SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores);
+    explicit SubDeviceImpl(ttsl::Span<const CoreRangeSet> cores);
 
     // Copy/move semantics
     SubDeviceImpl(const SubDeviceImpl&) = default;

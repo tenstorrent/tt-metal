@@ -85,7 +85,7 @@ WhereDeviceOperation::tensor_return_value_t WhereDeviceOperation::create_output_
     return create_device_tensor(compute_output_specs(operation_attributes, args), args.condition_tensor.device());
 }
 
-tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t WhereDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     TT_FATAL(
         is_device_tensor(args.condition_tensor),

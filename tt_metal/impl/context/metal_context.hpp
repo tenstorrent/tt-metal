@@ -90,7 +90,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
         bool initialize_fabric_and_dispatch_fw = true);
@@ -161,7 +161,7 @@ public:
     void on_dispatch_timeout_detected();
 
 private:
-    friend class tt::stl::Indestructible<MetalContext>;
+    friend class ttsl::Indestructible<MetalContext>;
     MetalContext();
     ~MetalContext();
 

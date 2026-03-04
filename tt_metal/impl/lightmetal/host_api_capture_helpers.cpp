@@ -27,7 +27,7 @@ namespace {
 // This can be useful for debug. Not all data types are currently supported, can use this during developmenmt.
 [[maybe_unused]] void PrintHostDataType(const HostDataType& data) {
     std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
             },
@@ -262,7 +262,7 @@ void CaptureEnqueueReadBuffer(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueReadBufferCommand, cmd.Union());
 }
 
-void CaptureFinish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void CaptureFinish(HWCommandQueue& cq, ttsl::Span<const SubDeviceId> sub_device_ids) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
 
@@ -325,7 +325,7 @@ void CaptureSetRuntimeArgsUint32(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    tt::stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     auto& ctx = LightMetalCaptureContext::get();
 
     std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);

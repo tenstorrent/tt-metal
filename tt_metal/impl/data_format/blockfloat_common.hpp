@@ -25,14 +25,14 @@ uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t sha
 template <tt::DataFormat BfpFormat>
 [[deprecated("Use pack_as_bfp_tiles instead.")]]
 std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
-    tt::stl::Span<const float> fp32_vec,
+    ttsl::Span<const float> fp32_vec,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);
 
 template <tt::DataFormat BfpFormat, typename T>
 std::vector<uint32_t> pack_as_bfp_tiles(
-    tt::stl::Span<const T> input_data,
+    ttsl::Span<const T> input_data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile = std::nullopt);

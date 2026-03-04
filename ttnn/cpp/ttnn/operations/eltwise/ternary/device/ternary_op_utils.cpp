@@ -660,7 +660,7 @@ ttnn::Shape compute_broadcasted_output_ternary(
     const int rank_c = c_shape.rank();
     const int largest_rank = std::max({rank_a, rank_b, rank_c});
 
-    tt::stl::SmallVector<uint32_t> output_shape(largest_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(largest_rank, 1);
 
     for (int i = -1; i >= -largest_rank; --i) {
         auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;

@@ -126,7 +126,7 @@ private:
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
-    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
+    ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
@@ -219,7 +219,7 @@ public:
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
     const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
@@ -243,7 +243,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     bool initialize_impl(
         MeshDevice* pimpl_wrapper,
@@ -251,7 +251,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_command_queue_host() override;
     void init_command_queue_device() override;
@@ -274,14 +274,14 @@ public:
     SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
@@ -369,7 +369,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
@@ -377,7 +377,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
@@ -385,7 +385,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 };
 

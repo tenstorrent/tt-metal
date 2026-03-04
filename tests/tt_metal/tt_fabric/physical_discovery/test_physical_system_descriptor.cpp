@@ -214,9 +214,9 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     uint32_t max_num_devices = 0;
     uint32_t max_hostname_len = 0;
     distributed_context->all_reduce(
-        tt::stl::Span<uint32_t>(&num_devices, 1), tt::stl::Span<uint32_t>(&max_num_devices, 1), ReduceOp::MAX);
+        ttsl::Span<uint32_t>(&num_devices, 1), ttsl::Span<uint32_t>(&max_num_devices, 1), ReduceOp::MAX);
     distributed_context->all_reduce(
-        tt::stl::Span<uint32_t>(&hostname_buf_len, 1), tt::stl::Span<uint32_t>(&max_hostname_len, 1), ReduceOp::MAX);
+        ttsl::Span<uint32_t>(&hostname_buf_len, 1), ttsl::Span<uint32_t>(&max_hostname_len, 1), ReduceOp::MAX);
 
     // Pad local buffers to the agreed-upon sizes.
     local_mapping.resize(2 * max_num_devices, UINT32_MAX);
@@ -229,15 +229,15 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     // Gather every rank's hostname and PCI-to-logical mapping at rank 0.
     std::vector<char> all_hostnames_buf(world_size * max_hostname_len, '\0');
     distributed_context->gather(
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(my_hostname_buf.data()), my_hostname_buf.size()),
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(all_hostnames_buf.data()), all_hostnames_buf.size()),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(my_hostname_buf.data()), my_hostname_buf.size()),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(all_hostnames_buf.data()), all_hostnames_buf.size()),
         Rank{0});
 
     std::vector<uint32_t> all_mappings(world_size * 2 * max_num_devices, UINT32_MAX);
     distributed_context->gather(
-        tt::stl::Span<std::byte>(
+        ttsl::Span<std::byte>(
             reinterpret_cast<std::byte*>(local_mapping.data()), local_mapping.size() * sizeof(uint32_t)),
-        tt::stl::Span<std::byte>(
+        ttsl::Span<std::byte>(
             reinterpret_cast<std::byte*>(all_mappings.data()), all_mappings.size() * sizeof(uint32_t)),
         Rank{0});
 
