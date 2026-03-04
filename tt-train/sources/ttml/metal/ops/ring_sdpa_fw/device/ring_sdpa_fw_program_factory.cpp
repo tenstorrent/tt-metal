@@ -87,13 +87,6 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
 
-    // Get mesh buffers
-    auto query_mesh_buffer = query.mesh_buffer_leak_ownership();
-    auto key_mesh_buffer = key.mesh_buffer_leak_ownership();
-    auto value_mesh_buffer = value.mesh_buffer_leak_ownership();
-    auto output_mesh_buffer = output.mesh_buffer_leak_ownership();
-    auto intermediates_mesh_buffer = intermediates.mesh_buffer_leak_ownership();
-
     // Iterate over all device coordinates in the mesh
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
@@ -106,28 +99,20 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
             continue;
         }
 
-        // Create DeviceStorage objects for this coordinate
-        std::vector<tt::tt_metal::distributed::MeshCoordinate> single_coord_vec{mesh_coord};
-        tt::tt_metal::DeviceStorage query_storage(query_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage key_storage(key_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage value_storage(value_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage output_storage(output_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage intermediates_storage(intermediates_mesh_buffer, single_coord_vec);
-
         // Create TensorTopology for single device
         ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
         for (size_t i = 0; i < mesh_shape.dims(); i++) {
             placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
         }
-        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
+        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, {mesh_coord}};
 
         // Create single-device tensors
-        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
-        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
-        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
-        auto output_tensor = ttnn::Tensor(std::move(output_storage), output.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::distributed::get_single_device_tensor_at_coord(query, mesh_coord, tensor_topology);
+        auto key_tensor = ttnn::distributed::get_single_device_tensor_at_coord(key, mesh_coord, tensor_topology);
+        auto value_tensor = ttnn::distributed::get_single_device_tensor_at_coord(value, mesh_coord, tensor_topology);
+        auto output_tensor = ttnn::distributed::get_single_device_tensor_at_coord(output, mesh_coord, tensor_topology);
         auto intermediates_tensor =
-            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
+            ttnn::distributed::get_single_device_tensor_at_coord(intermediates, mesh_coord, tensor_topology);
 
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
@@ -190,13 +175,6 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
     const auto mask_type = operation_attributes.mask_type;
     const auto ring_direction = operation_attributes.ring_direction;
 
-    // Get mesh buffers
-    auto query_mesh_buffer = query.mesh_buffer_leak_ownership();
-    auto key_mesh_buffer = key.mesh_buffer_leak_ownership();
-    auto value_mesh_buffer = value.mesh_buffer_leak_ownership();
-    auto output_mesh_buffer = output.mesh_buffer_leak_ownership();
-    auto intermediates_mesh_buffer = intermediates.mesh_buffer_leak_ownership();
-
     // Iterate over cached programs and update runtime arguments
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coord_range);
@@ -210,28 +188,20 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
         (void)should_execute;  // Already filtered in create_mesh_workload
 
-        // Create DeviceStorage objects for this coordinate
-        std::vector<tt::tt_metal::distributed::MeshCoordinate> single_coord_vec{start_coord};
-        tt::tt_metal::DeviceStorage query_storage(query_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage key_storage(key_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage value_storage(value_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage output_storage(output_mesh_buffer, single_coord_vec);
-        tt::tt_metal::DeviceStorage intermediates_storage(intermediates_mesh_buffer, single_coord_vec);
-
         // Create TensorTopology
         ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
         for (size_t i = 0; i < mesh_shape.dims(); i++) {
             placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
         }
-        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, single_coord_vec};
+        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, {start_coord}};
 
         // Create single-device tensors
-        auto query_tensor = ttnn::Tensor(std::move(query_storage), query.tensor_spec(), tensor_topology);
-        auto key_tensor = ttnn::Tensor(std::move(key_storage), key.tensor_spec(), tensor_topology);
-        auto value_tensor = ttnn::Tensor(std::move(value_storage), value.tensor_spec(), tensor_topology);
-        auto output_tensor = ttnn::Tensor(std::move(output_storage), output.tensor_spec(), tensor_topology);
+        auto query_tensor = ttnn::distributed::get_single_device_tensor_at_coord(query, start_coord, tensor_topology);
+        auto key_tensor = ttnn::distributed::get_single_device_tensor_at_coord(key, start_coord, tensor_topology);
+        auto value_tensor = ttnn::distributed::get_single_device_tensor_at_coord(value, start_coord, tensor_topology);
+        auto output_tensor = ttnn::distributed::get_single_device_tensor_at_coord(output, start_coord, tensor_topology);
         auto intermediates_tensor =
-            ttnn::Tensor(std::move(intermediates_storage), intermediates.tensor_spec(), tensor_topology);
+            ttnn::distributed::get_single_device_tensor_at_coord(intermediates, start_coord, tensor_topology);
 
         // Create SDPA attributes and tensor args
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
