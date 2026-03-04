@@ -5,7 +5,7 @@
 #pragma once
 
 // Number of untimed warmup iterations run before the timed measurement window.
-// Must stay in sync with kWarmupIters in tests/tt_metal/distributed/test_hd_sockets.cpp.
+// Must stay in sync with kWarmupIters in tests/tt_metal/distributed/benchmark_hd_sockets.cpp.
 constexpr uint32_t WARMUP_ITERS = 5;
 
 // D2H: write one page from L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks.
