@@ -70,7 +70,7 @@ lora_params = {k: v for k, v in all_params.items() if "lora_A" in k or "lora_B" 
 
 print(f"Total params: {len(all_params)}")
 print(f"Trainable (LoRA): {len(lora_params)}")
-for name, tensor in all_params.items():
+for name, tensor in sorted(all_params.items()):
     print(f"  {'*' if name in lora_params else ' '} {name}: {tensor.shape()}")
 
 # ── Optimizer ─────────────────────────────────────────────────────────────────
