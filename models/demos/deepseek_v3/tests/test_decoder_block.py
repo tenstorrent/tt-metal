@@ -194,7 +194,7 @@ def run_test_forward_pass_decoder2d(
     )
 
     # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.989)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
 
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
