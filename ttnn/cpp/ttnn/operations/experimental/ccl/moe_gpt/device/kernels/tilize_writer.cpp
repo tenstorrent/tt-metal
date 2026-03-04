@@ -567,7 +567,10 @@ void kernel_main() {
 
             // == 2 ==
             // start send sequence
-            if (num_chunks_sent == 0 && num_tilize_cores > 1) {
+            // TODO: First-iteration two-mcaster optimization disabled - causes incorrect data
+            // delivery to matmul cores. Needs investigation of NOC0/NOC1 split multicast
+            // interaction with the shared c_16 CB layout. Using single-mcaster for all chunks.
+            if (false && num_chunks_sent == 0 && num_tilize_cores > 1) {
                 // FIRST ITERATION
                 // NOTE: the first tilize iteration always sends to the first half of the matmul input buffer
 

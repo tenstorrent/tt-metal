@@ -872,3 +872,346 @@ def test_moe_gpt_tilize_single_device(
     )
 
     assert passing, "Tilize output PCC check failed for one or more experts"
+
+
+# ---------------------------------------------------------------------------
+# Tilize-to-matmul integration helpers
+# ---------------------------------------------------------------------------
+
+
+def gen_controlled_sparse_buffer(
+    total_tokens,
+    hidden_size,
+    experts_per_device,
+    experts_total,
+    selected_experts_k,
+    device_idx,
+):
+    """
+    Generate sparse buffer with exactly total_tokens / experts_per_device
+    tokens per local expert (one chunk each).
+
+    Token t is assigned to local expert (t % experts_per_device).  This
+    guarantees even distribution and exactly 1 chunk per expert when
+    tokens_per_chunk == total_tokens / experts_per_device.
+    """
+    expert_indices = torch.zeros(total_tokens, selected_experts_k, dtype=torch.int32)
+    non_local_experts = [e for e in range(experts_total) if e // experts_per_device != device_idx]
+
+    for t in range(total_tokens):
+        local_expert = t % experts_per_device
+        global_expert = device_idx * experts_per_device + local_expert
+
+        expert_indices[t, 0] = global_expert
+        others = random.sample(non_local_experts, selected_experts_k - 1)
+        for k, eid in enumerate(others):
+            expert_indices[t, k + 1] = eid
+
+    expert_scores = torch.rand(total_tokens, selected_experts_k, dtype=torch.bfloat16) + 1e-5
+    expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
+
+    sparse_buffer = torch.rand(total_tokens, hidden_size, dtype=torch.bfloat16) - 0.5
+
+    return sparse_buffer, expert_indices, expert_scores
+
+
+# ---------------------------------------------------------------------------
+# Tilize-to-matmul integration test body
+# ---------------------------------------------------------------------------
+
+
+def run_test_moe_gpt_tilize_matmul(
+    device,
+    M,
+    K,
+    N,
+    E,
+    selected_experts_k,
+    experts_total,
+):
+    """
+    Integration test: tilize → W0/W1 matmul → SwiGLU (fused mode).
+
+    Invokes the op with tilize inputs but WITHOUT tilize_output, triggering
+    the fused path where tilized chunks are multicast directly to matmul
+    cores.  The SwiGLU output is written to DRAM via enable_dram_output.
+
+    Verifies the DRAM output against a torch reference:
+      tilize → per-expert W0/W1 matmul → SwiGLU
+    """
+    torch.manual_seed(42)
+    random.seed(42)
+
+    num_devices = experts_total // E
+    total_tokens = M * num_devices
+
+    logger.info(f"Tilize-matmul integration test configuration:")
+    logger.info(f"  num_devices (simulated): {num_devices}")
+    logger.info(f"  tokens_per_device (M): {M}, total_tokens: {total_tokens}")
+    logger.info(f"  experts_per_device (E): {E}, experts_total: {experts_total}")
+    logger.info(f"  hidden_size (K): {K}, intermediate_size (N): {N}")
+
+    tokens_per_chunk = 32
+    cluster_axis = 0
+
+    # ------------------------------------------------------------------
+    # Matmul core infrastructure (same as matmul/tilize tests)
+    # ------------------------------------------------------------------
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(0)
+    core2dram = {core_coords: dram_bank_id for dram_bank_id, core_coords in enumerate(in0_core_coords)}
+    in0_num_cores = len(in0_core_coords)
+
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in PAD_CORES else 0)
+
+    in0_core_range = [ttnn.CoreRange(ring2cores[i][0], ring2cores[i][0]) for i in range(in0_num_cores)]
+    in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+
+    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
+    dram_core_range = [ttnn.CoreRange(c, c) for c in dram_core_coords]
+    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+    in0_dtype = ttnn.bfloat16
+    w_dtype = ttnn.bfloat4_b
+    L = 1
+
+    # Input activation memory config
+    in0_shard_spec = ttnn.ShardSpec(
+        grid=in0_core_range_set,
+        shard_shape=(E * M, K),
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
+    )
+
+    # Weight configs
+    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    w0_w1_shard_height = L * E * groups_per_core * K
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+
+    w0_w1_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
+
+    w2_shard_height = L * E * 2 * N
+    w2_shard_width = 4 * ttnn.TILE_SIZE
+    w2_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
+
+    # ------------------------------------------------------------------
+    # Create torch tensors
+    # ------------------------------------------------------------------
+    torch_input = create_torch_input(L, in0_num_cores, E, M, K)
+    torch_w0 = create_torch_w0(L, E, K, N)
+    torch_w1 = create_torch_w1(L, E, K, N)
+    torch_w2 = create_torch_w2(L, E, N, K)
+
+    # Prepare weight tensors
+    torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
+    tt_w0_w1 = ttnn.from_torch(
+        torch_w0_w1_reordered,
+        dtype=w_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=w0_w1_mem_config,
+    )
+
+    torch_w2_reordered = prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores)
+    tt_w2 = ttnn.from_torch(
+        torch_w2_reordered,
+        dtype=w_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=w2_mem_config,
+    )
+
+    # Matmul input (still needed for the op's output_tensor parameter)
+    tt_input = ttnn.from_torch(
+        torch_input[0],
+        dtype=in0_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_sharded_mem_config,
+    )
+
+    # ------------------------------------------------------------------
+    # Tilize inputs (controlled routing: 32 tokens per expert)
+    # ------------------------------------------------------------------
+    device_idx = 0
+    expert_mapping_torch = gen_expert_mapping(experts_total, num_devices)
+    sparse_torch, indices_torch, scores_torch = gen_controlled_sparse_buffer(
+        total_tokens,
+        K,
+        E,
+        experts_total,
+        selected_experts_k,
+        device_idx,
+    )
+
+    logger.info(f"  sparse_buffer shape: {sparse_torch.shape}")
+    logger.info(f"  expert_indices shape: {indices_torch.shape}")
+    logger.info(f"  expert_mapping shape: {expert_mapping_torch.shape}")
+
+    tt_sparse = ttnn.from_torch(
+        sparse_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_indices = ttnn.from_torch(
+        indices_torch,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_scores = ttnn.from_torch(
+        scores_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_mapping = ttnn.from_torch(
+        expert_mapping_torch,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # ------------------------------------------------------------------
+    # Pre-allocate DRAM output tensor for SwiGLU result [E, 1, M, K]
+    # ------------------------------------------------------------------
+    dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dram_out_torch = torch.zeros((E, 1, M, K), dtype=torch.bfloat16)
+    tt_dram_output = ttnn.from_torch(
+        dram_out_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram_mem_config,
+    )
+
+    # ------------------------------------------------------------------
+    # Run the op (fused mode: tilize inputs present, NO tilize_output)
+    # ------------------------------------------------------------------
+    _tt_output = ttnn.experimental.moe_gpt(
+        tt_input,
+        w0_w1_tensor=tt_w0_w1,
+        w2_tensor=tt_w2,
+        output_tensor=tt_input,
+        num_experts=E,
+        layer_id=0,
+        enable_dram_output=True,
+        dram_output_tensor=tt_dram_output,
+        sparse_buffer=tt_sparse,
+        expert_indices=tt_indices,
+        expert_scores=tt_scores,
+        expert_mapping=tt_mapping,
+        cluster_axis=cluster_axis,
+    )
+
+    # ------------------------------------------------------------------
+    # Read back DRAM output
+    # ------------------------------------------------------------------
+    tt_dram_result = ttnn.to_torch(tt_dram_output)
+    tt_dram_result = tt_dram_result.reshape(E, M, K)
+
+    # ------------------------------------------------------------------
+    # Torch reference: tilize → per-expert W0/W1 matmul → SwiGLU
+    # ------------------------------------------------------------------
+    ref_tilized, per_expert_counts = tilize_reference(
+        sparse_torch,
+        indices_torch,
+        expert_mapping_torch,
+        device_idx,
+        E,
+        tokens_per_chunk,
+    )
+
+    logger.info(f"  Per-expert token counts: {per_expert_counts}")
+
+    all_passing = True
+    for e in range(E):
+        count = per_expert_counts[e]
+        if count == 0:
+            logger.info(f"  Expert {e}: no tokens routed, skipping")
+            continue
+
+        # Gather tilized tokens for this expert
+        start_row = e * total_tokens
+        expert_input = ref_tilized[start_row : start_row + count, :]  # [count, K]
+
+        # Pad to tile height (32) for comparison with hardware output
+        padded_input = torch.zeros(M, K, dtype=torch.bfloat16)
+        padded_input[:count, :] = expert_input
+
+        # Torch reference: W0/W1 matmul + SwiGLU
+        with torch.no_grad():
+            gate = padded_input @ torch_w0[0, e]  # [M, N]
+            up = padded_input @ torch_w1[0, e]  # [M, N]
+            reference = swiglu_reference(gate, up)  # [M, N]
+
+        # Extract device result for this expert
+        tt_expert_result = tt_dram_result[e, :, :]  # [M, K]
+
+        metrics = get_accuracy_metrics(reference, tt_expert_result)
+        pcc = metrics["pcc"]
+        rmse = metrics["relative_rmse"]
+
+        if pcc < PCC_THRESHOLD:
+            all_passing = False
+            logger.warning(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens) FAILED")
+        else:
+            logger.info(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens) Passed")
+
+    return all_passing
+
+
+# ---------------------------------------------------------------------------
+# Tilize-matmul integration pytest entry point
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("M", [32])
+@pytest.mark.parametrize("K, N", [(2880, 2880)])
+@pytest.mark.parametrize("E, experts_total", [(4, 16)])
+@pytest.mark.parametrize("selected_experts_k", [4])
+def test_moe_gpt_tilize_matmul_single_device(
+    device,
+    M,
+    K,
+    N,
+    E,
+    experts_total,
+    selected_experts_k,
+    device_params,
+):
+    passing = run_test_moe_gpt_tilize_matmul(
+        device=device,
+        M=M,
+        K=K,
+        N=N,
+        E=E,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+    )
+
+    assert passing, "Tilize-matmul integration PCC check failed for one or more experts"

@@ -20,14 +20,14 @@ ttnn::Tensor ExecuteMoEGPT::invoke(
     const uint32_t num_experts,
     const uint32_t layer_id,
     bool enable_dram_output,
+    std::optional<ttnn::Tensor> dram_output_tensor,
     std::optional<ttnn::Tensor> sparse_buffer,
     std::optional<ttnn::Tensor> expert_indices,
     std::optional<ttnn::Tensor> expert_scores,
     std::optional<ttnn::Tensor> expert_mapping,
     std::optional<ttnn::Tensor> tilize_output,
     std::optional<uint32_t> cluster_axis) {
-    std::optional<Tensor> dram_output_tensor;
-    if (enable_dram_output) {
+    if (enable_dram_output && !dram_output_tensor.has_value()) {
         auto shape = input_tensor.logical_shape();
         uint32_t M = shape[-2];
         uint32_t K = shape[-1];

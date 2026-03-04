@@ -13,6 +13,17 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t enable_dram_output = get_named_compile_time_arg_val("enable_dram_output");
 
+#ifdef TILIZE_FUSED
+    constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t matmul_chunk_ready_semaphore_id =
+        get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
+    constexpr uint32_t matmul_chunk_available_semaphore_id =
+        get_named_compile_time_arg_val("matmul_chunk_available_semaphore_id");
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+    constexpr uint32_t tilize_drain_core_noc_x = get_named_compile_time_arg_val("tilize_drain_core_noc_x");
+    constexpr uint32_t tilize_drain_core_noc_y = get_named_compile_time_arg_val("tilize_drain_core_noc_y");
+#endif
+
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
@@ -37,6 +48,9 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+#ifdef TILIZE_FUSED
+    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+#endif
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
@@ -58,6 +72,108 @@ void kernel_main() {
     const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
+
+#ifdef TILIZE_FUSED
+    //=========================================================================
+    // FUSED MODE: Per-chunk SwiGLU output → DRAM, signal tilize drain
+    //=========================================================================
+
+    // The number of tiles to send in each step (max of 7/8 = 8 for GPT-OSS)
+    constexpr uint32_t tiles_per_step = moe_gpt_ring::IN2_TILES_PER_STEP_A;  // 8
+
+    //-------------------------------------------------------------------------
+    // Init synchronization with tilize cores
+    //-------------------------------------------------------------------------
+
+    // Wait for tilize drain to deliver metadata (token counts per expert)
+    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+
+    // Transfer semaphore addresses to compute via cb_w2c_md:
+    //   [0] = metadata_ready_semaphore address (for compute to decode token counts)
+    //   [1] = matmul_chunk_ready_semaphore address (for compute to wait on tilized chunks)
+    volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
+    cb_w2c_md_write_ptr[0] = metadata_ready_semaphore_addr;
+    cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
+    cb_reserve_back(cb_w2c_md, 2);
+    cb_push_back(cb_w2c_md, 2);
+
+    //-------------------------------------------------------------------------
+    // Decode metadata: per-expert token counts and chunk counts
+    //-------------------------------------------------------------------------
+    volatile tt_l1_ptr uint32_t* metadata_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
+    uint32_t encoded_metadata_value = *metadata_sem_ptr;
+
+    constexpr uint32_t BITS_PER_EXPERT = 7;
+    constexpr uint32_t EXPERT_MASK = 0x7Fu;
+    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
+    for (uint32_t e = 0; e < num_experts; ++e) {
+        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * e)) & EXPERT_MASK;
+        NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+    }
+
+    // NOC address to signal tilize drain that matmul has consumed a chunk
+    uint32_t local_chunk_available_sem_addr = get_semaphore(matmul_chunk_available_semaphore_id);
+    uint64_t matmul_chunk_available_noc_addr =
+        get_noc_addr(tilize_drain_core_noc_x, tilize_drain_core_noc_y, local_chunk_available_sem_addr);
+
+    //-------------------------------------------------------------------------
+    // DRAM output setup (conditional on enable_dram_output)
+    //-------------------------------------------------------------------------
+    // L1 source: cb_s2c_in2 base address (compute packs SwiGLU output here)
+    const uint32_t cb_base = get_write_ptr(cb_s2c_in2);
+
+    //-------------------------------------------------------------------------
+    // Per-expert, per-chunk processing
+    //-------------------------------------------------------------------------
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+
+        for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            // Wait for compute to signal SwiGLU output ready for this chunk
+            cb_wait_front(cb_c2w_rdy, 1);
+            cb_pop_front(cb_c2w_rdy, 1);
+
+            // Write SwiGLU output tiles to DRAM
+            if constexpr (enable_dram_output) {
+                const auto dram_output_addr = get_arg_val<uint32_t>(10);
+                const auto k_start_tile = get_arg_val<uint32_t>(11);
+
+                constexpr uint32_t K_tiles = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
+                const uint32_t tiles_per_core = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+
+                const InterleavedAddrGen<true> dram_output_addrgen = {
+                    .bank_base_address = dram_output_addr,
+                    .page_size = in2_tile_size,
+                };
+
+                for (uint32_t t = 0; t < tiles_per_core; ++t) {
+                    uint32_t l1_addr = cb_base + t * in2_tile_size;
+                    uint32_t dram_tile_id = expert_id * K_tiles + k_start_tile + t;
+                    noc_async_write_tile(dram_tile_id, dram_output_addrgen, l1_addr);
+                }
+                noc_async_write_barrier();
+            }
+
+            // Signal compute that we're done reading cb_s2c_in2 so it can overwrite
+            cb_reserve_back(cb_w2c_rdy, 1);
+            cb_push_back(cb_w2c_rdy, 1);
+
+            // Signal tilize drain that this chunk has been consumed and
+            // the shared c_16 buffer half is available for the next chunk
+            noc_semaphore_inc(matmul_chunk_available_noc_addr, 1);
+        }
+    }
+
+    // Flush pending NOC non-posted atomics (semaphore incs) before kernel exit
+    noc_async_atomic_barrier();
+
+#else
+    //=========================================================================
+    // NON-FUSED MODE: Ring A2A + optional DRAM output
+    //=========================================================================
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -235,4 +351,5 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     }
+#endif  // TILIZE_FUSED
 }

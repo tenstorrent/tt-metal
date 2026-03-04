@@ -14,10 +14,26 @@
 #include "swiglu_sfpu.h"
 #endif
 
+// Compute-side semaphore wait: spin on L1 value (no NOC API needed)
+#ifdef TILIZE_FUSED
+FORCE_INLINE
+void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    WAYPOINT("NSMW");
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) < val);
+    WAYPOINT("NSMD");
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
+#ifdef TILIZE_FUSED
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+#endif
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -34,7 +50,12 @@ void kernel_main() {
 
     // CBs
     constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
+#ifdef TILIZE_FUSED
+    constexpr auto cb_s2c_in = tt::CBIndex::c_16;  // shared tilize→matmul CB
+    constexpr auto cb_w2c_md = tt::CBIndex::c_5;   // metadata bridge from dm1
+#else
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
+#endif
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
@@ -110,6 +131,117 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
+
+#ifdef TILIZE_FUSED
+    //-------------------------------------------------------------------------
+    // FUSED MODE: Per-chunk matmul from shared c_16 CB
+    //-------------------------------------------------------------------------
+
+    // Receive metadata semaphore addresses from dm1 via cb_w2c_md
+    cb_wait_front(cb_w2c_md, 2);
+    cb_pop_front(cb_w2c_md, 2);
+    volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
+    uint32_t metadata_sem_addr = cb_w2c_md_read_ptr[0];
+    uint32_t chunk_ready_sem_addr = cb_w2c_md_read_ptr[1];
+
+    // Decode per-expert token counts from metadata_ready_semaphore
+    volatile tt_l1_ptr uint32_t* metadata_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_sem_addr);
+    uint32_t encoded_metadata_value = *metadata_sem_ptr;
+
+    constexpr uint32_t BITS_PER_EXPERT = 7;
+    constexpr uint32_t EXPERT_MASK = 0x7Fu;
+    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
+    for (uint32_t e = 0; e < num_experts; ++e) {
+        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * e)) & EXPERT_MASK;
+        NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+    }
+
+    // Process chunks
+    volatile tt_l1_ptr uint32_t* chunk_ready_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_ready_sem_addr);
+    uint32_t chunk_ready_wait_value = 1;
+    bool use_second_half_buffer = false;
+
+    uint32_t total_chunks_processed = 0;
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+
+        for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            // Wait for dm1 to finish reading previous chunk's output from cb_s2c_in2
+            // before we overwrite it with this chunk's output
+            if (total_chunks_processed > 0) {
+                cb_wait_front(cb_w2c_rdy, 1);
+                cb_pop_front(cb_w2c_rdy, 1);
+            }
+
+            // Wait for tilize drain to deliver this chunk via multicast
+            UNPACK(({
+                noc_semaphore_wait_min(chunk_ready_sem_ptr, chunk_ready_wait_value);
+                chunk_ready_wait_value++;
+            }));
+
+            // Double-buffer: determine input tile base
+            uint32_t in0_base = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
+
+            // Compute chunk @ W0/W1 → SwiGLU
+            for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
+                uint32_t in0_index = in0_base;
+
+                tile_regs_acquire();
+                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+
+                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        matmul_block(
+                            cb_s2c_in,
+                            cb_r2c_w0_w1,
+                            in0_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                    }
+                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                }
+
+                tile_regs_commit();
+
+                TTI_SEMWAIT(
+                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                    semaphore::t6_sem(semaphore::MATH_PACK),
+                    p_stall::STALL_ON_ZERO);
+
+                PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+                PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+                PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+
+                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
+                tile_regs_release();
+            }
+
+            // Signal dm1 that SwiGLU output is ready
+            cb_reserve_back(cb_c2w_rdy, 1);
+            cb_push_back(cb_c2w_rdy, 1);
+
+            use_second_half_buffer = !use_second_half_buffer;
+            total_chunks_processed++;
+        }
+    }
+
+    // Drain pipeline: dm0 pushes extra blocks at end
+    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+
+#else
+    // NON-FUSED MODE: Standard expert loop with A2A
+
     uint32_t in0_offset_per_expert = 0;
     uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
@@ -248,4 +380,5 @@ void kernel_main() {
     // Drain the pipeline - the last dummy push
     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+#endif  // TILIZE_FUSED
 }

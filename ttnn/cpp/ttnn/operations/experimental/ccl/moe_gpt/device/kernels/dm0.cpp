@@ -29,6 +29,11 @@ void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
+#ifdef TILIZE_FUSED
+    constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+#endif
+
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w0_w1_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
@@ -149,6 +154,70 @@ void kernel_main() {
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
+#ifdef TILIZE_FUSED
+    //-------------------------------------------------------------------------
+    // FUSED MODE: Decode metadata from tilize, read W0/W1 per-chunk
+    //-------------------------------------------------------------------------
+
+    // Wait for metadata from tilize drain core
+    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
+    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
+    noc_semaphore_wait_min(metadata_ready_semaphore_ptr, 1);
+
+    // Decode per-expert token counts from encoded metadata
+    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+    constexpr uint32_t BITS_PER_EXPERT = 7;
+    constexpr uint32_t EXPERT_MASK = 0x7Fu;
+    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
+    for (uint32_t e = 0; e < num_experts; ++e) {
+        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * e)) & EXPERT_MASK;
+        NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+    }
+
+    // Per-expert, per-chunk W0/W1 weight reads (same weights re-read for each chunk)
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+
+        for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
+
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
+                noc_async_read_set_trid(trid_to_issue);
+                noc_async_read_one_packet_with_state_with_trid<false, true>(
+                    dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
+                w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+
+                noc_async_read_one_packet_with_state_with_trid<false, true>(
+                    dram_noc_addr,
+                    w0_w1_dram_read_offset,
+                    slot_addr[slot_to_issue] + w0_w1_bytes_per_txn,
+                    trid_to_issue);
+                w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+
+                ADVANCE_SLOT(slot_to_issue);
+                ADVANCE_TRID(trid_to_issue);
+
+                if (txns_in_flight) {
+                    noc_async_read_barrier_with_trid(trid_to_wait);
+                    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    ADVANCE_TRID(trid_to_wait);
+                    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                }
+                txns_in_flight = true;
+            }
+        }
+
+        w0_w1_expert_offset += w0_w1_total_size_per_expert;
+    }
+
+    // Drain the pipeline
+    noc_async_read_barrier_with_trid(trid_to_wait);
+    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+
+#else
+    // NON-FUSED MODE: Read all W0/W1 then W2 for each expert
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         //-------------------------------------------------------------------------
         // Pipelined reading of W0/W1
@@ -226,6 +295,7 @@ void kernel_main() {
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
     cb_push_back(cb_r2c_w2, w2_tiles_per_block);
+#endif  // TILIZE_FUSED
 }
 
 #undef ADVANCE_TRID

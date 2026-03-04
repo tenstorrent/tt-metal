@@ -26,6 +26,7 @@ void bind_moe_gpt(nb::module_& mod) {
             num_experts: Number of experts per layer
             layer_id: The layer for which the MoE operation is being performed
             enable_dram_output: Write matmul output to DRAM (default: false)
+            dram_output_tensor: Optional pre-allocated DRAM tensor for output (created internally if not provided)
             sparse_buffer: Optional sparse token buffer for tilize phase
             expert_indices: Optional expert index tensor for tilize phase
             expert_scores: Optional expert score tensor for tilize phase
@@ -42,6 +43,7 @@ void bind_moe_gpt(nb::module_& mod) {
             nb::arg("num_experts"),
             nb::arg("layer_id"),
             nb::arg("enable_dram_output") = false,
+            nb::arg("dram_output_tensor") = nb::none(),
             nb::arg("sparse_buffer") = nb::none(),
             nb::arg("expert_indices") = nb::none(),
             nb::arg("expert_scores") = nb::none(),

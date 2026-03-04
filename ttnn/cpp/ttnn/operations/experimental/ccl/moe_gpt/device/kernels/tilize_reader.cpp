@@ -374,10 +374,8 @@ void kernel_main() {
 
     // TensorAccessors
     const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
-#ifdef TILIZE_TO_DRAM
     const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
-#endif
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
 #ifndef TILIZE_TO_DRAM
     const auto per_expert_total_tokens_output_tensor_addr_gen = TensorAccessor(
@@ -429,9 +427,12 @@ void kernel_main() {
     init_expert_activation_buffer_async<selected_experts_k, tokens, experts_per_device, l1_alignment>(
         expert_activation_cb_id);
 
-#ifdef TILIZE_TO_DRAM
-    // DRAM verification path: all cores read the full indices/scores tensors from DRAM.
-    // CBs are regular (not globally-allocated), so we populate them via NOC reads.
+    // All cores read the full indices/scores tensors from interleaved DRAM/L1.
+    // In TILIZE_TO_DRAM mode this is the only path. In fused mode, the drain core's
+    // CB is not backed by a shard (single-device test uses interleaved tensors), so
+    // all cores must independently read from the interleaved storage.
+    // TODO: When multi-device sharded indices/scores are supported, non-drain cores
+    // can read from drain's L1 shard instead (with proper synchronization).
     {
         uint32_t dest = get_read_ptr(indices_tensor_cb_id);
         for (uint32_t page = 0; page < indices_pages; page++) {
@@ -446,25 +447,6 @@ void kernel_main() {
             dest += aligned_scores_page_size;
         }
     }
-#else
-    // Non-drain cores read indices/scores from drain core's L1 shard.
-    // Must happen BEFORE pushing mapping_tensor_cb_id (BRISC waits on that
-    // and will immediately start reading indices/scores).
-    if (!is_drain_tilize_core) {
-        uint32_t token_byte_offset_indices = core_token_start * aligned_indices_page_size;
-        uint32_t token_byte_offset_scores = core_token_start * aligned_scores_page_size;
-        uint32_t num_tokens_this_core = core_token_end - core_token_start;
-
-        uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
-        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
-
-        uint64_t drain_indices_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_indices_addr);
-        uint64_t drain_scores_noc_addr = get_noc_addr(drain_core_noc_x, drain_core_noc_y, local_scores_addr);
-
-        noc_async_read(drain_indices_noc_addr, local_indices_addr, num_tokens_this_core * aligned_indices_page_size);
-        noc_async_read(drain_scores_noc_addr, local_scores_addr, num_tokens_this_core * aligned_scores_page_size);
-    }
-#endif
 
     // Wait for all reads to complete (mapping + indices/scores for non-drain)
     noc_async_read_barrier();
@@ -757,9 +739,12 @@ void kernel_main() {
 
 #ifndef TILIZE_TO_DRAM
         // Write activated rows + sentinel = (num_activated_tokens + 1) rows
-        uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
-        uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
-        noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        // Skip if address is 0 (fused mode: no output tensors allocated)
+        if (expert_activation_output_address != 0) {
+            uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
+            uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
+            noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
+        }
 #endif
 
         // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
@@ -840,15 +825,15 @@ void kernel_main() {
         // == 1 ==
 
         // Determine encoded value
-        // NOTE: can handle up to 3 experts:
+        // NOTE: can handle up to 4 experts:
         // - 1 valid bit
-        // - 10 bits per expert, valid num_tokens is [0, 512]
+        // - 7 bits per expert, valid num_tokens is [0, 127]
         // - 32 bits available in semaphore (4 Bytes), 0 value reserved as init value
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-        constexpr uint32_t bits_per_expert = 10;
-        constexpr uint32_t expert_mask = 0x3FFu;
+        constexpr uint32_t bits_per_expert = 7;
+        constexpr uint32_t expert_mask = 0x7Fu;
         uint32_t encoded_value = 1u;  // flag bit
         for (uint32_t e = 0; e < experts_per_device; ++e) {
             encoded_value |= (num_tokens_per_expert[e] & expert_mask) << (1 + bits_per_expert * e);
@@ -970,7 +955,8 @@ void kernel_main() {
 
 #ifndef TILIZE_TO_DRAM
     // write out e_t_output_tensor
-    if (is_drain_tilize_core) {
+    // Skip if address is 0 (fused mode: no output tensors allocated)
+    if (is_drain_tilize_core && e_t_output_address != 0) {
         uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
         for (uint32_t e = 0; e < experts_per_device; ++e) {
             noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
@@ -979,7 +965,7 @@ void kernel_main() {
     }
 
     // write out per_expert_total_tokens_output_tensor
-    if (is_drain_tilize_core) {
+    if (is_drain_tilize_core && per_expert_total_tokens_output_tensor_address != 0) {
         uint32_t l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
         noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
     }
