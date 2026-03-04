@@ -20,13 +20,13 @@ import math
 from typing import TYPE_CHECKING, Optional
 
 import ttnn
+from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor
 
 if TYPE_CHECKING:
     from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
@@ -924,10 +924,10 @@ class MoeRoutedExpert:
         mcast_data_sender_semaphore_id = 0
         mcast_data_receiver_semaphore_id = 1
 
-        gate_proj_fp32_dest_acc_en = 1
-        up_proj_fp32_dest_acc_en = 1
-        mul_fp32_dest_acc_en = 1
-        down_proj_fp32_dest_acc_en = 1
+        gate_proj_fp32_dest_acc_en = 0
+        up_proj_fp32_dest_acc_en = 0
+        mul_fp32_dest_acc_en = 0
+        down_proj_fp32_dest_acc_en = 0
         dst_full_sync_en = False
 
         # CB indices

@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "layernorm_types.hpp"
 
 namespace ttnn::prim {
@@ -21,6 +22,7 @@ struct LayerNormParams {
     LayerNormProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
+    std::optional<operations::unary::UnaryWithParam> fused_activation;
 };
 
 struct LayerNormInputs {

@@ -71,7 +71,7 @@ struct dfb_initializer_t {  // 24 bytes
     struct {
         uint16_t dm_mask : 8;         // bits 0-7: DM RISC mask
         uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
-        uint16_t reserved : 4;        // bits 12-15: reserved
+        uint16_t tensix_trisc_mask : 4;        // bits 12-15: indicates which triscs use the DFB (tensix producer uses trisc2 and tensix consumer can use trisc0 or trisc3)
     } risc_mask_bits;
     uint8_t num_producers;
     uint8_t num_txn_ids;
@@ -142,7 +142,7 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t num_txn_ids;  // shared across riscs so can be factored out and put into sep initialization struct
     uint8_t tc_idx;
-
+    uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
 
 } __attribute__((packed));
 
@@ -150,6 +150,6 @@ static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 24, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 97, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 98, "LocalDFBInterface size is incorrect");
 
 }  // namespace experimental

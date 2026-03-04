@@ -22,7 +22,7 @@
 namespace {
 /*
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
-or setting 'is_nigthly_tt_train_tests_enabled' variable to true.
+or setting 'is_nightly_tt_train_tests_enabled' variable to true.
 */
 // TODO: Disabled due to differences exceeding the threshold when comparing loss value.
 // Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37337
