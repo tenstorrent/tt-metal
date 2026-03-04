@@ -105,6 +105,7 @@ def _get_xattn_mask(
         get_negative_inf_value(cross_attention_masks.dtype),
     )
     cross_attention_masks *= full_text_row_masked_out_mask
+
     return (
         cross_attention_masks.to(device=text_device, dtype=text_dtype),
         full_text_row_masked_out_mask,
