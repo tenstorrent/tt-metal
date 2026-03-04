@@ -6,6 +6,7 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "pcie_noc_utils.h"
+#include "api/debug/dprint.h"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -162,6 +163,9 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
 
+    DPRINT << "Start H2D Receiver Embedding Kernel" << ENDL();
+    DPRINT << "use_fabric: " << static_cast<uint32_t>(use_fabric) << ENDL();
+
     if constexpr (use_fabric) {
         // Safe to use downstream_enc here: Fabric being enabled means that a socket will be used for downstream
         // communication
@@ -173,6 +177,8 @@ void kernel_main() {
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
 
+        DPRINT << "Downstream encoding: " << downstream_enc.d2d.downstream_mesh_id << " "
+               << downstream_enc.d2d.downstream_chip_id << ENDL();
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
@@ -234,7 +240,9 @@ void kernel_main() {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
+            DPRINT << "H2D Reserve pages downstream" << ENDL();
             socket_reserve_pages(sender_socket, 1);
+            DPRINT << "H2D Reserve pages downstream done" << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
