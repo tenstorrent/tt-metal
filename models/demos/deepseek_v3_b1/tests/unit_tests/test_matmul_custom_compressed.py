@@ -106,3 +106,13 @@ def test_matmul_custom_compressed_large(device):
 def test_matmul_custom_compressed_large_uniform(device):
     """[1, 7168] x [7168, 32], bfp8 only. DeepSeek shape."""
     _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8"])
+
+
+def test_matmul_custom_compressed_wide(device):
+    """[1, 64] x [64, 64], bfp8. out_w=2."""
+    _run_matmul_custom_compressed(device, 1, 64, 64, formats=["bfp8"])
+
+
+def test_matmul_custom_compressed_wide_mixed(device):
+    """[1, 256] x [256, 128], mixed bfp8+bfp4. out_w=4."""
+    _run_matmul_custom_compressed(device, 1, 256, 128, formats=["bfp8", "bfp4"])
