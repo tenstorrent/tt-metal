@@ -6,60 +6,54 @@
 #include "api/dataflow/dataflow_api.h"
 
 // Reader kernel for max-utilization workload.
-// Decoupled from compute - only generates NOC traffic to neighbors.
-// No CB dependencies, no DRAM reading.
-// Uses NOC0 to send 8KB in a loop to cores to the right and down.
-// Target physical coordinates are passed as runtime arguments from host.
+// Only the top-left core of the grid performs a NOC0 multicast to all
+// remaining cores, alternating between pattern A (0x5555) and pattern B (0xAAAA).
+// Every multicast transfer is data_transfer_size bytes.
+// All other cores exit immediately.
 //
 // Compile-time args:
 //   0: num_loops           – number of workload repetitions (stress-test loop)
-//   1: l1_tx_A_addr        – L1 address to use as source for transfers
-//   2: l1_tx_B_addr        – L1 address to use as source for transfers
-//   3: l1_rx_left_addr     – L1 address to use as source for transfers
-//   4: l1_rx_up_addr       – L1 address to use as source for transfers
-//   5: l1_rx_right_addr    – L1 address to use as source for transfers
-//   6: l1_rx_down_addr     – L1 address to use as source for transfers
-//   7: transfer_size       - transfer size (8KB)
+//   1: l1_tx_A_addr        – L1 address of pattern A (0x5555...) to send
+//   2: l1_tx_B_addr        – L1 address of pattern B (0xAAAA...) to send
+//   3: l1_rx_addr          – L1 destination address on all receiving cores
+//   4: (unused)
+//   5: (unused)
+//   6: (unused)
+//   7: transfer_size       – transfer size in bytes (data_transfer_size)
 //
 // Runtime args:
-//   0: target_right_x      – physical x coordinate of core to the right
-//   1: target_right_y      – physical y coordinate of core to the right
-//   2: target_down_x       – physical x coordinate of core below
-//   3: target_down_y       – physical y coordinate of core below
+//   0: is_sender        – 1 if this is the top-left (multicast sender) core, 0 otherwise
+//   1: mcast_start_x    – NOC0 physical x of top-left corner of multicast rectangle
+//   2: mcast_start_y    – NOC0 physical y of top-left corner of multicast rectangle
+//   3: mcast_end_x      – NOC0 physical x of bottom-right corner of multicast rectangle
+//   4: mcast_end_y      – NOC0 physical y of bottom-right corner of multicast rectangle
+//   5: num_dests        – number of destination cores (total grid cores minus self)
 
 void kernel_main() {
     constexpr uint32_t num_loops = get_compile_time_arg_val(0);
     constexpr uint32_t l1_tx_A_addr = get_compile_time_arg_val(1);
     constexpr uint32_t l1_tx_B_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t l1_rx_left_addr = get_compile_time_arg_val(3);
-    constexpr uint32_t l1_rx_up_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t l1_rx_right_addr = get_compile_time_arg_val(5);
-    constexpr uint32_t l1_rx_down_addr = get_compile_time_arg_val(6);
+    constexpr uint32_t l1_rx_addr = get_compile_time_arg_val(3);
     constexpr uint32_t transfer_size = get_compile_time_arg_val(7);
 
-    // Get target physical coordinates from runtime args
-    uint32_t target_right_x = get_arg_val<uint32_t>(0);
-    uint32_t target_right_y = get_arg_val<uint32_t>(1);
-    uint32_t target_down_x = get_arg_val<uint32_t>(2);
-    uint32_t target_down_y = get_arg_val<uint32_t>(3);
+    uint32_t is_sender = get_arg_val<uint32_t>(0);
 
-    for (uint32_t iter = 0; iter < num_loops; ++iter) {
-        // // Send pattern A
-        // // Send 8KB to core on the right (using NOC0)
-        // uint64_t noc_addr_right = get_noc_addr(target_right_x, target_right_y, l1_rx_left_addr, 0);
-        // noc_async_write(l1_tx_A_addr, noc_addr_right, transfer_size, 0);
+    // if (is_sender) {
+    //     uint32_t mcast_start_x = get_arg_val<uint32_t>(1);
+    //     uint32_t mcast_start_y = get_arg_val<uint32_t>(2);
+    //     uint32_t mcast_end_x = get_arg_val<uint32_t>(3);
+    //     uint32_t mcast_end_y = get_arg_val<uint32_t>(4);
+    //     uint32_t num_dests = get_arg_val<uint32_t>(5);
+    //     uint64_t mcast_dst =
+    //         get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, l1_rx_addr, 0);
 
-        // // // Send 8KB to core down (using NOC0)
-        // // uint64_t noc_addr_down = get_noc_addr(target_down_x, target_down_y, l1_rx_up_addr, 0);
-        // // noc_async_write(l1_tx_A_addr, noc_addr_down, transfer_size, 0);
+    //     for (uint32_t iter = 0; iter < num_loops / 4; ++iter) {
+    //         // Pattern A (0x5555...)
+    //         noc_async_write_multicast(l1_tx_A_addr, mcast_dst, transfer_size, num_dests, false, 0);
 
-        // // Send pattern B
-        // // Send 8KB to core on the left (using NOC0)
-        // noc_async_write(l1_tx_B_addr, noc_addr_right, transfer_size, 0);
-
-        // // Send 8KB to core down (using NOC0)
-        // // noc_async_write(l1_tx_B_addr, noc_addr_down, transfer_size, 0);
-    }
-
-    noc_async_write_barrier(0);
+    //         // Pattern B (0xAAAA...)
+    //         noc_async_write_multicast(l1_tx_B_addr, mcast_dst, transfer_size, num_dests, false, 0);
+    //     }
+    //     noc_async_write_barrier(0);
+    // }
 }
