@@ -118,7 +118,7 @@ ElementWiseMultiCoreAddProgram::cached_program_t ElementWiseMultiCoreAddProgram:
     std::vector<uint32_t> compute_compile_time_vec = ttnn::kernel_utils::to_vector(compute_compile_time_args);
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        kernel_prefix + "elemwise_compute_kernel.cpp",
+        kernel_prefix + "elemwise_compute_kernel.cpp",  //"sfpu_compute_kernel.cpp",  //
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
