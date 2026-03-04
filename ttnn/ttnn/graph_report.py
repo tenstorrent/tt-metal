@@ -26,6 +26,8 @@ import sqlite3
 from pathlib import Path
 from typing import Union
 
+from loguru import logger
+
 SUPPORTED_REPORT_VERSION = 1
 
 _BUFFER_TYPE_MAP = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
@@ -1097,7 +1099,7 @@ def import_graph(
         devices,
     )
     for w in warnings:
-        print(f"WARNING [graph import]: {w}")
+        logger.warning(f"[graph import] {w}")
 
     return {
         "operations": len(operations_batch),
@@ -1158,7 +1160,7 @@ def generate_svg(graph: list, output_path: Union[str, Path]) -> Path:
         ttnn.graph.visualize(graph, file_name=output_path)
         return output_path
     except ImportError:
-        print("Warning: ttnn.graph not available, skipping SVG generation")
+        logger.warning("ttnn.graph not available, skipping SVG generation")
         return None
 
 
@@ -1223,7 +1225,7 @@ def import_report(
 
             version = report.get("version", 0)
             if version != SUPPORTED_REPORT_VERSION:
-                print(f"Warning: {rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
+                logger.warning(f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
                 continue
 
             devices_data = report.get("devices", [])
@@ -1414,26 +1416,27 @@ def import_report(
             total_stats["files"] += 1
 
         conn.commit()
-        print(f"Imported {total_stats['files']} report(s) into {db_path}")
-        print(f"  - {total_stats['devices']} devices")
-        print(f"  - {total_stats['operations']} operations")
-        print(f"  - {total_stats['tensors']} tensors")
+        summary = [f"Imported {total_stats['files']} report(s) into {db_path}"]
+        summary.append(f"  - {total_stats['devices']} devices")
+        summary.append(f"  - {total_stats['operations']} operations")
+        summary.append(f"  - {total_stats['tensors']} tensors")
         if total_stats.get("device_tensors", 0) > 0:
-            print(f"  - {total_stats['device_tensors']} device tensor entries")
-        print(f"  - {total_stats['buffers']} buffers")
-        print(f"  - {total_stats['edges']} edges")
+            summary.append(f"  - {total_stats['device_tensors']} device tensor entries")
+        summary.append(f"  - {total_stats['buffers']} buffers")
+        summary.append(f"  - {total_stats['edges']} edges")
         if total_stats["errors"] > 0:
-            print(f"  - {total_stats['errors']} errors captured")
+            summary.append(f"  - {total_stats['errors']} errors captured")
         if total_stats["stack_traces"] > 0:
-            print(f"  - {total_stats['stack_traces']} stack traces captured")
+            summary.append(f"  - {total_stats['stack_traces']} stack traces captured")
         if total_stats.get("buffer_pages", 0) > 0:
-            print(f"  - {total_stats['buffer_pages']} buffer pages")
+            summary.append(f"  - {total_stats['buffer_pages']} buffer pages")
         if total_stats.get("cluster_descriptor"):
-            print(f"  - cluster_descriptor.yaml saved")
+            summary.append("  - cluster_descriptor.yaml saved")
         if total_stats.get("mesh_coordinate_mapping"):
-            print(f"  - physical_chip_mesh_coordinate_mapping_1_of_1.yaml saved")
+            summary.append("  - physical_chip_mesh_coordinate_mapping_1_of_1.yaml saved")
         if generate_svgs:
-            print(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
+            summary.append(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
+        logger.info("\n".join(summary))
 
     finally:
         conn.close()

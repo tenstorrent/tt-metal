@@ -172,12 +172,17 @@ def store_captured_graph(captured_graph_json):
 
 
 def _merge_python_io_into_report(report_path):
+    """Append python_io data to the JSON report on disk.
+
+    For large models (e.g. ResNet-50) the report can be hundreds of MB.
+    We avoid pretty-printing to keep file size manageable.
+    """
     report_path = pathlib.Path(report_path)
     with open(report_path, "r") as f:
         report = json.load(f)
     report["python_io"] = _python_io_data
     with open(report_path, "w") as f:
-        json.dump(report, f, indent=2)
+        json.dump(report, f)
 
 
 class ExitStackWithPop(contextlib.ExitStack):
