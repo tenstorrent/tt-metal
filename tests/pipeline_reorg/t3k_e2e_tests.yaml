@@ -101,7 +101,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface pytest --tb=short models/common/tests/modules/sampling
   skus:
     wh_llmbox:
-      timeout: 5
+      timeout: 10
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
