@@ -490,11 +490,11 @@ loads dst_reg[0] and dst_reg[1] into temporary LREGs (as expected).
 
 The compiler will not spill registers.  Exceeding the number of registers
 available will result in the cryptic: ``error: cannot store SFPU register
-(reigster spill?) - exiting!`` without a line number.
+(register spill?) - exiting!`` without a line number.
 
 The compiler does a reasonable job with lifetime analysis when assigning
 variables to registers.  Reloading or recalculating results helps the compiler
-free up and re-use registers and is a good way to correct a spilling error.
+free up and reuse registers and is a good way to correct a spilling error.
 
 Optimizer
 ---------
@@ -574,7 +574,7 @@ Register Spilling
 
 The compiler does not implement register spilling.  Since there are only 8 general purpose
 LRegs, running out of registers is not an uncommon occurrence.  If you see the
-following: ``error: cannot store SFPU register (reigster spill?) - exiting!``
+following: ``error: cannot store SFPU register (register spill?) - exiting!``
 you have most likely run out of registers.
 
 You can potentially spill registers by storing values to ``l_reg[]`` and
