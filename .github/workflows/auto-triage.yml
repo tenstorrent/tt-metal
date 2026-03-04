@@ -66,7 +66,7 @@ jobs:
           ref: ${{ inputs.run_url != '' && steps.get-run-ref.outputs.head_sha || github.ref }}
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@port-refactoring-23
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@port-refactoring-26
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
