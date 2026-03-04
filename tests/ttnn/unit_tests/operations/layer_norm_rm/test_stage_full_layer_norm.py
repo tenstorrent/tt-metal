@@ -69,5 +69,5 @@ def test_full_layer_norm(device, shape):
         torch_output.float(),
         expected.float(),
         rtol=0.05,
-        atol=0.2,
+        atol=0.05,
     ), f"Max diff: {(torch_output.float() - expected.float()).abs().max()}"

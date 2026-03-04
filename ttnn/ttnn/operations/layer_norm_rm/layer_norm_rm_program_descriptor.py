@@ -67,6 +67,7 @@ def create_program_descriptor(
     beta_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     epsilon: float = 1e-5,
+    bisect_phase: int = 99,
 ) -> ttnn.ProgramDescriptor:
     """
     Build the ProgramDescriptor for layer_norm_rm.
@@ -380,14 +381,19 @@ def create_program_descriptor(
     #   [1] Wt         - tiles per row
     compute_ct_args = [num_rows, Wt]
 
+    compute_defines = []
+    if bisect_phase != 99:
+        compute_defines.append(("BISECT_PHASE", str(bisect_phase)))
+
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=_COMPUTE_KERNEL,
         core_ranges=core_grid,
         compile_time_args=compute_ct_args,
+        defines=compute_defines,
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             math_approx_mode=False,
         ),
     )

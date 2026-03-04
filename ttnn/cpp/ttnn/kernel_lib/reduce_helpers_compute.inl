@@ -173,7 +173,9 @@ ALWI void reduce(
     }
 
     // Auto-detect FP32 dest accumulation mode from compile-time define
-    constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
+    // WORKAROUND: enforce_fp32_accumulation=true causes corrupted reduce output on WH B0
+    // (only 8/32 rows populated, wrong data placement). Keep fp32 DEST for other ops.
+    constexpr bool enforce_fp32_accumulation = false; // was: get_fp32_dest_acc_enabled();
 
     // Initialization
     reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb, output_cb);

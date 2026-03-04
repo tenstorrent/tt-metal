@@ -32,6 +32,7 @@ def layer_norm_rm(
     epsilon: float = 1e-5,
     *,
     memory_config: ttnn.MemoryConfig = None,
+    bisect_phase: int = 99,
 ) -> ttnn.Tensor:
     """
     Layer normalization on row-major interleaved tensors.
@@ -64,7 +65,9 @@ def layer_norm_rm(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(input_tensor, gamma, beta, output_tensor, epsilon)
+    program_descriptor = create_program_descriptor(
+        input_tensor, gamma, beta, output_tensor, epsilon, bisect_phase=bisect_phase
+    )
 
     # Output MUST be last in the list
     return ttnn.generic_op([input_tensor, gamma, beta, output_tensor], program_descriptor)
