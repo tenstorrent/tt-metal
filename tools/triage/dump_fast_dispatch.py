@@ -354,6 +354,7 @@ def run(args, context: Context):
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
         if dispatcher_core_data.kernel_name is not None and dispatcher_core_data.kernel_name in dispatcher_kernel_names:
             return (location, risc_name)
+        return None
 
     results = run_checks.run_per_core_check(
         lambda location, risc_name: get_dispatch_core_pair(location, risc_name, locations_to_check),
