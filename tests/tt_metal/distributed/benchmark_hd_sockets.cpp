@@ -562,13 +562,21 @@ void init_multichip_counters(benchmark::State& state) {
 
 // Returns true if the benchmark should proceed. Skips and returns false on failure.
 bool check_preconditions(
-    benchmark::State& state, MeshDevice& mesh_device, std::size_t page_size, std::size_t fifo_size) {
+    benchmark::State& state,
+    MeshDevice& mesh_device,
+    std::size_t page_size,
+    std::size_t fifo_size,
+    std::optional<std::size_t> total_data = std::nullopt) {
     if (!experimental::GetMemoryPinningParameters(mesh_device).can_map_to_noc) {
         state.SkipWithMessage("Mapping host memory to NOC is not supported on this system");
         return false;
     }
     if (page_size > fifo_size) {
         state.SkipWithMessage("page_size > fifo_size");
+        return false;
+    }
+    if (total_data.has_value() && *total_data < page_size) {
+        state.SkipWithMessage("total_data < page_size");
         return false;
     }
     return true;
@@ -590,7 +598,7 @@ std::optional<ThroughputBenchmarkContext> make_single_chip_throughput_context(
     std::size_t page_size,
     std::size_t fifo_size,
     std::size_t total_data) {
-    if (!check_preconditions(state, *mesh_device, page_size, fifo_size)) {
+    if (!check_preconditions(state, *mesh_device, page_size, fifo_size, total_data)) {
         return std::nullopt;
     }
 
@@ -619,7 +627,7 @@ std::optional<ThroughputBenchmarkContext> make_multichip_throughput_context(
     std::size_t page_size,
     std::size_t fifo_size,
     std::size_t total_data) {
-    if (!check_preconditions(state, *mesh_device, page_size, fifo_size)) {
+    if (!check_preconditions(state, *mesh_device, page_size, fifo_size, total_data)) {
         return std::nullopt;
     }
 
@@ -654,6 +662,7 @@ void BM_D2HSocketThroughput(benchmark::State& state) {
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto fifo_size = static_cast<std::size_t>(state.range(3));
     auto total_data = static_cast<std::size_t>(state.range(4));
+
     auto ctx = make_single_chip_throughput_context(
         state, fx.mesh_device, tray_id, asic_location, page_size, fifo_size, total_data);
     if (!ctx) {
@@ -746,6 +755,7 @@ void BM_D2HSocketMultiChipThroughput(benchmark::State& state) {
     auto fifo_size = static_cast<std::size_t>(state.range(1));
     auto page_size = static_cast<std::size_t>(state.range(2));
     auto total_data = static_cast<std::size_t>(state.range(3));
+
     auto ctx = make_multichip_throughput_context(state, fx.mesh_device, chip_index, page_size, fifo_size, total_data);
     if (!ctx) {
         return;
@@ -781,6 +791,7 @@ void BM_H2DSocketThroughput(benchmark::State& state) {
     auto total_data = static_cast<std::size_t>(state.range(4));
     auto mode_index = static_cast<int>(state.range(5));
     auto h2d_mode = static_cast<H2DMode>(mode_index);
+
     auto ctx = make_single_chip_throughput_context(
         state, fx.mesh_device, tray_id, asic_location, page_size, fifo_size, total_data);
     if (!ctx) {
