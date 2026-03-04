@@ -48,35 +48,43 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         core_range,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 4, .compile_args = {MEM_L1_UNCACHED_BASE}});
+            .num_threads_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE}});
 
     KernelHandle kernel_1 = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
-        CoreCoord(0, 0),
+        core_range,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
+            .num_threads_per_cluster = 2, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
 
     KernelHandle kernel_2 = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
+        CoreCoord(0, 0),
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + 2 * sizeof(int)}});
+
+    KernelHandle kernel_3 = experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         CoreCoord(1, 0),
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 4, .compile_args = {MEM_L1_UNCACHED_BASE + sizeof(int)}});
+            .num_threads_per_cluster = 2, .compile_args = {MEM_L1_UNCACHED_BASE + 2 * sizeof(int)}});
 
     SetRuntimeArgs(program, kernel_0, core_range, {1, 2});
-    SetRuntimeArgs(program, kernel_1, CoreCoord(0, 0), {3, 4});
-    SetRuntimeArgs(program, kernel_2, CoreCoord(1, 0), {5, 6});
+    SetRuntimeArgs(program, kernel_1, core_range, {3, 4});
+    SetRuntimeArgs(program, kernel_2, CoreCoord(0, 0), {5, 6});
+    SetRuntimeArgs(program, kernel_3, CoreCoord(1, 0), {7, 8});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    std::vector<uint32_t> result_core_0(2, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(0, 0), 0, sizeof(uint32_t) * 2, result_core_0);
+    std::vector<uint32_t> result_core_0(3, 0);
+    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(0, 0), 0, sizeof(uint32_t) * 3, result_core_0);
 
-    std::vector<uint32_t> result_core_1(2, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(1, 0), 0, sizeof(uint32_t) * 2, result_core_1);
+    std::vector<uint32_t> result_core_1(3, 0);
+    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(1, 0), 0, sizeof(uint32_t) * 3, result_core_1);
 
-    ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7}));
-    ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 11}));
+    ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
+    ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));
 }

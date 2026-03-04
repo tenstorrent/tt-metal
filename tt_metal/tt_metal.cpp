@@ -1606,10 +1606,8 @@ void UpdateDynamicCircularBufferAddress(
 
 namespace quasar {
 
-std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnClusterQuasar(
-    Program& program, const CoreCoord& cluster) {
-    const KernelGroup* kernel_group = program.impl().kernels_on_core(
-        cluster, MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
+    Program& program, const KernelGroup* kernel_group) {
     if (kernel_group == nullptr) {
         return {};
     }
@@ -1627,9 +1625,7 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnClusterQuasar(
     return processors_in_use;
 }
 
-bool DoesClusterHaveComputeKernelQuasar(Program& program, const CoreCoord& cluster) {
-    const KernelGroup* kernel_group = program.impl().kernels_on_core(
-        cluster, MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+bool DoesKernelGroupHaveComputeKernel(Program& program, const KernelGroup* kernel_group) {
     if (kernel_group == nullptr) {
         return false;
     }
@@ -1647,30 +1643,38 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
     Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
     std::set<ProcessorClassType> processors(
         enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
-    std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_cluster;
+    std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_kernel_group;
 
+    std::unordered_set<const KernelGroup*> kernel_groups;
     for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
-                    const std::set<DataMovementProcessor> dm_processors_in_use_on_cluster =
-                        GetDataMovementProcessorsInUseOnClusterQuasar(program, CoreCoord(x, y));
-                    dm_processors_in_use_per_cluster.push_back(dm_processors_in_use_on_cluster);
-                    for (const DataMovementProcessor dm_processor : dm_processors_in_use_on_cluster) {
-                        processors.erase(dm_processor);
-                    }
-                } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
-                    TT_FATAL(
-                        !DoesClusterHaveComputeKernelQuasar(program, CoreCoord(x, y)),
-                        "In Quasar, each cluster can only have a single compute kernel.");
-                }
+                const KernelGroup* kernel_group = program.impl().kernels_on_core(
+                    CoreCoord(x, y),
+                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                kernel_groups.insert(kernel_group);
             }
         }
     }
 
-    for (uint32_t i = 1; i < dm_processors_in_use_per_cluster.size(); i++) {
+    for (const KernelGroup* kernel_group : kernel_groups) {
+        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+            const std::set<DataMovementProcessor> dm_processors_in_use_on_kernel_group =
+                GetDataMovementProcessorsInUseOnKernelGroup(program, kernel_group);
+            dm_processors_in_use_per_kernel_group.push_back(dm_processors_in_use_on_kernel_group);
+            for (const DataMovementProcessor dm_processor : dm_processors_in_use_on_kernel_group) {
+                processors.erase(dm_processor);
+            }
+        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+            TT_FATAL(
+                !DoesKernelGroupHaveComputeKernel(program, kernel_group),
+                "In Quasar, each cluster can only have a single compute kernel.");
+        }
+    }
+
+    for (uint32_t i = 1; i < dm_processors_in_use_per_kernel_group.size(); i++) {
         TT_FATAL(
-            dm_processors_in_use_per_cluster[i] == dm_processors_in_use_per_cluster[i - 1],
+            dm_processors_in_use_per_kernel_group[i] == dm_processors_in_use_per_kernel_group[i - 1],
             "All clusters in {} must have the same data movement processors already in use to reserve {} new data "
             "movement processors per cluster.",
             core_ranges,
