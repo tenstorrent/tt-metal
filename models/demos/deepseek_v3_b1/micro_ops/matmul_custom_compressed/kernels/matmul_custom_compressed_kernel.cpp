@@ -31,6 +31,7 @@ void kernel_main() {
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("num_tiles_k");
+    constexpr uint32_t out_w = get_named_compile_time_arg_val("out_w");
 
 #if defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t cb_in0_num_pages = get_named_compile_time_arg_val("cb_in0_num_pages");
@@ -51,10 +52,10 @@ void kernel_main() {
     reconfig_data_format<false, true>(cb_in1, cb_in0);
     pack_reconfig_data_format<true>(cb_out);
 
-    // Init custom_mm (ct_dim=1, split_acc, dense_packing)
+    // Init custom_mm
     constexpr bool split_acc = true;
     constexpr bool dense_packing = true;
-    custom_mm_block_init_short<false, split_acc, dense_packing>(cb_in0, cb_in1, cb_out, 1);
+    custom_mm_block_init_short<false, split_acc, dense_packing>(cb_in0, cb_in1, cb_out, out_w);
 
     // Wait for inputs
     cb_wait_front(cb_in0, num_tiles_k);
@@ -74,17 +75,19 @@ void kernel_main() {
 
     volatile uint8_t* assign_ptr = reinterpret_cast<volatile uint8_t*>(assign_l1_addr);
 
-    // Reserve output (ct_dim=1, single tile)
-    cb_reserve_back(cb_out, 1);
+    // Reserve output tiles
+    cb_reserve_back(cb_out, out_w);
 
     tile_regs_acquire();
 
-    // Single call: custom_mm with per-tile format reconfig
-    compressed::custom_mm_compressed_block(assign_ptr, addr_in0, addr_in1, in0_face_r_dim, num_tiles_k, 0);
+    // Custom MM with per-tile format reconfig
+    compressed::custom_mm_compressed_block(assign_ptr, addr_in0, addr_in1, in0_face_r_dim, num_tiles_k, out_w, 0);
 
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile(0, cb_out, 0);
+    for (uint32_t w = 0; w < out_w; w++) {
+        pack_tile(w, cb_out, w);
+    }
     tile_regs_release();
 
     custom_mm_block_uninit<dense_packing>();
