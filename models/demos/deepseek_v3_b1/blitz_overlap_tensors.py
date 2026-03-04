@@ -151,10 +151,10 @@ class OverlappedTensor:
 
 
 def overlap_tensors(
-    tensors: list[list[tuple[torch.Tensor, OverlappedShardSpec]]],
+    tensors: list[list[tuple[str, torch.Tensor, OverlappedShardSpec]]],
     device: ttnn.Device,
     move_to_device: bool = True,
-) -> list[OverlappedTensor]:
+) -> dict[str, OverlappedTensor]:
     """Overlap a list of tensors into a single fused tensor.
 
     The fused tensor is always stored as WIDTH_SHARDED on the device
@@ -165,25 +165,24 @@ def overlap_tensors(
 
     Args:
         tensors: A list of "lanes".  Each lane is a list of
-            ``(torch.Tensor, OverlappedShardSpec)`` tuples that share
+            ``(name, tensor, spec)`` tuples that share
             the same core range set and are packed back-to-back within
             each core's shard.  Lanes must occupy disjoint core ranges.
         device: The mesh device to place the fused tensor on.
         move_to_device: If True (default), place the result on device.
 
     Returns:
-        A flat list of ``OverlappedTensor`` views, one per
-        ``(tensor, spec)`` pair across all lanes, in input order.
+        A dict of ``OverlappedTensor`` views, keyed by tensor name.
     """
 
     for lane in tensors:
         assert len(lane) > 0, "Lane must contain at least one tensor"
-        for tensor, spec in lane:
+        for _name, tensor, spec in lane:
             assert (
                 tuple(tensor.shape) == spec.raw_tensor_shape
             ), f"Tensor shape {tuple(tensor.shape)} does not match spec shape {spec.raw_tensor_shape}"
-            assert spec.core_range_set == lane[0][1].core_range_set, (
-                f"Core range set {spec.core_range_set} does not match {lane[0][1].core_range_set}, "
+            assert spec.core_range_set == lane[0][2].core_range_set, (
+                f"Core range set {spec.core_range_set} does not match {lane[0][2].core_range_set}, "
                 "all core range sets must be the same within a lane"
             )
             assert len(spec.tp_dim) == 2 and all(
@@ -203,20 +202,20 @@ def overlap_tensors(
         return cores
 
     for i, lane_a in enumerate(tensors):
-        cores_a = _core_set(lane_a[0][1].core_range_set)
+        cores_a = _core_set(lane_a[0][2].core_range_set)
         for lane_b in tensors[i + 1 :]:
-            cores_b = _core_set(lane_b[0][1].core_range_set)
+            cores_b = _core_set(lane_b[0][2].core_range_set)
             assert not cores_a & cores_b, "Lanes must have separate core range sets"
 
     mesh_shape = (device.shape[0], device.shape[1])
     mesh_rows, mesh_cols = mesh_shape
     num_devices = mesh_rows * mesh_cols
 
-    needed_shard_bytes = max_shard_bytes([[spec for _, spec in lane] for lane in tensors], mesh_shape)
+    needed_shard_bytes = max_shard_bytes([[spec for _, _, spec in lane] for lane in tensors], mesh_shape)
     assert needed_shard_bytes % 4 == 0, "shard bytes must be UINT32-aligned"
     uint32_per_shard = needed_shard_bytes // 4
 
-    total_cores = sum(lane[0][1].core_range_set.num_cores() for lane in tensors)
+    total_cores = sum(lane[0][2].core_range_set.num_cores() for lane in tensors)
 
     byte_offsets: dict[int, int] = {}
 
@@ -225,10 +224,10 @@ def overlap_tensors(
         for col in range(mesh_cols):
             dev_packed = bytearray()
             for lane in tensors:
-                num_cores = lane[0][1].core_range_set.num_cores()
+                num_cores = lane[0][2].core_range_set.num_cores()
                 for core_idx in range(num_cores):
                     shard_data = bytearray()
-                    for tensor, spec in lane:
+                    for _name, tensor, spec in lane:
                         h_idx = spec._dim_slice_idx(0, row, col, mesh_shape)
                         w_idx = spec._dim_slice_idx(1, row, col, mesh_shape)
                         per_dev_h = spec.per_device_height(mesh_shape)
@@ -261,7 +260,7 @@ def overlap_tensors(
         row_tensors = [torch.cat([t.reshape(1, -1) for t in row_list], dim=1) for row_list in per_device_raw]
         combined = torch.cat(row_tensors, dim=0)
 
-    combined_crs_ranges = [cr for lane in tensors for cr in lane[0][1].core_range_set.ranges()]
+    combined_crs_ranges = [cr for lane in tensors for cr in lane[0][2].core_range_set.ranges()]
     combined_crs = ttnn.CoreRangeSet(combined_crs_ranges)
     shard_spec = ttnn.ShardSpec(
         combined_crs,
@@ -289,24 +288,22 @@ def overlap_tensors(
         mesh_mapper=mesh_mapper,
     )
 
-    result = []
+    result = {}
     for lane in tensors:
-        for tensor, spec in lane:
+        for name, tensor, spec in lane:
             ts = spec.logical_tensor_shape or (
                 spec.per_device_height(mesh_shape),
                 spec.per_device_width(mesh_shape),
             )
-            result.append(
-                OverlappedTensor(
-                    fused_tensor=fused,
-                    tensor_shape=ts,
-                    shard_shape=spec.shard_shape(mesh_shape),
-                    core_range_set=spec.core_range_set,
-                    dtype=spec.dtype,
-                    tile_shape=(spec.tile_h, spec.tile_w),
-                    byte_offset=byte_offsets[id(spec)],
-                    total_size=spec.shard_bytes,
-                )
+            result[name] = OverlappedTensor(
+                fused_tensor=fused,
+                tensor_shape=ts,
+                shard_shape=spec.shard_shape(mesh_shape),
+                core_range_set=spec.core_range_set,
+                dtype=spec.dtype,
+                tile_shape=(spec.tile_h, spec.tile_w),
+                byte_offset=byte_offsets[id(spec)],
+                total_size=spec.shard_bytes(mesh_shape),
             )
 
     return result
