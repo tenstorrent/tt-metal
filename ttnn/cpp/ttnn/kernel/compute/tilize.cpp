@@ -7,7 +7,17 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-// #include "api/debug/dprint.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
+
+// Provide stub functions if debug printing is not enabled
+#if defined(COMPILE_FOR_TRISC) && (!defined(DEBUG_PRINT_ENABLED) || defined(FORCE_DPRINT_OFF))
+namespace tt::compute::common {
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    // No-op when debug printing is disabled
+}
+}  // namespace tt::compute::common
+#endif
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
