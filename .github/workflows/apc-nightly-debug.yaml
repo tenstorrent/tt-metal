@@ -1,6 +1,6 @@
-name: "nightly debug run"
+name: "apc nightly debug run"
 
-run-name: "nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
 
 on:
   schedule:
@@ -22,11 +22,11 @@ on:
       run-wormhole-tests:
         default: true
         type: boolean
-        description: "Run Wormhole tests"
+        description: "Run Wormhole (N300) tests"
       run-blackhole-tests:
         default: true
         type: boolean
-        description: "Run Blackhole tests"
+        description: "Run Blackhole (P100/P150) tests"
 
 permissions:
   actions: read
@@ -86,9 +86,9 @@ jobs:
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  # Ubuntu 22.04 test jobs - both Wormhole and Blackhole share artifacts
+  # Ubuntu 22.04 test jobs - both APC and Blackhole share artifacts
   nightly-debug-ubuntu-22:
-    name: wormhole nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    name: apc nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
     uses: ./.github/workflows/all-post-commit-workflows.yaml
@@ -123,9 +123,9 @@ jobs:
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
 
-  # Ubuntu 24.04 test jobs - both Wormhole and Blackhole share artifacts
+  # Ubuntu 24.04 test jobs - both APC and Blackhole share artifacts
   nightly-debug-ubuntu-24:
-    name: wormhole nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    name: apc nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
     uses: ./.github/workflows/all-post-commit-workflows.yaml
