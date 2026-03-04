@@ -1864,6 +1864,21 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 auto receiver_buffer_index = ack_counter.get_buffer_index();
                 tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
                     local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+                auto payload_size_bytes = packet_header->payload_size_bytes;
+                auto misc_val_in_packet = *reinterpret_cast<uint32_t*>(
+                    uint32_t(packet_header) + ((payload_size_bytes >> 1) + (payload_size_bytes >> 2)));
+                auto misc_val_in_packet2 =
+                    *reinterpret_cast<uint32_t*>(uint32_t(packet_header) + (payload_size_bytes >> 1));
+                auto misc_val_in_packet3 =
+                    *reinterpret_cast<uint32_t*>(uint32_t(packet_header) + (payload_size_bytes >> 2));
+                if (misc_val_in_packet == 0xfefefefe || misc_val_in_packet2 == 0xfefefefe ||
+                    misc_val_in_packet3 == 0xfefefefe) {
+                    // detected corruption
+                    hung = true;
+                    WATCHER_RING_BUFFER_PUSH(0xBAD07777);
+                    WATCHER_RING_BUFFER_PUSH(uint32_t(packet_header));
+                    return true;
+                }
                 receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
