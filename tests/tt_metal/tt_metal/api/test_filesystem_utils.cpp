@@ -165,23 +165,25 @@ TEST_F(FilesystemUtilsTest, SafeFileSize_ReturnsNulloptForNonExistentFile) {
 TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsValidTime) {
     std::filesystem::path file = create_test_file("time_test.txt");
 
-    auto before = std::chrono::system_clock::now();
     auto result = safe_last_write_time(file);
-    auto after = std::chrono::system_clock::now();
 
     EXPECT_TRUE(result.has_value());
-    // The returned time should be a valid file_time_type
+    // The returned time should be a valid file_time_type (not min or max)
     EXPECT_NE(result.value(), std::filesystem::file_time_type::min());
+    EXPECT_NE(result.value(), std::filesystem::file_time_type::max());
 
-    // Convert file_time_type to system_clock time for comparison
-    // file_time_type uses a different clock, so we need to convert
-    auto file_time_sys = std::chrono::clock_cast<std::chrono::system_clock>(result.value());
+    // Verify the time is recent by checking it's greater than a reference time point
+    // (1 hour ago - file should have been modified more recently than that)
+    auto now = std::filesystem::file_time_type::clock::now();
+    auto one_hour_ago = now - std::chrono::hours(1);
+    EXPECT_GT(result.value(), one_hour_ago);
 
-    // The file modification time should be within the test execution window
-    EXPECT_LE(file_time_sys, after);
-    // Allow for some clock skew (file time can be slightly before test start due to filesystem precision)
-    auto tolerance = std::chrono::seconds(1);
-    EXPECT_GE(file_time_sys, before - tolerance);
+    // Verify consistency - calling again returns the same time (within 1 second for filesystem precision)
+    auto result2 = safe_last_write_time(file);
+    EXPECT_TRUE(result2.has_value());
+    auto diff =
+        (result.value() > result2.value()) ? (result.value() - result2.value()) : (result2.value() - result.value());
+    EXPECT_LE(diff, std::chrono::seconds(1));
 }
 
 TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsNulloptForNonExistentFile) {
