@@ -26,10 +26,10 @@ void kernel_main() {
     cb_reserve_back(output_cb, 1);
     uint32_t l1_addr = get_write_ptr(output_cb);
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
-    ptr[0] = input_accessor.page_size;
-    ptr[1] = output_accessor.page_size;
+    ptr[0] = input_accessor.get_aligned_page_size();
+    ptr[1] = output_accessor.get_aligned_page_size();
 
     uint64_t dram_noc_addr = output_accessor.get_noc_addr(0);
-    noc_async_write(l1_addr, dram_noc_addr, output_accessor.page_size);
+    noc_async_write(l1_addr, dram_noc_addr, output_accessor.get_aligned_page_size());
     noc_async_write_barrier();
 }

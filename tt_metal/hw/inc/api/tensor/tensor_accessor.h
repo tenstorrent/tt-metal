@@ -66,18 +66,20 @@ public:
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
-        dspec_instance(std::forward<DSpec_>(dspec)), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+        dspec_instance(std::forward<DSpec_>(dspec)),
+        bank_base_address(bank_base_address_in),
+        aligned_page_size(page_size_in) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
     TensorAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
-        bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+        bank_base_address(bank_base_address_in), aligned_page_size(page_size_in) {}
 
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
-        dspec_instance(args), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
+        dspec_instance(args), bank_base_address(bank_base_address_in), aligned_page_size(page_size_in) {}
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -94,6 +96,9 @@ public:
             return dspec_instance.value;
         }
     }
+
+    FORCE_INLINE
+    const uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
     // NOC APIs
     FORCE_INLINE
@@ -238,6 +243,8 @@ public:
     }
 
 private:
+    const uint32_t bank_base_address = 0;
+    const uint32_t aligned_page_size = 0;
     // NOC APIs
     FORCE_INLINE
     std::uint64_t get_noc_addr(
@@ -247,7 +254,7 @@ private:
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
                                          : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
-        return bank_start + bank_base_address + (page_mapping.bank_page_offset * page_size) + offset;
+        return bank_start + bank_base_address + (page_mapping.bank_page_offset * aligned_page_size) + offset;
     }
 
     PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
@@ -278,9 +285,6 @@ private:
     uint16_t get_bank_y(uint16_t packed_xy_coord) const { return packed_xy_coord & 0xFF; }
 
 public:
-    const uint32_t bank_base_address = 0;
-    const uint32_t page_size = 0;
-
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
@@ -317,13 +321,18 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         const uint32_t bank_base_address_in,
         const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
         InterleavedAddrGen<IsDram>(
-            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}) {}
+            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}),
+        aligned_page_size(page_size_in) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
         InterleavedAddrGen<IsDram>(
-            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}) {}
+            {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}),
+        aligned_page_size(page_size_in) {}
+
+    FORCE_INLINE
+    const uint32_t get_aligned_page_size() const { return aligned_page_size; }
 
     // Locality APIs
     FORCE_INLINE
@@ -377,6 +386,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         uint32_t start_page_id, uint32_t end_page_id, uint8_t noc = noc_index) const {
         return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, end_page_id, noc);
     }
+
+private:
+    const uint32_t aligned_page_size = 0;
 };
 #endif
 
