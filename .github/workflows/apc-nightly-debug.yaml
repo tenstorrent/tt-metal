@@ -87,7 +87,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
 
   # Ubuntu 22.04 test jobs - both APC and Blackhole share artifacts
-  nightly-debug-ubuntu-22:
+  wormhole-nightly-debug-ubuntu-22:
     name: apc nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
@@ -117,14 +117,12 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
-      run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
-      run-blackhole-multi-card-fast-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-22.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
 
   # Ubuntu 24.04 test jobs - both APC and Blackhole share artifacts
-  nightly-debug-ubuntu-24:
+  wormhole-nightly-debug-ubuntu-24:
     name: apc nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
@@ -154,8 +152,6 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
-      run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
-      run-blackhole-multi-card-fast-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-24.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.wheel-artifact-name }}
