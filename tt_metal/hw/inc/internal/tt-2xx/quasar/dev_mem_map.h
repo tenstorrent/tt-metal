@@ -40,19 +40,19 @@
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 #define MEM_LOCAL_BASE 0x0802000
 
-// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
-// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
 // NUM_L1_BANKS)
 #define MEM_BANK_OFFSET_SIZE 1024
 
 /////////////
 // Firmware/kernel code holes
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
-#define MEM_TRISC_FIRMWARE_SIZE (1024 * 2)
+#define MEM_TRISC_FIRMWARE_SIZE (1024 * 4)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
-#define MEM_DM_GLOBAL_SIZE (1024 * 1)
+#define MEM_DM_GLOBAL_SIZE (1024 * 2)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 3)
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
@@ -61,10 +61,10 @@
 #define NUM_DM_CORES 8
 #define NUM_TRISC_CORES 4
 
-#define MEM_TRISC0_FIRMWARE_SIZE 2048
-#define MEM_TRISC1_FIRMWARE_SIZE 2048
-#define MEM_TRISC2_FIRMWARE_SIZE 2048
-#define MEM_TRISC3_FIRMWARE_SIZE 2048
+#define MEM_TRISC0_FIRMWARE_SIZE 4096
+#define MEM_TRISC1_FIRMWARE_SIZE 4096
+#define MEM_TRISC2_FIRMWARE_SIZE 4096
+#define MEM_TRISC3_FIRMWARE_SIZE 4096
 
 #define MEM_TRISC0_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC1_KERNEL_SIZE (24 * 1024)
@@ -84,7 +84,7 @@
 #define MEM_L1_ARC_FW_SCRATCH_SIZE 16
 
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-// time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
+// time. If one port on the recipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 // Each noc has 16B to store value written out by inline writes.
@@ -97,7 +97,7 @@
 #define MEM_MAILBOX_BASE 16
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 39408
+#define MEM_MAILBOX_SIZE 57424
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 

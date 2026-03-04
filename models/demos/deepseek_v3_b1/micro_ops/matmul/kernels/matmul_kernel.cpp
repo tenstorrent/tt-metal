@@ -68,6 +68,7 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

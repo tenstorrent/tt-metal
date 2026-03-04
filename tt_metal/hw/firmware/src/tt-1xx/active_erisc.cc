@@ -25,6 +25,7 @@
 #include "internal/ethernet/erisc.h"
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 
 uint8_t noc_index;
@@ -157,7 +158,7 @@ extern "C" __attribute__((naked, used)) void resume_from_reset() {
 
 // After running the base firmware, some core state (for erisc0) seems broken, so jumps into the kernel may occasionally
 // hang. Resetting the core fixes the issue. We need to save all the GPR and local memory to L1, because local memory is
-// cleared on reset. ERISC1 is responsible for triggering the reset, which willl start execution in resume_from_reset.
+// cleared on reset. ERISC1 is responsible for triggering the reset, which will start execution in resume_from_reset.
 extern "C" __attribute__((naked)) void enter_reset(void) {
     __asm__ volatile(
         // Save contents to stack
@@ -324,7 +325,7 @@ int __attribute__((noinline)) main(void) {
 
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
-                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];

@@ -188,6 +188,7 @@ void run_single_core_copy_block_matmul_partials(
          false});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec_bf16;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec_bf16);
@@ -227,7 +228,7 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
                 .num_tiles = 8,
                 .reader_ublock = 8,
                 .writer_ublock = 8,
-                .compute_ublock = 8,
+                .compute_ublock = 4,  // compute_ublock must be <= get_dest_max_tiles (4 for SyncHalf+FP32)
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(

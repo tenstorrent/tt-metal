@@ -58,11 +58,12 @@ def compute_forwarder_scratch_size(
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
-def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
+@pytest.mark.parametrize("position_id", [500, 1500, 2500, 3500], ids=["pos500", "pos1500", "pos2500", "pos3500"])
+def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     num_devices = 4
     num_cores = 8
     l_width = 512
@@ -74,13 +75,15 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     intermediate_shape = [batch_size, (l_width + ms_width) * num_cores]
 
     scale_value = 1.0
+    per_device_chunk_size = 1024
 
     topology = ttnn.Topology.Torus
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
+    final_output_layout = ttnn.ROW_MAJOR_LAYOUT
     tile = ttnn.Tile((8, 32))
 
     forwarder_cores = [ttnn.CoreCoord(6, 8), ttnn.CoreCoord(6, 9)]
@@ -119,6 +122,12 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     l_data_per_device = [torch.randn(l_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
     ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
 
+    # Derive position_mask from position_id for threshold check
+    # (matches how the kernel determines device validity: position_id >= device_idx * chunk)
+    position_mask = torch.tensor(
+        [1.0 if position_id >= d * per_device_chunk_size else 0.0 for d in range(num_devices)],
+        dtype=torch.bfloat16,
+    )
     m_data_per_device = []
     s_data_per_device = []
     for d in range(num_devices):
@@ -137,7 +146,9 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, _, _ = SdpaReduceToAll.golden(l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value)
+    ref_l, _, _ = SdpaReduceToAll.golden(
+        l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value, position_id, per_device_chunk_size
+    )
     ref_l = ref_l.to(torch.bfloat16)
 
     l_data_all = torch.stack(l_data_per_device, dim=0)
@@ -165,7 +176,7 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     output_l_mesh = ttnn.from_torch(
         torch.zeros_like(l_data_all),
         device=submesh_device,
-        layout=layout,
+        layout=final_output_layout,
         tile=tile,
         dtype=dtype,
         memory_config=mem_config_l,
@@ -249,6 +260,23 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
             mesh_mapper=mesh_mapper2,
         )
 
+    # ========================================================================
+    # Position ID tensor: HEIGHT_SHARDED, int32, replicated across mesh
+    # Each worker core gets [1, 1] shard containing the position_id value.
+    # This allows position_id to be updated between calls (e.g., trace replay).
+    # ========================================================================
+    position_data = torch.full((num_cores, 1), position_id, dtype=torch.int32)
+    pos_shard_spec = ttnn.ShardSpec(shard_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR)
+    pos_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, pos_shard_spec)
+    position_id_tensor_mesh = ttnn.from_torch(
+        position_data,
+        device=submesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=pos_mem_config,
+        mesh_mapper=mesh_mapper2,
+    )
+
     semaphores = [ttnn.create_global_semaphore(submesh_device, shard_grid, 0) for _ in range(2)]
     ttnn.synchronize_device(submesh_device)
 
@@ -266,6 +294,8 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
         input_forwarder_cores=forwarder_cores,
         scatter_dest_tensor_mesh=scatter_dest_mesh,
         scatter_dest_grid=scatter_grid,
+        position_id_tensor_mesh=position_id_tensor_mesh,
+        per_device_chunk_size=per_device_chunk_size,
     )
     ttnn.synchronize_device(submesh_device)
 
@@ -275,8 +305,10 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     output_l_torch = ttnn.to_torch(output_mesh, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
     out_l_root = output_l_torch[0]
 
+    max_diff_check = 0.07 if (position_mask.sum() > 1.0).item() else 0.13
+
     max_diff = torch.max(torch.abs(out_l_root.flatten().float() - ref_l.flatten().float())).item()
-    match = max_diff < 0.07
+    match = max_diff < max_diff_check
 
     logger.info(f"L tensor match: {match}, max_diff: {max_diff:.4f}")
     assert match, f"L tensor mismatch! Max diff: {max_diff}"
@@ -301,6 +333,6 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
                 diff = torch.max(torch.abs(actual - expected)).item()
                 scatter_max_diff = max(scatter_max_diff, diff)
 
-        scatter_match = scatter_max_diff < 0.07
+        scatter_match = scatter_max_diff < max_diff_check
         logger.info(f"Scatter output match: {scatter_match}, max_diff: {scatter_max_diff:.4f}")
         assert scatter_match, f"Scatter output mismatch! Max diff: {scatter_max_diff}"

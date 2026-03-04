@@ -412,7 +412,7 @@ inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t
 
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // time. If one port on the recipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
 
@@ -1018,7 +1018,8 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, num_dests);
@@ -1029,7 +1030,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, 0);
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
@@ -1491,7 +1492,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 /**
  * The stateful NOC commands provide granular control over NOC register programming by writing
  * only a subset of registers for each transaction. This approach leverages the fact that many
- * transactions re-use certain values (e.g. length, coordinates) while varying others.
+ * transactions reuse certain values (e.g. length, coordinates) while varying others.
  *
  * This design provides significant advantages over previous stateful APIs:
  * - Fine-grained control: Users can specify exactly which registers to update per transaction
@@ -1501,7 +1502,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  *
  * The flags parameter uses a bitmask approach to specify which registers to program.
  * Making template functions with a long list of booleans makes understanding what registers
- * are being set tedious. This is an attempt to pack that data in a way thats ~easy to visually parse.
+ * are being set tedious. This is an attempt to pack that data in a way that's ~easy to visually parse.
  *
  * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
  * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)

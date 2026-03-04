@@ -16,7 +16,6 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/events.hpp"
-#include <tt-metalium/event.hpp>
 
 using namespace tt::tt_metal;
 
@@ -25,8 +24,6 @@ using namespace tt::tt_metal;
 namespace ttnn::events {
 
 void py_module_types(nb::module_& mod) {
-    nb::class_<Event>(mod, "event");
-    nb::class_<MultiDeviceEvent>(mod, "multi_device_event");
     nb::class_<MeshEvent>(mod, "MeshEvent")
         .def("__repr__", [](const MeshEvent& self) {
             std::ostringstream str;
@@ -49,7 +46,7 @@ void py_module(nb::module_& mod) {
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         nb::arg("device_range") = nb::none(),
         R"doc(
-            Records the completion of commands on this CQ, preceeding this call.
+            Records the completion of commands on this CQ, preceding this call.
 
             Args:
                 mesh_device (ttnn.MeshDevice*): The device on which the event is being recorded.
@@ -58,7 +55,7 @@ void py_module(nb::module_& mod) {
                 device_range (ttnn.MeshCoordinateRange, optional): The range of devices to record completion for. Defaults to all devices.
 
             Returns:
-                MeshEvent: The event used to record completion of preceeding commands.
+                MeshEvent: The event used to record completion of preceding commands.
         )doc");
 
     mod.def(

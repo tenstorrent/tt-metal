@@ -78,7 +78,7 @@ class QwenImagePipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
-        is_fsdp: bool = False,  # This only appies to the transformer model.
+        is_fsdp: bool = False,  # This only applies to the transformer model.
         dynamic_load_encoder: bool = True,  # Set to true if it wouldn't fit with the transformer given the configuration
         dynamic_load_vae: bool = False,  # Set to true if it wouldn't fit with the transformer given the configuration
     ) -> None:
@@ -241,18 +241,15 @@ class QwenImagePipeline:
         if self.transformers[idx].is_loaded():
             return
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             tt_model=self.transformers[idx],
-            torch_state_dict=self._transformer_state_dict,
+            get_torch_state_dict=lambda: self._transformer_state_dict,
             model_name=self._checkpoint_name,
             subfolder="transformer",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._submesh_devices[idx].shape),
-            dtype="bf16",
             is_fsdp=self._is_fsdp,
-        ):
-            logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformers[idx].load_torch_state_dict(self._transformer_state_dict)
+        )
 
         ttnn.synchronize_device(self._submesh_devices[idx])
 
@@ -369,7 +366,7 @@ class QwenImagePipeline:
         dynamic_load_vae: bool | None = None,
     ) -> QwenImagePipeline:
         default_config = {
-            # The default cofigurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
+            # The default configurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
             # The encoder is currently hardcoded to always be FSDP as it is the most memory efficient configuration with little to no performance penalty.
             (2, 4): {
                 "cfg_config": (2, 0),

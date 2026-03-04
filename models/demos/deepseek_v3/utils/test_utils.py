@@ -283,6 +283,7 @@ def run_reference_with_attention(
     hf_config: PretrainedConfig,
     mode: str,
     zeroed_cache: bool,
+    collect_output: bool = True,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
     """
     Run reference model with attention, using memory optimizations for large sequences.
@@ -390,7 +391,7 @@ def run_reference_with_attention(
         device = activation.device
         num_chunks = (max_position_id_or_seq_len + chunk_size - 1) // chunk_size
 
-        output_chunks = []
+        output_chunks: list[torch.Tensor] = [] if collect_output else []
         current_cache = deepcopy(deepcopied_cache)
 
         with torch.no_grad():
@@ -446,19 +447,21 @@ def run_reference_with_attention(
                 )
 
                 chunk_out, current_cache = extract_output_and_cache(chunk_output)
-
-                output_chunks.append(chunk_out)
+                if collect_output:
+                    output_chunks.append(chunk_out)
 
                 # Free intermediate tensors to reduce memory usage
                 del activation_chunk, position_ids_chunk, mask_chunk, chunk_output
 
-            # Concatenate all chunk outputs
-            model_output_tensor = torch.cat(output_chunks, dim=1)
-
-            # Clean up chunk list
-            del output_chunks
-
-            out = model_output_tensor
+            if collect_output:
+                # Concatenate all chunk outputs
+                model_output_tensor = torch.cat(output_chunks, dim=1)
+                # Clean up chunk list
+                del output_chunks
+                out = model_output_tensor
+            else:
+                # Some callers only need the cache and can skip storing large outputs.
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
             output_cache = current_cache
     else:
         # Standard processing for shorter sequences or decode mode
@@ -478,6 +481,8 @@ def run_reference_with_attention(
             )
 
             out, output_cache = extract_output_and_cache(model_output_raw)
+            if not collect_output:
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
 
     return out, input_cache, output_cache
 
@@ -643,9 +648,45 @@ def get_test_weight_config(
     cache_path: Path,
     mesh_device: ttnn.Device,
     force_recalculate: bool,
+    *,
+    test_name: str | None = None,
+    real_weights: bool = True,
+    layer_id: str | int | None = None,
 ) -> Any:
-    """Get the weight config, either by loading from cache or recalculating."""
-    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    """Get the weight config, either by loading from cache or recalculating.
+
+    When ``test_name`` is provided the cache sub-directory is derived from
+    weight-relevant parameters only (``test_name``, ``ModuleClass``,
+    ``real_weights``, ``layer_id``).  Runtime parameters that do **not**
+    affect weight conversion (mode, seq_len, batch_size, position_ids, …)
+    are intentionally excluded so that e.g. decode and prefill variants share
+    the same cached weights.
+
+    ``num_hidden_layers`` and ``mesh_shape`` are already captured by
+    :func:`get_weight_config` in its internal sub-path, so they are not
+    needed here either.
+
+    When ``test_name`` is ``None`` the function falls back to
+    ``PYTEST_CURRENT_TEST`` for backward compatibility.
+
+    Args:
+        test_name: Test file name (e.g. ``"test_embedding"``).
+        real_weights: ``True`` when using real model weights,
+            ``False`` for randomly-initialised weights.
+        layer_id: Identifies which layer / sub-module the weights come from.
+            Typically a module-path string (``"model.layers.0.mlp"``), an
+            integer layer index, or a descriptive qualifier for random weights
+            (``"kv_lora_rank"``).  ``None`` when no further distinction is
+            needed.
+    """
+    if test_name is not None:
+        parts = [test_name, ModuleClass.__name__, "real" if real_weights else "random"]
+        if layer_id is not None:
+            parts.append(str(layer_id))
+        weight_config_id = "/".join(parts)
+    else:
+        weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
+    per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )

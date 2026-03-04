@@ -170,18 +170,19 @@ void kernel_main() {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-    constexpr uint32_t in0_cb_id = in0_transpose_tile ? tt::CBIndex::c_10 : tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
+    constexpr uint32_t in0_cb_id = in0_transpose_tile ? get_named_compile_time_arg_val("cb_in0_transposed")
+                                                      : get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-    // When in0 needs to be transposed, the original data is read from c_0 (in0_transpose_cb_id),
-    // transposed, and the result is written to c_10 (in0_cb_id), which is then used as input for
-    // the matmul call.
-    constexpr uint32_t in0_transpose_cb_id = tt::CBIndex::c_0;
+    // When in0 needs to be transposed, the original data is read from cb_in0 (in0_transpose_cb_id),
+    // transposed, and the result is written to cb_in0_transposed (in0_cb_id), which is then used
+    // as input for the matmul call.
+    constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
@@ -277,11 +278,11 @@ void kernel_main() {
                                 0;  // start at 0, each call to matmul_block internally increments dst_index
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
+                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
                                 matmul_block(
                                     in0_cb_id,

@@ -122,8 +122,6 @@ DataFormat get_single_unpack_dst_format(
                 (unpack_conditional_dst_format == DataFormat::Float32),
             "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
-    } else if (is_bfp_format(src_format)) {
-        dst_format = is_exp_b_format(src_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
     }
 
     return dst_format;
@@ -243,7 +241,7 @@ DataFormat get_single_pack_src_format(
     } else if (int_fpu_en) {
         TT_THROW("Integer math is not supported");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
-        // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
+        // If output if float, then pack_src_format is Float32 as sfpu output if Float32
         if (tt::is_integer_format(data_format)) {
             pack_src_format = data_format;
         } else {

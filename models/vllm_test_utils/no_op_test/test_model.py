@@ -4,14 +4,18 @@
 
 import torch
 
+from models.vllm_test_utils.generative_base import GenerativeTestModelBase
 
-class DummyNoOpModel:
+
+class DummyNoOpModel(GenerativeTestModelBase):
     """
     Dummy model class which does nothing for prefill and decode forward.
     Assumes sampling on device. Used to measure the host overheads from vLLM.
     """
 
-    def __init__(self, mesh_device, max_batch_size, vocab_size):
+    def __init__(self, mesh_device, max_batch_size, vocab_size, **kwargs):
+        # Accept arbitrary kwargs so the signature supports `vllm_config=...`
+        # (used by vLLM interface checks) without impacting TT initialization.
         self.mesh_device = mesh_device
         self.max_batch_size = max_batch_size
         self.vocab_size = vocab_size
@@ -32,9 +36,3 @@ class DummyNoOpModel:
         tokens = kwargs.get("tokens")
         assert tokens.shape[0] == self.max_batch_size, "Batch size mismatch"
         return self.decode_out
-
-    def allocate_kv_cache(self, *args, **kwargs):
-        return None
-
-    def warmup_model_prefill(self, *args, **kwargs):
-        pass

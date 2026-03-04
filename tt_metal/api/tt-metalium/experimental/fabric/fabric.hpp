@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -34,11 +33,11 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
 
-// Used to get the run-time args for estabilishing connection with the fabric router.
-// The API appends the connection specific run-time args to the set of exisiting
+// Used to get the run-time args for establishing connection with the fabric router.
+// The API appends the connection specific run-time args to the set of existing
 // run-time args for the worker programs, which allows the workers to conveniently
 // build connection management object(s) using the run-time args.
-// It is advised to call the API once all the other run-time args for the prgram are
+// It is advised to call the API once all the other run-time args for the program are
 // determined/pushed to keep things clean and avoid any extra arg management.
 //
 // Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
@@ -122,12 +121,26 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 tt::tt_fabric::Topology get_fabric_topology();
 
+struct FabricEriscDatamoverKernelConfig {
+    tt::tt_metal::Program& program;
+    const std::string& kernel_path;
+    const tt::tt_metal::CoreCoord& eth_core;
+    tt::tt_metal::DataMovementProcessor risc_id;
+    tt::tt_metal::NOC noc_id;
+    const std::vector<uint32_t>& compile_time_args;
+    const std::unordered_map<std::string, uint32_t>& named_compile_time_args;
+    const std::vector<uint32_t>& runtime_args;
+    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level;
+};
+
+tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
+
 /**
  * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the
- * available routing planes, num_routing_planes can be left unspecifed.
+ * available routing planes, num_routing_planes can be left unspecified.
  * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
  *
  * Return value: void

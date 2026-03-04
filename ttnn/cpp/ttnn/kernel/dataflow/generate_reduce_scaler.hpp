@@ -8,10 +8,11 @@
 
 // Tile is assumed to have 16-bit elements
 // Scaler is assumed to be a 16-bit value double packed into a u32
+template <bool half_tile = false>
 FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
     cb_reserve_back(cb_id, 1);
 
-    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
+    constexpr uint32_t num_zeros_reads = (half_tile ? 1024 : 2048) / MEM_ZEROS_SIZE;
     static_assert(num_zeros_reads > 0, "num_zeros_reads must be greater than 0");
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t write_addr = get_write_ptr(cb_id);
@@ -27,7 +28,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
     noc_async_read_barrier();
 
     if (scaler != 0) {
-        for (int k = 0; k < 4; ++k) {
+        for (int k = 0; k < (half_tile ? 2 : 4); ++k) {
             uint32_t idx = k << 7;
             for (int j = 0; j < 8; ++j) {
                 ptr[idx + j] = scaler;
@@ -39,7 +40,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
 }
 template <bool needs_zeroing = true>
 FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
-    // This is much faster but WILL NOT WORK IN BLACKHOLE since it assumes 32B allignment noc reads are allowed, done
+    // This is much faster but WILL NOT WORK IN BLACKHOLE since it assumes 32B alignment noc reads are allowed, done
     // for llama effort
     cb_reserve_back(cb_id, 1);
     uint32_t write_addr_base = get_write_ptr(cb_id);

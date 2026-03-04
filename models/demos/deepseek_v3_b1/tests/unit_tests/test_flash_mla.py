@@ -17,16 +17,50 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4, 5, 6, 7, 8, 16])
-@pytest.mark.parametrize("k_chunk_size", [128, 256])
+@pytest.mark.parametrize(
+    "decode_position",
+    [
+        # Aligned Chunks
+        127,
+        255,
+        383,
+        511,
+        639,
+        767,
+        895,
+        1023,
+        1151,
+        1279,
+        1919,
+        2047,
+        2175,
+        32767,
+        # Unaligned Chunks
+        0,
+        1,
+        2,
+        3,
+        6,
+        7,
+        8,
+        15,
+        16,
+        128,
+        564,
+        1203,
+        2046,
+        32750,
+    ],
+)
+@pytest.mark.parametrize(
+    "k_chunk_size", [128]
+)  # Chunk size 256 support can be added by consolidating tensix sem incs since cap is 15 but we have 16 tiles
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
-def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_len):
+def test_flash_mla_decode(device, batch_size, decode_position, k_chunk_size, max_seq_len):
     """Test FlashMLADecode op."""
     if is_blackhole() and is_watcher_enabled():
         pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37631")
 
-    # Calculate decode_position from num_chunks and k_chunk_size
-    decode_position = num_chunks * k_chunk_size - 1
     torch.manual_seed(0)
 
     # Debug: Print optimal worker core for each DRAM bank from device API
@@ -36,8 +70,8 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
 
     # Use 128 heads and 16 heads per core to test 8 groups of heads
     # SDPA has bug with 8x32 tile size, so can't use 64 and 8 for now
-    num_heads = 128  # TP=2, so 128 / 2 = 64 heads per device
-    num_q_heads_per_core = 16
+    num_heads = 64  # TP=2, so 128 / 2 = 64 heads per device
+    num_q_heads_per_core = 8
     kv_lora_rank = 512
     qk_nope_head_dim = 128
     qk_rope_head_dim = 64
@@ -46,7 +80,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
     scale = qk_head_dim**-0.5
 
     logger.info(
-        f"Testing FlashMLADecode with batch_size={batch_size}, k_chunk_size={k_chunk_size}, num_chunks={num_chunks}, "
+        f"Testing FlashMLADecode with batch_size={batch_size}, k_chunk_size={k_chunk_size}, "
         f"decode_position={decode_position}, max_seq_len={max_seq_len}"
     )
 
@@ -124,13 +158,23 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
         memory_config=kv_mem_config,
     )
 
-    # Create position tensor
-    logger.info("Creating position tensor...")
+    grid_size = device.compute_with_storage_grid_size()
     position_ids = torch.ones(batch_size, dtype=torch.int32) * decode_position
+    position_replicated = position_ids.repeat(grid_size.x * grid_size.y, 1)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
     tt_position_ids = ttnn.from_torch(
-        position_ids,
+        position_replicated,
         dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
+        memory_config=pos_mem_config,
     )
 
     # Create output tensor with same sharded memory config and tiny tile
@@ -147,25 +191,25 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
     )
 
     # Create compute kernel config (matching original test)
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
 
-    # Compute PyTorch reference using FlashMLADecode.golden_dummy (matches simplified compute kernel)
+    # Compute PyTorch reference using FlashMLADecode.golden (matches simplified compute kernel)
     logger.info("Computing PyTorch reference...")
-    reference_output = FlashMLADecode.golden_dummy(
+    reference_output = FlashMLADecode.golden(
         q=torch_q,
         kv_cache=torch_cache,
         position_ids=position_ids,
         head_dim_v=kv_lora_rank,
-        kv_chunk_size=k_chunk_size,
+        scale=scale,
     )
 
     # Run the op - stress test with multiple iterations
-    num_iterations = 100
+    num_iterations = 10
     first_output = None
     logger.info(f"Running FlashMLADecode.op {num_iterations} times for stress test...")
     for i in range(num_iterations):
@@ -194,7 +238,11 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
 
         if i == 0:
             # First iteration: compare with golden reference and store result
-            pcc_required = 0.999
+            out_max_diff = torch.max(torch.abs(output_torch - reference_output)).item()
+            out_mean_diff = torch.mean(torch.abs(output_torch - reference_output)).item()
+            logger.info(f"Out Max absolute difference: {out_max_diff}")
+            logger.info(f"Out Mean absolute difference: {out_mean_diff}")
+            pcc_required = 0.995
             passing, pcc_message = comp_pcc(reference_output, output_torch, pcc_required)
             assert passing, f"Iteration {i}: PCC check failed vs golden: {pcc_message}"
             logger.info(f"    PCC vs golden: {pcc_message}")

@@ -53,8 +53,11 @@ class T5TokenizerEncoderPair:
 
         self._encoder = self._load_encoder(checkpoint, use_torch=use_torch) if enabled else None
 
+    def load_torch_model(self, checkpoint: str) -> T5EncoderModel:
+        return T5EncoderModel.from_pretrained(checkpoint)
+
     def _load_encoder(self, checkpoint: str, *, use_torch: bool) -> T5Encoder | T5EncoderModel:
-        torch_model = T5EncoderModel.from_pretrained(checkpoint)
+        torch_model = self.load_torch_model(checkpoint)
 
         if use_torch:
             return torch_model
@@ -79,17 +82,14 @@ class T5TokenizerEncoderPair:
             parallel_config=self._parallel_config,
         )
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             tt_model=model,
-            torch_state_dict=torch_model.state_dict(),
+            get_torch_state_dict=torch_model.state_dict,
             model_name=checkpoint,
             subfolder="",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
-            dtype="bf16",
-        ):
-            logger.info("loading T5 encoder from torch state...")
-            model.load_torch_state_dict(torch_model.state_dict())
+        )
 
         return model
 
@@ -169,7 +169,7 @@ def _get_t5_prompt_embeds(
             if attention_mask is not None
             else None
         )
-        tt_hidden_states = text_encoder(prompt=tt_tokens, attention_mask=tt_attention_mask, device=mesh_device)
+        tt_hidden_states = text_encoder(prompt=tt_tokens, attention_mask=tt_attention_mask)
         tt_prompt_embeds = tt_hidden_states[-1]
 
         prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])

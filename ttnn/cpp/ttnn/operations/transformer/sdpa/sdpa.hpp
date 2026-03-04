@@ -8,6 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn {
 namespace operations::transformer {
@@ -91,7 +92,8 @@ struct ExecuteRingJointAttention {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
         CoreCoord ccl_core_grid_offset,
         std::optional<float> scale = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 };
 
 struct ExecuteFlashMLAPrefill {
@@ -99,6 +101,7 @@ struct ExecuteFlashMLAPrefill {
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         uint32_t head_dim_v,
+        const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
         const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
         bool is_causal = true,
         std::optional<float> scale = std::nullopt,
