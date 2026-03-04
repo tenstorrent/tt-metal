@@ -277,11 +277,30 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
+    // Host code is responsible for determining matmul configuration
+    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    const uint32_t qk_in0_block_w = DHt;
+
+    auto [qk_out_subblock_h, qk_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+
+    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
+    // Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
+    // fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
+    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
+    // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
+    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
+    const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_attention_sink &&
+                                       sliding_window_size.value_or(0) == 0 && !is_chunked && !fp32_dest_acc_en &&
+                                       qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 &&
+                                       !streaming_mask_unsupported;
+
+    const bool lightweight_mask = use_streaming_compute && use_padded_mask;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t mask_tiles = lightweight_mask ? 1 : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -300,13 +319,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
     log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
 
-    // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    const uint32_t qk_in0_block_w = DHt;
-
-    auto [qk_out_subblock_h, qk_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
-
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
@@ -320,16 +332,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
-    // Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
-    // fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
-    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
-    // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
-    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
-    const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_attention_sink &&
-                                       sliding_window_size.value_or(0) == 0 && !is_chunked && !fp32_dest_acc_en &&
-                                       qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 &&
-                                       !streaming_mask_unsupported;
     log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
@@ -470,6 +472,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
+        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -581,9 +584,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
-                                .set_page_size(tt::CBIndex::c_3, mask_tile_size);
+        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+        // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
+        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
+        tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
+        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
+        auto c_in3_config =
+            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
+                .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
 
