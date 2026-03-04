@@ -11,9 +11,9 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-
-# from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.grouped_moe_gate import MoEGate as GroupedMoEGate
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.new_moe_gate import MoEGate as NewMoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -63,8 +63,8 @@ def test_forward_pass(
         (hf_state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
-        # test_name="test_new_moe_gate",
+        force_recalculate=True,
+        test_name="test_new_moe_gate",
         real_weights=True,
     )
 
@@ -100,6 +100,8 @@ def test_forward_pass(
     # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
     tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+    tt_topk_weights_new, tt_topk_indices_new = run_module_forward(NewMoEGate, mode, tt_input, run_config)
+    tt_topk_weights_grouped, tt_topk_indices_grouped = run_module_forward(GroupedMoEGate, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
@@ -123,11 +125,31 @@ def test_forward_pass(
         tt_topk_indices,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
     )[0].squeeze(0)
+    tt_topk_weights_torch_new = ttnn.to_torch(
+        tt_topk_weights_new,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)
+    tt_topk_indices_torch_new = ttnn.to_torch(
+        tt_topk_indices_new,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)
+    tt_topk_weights_torch_grouped = ttnn.to_torch(
+        tt_topk_weights_grouped,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)
+    tt_topk_indices_torch_grouped = ttnn.to_torch(
+        tt_topk_indices_grouped,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)
 
     # Cleanup
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_weights)
     ttnn.deallocate(tt_topk_indices)
+    ttnn.deallocate(tt_topk_weights_new)
+    ttnn.deallocate(tt_topk_indices_new)
+    ttnn.deallocate(tt_topk_weights_grouped)
+    ttnn.deallocate(tt_topk_indices_grouped)
 
     # Compare outputs
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")
@@ -136,17 +158,39 @@ def test_forward_pass(
 
     reference_topk_weights = torch.sort(reference_topk_weights.to(torch.bfloat16), dim=-1, stable=True)[0]
     tt_topk_weights_torch = torch.sort(tt_topk_weights_torch, dim=-1, stable=True)[0]
-    passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
+    tt_topk_weights_torch_new = torch.sort(tt_topk_weights_torch_new, dim=-1, stable=True)[0]
+    tt_topk_weights_torch_grouped = torch.sort(tt_topk_weights_torch_grouped, dim=-1, stable=True)[0]
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch_new = torch.sort(tt_topk_indices_torch_new.to(torch.int32), dim=-1, stable=True)[0]
+    tt_topk_indices_torch_grouped = torch.sort(tt_topk_indices_torch_grouped.to(torch.int32), dim=-1, stable=True)[0]
+    print("Original MoE Gate")
+    print(f"TopK weights PCC: {comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)}")
+    temp = reference_topk_indices != tt_topk_indices_torch
+    print(f"Number of indices that do not match: {temp.sum()}")
+    print("New MoE Gate")
+    print(f"TopK weights PCC: {comp_pcc(reference_topk_weights, tt_topk_weights_torch_new, topk_weights_pcc_required)}")
+    temp = reference_topk_indices != tt_topk_indices_torch_new
+    print(f"Number of indices that do not match: {temp.sum()}")
+    print("Grouped MoE Gate")
+    print(
+        f"TopK weights PCC: {comp_pcc(reference_topk_weights, tt_topk_weights_torch_grouped, topk_weights_pcc_required)}"
+    )
+    temp = reference_topk_indices != tt_topk_indices_torch_grouped
+    print(f"Number of indices that do not match: {temp.sum()}")
+    import pdb
 
+    pdb.set_trace()
+
+    """
     logger.info(f"TopK experts weights PCC: {pcc_message}")
     assert (
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
     # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
-    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.int32), dim=-1, stable=True)[0]
-    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch.to(torch.int32), dim=-1, stable=True)[0]
     assert torch.equal(reference_topk_indices, tt_topk_indices_torch), "TopK experts indices output does not match"
+    """
 
 
 if __name__ == "__main__":

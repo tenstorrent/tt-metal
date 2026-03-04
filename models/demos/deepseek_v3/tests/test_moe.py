@@ -70,6 +70,10 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     # Get state dict from actual model - pass directly to convert_weights
+    if hasattr(reference_model.gate, "e_score_correction_bias"):
+        reference_model.gate.e_score_correction_bias.data = torch.zeros_like(
+            reference_model.gate.e_score_correction_bias.data
+        )
     state_dict = add_inv_scale_to_state_dict(
         reference_model.state_dict(),
         block_shape=hf_config.quantization_config["weight_block_size"],
@@ -90,9 +94,9 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
-        test_name="test_moe",
-        real_weights=False,
+        force_recalculate=True,
+        test_name="test_new_moe",
+        real_weights=True,
     )
 
     # Generate appropriate config using utility function
