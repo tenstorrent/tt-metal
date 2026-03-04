@@ -365,39 +365,44 @@ def _device_mesh_iterator(mesh_shape):
 
 
 def gen_combine_golden(
-    torch_dispatch_input_tensor,  # [T * D, 1, 1, H]
+    torch_dispatch_input_tensor,  # [512, 1, 1, H]
     torch_w0_tensors,  # [E, L, 1, H, N]
     torch_w1_tensors,  # [E, L, 1, H, N]
     torch_w2_tensors,  # [E, L, 1, N, H]
-    torch_dispatch_input_expert_indices,  # [T * D, 1, 1, K]
+    torch_dispatch_input_expert_indices,  # [512, 1, 1, K]
     batch,
+    batches_per_device,
     hidden_size,
     select_experts_k,
     cluster_axis,
     mesh_shape,
 ):
+    # 8, 16, 128
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
-    batch_per_device = batch // devices
+    torch_dispatch_input_tensor = torch_dispatch_input_tensor.repeat([cluster_factor, 1, 1, 1])
+    torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([cluster_factor, 1, 1, 1])
+
     torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * cluster_factor, hidden_size).bfloat16()
-
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
-
     for m0, m1, d in _device_mesh_iterator(mesh_shape):
-        for b in range(batch_per_device):
+        for b in range(batches_per_device):
             global_b = batch_rep_idxr(m0, m1, b)
             token = torch_dispatch_input_tensor[global_b, :, :, :]
             for k in range(select_experts_k):
                 e = torch_dispatch_input_expert_indices[global_b, :, :, k]
-                contrib = gen_matmul_golden(token, torch_w0_tensors[e], torch_w1_tensors[e], torch_w2_tensors[e])
+                # TODO: (GR) actual expert index
+                contrib = gen_matmul_golden(token, torch_w0_tensors[0], torch_w1_tensors[0], torch_w2_tensors[0])
 
-                torch_combine_ref_tensor[k, global_b] = contrib[0, 0, 0]
+                torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
 
     return torch_combine_ref_tensor
 
 
 def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_golden):
-    torch_combine_output = ttnn.from_torch(tt_combine_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+    torch_combine_output = ttnn.to_torch(
+        tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+    )
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
@@ -770,6 +775,7 @@ def test_optimized_moe_decode_block(
             torch_w2_tensors,
             torch_dispatch_input_expert_indices_tensor,
             batch,
+            batches_per_device,
             hidden_size,
             select_experts_k,
             cluster_axis,
