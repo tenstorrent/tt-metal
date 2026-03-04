@@ -140,8 +140,8 @@ static inline void append_accessors(
     const std::vector<ttnn::Tensor>& output_tensors,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const ttnn::Tensor& ag_input_tensor,
-    const std::optional<const Tensor>& ternary_a_tensor = std::nullopt,
-    const std::optional<const Tensor>& ternary_b_tensor = std::nullopt,
+    const std::optional<const ttnn::Tensor>& ternary_a_tensor = std::nullopt,
+    const std::optional<const ttnn::Tensor>& ternary_b_tensor = std::nullopt,
     bool is_injector_core = false) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
@@ -169,7 +169,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-    const std::vector<Tensor>& mm_output_tensors,
+    const std::vector<ttnn::Tensor>& mm_output_tensors,
     const ttnn::Tensor& ag_output_tensor,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const ttnn::MeshCoordinate& sender_device_coord,
@@ -187,8 +187,8 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
-    const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_b) {
+    const std::optional<const ttnn::Tensor>& fused_ternary_input_a,
+    const std::optional<const ttnn::Tensor>& fused_ternary_input_b) {
     auto* device = input_tensor.device();
 
     if (!config.has_value()) {
@@ -509,7 +509,7 @@ all_gather_minimal_matmul_async_factory_helper(
         // Workaround for LLK bug (https://github.com/tenstorrent/tt-llk/issues/1338)
         // - If ternary_b / gate is float32 then use unary_bcast (row broadcast) + mul_binary_tile (accurate)
         // - If ternary_b / gate is bfloat16 then use mul_tiles_bcast (row broadcast) (workaround)
-        if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
+        if (fused_ternary_input_b.value().dtype() == ttnn::DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
     }
