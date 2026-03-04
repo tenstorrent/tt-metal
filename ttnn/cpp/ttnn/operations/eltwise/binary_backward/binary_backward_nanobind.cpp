@@ -278,13 +278,12 @@ void bind_binary_backward_bias_gelu(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor_a,
-                const ttnn::Tensor& input_tensor_b,
-                const std::string& parameter_b,
-                const std::optional<MemoryConfig>& memory_config) {
-                return ttnn::bias_gelu_bw(grad_tensor, input_tensor_a, input_tensor_b, parameter_b, memory_config);
-            },
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                const std::string&,
+                const std::optional<MemoryConfig>&>(&ttnn::bias_gelu_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -292,13 +291,12 @@ void bind_binary_backward_bias_gelu(
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor,
-                float parameter_a,
-                const std::string& parameter_b,
-                const std::optional<MemoryConfig>& memory_config) {
-                return ttnn::bias_gelu_bw(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
-            },
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                float,
+                const std::string&,
+                const std::optional<MemoryConfig>&>(&ttnn::bias_gelu_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
@@ -465,13 +463,12 @@ void bind_binary_bw_mul(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const Tensor& grad_tensor,
-                const Tensor& input_tensor_a,
-                const float scalar,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::mul_bw(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                float,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>>(&ttnn::mul_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -479,22 +476,14 @@ void bind_binary_bw_mul(
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& other_tensor,
-                const std::vector<bool>& are_required_outputs,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad,
-                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::mul_bw(
-                    grad_tensor,
-                    input_tensor,
-                    other_tensor,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::vector<bool>&,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::mul_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -504,12 +493,8 @@ void bind_binary_bw_mul(
             nb::arg("input_grad") = nb::none(),
             nb::arg("other_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ComplexTensor& grad_tensor,
-                const ComplexTensor& input_tensor_a,
-                const ComplexTensor& input_tensor_b,
-                const MemoryConfig& memory_config) {
-                return ttnn::mul_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
-            },
+            nb::overload_cast<const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&>(
+                &ttnn::mul_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -565,13 +550,12 @@ void bind_binary_bw_add(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const Tensor& grad_tensor,
-                const Tensor& input_tensor_a,
-                const float scalar,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::add_bw(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                float,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>>(&ttnn::add_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -579,22 +563,14 @@ void bind_binary_bw_add(
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& other_tensor,
-                const std::vector<bool>& are_required_outputs,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad,
-                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::add_bw(
-                    grad_tensor,
-                    input_tensor,
-                    other_tensor,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::vector<bool>&,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::add_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -604,13 +580,12 @@ void bind_binary_bw_add(
             nb::arg("input_grad") = nb::none(),
             nb::arg("other_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ComplexTensor& grad_tensor,
-                const ComplexTensor& input_tensor_a,
-                const ComplexTensor& input_tensor_b,
-                float alpha,
-                const std::optional<MemoryConfig>& memory_config) {
-                return ttnn::add_bw(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
-            },
+            nb::overload_cast<
+                const ComplexTensor&,
+                const ComplexTensor&,
+                const ComplexTensor&,
+                float,
+                const std::optional<MemoryConfig>&>(&ttnn::add_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -667,13 +642,12 @@ void bind_binary_bw_sub(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const Tensor& grad_tensor,
-                const Tensor& input_tensor_a,
-                const float scalar,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::sub_bw(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                float,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::sub_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -681,22 +655,14 @@ void bind_binary_bw_sub(
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& other_tensor,
-                const std::vector<bool>& are_required_outputs,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad,
-                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::sub_bw(
-                    grad_tensor,
-                    input_tensor,
-                    other_tensor,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::vector<bool>&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<Tensor>&>(&ttnn::sub_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -706,13 +672,12 @@ void bind_binary_bw_sub(
             nb::arg("input_grad") = nb::none(),
             nb::arg("other_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ComplexTensor& grad_tensor,
-                const ComplexTensor& input_tensor_a,
-                const ComplexTensor& input_tensor_b,
-                float alpha,
-                const std::optional<MemoryConfig>& memory_config) {
-                return ttnn::sub_bw(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
-            },
+            nb::overload_cast<
+                const ComplexTensor&,
+                const ComplexTensor&,
+                const ComplexTensor&,
+                float,
+                const std::optional<MemoryConfig>&>(&ttnn::sub_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -771,14 +736,13 @@ void bind_binary_bw_div(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const Tensor& grad_tensor,
-                const Tensor& input_tensor_a,
-                const float scalar,
-                const std::optional<std::string>& rounding_mode,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::div_bw(grad_tensor, input_tensor_a, scalar, rounding_mode, memory_config, input_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                float,
+                const std::optional<std::string>&,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>>(&ttnn::div_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -787,24 +751,15 @@ void bind_binary_bw_div(
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& other_tensor,
-                const std::optional<std::string>& rounding_mode,
-                const std::vector<bool>& are_required_outputs,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad,
-                const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::div_bw(
-                    grad_tensor,
-                    input_tensor,
-                    other_tensor,
-                    rounding_mode,
-                    are_required_outputs,
-                    memory_config,
-                    input_grad,
-                    other_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::optional<std::string>&,
+                const std::vector<bool>&,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::div_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -815,12 +770,8 @@ void bind_binary_bw_div(
             nb::arg("input_grad") = nb::none(),
             nb::arg("other_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ComplexTensor& grad_tensor,
-                const ComplexTensor& input_tensor_a,
-                const ComplexTensor& input_tensor_b,
-                const MemoryConfig& memory_config) {
-                return ttnn::div_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
-            },
+            nb::overload_cast<const ComplexTensor&, const ComplexTensor&, const ComplexTensor&, const MemoryConfig&>(
+                &ttnn::div_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -872,24 +823,16 @@ void bind_binary_backward_remainder(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const Tensor& grad_tensor,
-                const Tensor& input_tensor_a,
-                const float scalar,
-                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return ttnn::remainder_bw(grad_tensor, input_tensor_a, scalar, memory_config);
-            },
+            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(
+                &ttnn::remainder_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor_a,
-                const ttnn::Tensor& input_tensor_b,
-                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return ttnn::remainder_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
-            },
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+                &ttnn::remainder_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -941,24 +884,15 @@ void bind_binary_backward_fmod(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const Tensor& grad_tensor,
-                const Tensor& input_tensor_a,
-                const float scalar,
-                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return ttnn::fmod_bw(grad_tensor, input_tensor_a, scalar, memory_config);
-            },
+            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::fmod_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor_a,
-                const ttnn::Tensor& input_tensor_b,
-                const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return ttnn::fmod_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
-            },
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+                &ttnn::fmod_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -1007,34 +941,22 @@ void bind_binary_backward_assign(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::assign_bw(grad_tensor, input_tensor, memory_config, input_grad);
-            },
+            nb::overload_cast<const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, std::optional<Tensor>>(
+                &ttnn::assign_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_a_grad") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& grad_tensor,
-                const ttnn::Tensor& input_tensor_a,
-                const ttnn::Tensor& input_tensor_b,
-                const std::vector<bool>& are_required_outputs,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& input_a_grad,
-                const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-                return ttnn::assign_bw(
-                    grad_tensor,
-                    input_tensor_a,
-                    input_tensor_b,
-                    are_required_outputs,
-                    memory_config,
-                    input_a_grad,
-                    input_b_grad);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::vector<bool>&,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::assign_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),

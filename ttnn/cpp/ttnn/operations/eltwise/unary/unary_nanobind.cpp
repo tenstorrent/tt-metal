@@ -2211,6 +2211,7 @@ void py_module(nb::module_& mod) {
 
     // Other unaries (unary chain operations)
     bind_softplus(mod);
+    bind_xielu(mod);
     bind_tanh_like<"tanh", &ttnn::tanh>(mod);
     bind_tanh_like<"tanhshrink", &ttnn::tanhshrink>(mod);
     bind_sigmoid_accurate(mod);
