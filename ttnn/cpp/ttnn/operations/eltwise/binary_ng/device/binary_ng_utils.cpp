@@ -118,6 +118,12 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
                 root_ng,
                 is_where_op ? "eltwise_where_sfpu_row_bcast.cpp"
                             : (is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp"));
+        case KernelName::ComputeColBcastNg:
+            return fmt::format(
+                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_col_bcast.cpp" : "eltwise_binary_col_bcast.cpp");
+        case KernelName::ComputeScalarBcastNg:
+            return fmt::format(
+                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_scalar_bcast.cpp" : "eltwise_binary_scalar_bcast.cpp");
         case KernelName::ComputeRowColBcastNg:
             return fmt::format(
                 compute,
