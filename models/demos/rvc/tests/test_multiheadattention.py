@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.rvc.torch_impl.synthesizer.attentions import MultiHeadAttention as TorchMultiHeadAttention
+from models.demos.rvc.tt_impl.synthesizer.attentions import MultiHeadAttention as TTMultiHeadAttention
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("window_size", [None, 4])
+def test_multiheadattention(device, window_size):
+    torch.manual_seed(0)
+
+    batch_size = 1
+    channels = 16
+    out_channels = 16
+    n_heads = 4
+    input_length = 64
+    torch_mha = TorchMultiHeadAttention(
+        channels=channels,
+        out_channels=out_channels,
+        n_heads=n_heads,
+        window_size=window_size,
+    ).eval()
+
+    torch_input = torch.randn(batch_size, channels, input_length, dtype=torch.float32)
+    torch_context = (
+        torch_input.clone()
+        if window_size is not None
+        else torch.randn(batch_size, channels, input_length, dtype=torch.float32)
+    )
+    torch_output = torch_mha(torch_input, torch_context)
+
+    tt_mha = TTMultiHeadAttention(
+        device=device,
+        channels=channels,
+        out_channels=out_channels,
+        n_heads=n_heads,
+        window_size=window_size,
+    )
+
+    parameters = {
+        "encoder.attn.conv_q.weight": torch_mha.conv_q.weight,
+        "encoder.attn.conv_q.bias": torch_mha.conv_q.bias,
+        "encoder.attn.conv_k.weight": torch_mha.conv_k.weight,
+        "encoder.attn.conv_k.bias": torch_mha.conv_k.bias,
+        "encoder.attn.conv_v.weight": torch_mha.conv_v.weight,
+        "encoder.attn.conv_v.bias": torch_mha.conv_v.bias,
+        "encoder.attn.conv_o.weight": torch_mha.conv_o.weight,
+        "encoder.attn.conv_o.bias": torch_mha.conv_o.bias,
+    }
+    if window_size is not None:
+        parameters["encoder.attn.emb_rel_k"] = torch_mha.emb_rel_k
+        parameters["encoder.attn.emb_rel_v"] = torch_mha.emb_rel_v
+    tt_mha.load_parameters(parameters=parameters, prefix="encoder.attn.")
+
+    tt_input = ttnn.from_torch(
+        torch_input.to(torch.bfloat16).permute(0, 2, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_context = ttnn.from_torch(
+        torch_context.to(torch.bfloat16).permute(0, 2, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    tt_output = tt_mha(tt_input, tt_context)
+    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
+    tt_output_torch = tt_output_torch.reshape(batch_size, -1, out_channels)
+    tt_output_torch = tt_output_torch.permute(0, 2, 1)
+
+    assert_with_pcc(torch_output, tt_output_torch, pcc=0.99)
