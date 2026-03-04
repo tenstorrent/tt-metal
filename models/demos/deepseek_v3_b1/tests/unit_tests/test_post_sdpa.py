@@ -207,33 +207,24 @@ def test_post_sdpa(
     # ========================================================================
     torch.manual_seed(0)
 
-    # Weights are shared across all devices (replicated per TP slice)
-    # Weights1 (kv_b2_proj): [512, 8192] per TP slice
-    torch_weights1 = torch.randn((K1, intermediate), dtype=torch.bfloat16)
-    # Weights2 (o_proj): [8192, 7168] per TP slice
-    torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
+    # kv_b2_proj: [512, 8192 * num_tp] — full TP width, split along output (heads) dim per column
+    torch_kv_b2_proj_weights = torch.randn((K1, intermediate * num_tp), dtype=torch.bfloat16)
+    # o_proj: [8192 * num_tp, 7168] — full TP height, split along input (heads) dim per column
+    torch_o_proj_weights = torch.randn((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
-    # TP-expanded tensors for BlitzDecodeWeights (replicate across TP so golden stays unchanged)
     torch_kv_b1_proj_dummy = torch.zeros(
         (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
     )
-    torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
-    torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
     torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
     torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
     torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
     torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
     torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
 
-    # Input per device: [1, 512]
+    # One input per mesh row: [num_matmul1_cores * num_tp, K1] covers all TP columns in the row
     device_inputs = []
-    device_input_replicated = []  # For sharding
-    for device_idx in range(num_devices):
-        torch_input_single = torch.randn((M, K1), dtype=torch.bfloat16)
-        device_inputs.append(torch_input_single)
-        # Replicate for matmul1 cores
-        torch_input = torch_input_single.repeat(num_matmul1_cores, 1)  # [64, 512]
-        device_input_replicated.append(torch_input)
+    for _ in range(mesh_rows):
+        device_inputs.append(torch.randn((num_matmul1_cores * num_tp, K1), dtype=torch.bfloat16))
 
     # Residual tensor (optional, shared across devices)
     if fuse_residual_add:
@@ -245,29 +236,28 @@ def test_post_sdpa(
     # Compute golden reference
     # ========================================================================
     if ccl_enabled:
-        # Per-pair CCL all-reduce: each row of devices forms an independent pair
-        num_pairs = mesh_rows
-        devices_per_pair = mesh_cols
+        # Per-pair CCL all-reduce: input is [num_matmul1_cores * num_tp, K1] covering all TP columns.
+        # Run the batched golden directly with the full weights.
         torch_expected_per_pair = []
-        for pair_idx in range(num_pairs):
-            pair_inputs = []
-            for col in range(devices_per_pair):
-                device_idx = pair_idx * devices_per_pair + col
-                pair_inputs.append(device_inputs[device_idx].float())
+        for row_inp in device_inputs:
             golden = PostSDPA.golden(
-                pair_inputs,
-                torch_weights1.float(),
-                torch_weights2.float(),
+                row_inp.float(),
+                torch_kv_b2_proj_weights.float(),
+                torch_o_proj_weights.float(),
                 torch_residual.float() if torch_residual is not None else None,
             ).bfloat16()
             torch_expected_per_pair.append(golden)
         logger.info(f"Golden output shape (per-pair all-reduced): {torch_expected_per_pair[0].shape}")
     else:
-        # Per-device matmul only: input @ W1 @ W2
+        # Per-device matmul only: slice the row input and weights for each TP column
         torch_expected_per_device = []
-        for inp in device_inputs:
-            result = (inp.float() @ torch_weights1.float() @ torch_weights2.float()).bfloat16()
-            torch_expected_per_device.append(result)
+        for row_idx, row_inp in enumerate(device_inputs):
+            for col in range(mesh_cols):
+                inp_slice = row_inp[col * num_matmul1_cores : (col + 1) * num_matmul1_cores].float()
+                w1_slice = torch_kv_b2_proj_weights[:, col * intermediate : (col + 1) * intermediate].float()
+                w2_slice = torch_o_proj_weights[col * K2 : (col + 1) * K2, :].float()
+                result = PostSDPA.golden(inp_slice, w1_slice, w2_slice).bfloat16()
+                torch_expected_per_device.append(result)
         logger.info(f"Golden output shape (per-device): {torch_expected_per_device[0].shape}")
 
     # ========================================================================
@@ -287,8 +277,8 @@ def test_post_sdpa(
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    # Concatenate per-device inputs for mesh tensor
-    mesh_input_torch = torch.cat(device_input_replicated, dim=0)  # [num_devices * 64, 512]
+    # Stack row inputs: [mesh_rows * num_matmul1_cores * num_tp, K1]; sharded across all devices
+    mesh_input_torch = torch.cat(device_inputs, dim=0)  # [mesh_rows * num_matmul1_cores * num_tp, K1]
     ttnn_input = ttnn.from_torch(
         mesh_input_torch,
         device=submesh,
@@ -683,16 +673,14 @@ def test_post_sdpa_with_sdpa_phase(
     # ========================================================================
     torch.manual_seed(0)
 
-    # Weights are shared across all devices (replicated per TP slice)
-    torch_weights1 = torch.randn((K1, intermediate), dtype=torch.bfloat16)
-    torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
+    # kv_b2_proj: [512, 8192 * num_tp] — full TP width, split along output (heads) dim per column
+    torch_kv_b2_proj_weights = torch.randn((K1, intermediate * num_tp), dtype=torch.bfloat16)
+    # o_proj: [8192 * num_tp, 7168] — full TP height, split along input (heads) dim per column
+    torch_o_proj_weights = torch.randn((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
-    # TP-expanded tensors for BlitzDecodeWeights
     torch_kv_b1_proj_dummy = torch.zeros(
         (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
     )
-    torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
-    torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
     torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
     torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
     torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
@@ -781,8 +769,7 @@ def test_post_sdpa_with_sdpa_phase(
         return result
 
     # Step 3: CCL all-reduce across row pairs (cluster_axis=1).
-    # Each row has mesh_cols devices. Both devices in a row pair compute their own
-    # scatter+matmul1+gather+matmul2 (using their column's SDPA output), then sum.
+    # Each column (TP rank) uses its own weight slice; results are summed across the pair.
     num_pairs = mesh_rows
     torch_expected_per_pair = []
     for pair_idx in range(num_pairs):
@@ -791,11 +778,10 @@ def test_post_sdpa_with_sdpa_phase(
             l_reduced = sdpa_l_reduced_per_col[col]
             device_result = scatter_matmul_gather(
                 l_reduced,
-                torch_weights1.float(),
-                torch_weights2.float(),
+                torch_kv_b2_proj_weights[:, col * intermediate : (col + 1) * intermediate].float(),
+                torch_o_proj_weights[col * K2 : (col + 1) * K2, :].float(),
             )
             pair_result += device_result
-        # Add residual if provided
         if torch_residual is not None:
             pair_result += torch_residual.float()
         torch_expected_per_pair.append(pair_result.bfloat16())
