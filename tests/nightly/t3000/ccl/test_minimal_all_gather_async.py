@@ -336,7 +336,7 @@ def run_all_gather_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["mesh_1,8"])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
@@ -346,10 +346,8 @@ def run_all_gather_impl(
             2,
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            # True,
-            # 30,
+            True,
+            30,
             None,
             None,
             1.0,
@@ -377,10 +375,8 @@ def run_all_gather_impl(
             1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            # True,
-            # 35,
+            True,
+            35,
             None,
             None,
             1.0,
@@ -413,10 +409,8 @@ def run_all_gather_impl(
             2,
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            # True,
-            # 30,
+            True,
+            30,
             None,
             None,
             1.0,
@@ -439,10 +433,8 @@ def run_all_gather_impl(
             1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            False,
-            1,
-            # True,
-            # 35,
+            True,
+            35,
             None,
             None,
             1.0,
@@ -461,7 +453,7 @@ def run_all_gather_impl(
             ),
         ),
     ],
-    ids=["row-major sharded", "tiled sharded", "row-major L1 interleaved", "tiled L1 interleaved"],
+    ids=["RM_sharded", "TILED_sharded", "RM_interleaved", "TILED_interleaved"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
