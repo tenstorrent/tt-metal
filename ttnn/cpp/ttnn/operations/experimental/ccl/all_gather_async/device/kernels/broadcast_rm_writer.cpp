@@ -58,7 +58,6 @@ public:
     }
 
     void send(uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
-
         auto packet_read_addr = cb_out_page_start;
         auto dest_addr = tensor_page_addr;
         constexpr uint32_t packets_per_outpage = out_page_size / packet_size;
@@ -120,7 +119,6 @@ public:
         scatter_header.noc_address[scatter_header.chunk_count++] = tensor_page_addr;
 
         if (scatter_header.chunk_count == num_out_pages_per_packet) {
-
             noc_async_writes_flushed();
             fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                 fabric_connection,
