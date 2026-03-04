@@ -9,7 +9,7 @@ Stage kinds (Embedding, LMHead, Passthrough) live in stage.py.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
@@ -22,29 +22,8 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageContext,
     StageKind,
 )
+from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    DeepSeekV3DenseLayerWeights,
-    DeepSeekV3EmbeddingLayerWeights,
-    DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
-)
-
-
-class WeightProvider(Protocol):
-    """Provides embedding and LM head weights on demand; each host loads only what its stage needs."""
-
-    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        ...
-
-    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        ...
-
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        ...
-
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        ...
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
