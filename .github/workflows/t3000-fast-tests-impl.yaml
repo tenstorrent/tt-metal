@@ -102,6 +102,7 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: UJ45FEC7M #Allan Liu
+      # The multiprocess tests are currently disabled as they are not stable. We will re-enable them once we have improved their stability.
       # - name: Run t3k ttnn multiprocess tests
       #   id: t3k-ttnn-multiprocess-tests
       #   timeout-minutes: 15
