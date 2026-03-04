@@ -92,7 +92,8 @@ struct ReduceToOneB1 {
         uint32_t isFabricCore,
         uint32_t fabricRtArgBase = 0,
         uint32_t totalNumWorkers = 0,
-        uint32_t aggOutputSizeBytes = 0>
+        uint32_t aggOutputSizeBytes = 0,
+        uint32_t persistentFabricRtArgBase = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -113,6 +114,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t total_num_workers = totalNumWorkers;
         static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
         static constexpr bool enable_downstream_socket = totalNumWorkers > 0;
+        static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
     };
 
     // Compute (TRISC) compile-time args
@@ -163,6 +165,12 @@ struct ReduceToOneB1 {
         uint32_t agg_sem_l1_addr;     // Aggregation sync semaphore L1 address (global sem)
         uint32_t agg_core_noc_x;      // Aggregator core physical NOC x
         uint32_t agg_core_noc_y;      // Aggregator core physical NOC y
+        uint32_t persistent_enable;   // 1 if this core should send the persistent signal
+        uint32_t persistent_dst_noc_x;     // Bcast sender physical NOC x on entry device
+        uint32_t persistent_dst_noc_y;     // Bcast sender physical NOC y on entry device
+        uint32_t persistent_dst_mesh_id;   // Entry device fabric mesh id
+        uint32_t persistent_dst_chip_id;   // Entry device fabric chip id
+        uint32_t persistent_dst_sem_addr;  // persistent_next_iter_semaphore address on entry device
     };
 
     // Writer (BRISC) runtime args for fabric cores - handled dynamically via build_from_args
@@ -194,6 +202,32 @@ struct ReduceToOneB1 {
             } else {
                 fabric_set_unicast_route<false>(header, num_hops);
             }
+        }
+
+        static FORCE_INLINE void send_persistent_next_iter_inc_via_fabric(const WorkerWriterArgs& args) {
+            if (args.persistent_enable == 0) {
+                return;
+            }
+
+            constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
+            auto route_id = PacketHeaderPool::allocate_header_n(1);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
+            set_unicast_route(
+                hdr,
+                static_cast<uint16_t>(args.persistent_dst_chip_id),
+                static_cast<uint16_t>(args.persistent_dst_mesh_id),
+                1);
+            hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr), 1});
+
+            size_t arg_idx = CTArgs::persistent_fabric_rt_arg_base;
+            auto sender =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            sender.open();
+            sender.wait_for_empty_write_slot();
+            sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
+            sender.close();
+            noc_async_full_barrier();
         }
 #endif
 
@@ -306,6 +340,7 @@ struct ReduceToOneB1 {
 
             // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                DPRINT << "Start of root 1 last section\n";
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
@@ -356,6 +391,9 @@ struct ReduceToOneB1 {
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
                         noc_async_write_barrier();
+                        DPRINT << "root1 before sending semaphore\n";
+                        send_persistent_next_iter_inc_via_fabric(args);
+                        DPRINT << "root1 after sending semaphore\n";
                     } else if (args.agg_sem_l1_addr != 0) {
                         // Non-aggregator worker: signal the aggregator that our shard is ready.
                         uint64_t agg_sem_noc =
@@ -365,6 +403,7 @@ struct ReduceToOneB1 {
                 }
 
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "end of root 1 last section\n";
                 return;
             }
 
