@@ -289,7 +289,10 @@ def _golden_function_xielu(x, *args, alpha_p=0.8, alpha_n=0.8, **kwargs):
     return out.to(dtype)
 
 
-ttnn.attach_golden_function(ttnn.xielu, golden_function=_golden_function_xielu)
+# Check if xielu exists before attaching golden function to avoid circular import issues
+_xielu_op = getattr(ttnn, "xielu", None)
+if _xielu_op is not None:
+    ttnn.attach_golden_function(_xielu_op, golden_function=_golden_function_xielu)
 
 
 def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
