@@ -187,8 +187,27 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
 
 void FlipDeviceOperation::MultiCoreTiled::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {}
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto& output_tensor = tensor_return_value;
+
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
+    auto& all_cores = cached_program.shared_variables.core_range;
+
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    for (const auto& core : cores) {
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
+        runtime_args[0] = src_buffer->address();
+        auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+        runtime_args_writer[0] = dst_buffer->address();
+    }
+}
 
 }  // namespace ttnn::operations::data_movement

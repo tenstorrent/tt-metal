@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto layout = input_tensor.layout();
     if (layout == Layout::TILE) {
@@ -48,7 +48,7 @@ void FlipDeviceOperation::validate_on_program_cache_miss(
 }
 
 void FlipDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // No additional validation needed on cache hit
 }
 

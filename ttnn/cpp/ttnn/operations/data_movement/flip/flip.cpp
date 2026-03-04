@@ -13,13 +13,15 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+// #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+
+// #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 // toggle this to enable debug prints
@@ -77,41 +79,24 @@ MassagedFlip build_untilize_rm_retilize_flip(
                              const ttnn::SmallVector<uint32_t>& dims) -> OwnedFlipArgs {
             TT_FATAL(
                 input_tensor.layout() == ttnn::TILE_LAYOUT, "ttnn.flip: expected input tensor to be in tile layout");
-            auto untilized_tensor = ttnn::untilize(input_tensor);
 
-            // untilized, so now we have a padded rm tensor. we slice to remove the padding.
-            const auto& input_shape = input_tensor.logical_shape();
-            std::vector<uint32_t> begins_vec(input_shape.rank(), 0);
-            tt::stl::Span<const uint32_t> begins = begins_vec;
-            tt::stl::Span<const uint32_t> ends = input_shape.view();
-            std::vector<uint32_t> steps_vec(input_shape.rank(), 1);
-            tt::stl::Span<const uint32_t> steps = steps_vec;
+            // Untilize and simultaneously remove the padding introduced by tiling.
+            // The result is an unpadded row‑major tensor with the logical shape.
+            auto unpadded_tensor =
+                ttnn::untilize_with_unpadding(input_tensor, input_tensor.logical_shape(), output_memory_config);
 
-            // perform padding-oblivious slice to remove tile padding
-            // FIXME: replace with proper slice call once padding-oblivious entry point is uplifted
-            untilized_tensor = tt::tt_metal::operation::run(
-                SliceDeviceOperation{ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
-                {untilized_tensor},
-                {},
-                {std::nullopt})[0];
-
-            untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.logical_shape());
-            return std::make_tuple(untilized_tensor, dims);
+            return std::make_tuple(unpadded_tensor, dims);
         },
 
-        // post_transform: pad back to tile-size & re-tilize, then reshape to logical output
         .post_transform = [&logical_output_shape](const ttnn::Tensor& output) -> ttnn::Tensor {
-            // now we have a rm tensor, so we need ensure it's padded to tile size and re-tilize it
+            // output is an unpadded row‑major tensor (flipped result)
             if (output.layout() != ttnn::TILE_LAYOUT) {
-                auto padded = pad_to_tile_vol(output, 0.0f, true, output.memory_config());
-                flip_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
-                auto tilized =
-                    ttnn::tilize_with_val_padding(padded, padded.padded_shape(), 0.0f, output.memory_config());
-                flip_db_print(true, "[DEBUG] tilized");
-                // need to reshape tilized result to logical flip output shape
-                return ttnn::reshape(tilized, logical_output_shape, tilized.padded_shape());
+                // Compute the padded shape needed for tile layout (height/width rounded up to 32)
+                auto padded_shape = compute_padded_shape(output.logical_shape());
+
+                // Tilize and pad to the computed shape, using 0.0f as padding value
+                return ttnn::tilize_with_val_padding(output, padded_shape, 0.0f, output.memory_config());
             }
-            flip_db_print(true, "[DEBUG] already tilized");
             return output;
         },
 
