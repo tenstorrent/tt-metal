@@ -174,11 +174,10 @@ ALWI void reduce(
 
     // enforce_fp32_accumulation controls the MOVD2B/MOVB2D transpose path in reduce LLK.
     // When true, the reduce splits the transpose into hi16/lo16 passes for full fp32 precision.
-    // On WH B0, this path is BROKEN: the LLK doesn't toggle ALU_ACC_CTRL_Fp32_enabled around
-    // MOVD2B/MOVB2D (unlike BH which disables/re-enables it). With fp32 mode active, DEST
-    // addressing uses 2x stride, so MOVB2D offsets 0,4,8,12 only cover half the physical rows:
+    // This path is BROKEN on WH B0 (and likely BH too): with fp32 dest active, DEST addressing
+    // uses 2x stride, so MOVB2D offsets 0,4,8,12 only cover half the physical rows:
     //   rows 0-3: correct, rows 4-7: wrong source data, rows 8-31: zeros.
-    // Until the WH B0 LLK is fixed to match BH's ALU_ACC_CTRL toggle, keep this false.
+    // Keep false until the LLK MOVD2B/MOVB2D transpose is fixed across architectures.
     constexpr bool enforce_fp32_accumulation = false;
 
     // Initialization
