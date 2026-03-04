@@ -311,6 +311,7 @@ create_program_dram_sharded(
         (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
         (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
         (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
+        (std::uint32_t)0,                                           // in0_last_ktile_h (transpose not supported)
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
