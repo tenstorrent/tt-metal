@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import Literal
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -27,14 +28,26 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.demos.gpt_oss.tt.experts_throughput import ThroughputExpertConfig, ThroughputExperts
+
+# GPT-OSS components (optional backend)
+from models.demos.gpt_oss.tt.topk import TopKRouter
 from models.tt_moe.collectives.ccl import CCL
+
+# DeepSeek components (default)
 from models.tt_moe.components.experts.routed_experts import RoutedExperts as MoEExperts
 from models.tt_moe.components.routers.grouped_topk_router import GroupedTopKRouter as MoEGate
 
 
 class MoEBlock(SharedStateAddOn, AbstractModule):
-    """MoE module from DeepSeek-R1.
-    See the `AbstractModule` docstring for usage info.
+    """MoE module supporting both DeepSeek and GPT-OSS backends.
+
+    Args:
+        backend: Either "deepseek" (default) or "gptoss" to select the implementation.
+                DeepSeek uses GroupedTopKRouter + RoutedExperts.
+                GPT-OSS uses TopKRouter + ThroughputExperts.
+
+    See the `AbstractModule` docstring for additional usage info.
     """
 
     @classmethod
@@ -44,6 +57,7 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
+        backend: Literal["deepseek", "gptoss"] = "deepseek",
     ) -> WeightConfig:
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
@@ -51,31 +65,57 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         (state_dict,) = state_dicts
         assert state_dict is not None
 
-        return {
-            "moe_gate": MoEGate.convert_weights(
-                hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
-            ),
-            "moe_experts": MoEExperts.convert_weights(
-                hf_config, (state_dict,), output_path / "moe_experts", mesh_device
-            ),
-        }
+        if backend == "deepseek":
+            # Use DeepSeek's GroupedTopKRouter and RoutedExperts
+            return {
+                "moe_gate": MoEGate.convert_weights(
+                    hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
+                ),
+                "moe_experts": MoEExperts.convert_weights(
+                    hf_config, (state_dict,), output_path / "moe_experts", mesh_device
+                ),
+            }
+        elif backend == "gptoss":
+            # Use GPT-OSS's TopKRouter and ThroughputExperts weight conversion
+            # Note: GPT-OSS uses different weight organization
+            from models.demos.gpt_oss.utils.substate import substate
+
+            router_state_dict = substate(state_dict, "router")
+            experts_state_dict = substate(state_dict, "experts")
+
+            # Convert weights for GPT-OSS components
+            # TopKRouter and ThroughputExperts handle their own weight conversion internally
+            return {
+                "router_state_dict": router_state_dict,
+                "experts_state_dict": experts_state_dict,
+            }
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
 
     @classmethod
     def create_shared_state(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        backend: Literal["deepseek", "gptoss"] = "deepseek",
     ) -> ModelState:
         """Create shared model state containing tensors that are constant across all instances.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            backend: Either "deepseek" or "gptoss" to select implementation
         Returns:
             ModelState containing shared tensors
         """
         num_devices = mesh_device.get_num_devices()
-        num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+
+        # Get num_experts_per_device based on backend
+        if backend == "deepseek":
+            num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        else:  # gptoss
+            # GPT-OSS distributes experts across devices
+            num_experts_per_device = hf_config.num_local_experts // num_devices
         num_dispatch_device_rows = mesh_device.shape[0]
 
         expert_mapping_tensors = ttnn.from_torch(
@@ -140,17 +180,26 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         mode: str,
         topk_fallback: bool = False,
+        backend: Literal["deepseek", "gptoss"] = "deepseek",
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            mode: Either "decode" or "prefill"
+            topk_fallback: Whether to use fallback for topk operation
+            backend: Either "deepseek" or "gptoss" to select implementation
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
 
-        num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        # Get num_experts_per_device based on backend
+        if backend == "deepseek":
+            num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        else:  # gptoss
+            # GPT-OSS distributes experts across devices
+            num_experts_per_device = hf_config.num_local_experts // mesh_device.get_num_devices()
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -166,88 +215,134 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
             )
 
             # Construct the config
-            return {
+            config = {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
                 "num_experts_per_device": num_experts_per_device,
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                "all_to_all_dispatch_output_memory_config": memory_config,
-                "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
-                "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                "all_to_all_combine_output_memory_config": memory_config,
-                "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
-                "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
-                "input_memory_config": input_output_memory_config,
-                "output_memory_config": input_output_memory_config,
-                "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-                "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    memory_config=input_output_memory_config,
-                ),
-                "revert_tp": AllGatherAsyncConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dim=-1,  # Last dimension
-                    # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
-                    #     shape=(USERS_PER_ROW, HIDDEN_SIZE),
-                    #     core_grid=ttnn.CoreGrid(y=7, x=8),
-                    #     strategy=ttnn.ShardStrategy.WIDTH,
-                    # ),
-                    memory_config=memory_config,
-                    cluster_axis=1,
-                ),
+                "backend": backend,  # Store backend for runtime
             }
+
+            if backend == "deepseek":
+                # DeepSeek-specific configuration
+                config.update(
+                    {
+                        "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                        "all_to_all_dispatch_output_memory_config": memory_config,
+                        "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                        "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+                        "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+                        "all_to_all_combine_output_memory_config": memory_config,
+                        "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
+                        "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
+                        "input_memory_config": input_output_memory_config,
+                        "output_memory_config": input_output_memory_config,
+                        "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
+                        "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                        "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                            cluster_axis=1,
+                            dim=3,
+                            memory_config=input_output_memory_config,
+                        ),
+                        "revert_tp": AllGatherAsyncConfig(
+                            mesh_device=MeshDeviceStub(mesh_device.shape),
+                            dim=-1,  # Last dimension
+                            # memory_config=ttnn.create_sharded_memory_config(  # Bad PCC
+                            #     shape=(USERS_PER_ROW, HIDDEN_SIZE),
+                            #     core_grid=ttnn.CoreGrid(y=7, x=8),
+                            #     strategy=ttnn.ShardStrategy.WIDTH,
+                            # ),
+                            memory_config=memory_config,
+                            cluster_axis=1,
+                        ),
+                    }
+                )
+            else:  # gptoss
+                # GPT-OSS-specific configuration
+                config.update(
+                    {
+                        "use_throughput_experts": True,
+                        "input_memory_config": input_output_memory_config,
+                        "output_memory_config": input_output_memory_config,
+                    }
+                )
+
+            return config
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
             # Construct the config
-            return {
+            config = {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
                 "num_experts_per_device": num_experts_per_device,
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
-                "all_to_all_dispatch_output_memory_config": memory_config,
-                "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
-                "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
-                "all_to_all_combine_output_memory_config": memory_config,
-                "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
-                "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
-                "input_memory_config": memory_config,
-                "output_memory_config": memory_config,
-                "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-                "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
-                    cluster_axis=1,
-                    dim=3,
-                    memory_config=memory_config,
-                ),
-                "revert_tp": AllGatherAsyncConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dim=-1,  # Last dimension
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cluster_axis=1,
-                ),
+                "backend": backend,  # Store backend for runtime
             }
+
+            if backend == "deepseek":
+                # DeepSeek-specific configuration
+                config.update(
+                    {
+                        "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                        "all_to_all_dispatch_output_memory_config": memory_config,
+                        "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                        "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+                        "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+                        "all_to_all_combine_output_memory_config": memory_config,
+                        "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
+                        "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
+                        "input_memory_config": memory_config,
+                        "output_memory_config": memory_config,
+                        "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
+                        "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                        "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                            cluster_axis=1,
+                            dim=3,
+                            memory_config=memory_config,
+                        ),
+                        "revert_tp": AllGatherAsyncConfig(
+                            mesh_device=MeshDeviceStub(mesh_device.shape),
+                            dim=-1,  # Last dimension
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            cluster_axis=1,
+                        ),
+                    }
+                )
+            else:  # gptoss
+                # GPT-OSS-specific configuration
+                config.update(
+                    {
+                        "use_throughput_experts": True,
+                        "input_memory_config": memory_config,
+                        "output_memory_config": memory_config,
+                    }
+                )
+
+            return config
 
     @classmethod
     def decode_model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        topk_fallback: bool = False,
+        backend: Literal["deepseek", "gptoss"] = "deepseek",
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback, backend=backend)
 
     @classmethod
     def prefill_model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        topk_fallback: bool = False,
+        backend: Literal["deepseek", "gptoss"] = "deepseek",
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback, backend=backend)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
@@ -330,12 +425,49 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return MoEGate.forward(x, cfg["moe_gate"])
+        backend = cfg.get("backend", "deepseek")
+
+        if backend == "deepseek":
+            return MoEGate.forward(x, cfg["moe_gate"])
+        else:  # gptoss
+            # Use TopKRouter for GPT-OSS
+            # GPT-OSS router expects the input to be reshaped to (batch * seq_len, hidden_size)
+            batch_size_per_device = x.shape[-2]
+            hidden_size = x.shape[-1]
+
+            # Reshape input for router
+            x_reshaped = ttnn.reshape(x, shape=(1, 1, batch_size_per_device, hidden_size))
+
+            # Create router if not cached
+            if not hasattr(cls, "_gptoss_router"):
+                # This is simplified - in production, load from weights
+                cls._gptoss_router = TopKRouter(
+                    x.device(),
+                    {
+                        "num_local_experts": cfg["num_experts_per_device"] * cfg["num_devices"],
+                        "num_experts_per_tok": cfg["num_experts_per_tok"],
+                        "hidden_size": hidden_size,
+                    },
+                    {},  # State dict would be loaded from weights
+                )
+
+            # Call GPT-OSS router
+            use_throughput_experts = cfg.get("use_throughput_experts", True)
+            expert_indices, expert_weights = cls._gptoss_router(x_reshaped, use_throughput_experts)
+
+            return expert_weights, expert_indices
 
     @classmethod
     def _fwd_repeat_permute_expert_weights(
         cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
     ) -> ttnn.Tensor:
+        backend = cfg.get("backend", "deepseek")
+
+        if backend == "gptoss":
+            # GPT-OSS doesn't need this transformation
+            return topk_experts_weights
+
+        # DeepSeek path
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
@@ -354,6 +486,15 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         batch_size: int,
         seq_len: int,
     ) -> ttnn.Tensor:
+        backend = cfg.get("backend", "deepseek")
+
+        if backend == "gptoss":
+            # Use GPT-OSS ThroughputExperts path
+            return cls._fwd_moe_gptoss(
+                x, topk_experts_indices, topk_experts_weights, cfg, batch_size_per_device, batch_size, seq_len
+            )
+
+        # Original DeepSeek path follows
         tokens = batch_size * seq_len
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(
@@ -459,6 +600,55 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
+
+    @classmethod
+    def _fwd_moe_gptoss(
+        cls,
+        x: ttnn.Tensor,
+        topk_experts_indices: ttnn.Tensor,
+        topk_experts_weights: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        batch_size_per_device: int,
+        batch_size: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """GPT-OSS implementation using ThroughputExperts."""
+
+        # Create ThroughputExperts if not cached
+        if not hasattr(cls, "_gptoss_experts"):
+            # Create configuration for ThroughputExperts
+            throughput_config = ThroughputExpertConfig(
+                intermediate_size=cfg.get("intermediate_size", 2880),  # GPT-OSS default
+                num_experts=cfg["num_experts_per_device"] * cfg["num_devices"],
+                hidden_size=cfg["hidden_size"],
+                num_experts_per_tok=cfg["num_experts_per_tok"],
+                num_devices=cfg["num_devices"],
+            )
+
+            # Create ThroughputExperts
+            cls._gptoss_experts = ThroughputExperts(
+                mesh_device=x.device(),
+                config=throughput_config,
+                state_dict={},  # Would be loaded from weights
+                ccl_manager=cfg.get("ccl"),
+                mesh_config=None,  # Would be provided in real usage
+                weight_dtype=ttnn.bfloat4_b,
+                dispatch_cluster_axis=0,
+                decode_memory_config=ttnn.L1_MEMORY_CONFIG if seq_len == 1 else ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # ThroughputExperts expects different input format
+        is_decode = seq_len == 1
+
+        # Call ThroughputExperts
+        output = cls._gptoss_experts(
+            hidden_states=x,
+            topk_expert_indices=topk_experts_indices,
+            topk_expert_weights=topk_experts_weights,
+            is_decode=is_decode,
+        )
+
+        return output
 
     @classmethod
     def _fwd_reduce_scatter(

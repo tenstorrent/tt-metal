@@ -84,6 +84,12 @@ def test_forward_pass(
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
+    # For testing, use backend="deepseek" explicitly to ensure backward compatibility
+    backend = "deepseek"  # Default backend for DeepSeek tests
+
+    # Use the standard test utility to get weight config
+    # Note: get_test_weight_config doesn't support backend parameter,
+    # but since we're using backend="deepseek" (the default), it will work correctly
     weight_config = get_test_weight_config(
         MoE,
         hf_config,
@@ -91,18 +97,25 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate=False,
-        test_name="test_moe",
+        test_name="test_moe_block_deepseek",
         real_weights=False,
     )
 
-    # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
+    # Generate appropriate config with backend parameter
+    model_config = get_model_config(
+        MoE,
+        mode,
+        hf_config,
+        mesh_device,
+        topk_fallback=topk_fallback,
+        backend=backend,  # This gets passed through to decode_model_config
+    )
 
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
 
-    # Create a new model shared state
-    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+    # Create a new model shared state with backend parameter
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device, backend=backend)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
