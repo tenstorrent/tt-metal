@@ -44,6 +44,9 @@ inline constexpr uint32_t sharded_args_start_idx = 13;
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////

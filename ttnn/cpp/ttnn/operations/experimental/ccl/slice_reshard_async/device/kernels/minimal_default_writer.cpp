@@ -26,6 +26,9 @@ constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
 constexpr bool direction = get_compile_time_arg_val(3);
 
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////

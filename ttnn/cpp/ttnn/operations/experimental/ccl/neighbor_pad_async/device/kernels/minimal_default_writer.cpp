@@ -28,6 +28,9 @@ constexpr bool is_padding_zeros = get_compile_time_arg_val(4);
 constexpr uint32_t stick_size = get_compile_time_arg_val(5);
 
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////

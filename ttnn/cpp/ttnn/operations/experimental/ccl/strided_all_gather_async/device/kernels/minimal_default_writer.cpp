@@ -57,6 +57,9 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
 inline constexpr uint32_t sharded_args_start_idx = 25 + ccl_routing_utils::num_line_unicast_args;
 
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
