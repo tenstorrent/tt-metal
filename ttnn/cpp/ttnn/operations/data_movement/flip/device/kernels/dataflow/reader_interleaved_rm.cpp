@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 uint32_t compute_src_row_id(
     uint32_t dst_row_id, uint32_t rank, const uint32_t* shape, const uint32_t* dims_to_flip, const uint32_t* strides) {

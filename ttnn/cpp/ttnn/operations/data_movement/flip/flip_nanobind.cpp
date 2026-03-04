@@ -18,7 +18,7 @@
 
 namespace ttnn::operations::data_movement {
 
-void bind_flip_operation(nb::module_& mod) {
+void bind_flip(nb::module_& mod) {
     bind_registered_operation(
         mod,
         ttnn::flip,

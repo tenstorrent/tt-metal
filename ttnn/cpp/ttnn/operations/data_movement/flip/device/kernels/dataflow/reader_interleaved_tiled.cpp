@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 inline uint32_t calc_src_tile_index(
     uint32_t dst_tile_id, uint32_t rank, uint32_t* dims_to_flip, uint32_t* tiled_shape, uint32_t* tile_strides) {

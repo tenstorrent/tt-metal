@@ -138,6 +138,8 @@ target_sources(
             # expand/
             expand/expand.hpp
             expand/expand_nanobind.hpp
+            # flip/
+            flip/flip_nanobind.hpp
             # fill_pad/
             fill_pad/fill_pad_nanobind.hpp
             fill_pad/device/fill_pad_device_operation_types.hpp

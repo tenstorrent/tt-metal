@@ -9,5 +9,5 @@
 namespace ttnn::operations::data_movement {
 
 namespace nb = nanobind;
-void bind_flip_operation(nb::module_& mod);
+void bind_flip(nb::module_& mod);
 }  // namespace ttnn::operations::data_movement
