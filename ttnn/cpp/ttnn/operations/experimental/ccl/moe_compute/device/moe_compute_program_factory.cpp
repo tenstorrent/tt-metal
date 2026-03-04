@@ -732,7 +732,6 @@ MoEComputeMeshWorkloadFactory::create_at(
             .defines = {},
             .named_compile_args = tilize_named_compile_time_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
-    // num devices is passed above
 
     tt::tt_metal::KernelHandle tilize_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
