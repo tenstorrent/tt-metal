@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import typed_tensor_2dshard
+from ...utils.tensor import local_device_to_torch, typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -958,7 +958,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     )
 
                 # Move result to host for scheduler step
-                permuted_noise_pred = current_model.device_to_host(permuted_noise_pred_tt)
+                permuted_noise_pred = local_device_to_torch(permuted_noise_pred_tt)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 permuted_latent = self.scheduler.step(permuted_noise_pred, t, permuted_latent, return_dict=False)[0]

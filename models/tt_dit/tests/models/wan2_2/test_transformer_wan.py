@@ -18,7 +18,7 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import line_params, ring_params
 
 # ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ def test_wan_transformer_inner_step(
         N=N,
         timestep_torch=timestep_input,
     )
-    tt_output_1BNI = tt_model.device_to_host(tt_output_1BNI_tt)
+    tt_output_1BNI = local_device_to_torch(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
     del tt_model
 
