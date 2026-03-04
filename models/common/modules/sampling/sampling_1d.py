@@ -303,8 +303,12 @@ class Sampling1D(LightweightModule):
         )
         ttnn.deallocate(topk_indices_int32)
 
-        topk_global_indices = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
-        topk_global_indices = ttnn.untilize(topk_global_indices, use_multicore=True, sub_core_grids=cfg.sub_core_grids)
+        # Use distinct names so we can free the interleaved intermediate after untilize
+        topk_global_indices_interleaved = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
+        topk_global_indices = ttnn.untilize(
+            topk_global_indices_interleaved, use_multicore=True, sub_core_grids=cfg.sub_core_grids
+        )
+        ttnn.deallocate(topk_global_indices_interleaved)
 
         # Seed the RNG
         seeds_tensor = seeds if seeds is not None else self._seeds
