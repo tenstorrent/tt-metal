@@ -1964,16 +1964,16 @@ class AttentionBlock:
 
                 # CBs overlapped with sdpa_kv_cache L1 buffer (consumed before SDPA runs)
                 sdpa_kv_cache_running_offset = 0
+                sdpa_kv_cache_running_offset_mcast_core = 0
 
                 # CB: CCL broadcast packet buffer
                 bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
-                sdpa_kv_cache_running_offset += bcast_pkt_cb_descriptor.total_size
 
                 # CB: RMSNorm output buffer
                 rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm_output_cb,
                     sdpa_kv_cache_buffer_device,
-                    address_offset=sdpa_kv_cache_running_offset,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
                     total_size=num_tiles * cb_page_size,
                 )
                 rmsnorm_output_cb_descriptor.format_descriptors = [
@@ -1984,6 +1984,7 @@ class AttentionBlock:
                         tile=tile_descriptor,
                     )
                 ]
+                sdpa_kv_cache_running_offset_mcast_core += rmsnorm_output_cb_descriptor.total_size
 
                 # CB: Fused matmul weights (single CB backing matmul1, matmul2, dkv_matmul)
                 fused_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensors(
@@ -2038,8 +2039,8 @@ class AttentionBlock:
                 # at offset 64 B. This CB is consumed before SDPA runs.
                 rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm2_input_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 14400 B
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 14400 B
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
                 )
                 rmsnorm2_input_cb_descriptor.format_descriptors = [
@@ -2050,7 +2051,7 @@ class AttentionBlock:
                         tile=rmsnorm2_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += rmsnorm2_input_cb_descriptor.total_size  # +3072 B
+                sdpa_kv_cache_running_offset_mcast_core += rmsnorm2_input_cb_descriptor.total_size  # +3072 B
 
                 # CB9 lifecycle:
                 # 1) RMSNorm2 writes normalized output here
@@ -2060,8 +2061,8 @@ class AttentionBlock:
                 # at offset 3136 B. This CB is consumed before SDPA runs.
                 gather_reduce_half1_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     gather_reduce_half1_scratch_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 17472 B
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 17472 B
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
                 )
                 gather_reduce_half1_scratch_cb_descriptor.format_descriptors = [
@@ -2072,21 +2073,15 @@ class AttentionBlock:
                         tile=rmsnorm2_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += gather_reduce_half1_scratch_cb_descriptor.total_size  # +3072 B
+                sdpa_kv_cache_running_offset_mcast_core += (
+                    gather_reduce_half1_scratch_cb_descriptor.total_size
+                )  # +3072 B
 
                 # CB: RMSNorm2 output buffer (3 tiles)
-                rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=rmsnorm2_output_cb,
-                    data_format=data_format,
-                    page_size=rmsnorm2_page_size,
-                    tile=rmsnorm2_tile_descriptor,
-                )
-                rmsnorm2_output_cb_core_ranges = rmsnorm_core_grid
-
                 rmsnorm2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm2_output_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 20544 B
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 20544 B
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
                 )
                 rmsnorm2_output_cb_descriptor.format_descriptors = [
@@ -2097,7 +2092,7 @@ class AttentionBlock:
                         tile=rmsnorm2_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += rmsnorm2_output_cb_descriptor.total_size  # +3072 B
+                sdpa_kv_cache_running_offset_mcast_core += rmsnorm2_output_cb_descriptor.total_size  # +3072 B
 
                 # CB: Matmul2 input buffer (1x1536 with 1x32 tiles = 48 tiles) — overlap with
                 # sdpa_out_interm L1 buffer at offset 9280 B. This CB is consumed before SDPA runs.
@@ -2480,37 +2475,58 @@ class AttentionBlock:
                 mla_intermed_ms_tiles = PNHt * optimized_mla_grid.NUM_TREE_REDUCTION_STEPS
 
                 # cb_k_in: K input (full tile)
-                mla_cb_descriptors.append(
-                    ttnn.CBDescriptor(
-                        total_size=k_tiles * k_tile_size,
-                        core_ranges=mla_core_grid,
-                        format_descriptors=[ttnn.CBFormatDescriptor(mla_k_in_cb, k_df, k_tile_size)],
-                    )
+                mla_k_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    mla_k_in_cb,
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=0,
+                    total_size=k_tiles * k_tile_size,
                 )
+                mla_k_in_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=mla_k_in_cb,
+                        data_format=k_df,
+                        page_size=k_tile_size,
+                        tile=ttnn.TileDescriptor(kv_cache_tensor.get_tile()),
+                    )
+                ]
+                mla_cb_descriptors.append(mla_k_in_cb_descriptor)
                 # V is read directly from K buffer (strided matmul) - no separate V CB needed
 
                 if optimized_mla_grid.NUM_TREE_REDUCTION_STEPS > 0:
                     # cb_out_in: output input (tiny tile)
-                    mla_cb_descriptors.append(
-                        ttnn.CBDescriptor(
-                            total_size=mla_intermed_output_tiles * stats_tile_size,
-                            core_ranges=mla_core_grid,
-                            format_descriptors=[
-                                ttnn.CBFormatDescriptor(mla_out_in_cb, stats_df, stats_tile_size, stats_tile_descriptor)
-                            ],
-                        )
+                    mla_out_in_total_size = mla_intermed_output_tiles * stats_tile_size
+                    mla_out_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        mla_out_in_cb,
+                        sdpa_out_interm_buffer_device,
+                        address_offset=0,
+                        total_size=mla_out_in_total_size,
                     )
-
+                    mla_out_in_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=mla_out_in_cb,
+                            data_format=stats_df,
+                            page_size=stats_tile_size,
+                            tile=stats_tile_descriptor,
+                        )
+                    ]
+                    mla_cb_descriptors.append(mla_out_in_cb_descriptor)
                     # cb_ms_in: m/s stats input (m and s are packed into single tile)
-                    mla_cb_descriptors.append(
-                        ttnn.CBDescriptor(
-                            total_size=mla_intermed_ms_tiles * stats_tile_size,
-                            core_ranges=mla_core_grid,
-                            format_descriptors=[
-                                ttnn.CBFormatDescriptor(mla_ms_in_cb, stats_df, stats_tile_size, stats_tile_descriptor)
-                            ],
-                        )
+                    mla_ms_in_total_size = mla_intermed_ms_tiles * stats_tile_size
+                    mla_ms_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        mla_ms_in_cb,
+                        sdpa_out_interm_buffer_device,
+                        address_offset=mla_out_in_total_size,
+                        total_size=mla_ms_in_total_size,
                     )
+                    mla_ms_in_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=mla_ms_in_cb,
+                            data_format=stats_df,
+                            page_size=stats_tile_size,
+                            tile=stats_tile_descriptor,
+                        )
+                    ]
+                    mla_cb_descriptors.append(mla_ms_in_cb_descriptor)
 
                 # Position tensor is now height-sharded - no CB needed, read directly from L1
 
