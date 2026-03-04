@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -95,17 +96,37 @@ void bind_sdpa(nb::module_& mod) {
 
     const auto* chunked_doc =
         R"doc(
-        Chunked causal scaled dot product attention for processing long sequences in chunks.
-        This variant allows processing of sequences longer than the maximum supported length
-        by splitting the input into chunks and maintaining KV cache state.
-        The KV cache is page-based, and the page table tensor is used to map the page indices to the corresponding KV cache indices.
+        Chunked causal scaled dot product attention for paged KV cache and long sequences.
+        Processes one Q chunk at a time; K/V are provided as paged cache. The page table
+        maps virtual block indices to physical blocks. Two calling conventions:
+
+        **Legacy (chunk_start_idx as int):**
+        Pass ``chunk_start_idx`` (integer). The offset is fixed at dispatch time. Use when
+        iterating chunks from Python and passing a new scalar each call. Program is cached
+        per (config, chunk_start_idx) for the first chunk; later chunks reuse when possible.
+
+        **Flexible (chunk_start_idx_tensor):**
+        Pass ``chunk_start_idx_tensor`` (ttnn.Tensor of shape [1], dtype int32) on device.
+        The kernel reads the start index from device memory at runtime. Use for:
+
+        - Trace capture/replay: capture one SDPA call, then replay with different
+          chunk_start_idx by updating the tensor on device (no recompile).
+          One program handles variable prefix lengths by updating the tensor each step.
+
+        The program is compiled once (fixed max page table size); the trace key does not
+        include the runtime offset.
 
         Args:
-            input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
-            input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
-            input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
-            page_table_tensor (ttnn.Tensor): the page table tensor.  [b x num_pages]
-            chunk_start_idx (int): Absolute position in the sequence where this chunk starts.
+            input_tensor_q (ttnn.Tensor): Q chunk.          [b x nqh x chunk_s x dh]
+            input_tensor_k (ttnn.Tensor): Paged K cache.    [max_blocks x nkv x block_s x dh]
+            input_tensor_v (ttnn.Tensor): Paged V cache.    [max_blocks x nkv x block_s x dh]
+            page_table_tensor (ttnn.Tensor): Page table.    [b x num_pages], int32.
+            chunk_start_idx (int, optional): Legacy: absolute sequence index for this chunk.
+                Must be a multiple of program_config.q_chunk_size.
+                Must be a multiple of program_config.k_chunk_size (workaround for https://github.com/tenstorrent/tt-metal/issues/35225)
+                Omit when using chunk_start_idx_tensor.
+            chunk_start_idx_tensor (ttnn.Tensor, optional): Flexible: device tensor [1] int32
+                holding the chunk start index; read at runtime. Use for trace or prefix caching.
                 Must be a multiple of program_config.q_chunk_size.
                 Must be a multiple of program_config.k_chunk_size (workaround for https://github.com/tenstorrent/tt-metal/issues/35225)
 
@@ -126,16 +147,36 @@ void bind_sdpa(nb::module_& mod) {
         ttnn::transformer::chunked_scaled_dot_product_attention,
         chunked_doc,
         ttnn::nanobind_overload_t{
+            // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
             [](const ChunkedOperationType& self,
                const ttnn::Tensor& input_tensor_q,
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
                const ttnn::Tensor& page_table_tensor,
-               int64_t chunk_start_idx,
+               const nb::object& chunk_start_idx_arg,
+               std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<SDPAProgramConfig>& program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                if (chunk_start_idx_tensor_opt.has_value()) {
+                    return self(
+                        input_tensor_q,
+                        input_tensor_k,
+                        input_tensor_v,
+                        page_table_tensor,
+                        chunk_start_idx_tensor_opt.value(),
+                        scale,
+                        memory_config,
+                        program_config,
+                        compute_kernel_config);
+                }
+                if (chunk_start_idx_arg.is_none()) {
+                    throw std::runtime_error(
+                        "chunk_start_idx (int) is required for legacy chunked SDPA. For flexible path use "
+                        "chunk_start_idx_tensor=...");
+                }
+                int64_t chunk_start_idx = nb::cast<int64_t>(chunk_start_idx_arg);
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -151,8 +192,9 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
             nb::arg("page_table_tensor").noconvert(),
-            nb::arg("chunk_start_idx"),
+            nb::arg("chunk_start_idx") = nb::none(),
             nb::kw_only(),
+            nb::arg("chunk_start_idx_tensor") = nb::none(),
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
@@ -269,6 +311,9 @@ void bind_sdpa(nb::module_& mod) {
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
+            use_column_major_ccl (bool, optional): If True, allocate CCL worker cores in column-major order.
+                This places CCL workers in a column (useful when reserving the last column for CCL).
+                If False (default), uses row-major allocation. Defaults to False.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -305,7 +350,10 @@ void bind_sdpa(nb::module_& mod) {
                const MeshDevice& mesh_device,
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               CoreCoord ccl_core_grid_offset) {
+               CoreCoord ccl_core_grid_offset,
+               bool use_column_major_ccl) {
+                auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                                                     : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
                 auto outputs = self(
                     input_tensor_q,
                     input_tensor_k,
@@ -327,7 +375,8 @@ void bind_sdpa(nb::module_& mod) {
                     subdevice_id,
                     ccl_core_grid_offset,
                     scale,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    strategy);
                 return outputs;
             },
             nb::arg("input_tensor_q").noconvert(),
@@ -351,7 +400,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
-            nb::arg("ccl_core_grid_offset")});
+            nb::arg("ccl_core_grid_offset"),
+            nb::arg("use_column_major_ccl") = false});
 
     const auto* mla_doc =
         R"doc(
@@ -383,6 +433,7 @@ void bind_sdpa(nb::module_& mod) {
         mod,
         ttnn::transformer::flash_mla_prefill,
         mla_doc,
+        // Overload: head_dim_v as uint32_t (original MLA)
         ttnn::nanobind_overload_t{
             [](const MLAOperationType& self,
                const ttnn::Tensor& input_tensor_q,
@@ -398,6 +449,7 @@ void bind_sdpa(nb::module_& mod) {
                     input_tensor_q,
                     input_tensor_k,
                     head_dim_v,
+                    std::nullopt,
                     attn_mask,
                     is_causal,
                     scale,
@@ -408,6 +460,40 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("head_dim_v").noconvert(),
+            nb::kw_only(),
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("is_causal").noconvert() = true,
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()},
+        // Overload: input_tensor_v as Tensor (V in embedding space)
+        ttnn::nanobind_overload_t{
+            [](const MLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
+               const std::optional<ttnn::Tensor>& attn_mask,
+               bool is_causal,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<SDPAProgramConfig>& program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                return self(
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v.logical_shape()[-1],
+                    input_tensor_v,
+                    attn_mask,
+                    is_causal,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            nb::arg("input_tensor_q").noconvert(),
+            nb::arg("input_tensor_k").noconvert(),
+            nb::arg("input_tensor_v").noconvert(),
             nb::kw_only(),
             nb::arg("attn_mask") = nb::none(),
             nb::arg("is_causal").noconvert() = true,

@@ -82,7 +82,16 @@ void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
         .def_rw("compute_with_storage_grid_size", &SoftmaxShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
         .def_rw("subblock_w", &SoftmaxShardedMultiCoreProgramConfig::subblock_w)
         .def_rw("block_h", &SoftmaxShardedMultiCoreProgramConfig::block_h)
-        .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w);
+        .def_rw("block_w", &SoftmaxShardedMultiCoreProgramConfig::block_w)
+        .def("__repr__", [](const SoftmaxShardedMultiCoreProgramConfig& config) {
+            return fmt::format(
+                "SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={}, subblock_w={}, block_h={}, "
+                "block_w={})",
+                config.compute_with_storage_grid_size,
+                config.subblock_w,
+                config.block_h,
+                config.block_w);
+        });
 }
 
 // Softmax operation base

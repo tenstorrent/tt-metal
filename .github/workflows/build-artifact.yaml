@@ -242,7 +242,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
+          sparse-checkout-cone-mode: true
       - id: parse
         uses: ./.github/actions/parse-platform
         with:
@@ -282,6 +282,9 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
 
       - name: Download artifacts from workflow run
         id: download
@@ -444,6 +447,14 @@ jobs:
           # but not /work which is mounted from the host. Git commands from /work fail due to
           # ownership mismatch (host uid vs container root). Add /work to safe.directory.
           git config --global --add safe.directory /work
+
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache@v4
+        with:
+          path: .cpmcache
+          key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: |
+            cpm-
 
       - name: 🔧 CMake configure
         run: |

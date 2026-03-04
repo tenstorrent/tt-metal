@@ -18,6 +18,7 @@ Owner:
 from dataclasses import dataclass
 import os
 import threading
+from typing import Callable
 
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
@@ -29,7 +30,7 @@ from ttexalens.memory_access import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
-from run_checks import RunChecks
+from run_checks import RunChecks, BlockType
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -56,6 +57,12 @@ class DispatcherCoreData:
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
     kernel_path: str = triage_field("Kernel Path", verbose=1)
     firmware_path: str = triage_field("Firmware Path", verbose=1)
+    # New watcher/mailbox fields (verbose=1)
+    dispatch_mode: str | None = triage_field("Dispatch Mode", verbose=1)
+    brisc_noc_id: int | None = triage_field("BRISC NOC", verbose=1)
+    enables: str | None = triage_field("Enables", verbose=1)
+    subordinate_sync: str | None = triage_field("Subordinate Sync", verbose=1)
+    watcher_enabled: bool | None = triage_field("Watcher Enabled", verbose=1)
 
     # Level 2: Internal debug fields
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
@@ -87,6 +94,7 @@ class DispatcherData:
         self.lock = threading.Lock()
         self._mailboxes_cache: dict[OnChipCoordinate, ElfVariable] = {}
         self._core_data_cache: dict[tuple[OnChipCoordinate, str], DispatcherCoreData] = {}
+        self._get_block_type: Callable[[OnChipCoordinate], BlockType | None] = run_checks.get_block_type
 
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
@@ -187,6 +195,36 @@ class DispatcherData:
         }
         self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
+        # Subordinate sync states (used by NCRISC, TRISC0-2, ERISC1)
+        self._sync_states = {
+            get_const_value("RUN_SYNC_MSG_INIT"): "INIT",
+            get_const_value("RUN_SYNC_MSG_GO"): "GO",
+            get_const_value("RUN_SYNC_MSG_DONE"): "DONE",
+            get_const_value("RUN_SYNC_MSG_LOAD"): "LOAD",
+            get_const_value("RUN_SYNC_MSG_WAITING_FOR_RESET"): "WAITING_FOR_RESET",
+            get_const_value("RUN_SYNC_MSG_INIT_SYNC_REGISTERS"): "INIT_SYNC_REGISTERS",
+        }
+
+        # Dispatch mode constants
+        self._DISPATCH_MODE_DEV = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_DEV")
+        self._DISPATCH_MODE_HOST = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_HOST")
+
+        # Watcher enable constants (not used in firmware elf, so can't be retrieved from elf)
+        self._WATCHER_ENABLED = 3
+        self._WATCHER_DISABLED = 2
+
+        # Subordinate sync map indices for each processor type
+        # BRISC is the master, so it doesn't have a subordinate sync entry
+        # For Tensix: NCRISC=0, TRISC0=1, TRISC1=2, TRISC2=3
+        # For ETH (2-ERISC mode): ERISC1=0
+        self._subordinate_sync_index = {
+            "NCRISC": 0,
+            "TRISC0": 1,
+            "TRISC1": 2,
+            "TRISC2": 3,
+            "ERISC1": 0,
+        }
+
     def _get_build_env_for_device(self, device_unique_id: int):
         """Get build_env for a specific device, with caching"""
         if device_unique_id not in self._build_env_cache:
@@ -227,38 +265,35 @@ class DispatcherData:
         return value
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
+        block_type = self._get_block_type(location)
         l1_mem_access = MemoryAccess.create_l1(location)
-        if location.device.get_block_type(location) == "functional_workers":
-            # For tensix, use the brisc elf
-            fw_elf = self._brisc_elf
-        elif location in location.device.idle_eth_block_locations:
-            # For idle eth, use the idle erisc elf
-            fw_elf = self._idle_erisc_elf
-        elif location in location.device.active_eth_block_locations:
-            # For active eth, use the active erisc elf
-            fw_elf = self._active_erisc_elf
-        else:
-            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
+        match block_type:
+            case "tensix":
+                fw_elf = self._brisc_elf
+            case "idle_eth":
+                fw_elf = self._idle_erisc_elf
+            case "active_eth":
+                fw_elf = self._active_erisc_elf
+            case _:
+                raise TTTriageError(f"Unsupported block type: {block_type}")
         return fw_elf.read_global("mailboxes", l1_mem_access)
 
     def get_core_data(
         self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
     ) -> DispatcherCoreData:
-        if location.device.get_block_type(location) == "functional_workers":
-            # For tensix, use the brisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_TENSIX
-            enum_values = self._enum_values_tenisx
-        elif location in location.device.idle_eth_block_locations:
-            # For idle eth, use the idle erisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
-            enum_values = self._enum_values_eth
-        elif location in location.device.active_eth_block_locations:
-            # For active eth, use the active erisc elf
-            programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
-            enum_values = self._enum_values_eth
-        else:
-            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
-
+        block_type = self._get_block_type(location)
+        match block_type:
+            case "tensix":
+                programmable_core_type = self._ProgrammableCoreTypes_TENSIX
+                enum_values = self._enum_values_tenisx
+            case "idle_eth":
+                programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
+                enum_values = self._enum_values_eth
+            case "active_eth":
+                programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
+                enum_values = self._enum_values_eth
+            case _:
+                raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
         device_unique_id = location._device.unique_id
@@ -345,6 +380,99 @@ class DispatcherData:
         except Exception:
             pass
 
+        # Read new watcher/mailbox fields
+        dispatch_mode = None
+        brisc_noc_id = None
+        enables = None
+        subordinate_sync = None
+        watcher_enabled = None
+
+        try:
+            mode_val = mailboxes.launch[launch_msg_rd_ptr].kernel_config.mode
+            if mode_val == self._DISPATCH_MODE_DEV:
+                dispatch_mode = "DEV"
+            elif mode_val == self._DISPATCH_MODE_HOST:
+                dispatch_mode = "HOST"
+            else:
+                # Unexpected/unknown dispatch mode value; track for debugging but preserve behavior.
+                log_check_location(
+                    location,
+                    False,
+                    f"unexpected dispatch mode value '{mode_val}' in launch message",
+                )
+                dispatch_mode = str(mode_val)
+        except Exception:
+            log_check_location(
+                location,
+                False,
+                f"failed to read dispatch mode from launch message. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
+
+        try:
+            brisc_noc_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.brisc_noc_id)
+        except Exception:
+            log_check_location(
+                location,
+                False,
+                f"failed to read brisc noc id from launch message. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
+
+        try:
+            enables_val = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.enables)
+            # Format enables like watcher: uppercase = enabled, lowercase = disabled
+            # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
+            # ETH Blackhole: "EE" (2 ERISCs)
+            # ETH Wormhole: "E" (1 ERISC)
+            if self._get_block_type(location) == "tensix":
+                symbols = "BNT"
+            elif location.device.is_blackhole():
+                symbols = "EE"
+            else:
+                symbols = "E"
+            enables = ""
+            for i, sym in enumerate(symbols):
+                enables += sym if (enables_val & (1 << i)) else sym.lower()
+        except Exception:
+            log_check_location(
+                location,
+                False,
+                f"failed to read enables from launch message. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
+
+        try:
+            watcher_enable_val = mailboxes.watcher.enable
+            if watcher_enable_val == self._WATCHER_ENABLED:
+                watcher_enabled = True
+            elif watcher_enable_val == self._WATCHER_DISABLED:
+                watcher_enabled = False
+            else:
+                watcher_enabled = None  # Unknown state
+                log_check_location(
+                    location,
+                    False,
+                    f"unexpected watcher enable value: {watcher_enable_val}",
+                )
+        except Exception:
+            watcher_enabled = None
+            log_check_location(
+                location,
+                False,
+                f"failed to read watcher enable from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
+
+        # Subordinate sync is per-RISC (BRISC is the master, so no sync entry for it)
+        try:
+            if proc_name in self._subordinate_sync_index:
+                sync_idx = self._subordinate_sync_index[proc_name]
+                sync_val = int(mailboxes.subordinate_sync.map[sync_idx])
+                subordinate_sync = self._sync_states.get(sync_val, str(sync_val))
+        except Exception:
+            log_check_location(
+                location,
+                False,
+                f"failed to read subordinate sync from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
+
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
         if location in location.device.active_eth_block_locations:
@@ -427,6 +555,11 @@ class DispatcherData:
             waypoint=waypoint,
             mailboxes=mailboxes,
             previous_host_assigned_id=previous_host_assigned_id,
+            dispatch_mode=dispatch_mode,
+            brisc_noc_id=brisc_noc_id,
+            enables=enables,
+            subordinate_sync=subordinate_sync,
+            watcher_enabled=watcher_enabled,
         )
 
 

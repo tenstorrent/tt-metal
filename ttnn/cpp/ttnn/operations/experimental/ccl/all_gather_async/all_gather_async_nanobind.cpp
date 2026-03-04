@@ -50,7 +50,9 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                bool use_optimal_ccl_for_llama,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -62,7 +64,9 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     use_optimal_ccl_for_llama,
                     barrier_semaphore,
                     false,
-                    sub_core_grids);
+                    sub_core_grids,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             nb::arg("input_tensor"),
             nb::arg("dim"),
@@ -74,8 +78,9 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
             nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()},
         // ring
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
@@ -89,6 +94,7 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                std::optional<uint32_t> cluster_axis,
                bool use_optimal_ccl_for_llama,
+               bool use_broadcast,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
                std::optional<uint32_t> chunks_per_sync,
                std::optional<uint32_t> num_workers_per_link,
@@ -106,6 +112,7 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     cluster_axis,
                     use_optimal_ccl_for_llama,
                     barrier_semaphore,
+                    use_broadcast,
                     chunks_per_sync,
                     num_workers_per_link,
                     num_buffers_per_channel,
@@ -123,6 +130,7 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
@@ -143,8 +151,11 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                const std::optional<MemoryConfig>& memory_config,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                bool use_optimal_ccl_for_llama,
+               bool use_broadcast,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -157,9 +168,12 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     num_preferred_links,       // = nb::none(),
                     subdevice_id,
                     use_optimal_ccl_for_llama,
+                    use_broadcast,
                     barrier_semaphore,
                     false,
-                    sub_core_grids);
+                    sub_core_grids,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             nb::arg("input_tensor"),
             nb::arg("dim"),
@@ -173,8 +187,11 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::arg("memory_config") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
             nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()});
 }
 
 }  // namespace

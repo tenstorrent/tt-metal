@@ -140,9 +140,9 @@ def run_rms_norm_component(
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, ref_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"RMS Norm test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"RMS Norm test failed. Output: {output}"
 
 
 def run_topk_router_component(
@@ -172,17 +172,17 @@ def run_topk_router_component(
 
     # Convert to TTNN tensors
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
         if is_row_sharded
         else None
     )
 
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.reshape(-1, 1, 2880),
+        hidden_states.reshape(1, 1, -1, 2880),
         device=mesh_device,
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
 
     # Extract TT TopK router from decoder layer
@@ -222,46 +222,49 @@ def run_throughput_experts_component(
     """Test experts component - extracted from decoder layer"""
 
     # Create input
-    batch, seq_len, hidden_size = hidden_shape
+    _, _, num_tokens, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
-    import itertools
 
-    router_indices = torch.zeros(batch * seq_len, config.num_experts_per_tok, dtype=torch.long)
-    routing_weights = torch.zeros(batch * seq_len, config.num_local_experts)
+    router_indices = torch.zeros(num_tokens, config.num_experts_per_tok, dtype=torch.long)
+    routing_weights = torch.zeros(num_tokens, config.num_local_experts)
 
-    for b, s in itertools.product(range(batch), range(seq_len)):
+    for t in range(num_tokens):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
-        router_indices[b * seq_len + s, :] = active_experts
+        router_indices[..., t, :] = active_experts
         weights = torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
-        routing_weights[b * seq_len + s, active_experts] = weights
-    topk_weights_dense = torch.tensor([[routing_weights[i, j].item() for j in b] for i, b in enumerate(router_indices)])
+        routing_weights[..., t, active_experts] = weights
+    topk_weights_dense = torch.tensor(
+        [[routing_weights[..., i, j].item() for j in b] for i, b in enumerate(router_indices.squeeze())]
+    )
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+    reference_output = reference_experts(
+        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+    )
 
     # Convert to TTNN tensors
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
         if is_row_sharded
         else None
     )
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.unsqueeze(1),
+        hidden_states,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=mesh_mapper,
     )
     tt_routing_weights = ttnn.from_torch(
-        topk_weights_dense.unsqueeze(1).unsqueeze(1),
+        topk_weights_dense,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=mesh_mapper,
     )
     tt_router_indices = ttnn.from_torch(
-        router_indices.unsqueeze(1).unsqueeze(1),
+        router_indices,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.uint16,
@@ -278,13 +281,13 @@ def run_throughput_experts_component(
     )
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
-    tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch * seq_len, :hidden_size]
+    tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., :num_tokens, :hidden_size]
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"High Throughput Experts test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"High Throughput Experts test failed. Output: {output}"
 
 
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
@@ -337,9 +340,9 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"Low Latency Experts test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"Low Latency Experts test failed. Output: {output}"
 
 
 def run_full_mlp_pipeline(
@@ -434,15 +437,13 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
-        (32, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
         (1, 4096),  # prefill 4k
     ],
     ids=[
-        "decode_1",
-        "decode_32",
-        "decode_128",
+        "decode_low_latency",
+        "decode_high_throughput",
         "prefill_128",
         "prefill_4096",
     ],
@@ -573,7 +574,7 @@ def test_decoder(
 
     # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
     if mode == "decode":
-        grid_size = setup["mesh_device"].compute_with_storage_grid_size()
+        grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         batch_grid = ttnn.num_cores_to_corerangeset(local_batch_size, grid_size, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
@@ -632,9 +633,10 @@ def test_decoder(
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
             logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_throughput_experts_component(
                 setup["mesh_device"],
-                hidden_states.shape,
+                hidden_states_throughput_experts.shape,
                 config,
                 reference_layer,
                 decoder_layer,
@@ -741,7 +743,7 @@ def run_model_forward_test(
     mesh_device,
     config,
     state_dict_meta,
-    state_dict_hf,
+    reference_model,
     mesh_config,
     batch_size,
     seq_len,
@@ -755,15 +757,13 @@ def run_model_forward_test(
         mesh_device: TTNN mesh device
         config: HuggingFace config (with num_hidden_layers already modified)
         state_dict_meta: Model weights in meta format for TT model
-        state_dict_hf: Model weights in HF format for reference model
+        reference_model: Already-instantiated HuggingFace reference model (eval mode)
         mesh_config: Mesh configuration
         batch_size: Batch size
         seq_len: Sequence length
         is_decode: True for decode mode (seq_len=1), False for prefill mode
         pcc_threshold: PCC threshold for comparison
     """
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
-
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
 
@@ -777,7 +777,7 @@ def run_model_forward_test(
         local_batch_size = batch_size
 
     # Create CCL manager
-    ccl_manager = CCLManager(mesh_device)
+    ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
@@ -796,11 +796,6 @@ def run_model_forward_test(
         users_row_sharded=is_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
-
-    # Create reference model with HF format weights
-    reference_model = GptOssForCausalLM(config)
-    reference_model.load_state_dict(state_dict_hf, strict=False)
-    reference_model.eval()
 
     # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
@@ -862,19 +857,24 @@ def run_model_forward_test(
         )
 
     # Convert TT output to torch
-    mesh_composer_dims = (-2, 1) if is_row_sharded else (0, 1)
+    mesh_composer_dims = (-2, -1) if is_row_sharded else (0, -1)
     tt_logits_torch = ttnn.to_torch(
         tt_logits,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device, dims=mesh_composer_dims, mesh_shape=tuple(mesh_device.shape)
         ),
     )
-
     # Slice to match reference shape
     tt_logits_torch = tt_logits_torch[0, 0]
 
     # Reshape to match reference
     tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
+
+    # Truncate to vocab_size — lm_head weight may be padded to padded_vocab_size
+    # for on-device sampling alignment, producing extra columns in the output.
+    vocab_size = config.vocab_size
+    if tt_logits_torch.shape[-1] > vocab_size:
+        tt_logits_torch = tt_logits_torch[:, :, :vocab_size]
 
     # Compare outputs
     passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
@@ -898,15 +898,19 @@ def run_model_forward_test(
 @pytest.mark.parametrize(
     "mesh_shape",
     [
+        (1, 8),
         (4, 8),
+    ],
+    ids=[
+        "mesh_1x8",
+        "mesh_4x8",
     ],
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 5],
+    [1],
     ids=[
         "1_layer",
-        "5_layers",
     ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
@@ -929,8 +933,14 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         num_layers: Number of layers to use (overrides config.num_hidden_layers)
         reset_seeds: Fixture to reset random seeds
     """
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    if mesh_shape[0] == 1 and batch_size > 1:
+        pytest.skip(
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+        )
 
     is_decode = mode == "decode"
 
@@ -938,7 +948,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Setup test using TestFactory
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
 
     # Override number of layers
@@ -952,13 +962,13 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     # Create mesh config
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # Load state dict in HF format for reference model
-    model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=False)
-    state_dict_hf = model_args.load_state_dict(
-        weights_path=model_args.model_path,
-        dummy_weights=False,
-        convert_to_meta_format=False,  # HF format for reference
-    )
+    # Use randomly-initialized weights (config already has num_hidden_layers overridden to num_layers,
+    # so this creates a small model — no need to deserialize the full checkpoint shards).
+    # Build the reference model once here and pass it into run_model_forward_test to avoid
+    # a second instantiation of the large embedding/lm_head tensors inside that function.
+    reference_model_hf = GptOssForCausalLM(config)
+    reference_model_hf.eval()
+    state_dict_hf = reference_model_hf.state_dict()
 
     # Convert to meta format for TT model
     state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
@@ -970,7 +980,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         mesh_device=mesh_device,
         config=config,
         state_dict_meta=state_dict_meta,
-        state_dict_hf=state_dict_hf,
+        reference_model=reference_model_hf,
         mesh_config=mesh_config,
         batch_size=batch_size,
         seq_len=seq_len,

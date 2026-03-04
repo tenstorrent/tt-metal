@@ -52,11 +52,6 @@ BcastDeviceOperation::program_factory_t BcastDeviceOperation::select_program_fac
     return selected_factory;
 }
 
-void BcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void BcastDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_a = tensor_args.input_a;

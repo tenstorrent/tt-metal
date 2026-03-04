@@ -81,7 +81,13 @@ class StatsReporter:
 
                 # Get test metadata if metadata loader is available
                 test_metadata = None
+                bandwidth_mode = "per_core"  # Default to per-core bandwidth
                 if self.metadata_loader is not None:
+                    # Load bandwidth_mode from test_information.yaml
+                    test_info = self.metadata_loader.load_test_information()
+                    test_data = test_info.get("tests", {}).get(test_id, {})
+                    bandwidth_mode = test_data.get("bandwidth_mode", "per_core")
+
                     try:
                         test_metadata = self.metadata_loader.get_test_metadata(test_id, self.arch)
                     except Exception as e:
@@ -93,18 +99,24 @@ class StatsReporter:
                     "Number of Transactions",
                 ]
 
+                # Architecture is always included (known from the host side)
+                header.append("Architecture")
+
                 # Add metadata columns for NOC estimator consumption
                 # All metadata fields are automatically included (except 'name' and 'comment')
                 if test_metadata is not None:
                     # Standard metadata fields in specific order for csv_reader.cpp compatibility
                     standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
                     for field in standard_fields:
-                        if field in test_metadata:
+                        if field in test_metadata and field != "architecture":
                             column_name = self.metadata_loader.metadata_field_to_column_name(field)
                             header.append(column_name)
 
                     # Add any additional optional fields in alphabetical order
-                    optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
+                    # Exclude bandwidth_mode as it's a config flag, not data
+                    optional_fields = sorted(
+                        [k for k in test_metadata.keys() if k not in standard_fields and k != "bandwidth_mode"]
+                    )
                     for field in optional_fields:
                         column_name = self.metadata_loader.metadata_field_to_column_name(field)
                         header.append(column_name)
@@ -125,12 +137,22 @@ class StatsReporter:
                         break
 
                 # Add performance metrics at the end
-                header.extend(
-                    [
-                        "Latency (cycles)",
-                        "Bandwidth (bytes/cycle)",
-                    ]
-                )
+                if bandwidth_mode == "combined":
+                    header.extend(
+                        [
+                            "Number of Cores",
+                            "Total Bytes",
+                            "Latency (cycles)",
+                            "Combined Bandwidth (bytes/cycle)",
+                        ]
+                    )
+                else:
+                    header.extend(
+                        [
+                            "Latency (cycles)",
+                            "Bandwidth (bytes/cycle)",
+                        ]
+                    )
 
                 writer.writerow(header)
 
@@ -146,6 +168,9 @@ class StatsReporter:
                             run_stats.get("num_transactions"),
                         ]
 
+                        # Architecture is always included
+                        row.append(self.arch.lower())
+
                         # Add metadata columns
                         if test_metadata is not None:
                             # Standard metadata fields in specific order
@@ -155,14 +180,12 @@ class StatsReporter:
                                     row.append(test_metadata[field])
 
                             # Add any additional optional fields in alphabetical order
-                            optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
+                            # Exclude bandwidth_mode as it's a config flag, not data
+                            optional_fields = sorted(
+                                [k for k in test_metadata.keys() if k not in standard_fields and k != "bandwidth_mode"]
+                            )
                             for field in optional_fields:
                                 value = test_metadata[field]
-                                # If we have profiled data and it's not set in the test_information
-                                if field == "num_subordinates" and value == "":
-                                    value = run_stats.get("num_subordinates", 0)
-                                if field == "same_axis" and value == "":
-                                    value = bool(run_stats.get("same_axis", 0))
                                 row.append(value)
                         row.extend(
                             [
@@ -180,12 +203,22 @@ class StatsReporter:
                                 break
 
                         # Add performance metrics at the end
-                        row.extend(
-                            [
-                                run_stats["duration_cycles"],
-                                run_stats["bandwidth"],
-                            ]
-                        )
+                        if bandwidth_mode == "combined":
+                            row.extend(
+                                [
+                                    run_stats.get("num_cores", 1),
+                                    run_stats.get("total_bytes", 0),
+                                    run_stats.get("wall_clock_time", run_stats["duration_cycles"]),
+                                    run_stats.get("combined_bandwidth", run_stats["bandwidth"]),
+                                ]
+                            )
+                        else:
+                            row.extend(
+                                [
+                                    run_stats["duration_cycles"],
+                                    run_stats["bandwidth"],
+                                ]
+                            )
 
                         writer.writerow(row)
 

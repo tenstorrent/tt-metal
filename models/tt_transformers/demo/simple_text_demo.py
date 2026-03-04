@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -25,8 +26,12 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
+
+# Issue: https://github.com/tenstorrent/tt-metal/issues/34763
+models_not_supported_for_device_sampling = ["Mistral-7B"]
 
 
 class TokenAccuracy:
@@ -206,6 +211,8 @@ def prepare_generator_args(
     page_params,
     paged_attention,
     num_layers,
+    use_prefetcher,
+    use_hf_rope,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -235,6 +242,8 @@ def prepare_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             num_layers=num_layers,
+            use_prefetcher=use_prefetcher,
+            use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -615,7 +624,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -736,6 +745,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
+# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -743,6 +753,10 @@ def prepare_generator_args(
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=["performance", "accuracy"],
+)
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    ([False]),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -792,10 +806,13 @@ def test_demo_text(
     model_location_generator,
     num_layers,
     mode,
+    use_prefetcher,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
+    hf_dir = os.getenv("HF_MODEL", "")
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -829,9 +846,16 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
-    enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    arg_enable_trace = request.config.getoption("--enable_trace")
+    enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
+    use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
+    use_prefetcher = (
+        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+    )
+    global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+    use_hf_rope = request.config.getoption("--use_hf_rope")
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -847,10 +871,6 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
-    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
-    global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
-
-    hf_dir = os.getenv("HF_MODEL", "")
     if "phi-3-mini-128k-instruct" in hf_dir.lower():
         max_context_supported = 32 * 1024 * num_devices
         # This condition is present since Phi3 mini has a limit of context length 32k for N150
@@ -925,6 +945,8 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
         num_layers=num_layers,
+        use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Skip ci-eval tests on P100 devices
@@ -986,6 +1008,7 @@ def test_demo_text(
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
+
         if batch_idx != 0:
             for i in range(len(model)):
                 for layer in model[i].layers:
@@ -995,6 +1018,40 @@ def test_demo_text(
             generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
+        # Use device sampling for all cases when supported (prefill + decode)
+        device_sampling_params = (
+            SamplingParams(
+                temperature=sampling_params["temperature"],
+                top_k=sampling_params["top_k"],
+                top_p=sampling_params["top_p"],
+                seed=sampling_params["seed"] if "seed" in sampling_params else None,
+                frequency_penalty=sampling_params["frequency_penalty"]
+                if "frequency_penalty" in sampling_params
+                else 0.0,
+                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
+                repetition_penalty=sampling_params["repetition_penalty"]
+                if "repetition_penalty" in sampling_params
+                else 1.0,
+                enable_log_probs=sampling_params["enable_log_probs"]
+                if "enable_log_probs" in sampling_params
+                else False,
+            )
+            if model[0]._supports_on_device_sampling
+            else None
+        )
+
+        # Override the sampling params for some models
+        # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
+        if model_args[0].base_model_name in models_not_supported_for_device_sampling:
+            device_sampling_params = None
+
+        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+            # host sampling only supports single sample param for all users in a batch
+            sampling_params["temperature"] = sampling_params["temperature"][0]
+            sampling_params["top_p"] = sampling_params["top_p"][0]
+            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+
+        prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 
         if mode == "prefill" or mode == "full":
             logger.info("Starting prefill warmup...")
@@ -1004,19 +1061,25 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                sampling_params=prefill_sampling_params,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
+            prefill_out = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                sampling_params=prefill_sampling_params,
             )
-            prefilled_token = torch.argmax(logits, dim=-1)
+            if prefill_sampling_params is not None:
+                prefilled_token, prefill_log_probs = prefill_out
+            else:
+                logits = prefill_out
+                prefilled_token = torch.argmax(logits, dim=-1)
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
         else:
@@ -1038,32 +1101,6 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Use device sampling for all cases when supported
-
-        device_sampling_params = (
-            SamplingParams(
-                temperature=sampling_params["temperature"],
-                top_k=sampling_params["top_k"],
-                top_p=sampling_params["top_p"],
-                frequency_penalty=sampling_params["frequency_penalty"]
-                if "frequency_penalty" in sampling_params
-                else 0.0,
-                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
-                repetition_penalty=sampling_params["repetition_penalty"]
-                if "repetition_penalty" in sampling_params
-                else 1.0,
-                enable_log_probs=sampling_params["enable_log_probs"]
-                if "enable_log_probs" in sampling_params
-                else False,
-            )
-            if model[0]._supports_on_device_sampling
-            else None
-        )
-        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
-            # host sampling only supports single sample param for all users in a batch
-            sampling_params["temperature"] = sampling_params["temperature"][0]
-            sampling_params["top_p"] = sampling_params["top_p"][0]
-            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
 
@@ -1097,12 +1134,13 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits, log_probs = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
+                reset_batch=(iteration == 0),
                 sampling_params=device_sampling_params,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
@@ -1332,7 +1370,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "N150x4", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
@@ -1490,7 +1528,7 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 66,
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
-                "N150_Mistral-7B": 23,
+                "N150_Mistral-7B": 22,
                 # N300 targets
                 # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
                 "N300_Qwen2.5-7B": 21.0,

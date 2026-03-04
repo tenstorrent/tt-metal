@@ -13,7 +13,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
@@ -134,10 +134,13 @@ def run_group_norm_DRAM(
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
         # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
-        #  SDXL VAE
+        # SDXL Base
+        (1, 1920, 16, 16, 32, 1, 4, 4),
+        # SDXL VAE
         (1, 256, 256, 256, 32, 4, 8, 8),
         (1, 512, 256, 256, 32, 4, 8, 8),
         # SDXL Refiner
+        (1, 1536, 8, 8, 32, 1, 2, 8),
         (1, 1152, 128, 128, 32, 2, 8, 4),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
@@ -231,6 +234,17 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
+
+    if (
+        is_blackhole()
+        and is_watcher_enabled()
+        and N == 1
+        and H == 512
+        and W == 512
+        and num_groups == 32
+        and (C, num_splits) in [(256, 8), (512, 16)]
+    ):
+        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37645")
 
     grid_size = ttnn.CoreGrid(y=8, x=8)
 

@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-constexpr uint32_t WT_THRESHOLD = 64;
+constexpr uint32_t SORT_WT_THRESHOLD = 64;
 
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -37,7 +37,7 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
             index_dtype,
             SortProgramFactoryCrossCoreDataExchange::CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
 
-    if (Wt <= WT_THRESHOLD) {
+    if (Wt <= SORT_WT_THRESHOLD) {
         // Single-core implementation
         return SortProgramFactorySingleRowSingleCore{};
     }
@@ -47,11 +47,6 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     }
     // DRAM implementation
     return SortProgramFactorySingleRowMultiCore{};
-}
-
-void SortDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void SortDeviceOperation::validate_on_program_cache_miss(

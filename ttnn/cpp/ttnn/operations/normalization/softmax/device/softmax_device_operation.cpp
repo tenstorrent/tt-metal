@@ -161,11 +161,6 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     return SoftmaxProgramFactoryGeneralCLarge{};
 }
 
-void SoftmaxDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensors_args) {
     TT_FATAL(
@@ -239,6 +234,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w * tensors_args.input_tensor.tensor_spec().tile().get_width() ==
                                 shape[3],
                             "shard width must equal to input tensor shape[3]!");
+
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
                             // grid
@@ -288,6 +284,42 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(not attributes.scale.has_value(), "Scale value must not be set when mask is not present");
     }
+
+    // Validate SoftmaxShardedMultiCoreProgramConfig parameters regardless of mask presence
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                // Validate block_h and block_w match the actual shard dimensions in tiles
+                TT_FATAL(
+                    attributes.output_mem_config.shard_spec().has_value(),
+                    "output_mem_config must have a shard_spec when using SoftmaxShardedMultiCoreProgramConfig");
+                const auto& shard_shape = attributes.output_mem_config.shard_spec().value().shape;
+                uint32_t shard_height_in_tiles =
+                    shard_shape[0] / tensors_args.input_tensor.tensor_spec().tile().get_height();
+                uint32_t shard_width_in_tiles =
+                    shard_shape[1] / tensors_args.input_tensor.tensor_spec().tile().get_width();
+                TT_FATAL(
+                    program_config.block_h == shard_height_in_tiles,
+                    "block_h ({}) must match the shard height in tiles ({}). Shard shape is [{}, {}] with tile "
+                    "height {}.",
+                    program_config.block_h,
+                    shard_height_in_tiles,
+                    shard_shape[0],
+                    shard_shape[1],
+                    tensors_args.input_tensor.tensor_spec().tile().get_height());
+                TT_FATAL(
+                    program_config.block_w == shard_width_in_tiles,
+                    "block_w ({}) must match the shard width in tiles ({}). Shard shape is [{}, {}] with tile "
+                    "width {}.",
+                    program_config.block_w,
+                    shard_width_in_tiles,
+                    shard_shape[0],
+                    shard_shape[1],
+                    tensors_args.input_tensor.tensor_spec().tile().get_width());
+            }
+        },
+        attributes.program_config);
 }
 
 SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_output_specs(
@@ -321,6 +353,22 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
 
 tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // When a mask is present, its dtype and memory_config influence the compiled program:
+    //   - mask dtype        → mask_cb_data_format → CB c_in4/c_in5 data format (compile-time)
+    //   - mask memory_config → TensorAccessorArgs IsDram flag (compile-time arg)
+    //
+    // mask padded_shape is NOT included, even though num_tiles_causal_mask (compile-time arg,
+    // is_causal_mask=True only) is derived from it. It is provably redundant: scale_mask_softmax
+    // enforces mask.padded_shape()[-1] == input.padded_shape()[-1] and mask.padded_shape()[-2]
+    // is always the tile height at the device op level (either already equal to the tile height or
+    // padded to it by tilize_with_val_padding). Therefore, using tile_height and tile_width from
+    // input_tensor.tensor_spec().tile():
+    //   num_tiles_causal_mask = input.padded_shape()[-1] * tile_height / (tile_height * tile_width) = Wt_of_input
+    // which is fully determined by input.logical_shape()[-1] already present in the hash.
+    std::optional<MemoryConfig> default_memory_config =
+        !tensor_args.mask.has_value() ? std::make_optional<MemoryConfig>() : std::nullopt;
+    const auto& mask_memory_config =
+        tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : *default_memory_config;
     return operation::hash_operation<SoftmaxDeviceOperation>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.softmax_type,
@@ -336,7 +384,9 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
         tensor_args.input_tensor.logical_shape(),
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.memory_config(),
-        tensor_args.input_tensor.layout());
+        tensor_args.input_tensor.layout(),
+        tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID,
+        mask_memory_config);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>

@@ -110,11 +110,12 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     // Program specific checks
     if ((tensor_args.input_tensor.device()->l1_size_per_core() * 0.9) < cb_size_sum_bytes) {
         use_large_kernel = true;
-        cb_length = 80;
-        in0_t = 80;
-        im4_t = 80;
-        im0_t = 80;
-        im3_t = 80;
+        uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
+        cb_length = large_kernel_cb_size;
+        in0_t = large_kernel_cb_size;
+        im4_t = large_kernel_cb_size;
+        im0_t = large_kernel_cb_size;
+        im3_t = large_kernel_cb_size;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     if (!use_large_kernel) {
@@ -290,9 +291,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0, 0});
             } else {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
             }
 
             SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0});
@@ -418,11 +419,12 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
 
     if (use_large_kernel) {
         // Use fixed sizes matching create() for large kernel
-        in0_t = 80;
+        uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
+        in0_t = large_kernel_cb_size;
         out0_t = block_size * 2;
-        im0_t = 80;
-        im3_t = 80;
-        im4_t = 80;
+        im0_t = large_kernel_cb_size;
+        im3_t = large_kernel_cb_size;
+        im4_t = large_kernel_cb_size;
     } else {
         // Standard calculation for regular kernel
         in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;

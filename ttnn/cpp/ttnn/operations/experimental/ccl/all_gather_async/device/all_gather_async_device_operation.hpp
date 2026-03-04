@@ -7,6 +7,7 @@
 #include "all_gather_async_device_operation_types.hpp"
 #include "all_gather_async_default_program_factory.hpp"
 #include "all_gather_async_llama_sharded_program_factory.hpp"
+#include "all_gather_via_broadcast_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -18,11 +19,10 @@ struct AllGatherAsyncDeviceOperation {
     using tensor_args_t = AllGatherAsyncInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory>;
+    using program_factory_t =
+        std::variant<DefaultMeshWorkloadFactory, LlamaShardedMeshWorkloadFactory, AllGatherViaBroadcastFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -44,6 +44,7 @@ struct AllGatherAsyncDeviceOperation {
         const std::optional<uint32_t>& cluster_axis,
         bool use_optimal_ccl_for_llama,
         bool use_all_gather_async_llama_sharded,
+        bool use_all_gather_async_via_broadcast,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         const std::optional<uint32_t>& chunks_per_sync,
         const std::optional<uint32_t>& num_workers_per_link,
@@ -55,7 +56,8 @@ struct AllGatherAsyncDeviceOperation {
 
 enum class AllGatherAsyncVersion {
     LLAMA_MINIMAL_SHARDED = 0,
-    MINIMAL_DEFAULT = 1,
+    VIA_BROADCAST = 1,
+    MINIMAL_DEFAULT = 2,
 };
 
 AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes);

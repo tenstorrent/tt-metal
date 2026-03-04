@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,28 +37,36 @@ void initialize_weights_he_kaiming_normal(modules::ModuleBase& model) {
     }
 }
 
-RunnerType read_runner_type(const YAML::Node& config) {
-    auto runner_type_str = config["runner_type"].as<std::string>("default");
-    if (runner_type_str == "default") {
+RunnerType read_runner_type(const std::string& s) {
+    if (s == "default") {
         return RunnerType::Default;
-    } else if (runner_type_str == "memory_efficient") {
+    } else if (s == "memory_efficient") {
         return RunnerType::MemoryEfficient;
     } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown runner type: {}. Supported runner types [default, memory_efficient]", runner_type_str));
+        throw std::runtime_error(
+            fmt::format("Unknown runner type: {}. Supported runner types [default, memory_efficient]", s));
+    }
+}
+
+RunnerType read_runner_type(const YAML::Node& config) {
+    auto runner_type_str = config["runner_type"].as<std::string>("default");
+    return read_runner_type(runner_type_str);
+}
+
+WeightTyingType read_weight_tying_type(const std::string& s) {
+    if (s == "disabled") {
+        return WeightTyingType::Disabled;
+    } else if (s == "enabled") {
+        return WeightTyingType::Enabled;
+    } else {
+        throw std::runtime_error(
+            fmt::format("Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", s));
     }
 }
 
 WeightTyingType read_weight_tying_type(const YAML::Node& config) {
     auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
-    if (weight_tying_str == "disabled") {
-        return WeightTyingType::Disabled;
-    } else if (weight_tying_str == "enabled") {
-        return WeightTyingType::Enabled;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
-    }
+    return read_weight_tying_type(weight_tying_str);
 }
 
 KvCache::KvCache(
@@ -119,15 +127,15 @@ const uint32_t KvCache::update_prefill(
         new_tokens <= key_tensor.logical_shape()[-2], "New tokens must be less than or equal to the sequence length");
     const auto cache_shape = k_cache.logical_shape();
 
-    const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-    const ttnn::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
-    const ttnn::SmallVector<uint32_t> kv_end = {kv_shape[0], kv_shape[1], new_tokens, kv_shape[3]};
+    const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    const ttsl::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> kv_end = {kv_shape[0], kv_shape[1], new_tokens, kv_shape[3]};
 
     const tt::tt_metal::Tensor& new_key = ttnn::slice(key_tensor, token_start, kv_end, step);
     const tt::tt_metal::Tensor& new_value = ttnn::slice(value_tensor, token_start, kv_end, step);
 
-    const ttnn::SmallVector<uint32_t> cache_start = {0, 0, 0, 0};
-    const ttnn::SmallVector<uint32_t> cache_end = {cache_shape[0], cache_shape[1], new_tokens, cache_shape[3]};
+    const ttsl::SmallVector<uint32_t> cache_start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> cache_end = {cache_shape[0], cache_shape[1], new_tokens, cache_shape[3]};
 
     ttnn::experimental::slice_write(new_key, k_cache, cache_start, cache_end, step);
     ttnn::experimental::slice_write(new_value, v_cache, cache_start, cache_end, step);
@@ -146,15 +154,15 @@ const uint32_t KvCache::update_decode(
     const auto kv_shape = key_tensor.logical_shape();
     TT_FATAL(new_tokens <= kv_shape[-2], "New tokens must be less than or equal to the sequence length");
 
-    const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-    const ttnn::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
-    const ttnn::SmallVector<uint32_t> kv_end = {kv_shape[0], kv_shape[1], new_tokens, kv_shape[3]};
+    const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    const ttsl::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
+    const ttsl::SmallVector<uint32_t> kv_end = {kv_shape[0], kv_shape[1], new_tokens, kv_shape[3]};
 
     const tt::tt_metal::Tensor& new_key = ttnn::slice(key_tensor, token_start, kv_end, step);
     const tt::tt_metal::Tensor& new_value = ttnn::slice(value_tensor, token_start, kv_end, step);
 
-    const ttnn::SmallVector<uint32_t> cache_start = {0, 0, cache_position, 0};
-    const ttnn::SmallVector<uint32_t> cache_end = {
+    const ttsl::SmallVector<uint32_t> cache_start = {0, 0, cache_position, 0};
+    const ttsl::SmallVector<uint32_t> cache_end = {
         cache_shape[0], cache_shape[1], cache_position + new_tokens, cache_shape[3]};
 
     ttnn::experimental::slice_write(new_key, k_cache, cache_start, cache_end, step);

@@ -49,10 +49,14 @@ class TtUNet2DConditionModel(LightweightModule):
 
         # Initialze embeddings with attention_weights_dtype for the time being.
         self.time_embedding = TtTimestepEmbedding(
-            device, state_dict, "time_embedding", linear_weights_dtype=model_config.attention_weights_dtype
+            device,
+            state_dict,
+            "time_embedding",
+            model_config,
+            linear_weights_dtype=model_config.attention_weights_dtype,
         )
         self.add_embedding = TtTimestepEmbedding(
-            device, state_dict, "add_embedding", linear_weights_dtype=model_config.attention_weights_dtype
+            device, state_dict, "add_embedding", model_config, linear_weights_dtype=model_config.attention_weights_dtype
         )
 
         self.down_blocks = []

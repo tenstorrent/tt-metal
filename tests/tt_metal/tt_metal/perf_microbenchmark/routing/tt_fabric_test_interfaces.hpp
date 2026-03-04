@@ -42,6 +42,7 @@ public:
     virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
+    virtual std::vector<CoreCoord> get_available_worker_cores() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
     virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
@@ -96,6 +97,10 @@ public:
     virtual std::unordered_map<RoutingDirection, uint32_t> get_unidirectional_linear_mcast_hops(
         const FabricNodeId& src_node_id, uint32_t dim) const = 0;
     virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const = 0;
+    virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_non_wrap_around_ring_pairs(
+        const std::vector<FabricNodeId>& device_ids) const = 0;
+    virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_directional_neighbor_pairs(
+        const std::vector<FabricNodeId>& device_ids, bool is_galaxy) const = 0;
     virtual std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_wrap_around_mesh_full_or_half_ring_mcast_hops(

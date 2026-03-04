@@ -103,20 +103,19 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
+    Tensor(HostStorage(std::move(buffer)), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(Tensor::next_tensor_id()) {
-    init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
-}
+Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
-void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
-    tensor_attributes =
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology));
-
-    if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
-        device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
-        mesh_device_ = device_storage->mesh_buffer->device();
+Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
+        mesh_device_ = buffer->device();
     }
 }
 
@@ -161,10 +160,10 @@ void Tensor::deallocate_impl(bool force) {
             tt::stl::overloaded{
                 [](HostStorage&) {},
                 [this, force, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.mesh_buffer, force)) {
-                        storage.mesh_buffer->deallocate();
+                    if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
+                        storage.deallocate_root_mesh_buffer();
                     }
-                    storage.mesh_buffer.reset();
+                    storage.reset_root_mesh_buffer();
                 }},
             this->tensor_attributes->get_storage());
     }
@@ -591,8 +590,6 @@ Tensor set_tensor_id(const Tensor& tensor) {
     output.tensor_id = Tensor::next_tensor_id();
     return output;
 };
-
-Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
 

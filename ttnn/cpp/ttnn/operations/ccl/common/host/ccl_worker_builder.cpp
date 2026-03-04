@@ -45,9 +45,7 @@ Shape4D<uint32_t> to_4d_offset(tt_xy_pair const& offset) { return Shape4D<uint32
 size_t get_volume(tt_xy_pair const& shape) { return shape.x * shape.y; }
 
 template <cmd::CclCommandArgCode code>
-struct tensor_slice_command_arg_field {
-    using type = std::nullptr_t;
-};
+struct tensor_slice_command_arg_field {};
 template <>
 struct tensor_slice_command_arg_field<cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> {
     static auto get_value(v2::TensorSlice const& s) { return s.tensor_shape; };

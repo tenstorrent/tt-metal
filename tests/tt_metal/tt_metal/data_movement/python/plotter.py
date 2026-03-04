@@ -13,7 +13,9 @@ from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
 class Plotter:
-    def __init__(self, dm_stats, aggregate_stats, output_dir, arch, test_id_to_name, test_id_to_comment):
+    def __init__(
+        self, dm_stats, aggregate_stats, output_dir, arch, test_id_to_name, test_id_to_comment, metadata_loader=None
+    ):
         self.dm_stats = dm_stats
         self.aggregate_stats = aggregate_stats
         # Create architecture-specific subdirectory
@@ -22,6 +24,7 @@ class Plotter:
         self.arch = arch
         self.test_id_to_name = test_id_to_name
         self.test_id_to_comment = test_id_to_comment
+        self.metadata_loader = metadata_loader
         self.plot_config = self.get_plot_config()
 
     def get_plot_config(self):
@@ -49,6 +52,15 @@ class Plotter:
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 1
         return config
+
+    def get_bandwidth_mode(self, test_id):
+        """Returns the bandwidth_mode for a given test_id from test_information.yaml.
+        Defaults to 'per_core' if metadata_loader is not available or field is missing."""
+        if self.metadata_loader is None:
+            return "per_core"
+        test_info = self.metadata_loader.load_test_information()
+        test_data = test_info.get("tests", {}).get(test_id, {})
+        return test_data.get("bandwidth_mode", "per_core")
 
     def plot_dm_stats(self):
         # Ensure output directory exists
@@ -106,6 +118,8 @@ class Plotter:
                 for col in range(plot_config["ncols_per_figure"]):
                     axes.append(fig.add_subplot(gridspec[row, col]))
 
+            bandwidth_mode = self.get_bandwidth_mode(test_id)
+
             # Generate plots based on test type
             if "Multicast Schemes" in test_name:
                 self.plot_bandwidth_multicast(
@@ -137,7 +151,7 @@ class Plotter:
                 self.plot_num_transactions_vs_total_cycles(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
-                self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
+                self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id], bandwidth_mode=bandwidth_mode)
 
             # Add figure title
             fig.suptitle(f"{test_name} ({self.arch.upper()})", fontsize=16, fontweight="bold", y=0.98)
@@ -263,14 +277,22 @@ class Plotter:
         )
 
     # Packet Sizes: Transaction Size vs Bandwidth
-    def plot_data_size_vs_bandwidth(self, ax, data):
+    def plot_data_size_vs_bandwidth(self, ax, data, bandwidth_mode="per_core"):
         x_key = "transaction_size"
-        y_key = "bandwidth"
         series_keys = ["riscv", "num_transactions"]
 
-        title = "Transaction Size vs Bandwidth"
+        if bandwidth_mode == "combined":
+            y_key = "combined_bandwidth"
+            title = "Transaction Size vs Combined Bandwidth"
+            ylabel = "Combined Bandwidth (bytes/cycle)"
+            add_theoretical_max_bw = False
+        else:
+            y_key = "bandwidth"
+            title = "Transaction Size vs Bandwidth"
+            ylabel = "Bandwidth (bytes/cycle)"
+            add_theoretical_max_bw = True
+
         xlabel = "Transaction Size (bytes)"
-        ylabel = "Bandwidth (bytes/cycle)"
 
         risc_to_kernel_map = RISC_TO_KERNEL_MAP
         self._plot_series(
@@ -285,7 +307,7 @@ class Plotter:
             ylabel=ylabel,
             xscale="log",
             xbase=2,
-            add_theoretical_max_bw=True,
+            add_theoretical_max_bw=add_theoretical_max_bw,
         )
 
     # Transaction ID: Transaction ID Count vs Bandwidth (grouped by transaction size)

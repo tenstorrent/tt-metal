@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,7 @@ public:
         if (check_32_chips()) {
             ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
             ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
+            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
         }
@@ -177,7 +177,7 @@ TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
     // batch=4 sharded across 4 rows -> 1 per device
-    TestRingShift(4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
+    TestRingShift(8, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardBig) {

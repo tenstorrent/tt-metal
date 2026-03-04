@@ -45,7 +45,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
@@ -191,7 +191,7 @@ struct RowMajorHostBuffer {
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
     // conversion to Host storage after
     // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
-    if (std::holds_alternative<DeviceStorage>(tt_tensor.storage())) {
+    if (is_device_tensor(tt_tensor)) {
         return convert_to_row_major_host_buffer(tt_tensor.cpu(), padded_output);
     }
 
@@ -242,26 +242,17 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         TT_THROW("Unreachable");
     };
 
-    return convert_to_logical(std::visit(
-        tt::stl::overloaded{
-            [](const HostStorage& storage) {
-                std::vector<HostBuffer> buffers;
-                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
-                    "to concatenate multi-device shards.",
-                    storage.buffer().shape());
-                return buffers.front();
-            },
-            [&tt_tensor](auto&&) -> HostBuffer {
-                TT_THROW(
-                    "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
-            },
-        },
-        tt_tensor.storage()));
+    TT_FATAL(is_cpu_tensor(tt_tensor), "Tensor with {} cannot be converted to torch", tt_tensor.storage_type());
+    const auto& storage = tt_tensor.host_storage();
+    std::vector<HostBuffer> buffers;
+    storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+    TT_FATAL(
+        buffers.size() == 1,
+        "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+        "composer "
+        "to concatenate multi-device shards.",
+        storage.buffer().shape());
+    return convert_to_logical(buffers.front());
 }
 
 // Overload that converts a distributed tensor to a RowMajorHostBuffer.
@@ -309,11 +300,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // Fiddling with sign bit to match previous behavior
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
-    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
-        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
-    }
 
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
@@ -651,7 +638,8 @@ void pytensor_module(nb::module_& mod) {
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
                const distributed::TensorToMesh* mesh_mapper,
-               bool preserve_nan_values) {
+               bool preserve_nan_values,
+               bool col_tilize) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -683,7 +671,8 @@ void pytensor_module(nb::module_& mod) {
                     cq_id,
                     mesh_mapper,
                     pad_value,
-                    preserve_nan_values));
+                    preserve_nan_values,
+                    col_tilize));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -695,6 +684,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
             nb::arg("preserve_nan_values") = false,
+            nb::arg("col_tilize") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -719,6 +709,8 @@ void pytensor_module(nb::module_& mod) {
                 +--------------+--------------------------------+
                 | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
                 +--------------+--------------------------------+
+                | col_tilize   | Column-wise BFP tilize (false)  |
+                +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:
 
@@ -739,7 +731,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, bool force) { self.deallocate(force); },
             nb::arg("force") = false,
             R"doc(
-                Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
+                Deallocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
             )doc")
         .def(
             "to",
@@ -875,7 +867,7 @@ void pytensor_module(nb::module_& mod) {
              )doc")
         .def(
             "to",
-            nb::overload_cast<Layout>(&Tensor::to_layout, nb::const_),
+            [](const Tensor& self, Layout target_layout) { return ttnn::to_layout(self, target_layout); },
             nb::arg("target_layout").noconvert(),
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:
@@ -1313,19 +1305,10 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t {
-                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
-                            return s.mesh_buffer->address();
-                        },
-                        [&](auto&&) -> uint32_t {
-                            TT_THROW(
-                                "{} doesn't support buffer_address method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+                TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
+                const auto& storage = self.device_storage();
+                TT_FATAL(storage.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return storage.mesh_buffer->address();
             },
             R"doc(
             Get the address of the underlying buffer.

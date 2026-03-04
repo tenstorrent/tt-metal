@@ -99,6 +99,7 @@ constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
 constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE = 0;
+constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -142,7 +143,7 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
-    volatile uint32_t local_cb_mask;
+    volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
@@ -160,7 +161,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2)];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -170,10 +171,9 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
-static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
-static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
@@ -241,6 +241,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeL1AddrOverflow = 14,
     DebugSanitizeEthSrcL1AddrOverflow = 15,
     DebugSanitizeEthDestL1AddrOverflow = 16,
+    DebugSanitizeCBOutOfBounds = 17,
 };
 
 struct debug_assert_msg_t {

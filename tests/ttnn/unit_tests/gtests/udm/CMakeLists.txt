@@ -2,15 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
 add_executable(unit_tests_ttnn_udm)
-target_sources(
-    unit_tests_ttnn_udm
-    PRIVATE
-        copy/test_udm_copy.cpp
-        eltwise/test_udm_add.cpp
-        reduction/sharded/test_udm_reduction.cpp
-        reduction/interleaved/test_udm_reduction_interleaved.cpp
-)
+target_sources(unit_tests_ttnn_udm PRIVATE ${UNIT_TESTS_TTNN_UDM_SOURCES})
 
 target_link_libraries(
     unit_tests_ttnn_udm
@@ -27,3 +23,4 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tests
 )
+target_precompile_headers(unit_tests_ttnn_udm REUSE_FROM TTNN::PCH)

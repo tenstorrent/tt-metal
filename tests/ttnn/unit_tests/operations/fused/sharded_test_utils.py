@@ -130,6 +130,12 @@ def ttnn_layer_norm_sharded(
     # Create output memory config (same sharding as input)
     output_memory_config = ttnn.get_memory_config(tt_input_tensor)
 
+    # Create reciprocal tensor for Welford algorithm if needed
+    recip_tensor = None
+    if use_welford:
+        shard_spec = tt_input_tensor.memory_config().shard_spec
+        recip_tensor = ttnn.create_layer_norm_reciprocals(device, shard_spec.grid, shard_spec.shape[1])
+
     # Run layernorm
     output_ttnn = ttnn.layer_norm(
         tt_input_tensor,
@@ -145,13 +151,16 @@ def ttnn_layer_norm_sharded(
             use_welford=use_welford,
             inplace=False,
         ),
+        recip_tensor=recip_tensor,
     )
 
     output_ttnn = ttnn.from_device(output_ttnn)
     return ttnn.to_torch(output_ttnn)
 
 
-def ttnn_rms_norm_sharded(device, tt_input_tensor, block_ht, block_wt, subblock_w=1, residual=None, weight=None):
+def ttnn_rms_norm_sharded(
+    device, tt_input_tensor, block_ht, block_wt, subblock_w=1, residual=None, weight=None, bias=None
+):
     """
     Run rms norm sharded on a TTNN tensor.
     Args:
@@ -162,6 +171,7 @@ def ttnn_rms_norm_sharded(device, tt_input_tensor, block_ht, block_wt, subblock_
         subblock_w: The width of the subblock in tiles.
         residual: The residual tensor to add to the input tensor.
         weight: The weight tensor to use for the rms norm.
+        bias: The bias tensor to use for the rms norm.
     Returns:
         The output tensor as a torch tensor.
     """
@@ -173,6 +183,7 @@ def ttnn_rms_norm_sharded(device, tt_input_tensor, block_ht, block_wt, subblock_
         tt_input_tensor,
         residual_input_tensor=residual,
         weight=weight,
+        bias=bias,
         memory_config=output_memory_config,
         program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -207,17 +218,23 @@ def torch_layer_norm(torch_input_tensor, residual=None, weight=None, bias=None):
     )
 
 
-def rms_norm_golden(input_tensor, weight):
+def rms_norm_golden(input_tensor, weight=None, bias=None, epsilon=1e-5):
     """
-    Compute golden RMS output for an input tensor and weight tensor.
+    Compute golden RMS output for an input tensor with optional weight and bias.
     Args:
         input_tensor: The input tensor to run the rms norm on.
-        weight: The weight tensor to use for the rms norm.
+        weight: The weight tensor (gamma) to use for the rms norm, or None.
+        bias: The bias tensor (beta) to use for the rms norm, or None.
+        epsilon: Epsilon for rsqrt stability.
     Returns:
         The output tensor as a torch tensor.
     """
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
-    return golden_function(input_tensor, weight)
+    golden_rms = golden_function(input_tensor, weight)
+    if bias is not None:
+        golden_rms = golden_rms + bias
+
+    return golden_rms
 
 
 def simple_size_params(two_stage):
@@ -314,7 +331,11 @@ def do_test_main(
     if op_name == "layer_norm":
         ref_output_tensor = torch_layer_norm(torch_input_tensor, residual=residual, weight=weight, bias=bias)
     elif op_name == "rms_norm":
-        ref_output_tensor = rms_norm_golden(torch_input_tensor, weight)
+        ref_output_tensor = rms_norm_golden(
+            torch_input_tensor + residual if residual is not None else torch_input_tensor,
+            weight=weight,
+            bias=bias,
+        )
 
     # Generate the tt tensor based on the inputs
     sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
@@ -354,6 +375,7 @@ def do_test_main(
             subblock_wt,
             residual=residual,
             weight=weight,
+            bias=bias,
         )
 
     # Check PCC
@@ -416,6 +438,7 @@ def rms_norm_test_main(
     dtype,
     residual=None,
     weight=None,
+    bias=None,
     weight_layout=ttnn.TILE_LAYOUT,
 ):
     """
@@ -436,7 +459,7 @@ def rms_norm_test_main(
         dtype,
         residual=residual,
         weight=weight,
-        bias=None,
+        bias=bias,
         weight_bias_layout=weight_layout,
         op_name="rms_norm",
     )

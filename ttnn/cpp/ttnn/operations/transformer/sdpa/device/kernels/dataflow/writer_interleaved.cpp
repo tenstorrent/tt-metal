@@ -28,8 +28,9 @@ void kernel_main() {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
+    constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<21>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -40,13 +41,14 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
     const uint32_t num_phases = get_arg_val<uint32_t>(8);
-    const uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(9);
-    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(10);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
+    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(11);
-        write_offset_phase_2 = get_arg_val<uint32_t>(12);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(12);
+        write_offset_phase_2 = get_arg_val<uint32_t>(13);
     }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
@@ -56,6 +58,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_chunk_start_idx = tt::CBIndex::c_9;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
@@ -70,6 +73,31 @@ void kernel_main() {
 
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    // Lightweight mask: generate a single -inf tile once, leave permanently fronted.
+    if constexpr (use_lightweight_mask) {
+        const uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+        cb_reserve_back(cb_mask_in, 1);
+        auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
+        for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
+            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
+        }
+        cb_push_back(cb_mask_in, 1);
+    }
+
+    if constexpr (is_chunked) {
+        if (use_chunk_start_idx_tensor != 0) {
+            cb_wait_front(cb_chunk_start_idx, 1);
+            auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chunk_start_idx));
+            uint32_t chunk_start_idx = chunk_start_ptr[0];
+            cb_pop_front(cb_chunk_start_idx, 1);
+            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
+            chunk_start_t_in_q_chunks_phase_1 = chunk_start_idx / q_chunk_size;
+            if (num_phases == 2) {
+                chunk_start_t_in_q_chunks_phase_2 = chunk_start_t_in_q_chunks_phase_1;
+            }
+        }
+    }
 
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;
@@ -98,9 +126,9 @@ void kernel_main() {
                     q_chunk = local_q_start + q_iter;
 #endif
 
-                    // Generate mask only when user didn't provide one
-                    // When use_provided_mask, reader handles mask reading (and padding if needed)
-                    if constexpr (!use_provided_mask) {
+                    // Generate mask only when user didn't provide one.
+                    // Lightweight path already has a single -inf tile fronted — skip generate_mask.
+                    if constexpr (!use_provided_mask && !use_lightweight_mask) {
                         generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
                             Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0);
                     }

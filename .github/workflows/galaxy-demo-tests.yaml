@@ -15,9 +15,7 @@ on:
           # - llama3_evals
           - llama3_8b_dp
           - llama3_70b_dp
-          - falcon7b
           - sentence_bert
-          - whisper
           - sd35
           - flux1
           - gpt-oss
@@ -52,6 +50,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
 jobs:
@@ -74,4 +77,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
-      topology: topology-6u
+      enabled-skus: wh_galaxy
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

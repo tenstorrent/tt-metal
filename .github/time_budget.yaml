@@ -67,12 +67,19 @@ metal_infra:
 # Current time budgets are based on sums of existing tests.
 # No official decision has been made yet for division of budgets per team.
 ttnn:
+  sanity:
+    wh_n300_civ2: 535
+    bh_p100: 535
+    bh_p150b_civ2: 535
   unit:
     wh_llmbox: 50
   e2e:
     wh_llmbox: 90
+    wh_galaxy: 40
+    bh_galaxy: 40
   integration:
     wh_llmbox: 30
+    wh_galaxy: 350
 
 fabric:
   unit:
@@ -81,23 +88,52 @@ fabric:
     wh_llmbox: 10
   e2e:
     wh_llmbox: 165
+    wh_galaxy: 100
+    bh_galaxy: 60
 
 scaleout:
   e2e:
     wh_llmbox: 20
   unit:
-    wh_llmbox: 15
+    wh_llmbox: 20
   integration:
     wh_llmbox: 30
 
 models:
   e2e:
-    wh_llmbox: 35
+    wh_llmbox: 180
+    wh_llmbox_perf: 60
+    wh_n150: 30
+    wh_n300: 30
+    wh_galaxy: 30
   unit:
-    wh_llmbox: 287
+    wh_llmbox: 305
+    wh_llmbox_perf: 60
+    wh_n150: 30
+    wh_n300: 30
+    wh_galaxy: 30
   integration:
     wh_llmbox: 422
   perf:
-    wh_llmbox: 685
+    wh_llmbox_perf: 685
+    wh_galaxy: 280
   demo:
-    wh_llmbox: 1090
+    wh_llmbox_perf: 1090
+    wh_llmbox_perf_release: 1090
+    wh_galaxy: 287
+    wh_galaxy_release: 345
+    wh_n150: 500
+    wh_n150_civ2: 300
+    wh_n300: 600
+    wh_n300_civ2: 400
+    wh_n300_perf: 200
+    bh_p150: 250
+    bh_p150_perf: 420
+    bh_deskbox: 250
+    bh_llmbox: 1200
+    bh_loudbox: 1200
+    bh_p300: 800
+    bh_quietbox_2: 250
+  sweep:
+    wh_n150: 15
+    wh_llmbox_perf: 30

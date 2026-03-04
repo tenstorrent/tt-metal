@@ -7,8 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/math.hpp"
@@ -101,7 +99,8 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        args.reduce_scatter_core_grid_offset);
+        args.reduce_scatter_core_grid_offset,
+        std::nullopt);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =

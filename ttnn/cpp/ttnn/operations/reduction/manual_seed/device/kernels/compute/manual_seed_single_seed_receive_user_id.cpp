@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/rand.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
@@ -25,8 +25,9 @@ void kernel_main() {
     const uint32_t message = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/0);
     const bool is_core_id = (message != 0) ? true : false;
 
-    // Initialize random generator if core_id matched
-    if (is_core_id) {
+    // A seed value of UINT32_MAX (0xFFFFFFFF) is a special value
+    // that skips rand_tile_init, leaving the PRNG state unchanged.
+    if (is_core_id && seed != UINT32_MAX) {
         rand_tile_init(seed);
     }
 

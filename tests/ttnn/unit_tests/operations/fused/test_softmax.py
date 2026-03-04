@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_watcher_enabled
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -23,6 +23,9 @@ from models.common.utility_functions import torch_random
     ],
 )
 def test_large_softmax(device, batch_size, h, w, dim):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test with watcher enabled, see #37269")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
@@ -489,7 +492,43 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     assert_with_ulp(torch_output, output_torch, expected_ulp)
 
 
+@pytest.mark.parametrize(
+    "Wt",
+    [
+        193,  # block_size=1
+        194,  # block_size=2
+        195,  # block_size=3
+        196,  # block_size=4
+    ],
+)
+def test_softmax_large_kernel_block_size(device, Wt):
+    """Large tensors trigger a large-kernel code path that caps CB sizes.
+    The capped size must be rounded to a multiple of block_size.
+    Regression test for block_size values that do not evenly divide 80.
+    """
+    torch.manual_seed(0)
+
+    W = Wt * 32
+    shape = (1, 1, 32, W)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = F.softmax(torch_input, dim=-1, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(ttnn_input, dim=-1, compute_kernel_config=compute_config, numeric_stable=True)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.997)
+
+
 def test_softmax_4096x4096_fp32(device):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test with watcher enabled, see #37269")
+
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)
     torch_output = torch.ops.aten._softmax.default(torch_input_tensor, dim=3, half_to_float=False)

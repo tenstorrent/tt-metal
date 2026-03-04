@@ -1,4 +1,4 @@
-name: "[internal] Blackhole Demo tests impl"
+name: "[internal] Blackhole demo tests impl reorg"
 
 on:
   workflow_call:
@@ -12,61 +12,88 @@ on:
       docker-image:
         required: true
         type: string
-      runner-label:
+      enabled-skus:
+        required: true
+        type: string
+      weights-cache-mode:
         required: false
         type: string
-        default: "BH"
+        default: "local-disk"
+      model:
+        required: false
+        type: string
+        default: "all"
       regenerate-ttnn-cache:
         required: false
         type: boolean
         default: false
 
 jobs:
-  single-card-demo-tests:
-    if: ${{ inputs.runner-label == 'P100' || inputs.runner-label == 'P150' }}
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/blackhole_demo_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Filter test matrix by model
+        id: filter-matrix
+        if: inputs.model != 'all'
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$filtered" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  blackhole-demo-tests:
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          {
-            name: "whisper performance",
-            arch: blackhole,
-            runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
-            cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
-            owner_id: U05RWH3QUPM # Salar Hosseini
-          },
-          {
-            name: "llama3-8b performance",
-            arch: blackhole,
-            runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
-            # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1" --max_seq_len 131072,
-            owner_id: U03PUAKE719 # Miguel Tairum
-          },
-          { # This should be moved to a BH perf regression pipeline in the future
-            name: "unet-shallow performance",
-            arch: blackhole,
-            runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
-            cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
-            owner_id: U06ECNVR0EN # Evan Smal
-          }
-        ]
-
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
         TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - "/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data${{ inputs.regenerate-ttnn-cache == true && ':rw' || ':ro' }}"
+        - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
+        # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
+        # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
+        - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -78,15 +105,40 @@ jobs:
         with:
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run demo regression tests
-        timeout-minutes: 70
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        # Skip this on single-card systems
+        if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
+        timeout-minutes: 10
+        with:
+          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
+      - name: Download Llama model weights from LFC
+        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'llama') }}
+        timeout-minutes: 15
         run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+      - name: Download Flux.1-dev model weights from LFC
+        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        timeout-minutes: 15
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
+      - name: Run demo regression tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         id: save-environment-data
@@ -125,69 +177,3 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-  single-card-p150-demo-tests:
-    if: ${{ inputs.runner-label == 'p150b' }}
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-group: [
-            { # This test shall be executed on the BH with 20 cores
-              name: "panoptic_deeplab demo - 20 cores",
-              arch: blackhole,
-              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline',
-              owner_id: U09LK84G4TF # Nikola Milicevic
-            },
-            { # This test shall be executed on the BH P150 on 110 cores
-              name: "panoptic_deeplab demo - 110 cores",
-              arch: blackhole,
-              cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10, 9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline',
-              owner_id: U09LK84G4TF # Nikola Milicevic
-            },
-          ]
-    name: ${{ matrix.test-group.name }}
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
-    container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
-      env:
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: blackhole
-        LOGURU_LEVEL: INFO
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-
-      - name: Run frequent reg tests scripts
-        timeout-minutes: 180
-        run: ${{ matrix.test-group.cmd }}
-
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}

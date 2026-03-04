@@ -11,10 +11,10 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
-  pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
+  pytest models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
 
   # Falcon40B end to end demo (prefill + decode)
-  pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
+  pytest models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -35,7 +35,7 @@ run_t3000_llama3_70b_tests() {
   llama70b=meta-llama/Llama-3.1-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
-  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
 
 
   # Record the end time
@@ -66,7 +66,7 @@ run_t3000_llama3_tests() {
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
@@ -185,7 +185,7 @@ run_t3000_llama3_vision_tests() {
 
   for mesh_device in "$n300" "$t3k"; do
     MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b \
-    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
+    pytest models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -211,7 +211,7 @@ run_t3000_llama3_90b_vision_tests() {
   tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 1000 || fail=1
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 1000 || fail=1
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -231,7 +231,7 @@ run_t3000_falcon7b_tests(){
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
+  pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -262,8 +262,8 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  # pytest models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
   mixtral8x7=mistralai/Mixtral-8x7B-v0.1
   tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
 
@@ -286,7 +286,7 @@ run_t3000_resnet50_tests() {
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
   # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
+  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -305,7 +305,7 @@ run_t3000_sentence_bert_tests() {
   echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
 
   # Sentence BERT demo test
-  pytest -n auto models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+  pytest models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -325,7 +325,7 @@ run_t3000_dit_tests() {
 
   echo "LOG_METAL: Running ${test_name}"
 
-  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
+  NO_PROMPT=1 pytest ${test_cmd} --timeout 1200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -337,19 +337,19 @@ run_t3000_dit_tests() {
 }
 
 run_t3000_sd35large_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k 2x4cfg1sp0tp1"
+  run_t3000_dit_tests "models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k 2x4cfg1sp0tp1"
 }
 
 run_t3000_flux1_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 2x4sp0tp1-dev"
+  run_t3000_dit_tests "models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 2x4sp0tp1-dev"
 }
 
 run_t3000_motif_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
+  run_t3000_dit_tests "models/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
 
 run_t3000_qwenimage_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 2x4"
+  run_t3000_dit_tests "models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 2x4"
 }
 
 
@@ -376,7 +376,7 @@ run_t3000_whisper_tests() {
 
   echo "LOG_METAL: Running run_t3000_whisper_tests"
 
-  pytest -n auto models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+  pytest models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -395,7 +395,7 @@ run_t3000_wan22_tests() {
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -414,7 +414,7 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1" --timeout 1500; fail+=$?
+  pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1" --timeout 1500; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -434,17 +434,17 @@ run_t3000_gpt_oss_tests() {
   uv pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B accuracy tests completed"
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest --timeout 600 models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B tests completed"
 
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest --timeout 900 models/demos/gpt_oss/tests/accuracy/test_model.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B accuracy tests completed"
 
   # Record the end time
