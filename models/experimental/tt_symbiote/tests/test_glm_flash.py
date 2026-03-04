@@ -149,14 +149,26 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
 
     prompt_tokens = inputs["input_ids"].shape[-1]
 
+    prefill_start = time.perf_counter()
+    outputs_prefill = model(**inputs, use_cache=True, **cache_kwargs)
+    ttnn.synchronize_device(mesh_device)
+    prefill_end = time.perf_counter()
+    prefill_time = prefill_end - prefill_start
+
+    cache_kwargs2 = {}
+    if use_paged_attention:
+        cache_kwargs2["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+
     start_time = time.perf_counter()
-    outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True, **cache_kwargs)
+    outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True, **cache_kwargs2)
     ttnn.synchronize_device(mesh_device)
     end_time = time.perf_counter()
 
     total_time = end_time - start_time
     generated_tokens = outputs.shape[-1] - prompt_tokens
-    tokens_per_second = generated_tokens / total_time
+    decode_time = total_time - prefill_time
+    decode_throughput = generated_tokens / decode_time if decode_time > 0 else 0
+    e2e_throughput = generated_tokens / total_time
 
     decoded_output = tokenizer.decode(outputs[0][prompt_tokens:])
     print(f"\n{'='*80}")
@@ -165,9 +177,12 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     print(f"\nPERFORMANCE METRICS:")
     print(f"  Prompt tokens:        {prompt_tokens}")
     print(f"  Generated tokens:     {generated_tokens}")
+    print(f"  Prefill time:         {prefill_time:.3f}s")
     print(f"  Total time:           {total_time:.3f}s")
-    print(f"  Throughput:           {tokens_per_second:.2f} tokens/s")
-    print(f"  Time per token:       {(total_time / generated_tokens * 1000):.2f}ms")
+    print(f"  Decode time:          {decode_time:.3f}s")
+    print(f"  E2E throughput:       {e2e_throughput:.2f} tokens/s")
+    print(f"  Decode throughput:    {decode_throughput:.2f} tokens/s")
+    print(f"  Decode ms/token:      {(decode_time / generated_tokens * 1000):.2f}ms")
     print(f"{'='*80}\n")
 
     DispatchManager.save_stats_to_file("glm_timing_stats.csv")
