@@ -12,7 +12,7 @@
 // Target physical coordinates are passed as runtime arguments from host.
 //
 // Compile-time args:
-//   0: num_iterations      – number of workload repetitions (stress-test loop)
+//   0: num_loops           – number of workload repetitions (stress-test loop)
 //   1: l1_tx_A_addr        – L1 address to use as source for transfers
 //   2: l1_tx_B_addr        – L1 address to use as source for transfers
 //   3: l1_rx_left_addr     – L1 address to use as source for transfers
@@ -28,7 +28,7 @@
 //   3: target_up_y         – physical y coordinate of core above
 
 void kernel_main() {
-    constexpr uint32_t num_iterations = get_compile_time_arg_val(0);
+    constexpr uint32_t num_loops = get_compile_time_arg_val(0);
     constexpr uint32_t l1_tx_A_addr = get_compile_time_arg_val(1);
     constexpr uint32_t l1_tx_B_addr = get_compile_time_arg_val(2);
     constexpr uint32_t l1_rx_left_addr = get_compile_time_arg_val(3);
@@ -43,7 +43,7 @@ void kernel_main() {
     uint32_t target_up_x = get_arg_val<uint32_t>(2);
     uint32_t target_up_y = get_arg_val<uint32_t>(3);
 
-    for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+    for (uint32_t iter = 0; iter < num_loops; ++iter) {
         // // Send pattern A
         // // Send 8KB to core on the left (using NOC1)
         // uint64_t noc_addr_left = get_noc_addr(target_left_x, target_left_y, l1_rx_right_addr, 1);

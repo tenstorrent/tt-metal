@@ -54,8 +54,11 @@ struct MaxUtilConfig {
     // Number of tiles for pre-filled buffers.
     uint32_t num_tiles = 8;  // 8 tiles as requested
 
-    // Stress-test loop count.
-    uint32_t num_iterations = 100;
+    // Number of times the main program is enqueued to the device.
+    uint32_t num_iterations = 1;
+
+    // Number of loops within each kernel of a single program dispatch.
+    uint32_t num_wl_loops = 100;
 
     // Data transfer size in bytes.
     uint32_t data_transfer_size = 8192;  // 8KB
@@ -79,6 +82,8 @@ struct MaxUtilConfig {
     uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (first 16 bytes = timing)
     // DRAM read transaction size.  Larger values saturate bandwidth better.
     uint32_t eth_page_size = 1024;  // 1KB found to be optimal for BH
+    // ETH loop count: 8x fewer loops than compute to match kernel duration.
+    uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
 };
 
 // ---------------------------------------------------------------------------
@@ -105,13 +110,15 @@ static std::vector<uint32_t> rng_bfp16(
 }
 
 /// Returns a MaxUtilConfig that covers every compute core on @p device.
-static MaxUtilConfig full_grid_config(IDevice* device, uint32_t num_tiles, uint32_t num_iterations) {
+static MaxUtilConfig full_grid_config(
+    IDevice* device, uint32_t num_tiles, uint32_t num_iterations, uint32_t num_wl_loops) {
     auto grid = device->compute_with_storage_grid_size();
     MaxUtilConfig cfg;
     cfg.grid_start = {0, 0};
     cfg.grid_end = {grid.x - 1, grid.y - 1};
     cfg.num_tiles = num_tiles;
     cfg.num_iterations = num_iterations;
+    cfg.num_wl_loops = num_wl_loops;
     return cfg;
 }
 
@@ -246,6 +253,9 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
     // Each core reads from 1 bank only, so maximise staging over the full
     // unreserved ETH L1 region (minus 16-byte timing header).
     cfg.eth_pages_per_bank = (eth_l1_size - 16) / page_size_bytes;
+
+    // ETH kernel runs 8x fewer loops than the compute kernel to match duration.
+    cfg.eth_num_wl_loops = std::max(1u, cfg.num_wl_loops / 8);
 
     log_info(
         LogTest,
@@ -425,7 +435,12 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
     const CoreRange core_range(cfg.grid_start, cfg.grid_end);
     const CoreRangeSet core_range_set({core_range});
 
-    log_info(LogTest, "Main program: {} cores, {} iterations", core_range.size(), cfg.num_iterations);
+    log_info(
+        LogTest,
+        "Main program: {} cores, {} enqueues × {} inner iterations",
+        core_range.size(),
+        cfg.num_iterations,
+        cfg.num_wl_loops);
 
     Program program = CreateProgram();
 
@@ -440,7 +455,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .noc = NOC::RISCV_0_default,
             .compile_args =
                 {
-                    cfg.num_iterations,      // 0: num_iterations
+                    cfg.num_wl_loops,        // 0: num_iterations (inner loops per dispatch)
                     cfg.l1_buffer3_addr,     // 1: l1_buffer_addr for tx pattern A
                     cfg.l1_buffer4_addr,     // 2: l1_buffer_addr for tx pattern B
                     cfg.l1_buffer7_addr,     // 3: l1_buffer_addr for rx from left
@@ -462,7 +477,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .noc = NOC::RISCV_1_default,
             .compile_args =
                 {
-                    cfg.num_iterations,      // 0: num_iterations
+                    cfg.num_wl_loops,        // 0: num_iterations (inner loops per dispatch)
                     cfg.l1_buffer5_addr,     // 1: l1_buffer_addr for tx pattern A
                     cfg.l1_buffer6_addr,     // 2: l1_buffer_addr for tx pattern B
                     cfg.l1_buffer7_addr,     // 3: l1_buffer_addr for rx from left
@@ -488,7 +503,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                     cfg.l1_buffer1_addr,  // 1: l1_buffer1_addr (bfloat16)
                     cfg.l1_buffer2_addr,  // 2: l1_buffer2_addr (output, 8 float16_b tiles)
                     cfg.num_tiles,        // 3: num_tiles (8)
-                    cfg.num_iterations,   // 4: num_iterations
+                    cfg.num_wl_loops,     // 4: num_iterations (inner loops per dispatch)
                 },
         });
 
@@ -545,7 +560,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                 .noc = NOC::NOC_0,
                 .compile_args =
                     {
-                        cfg.num_iterations,
+                        cfg.eth_num_wl_loops,
                         cfg.eth_pages_per_bank,
                         cfg.eth_page_size,
                     },
@@ -566,10 +581,12 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
             log_info(
                 LogTest,
-                "ETH DRAM streaming: {} cores (1 bank each), {} iterations, "
-                "{} pages/bank × {} B/page ({}KB)",
+                "ETH DRAM streaming: {} cores (1 bank each), {} enqueues × {} inner iterations "
+                "(compute loops={}, ratio=1/8), {} pages/bank × {} B/page ({}KB)",
                 assignments.size(),
                 cfg.num_iterations,
+                cfg.eth_num_wl_loops,
+                cfg.num_wl_loops,
                 cfg.eth_pages_per_bank,
                 cfg.eth_page_size,
                 cfg.eth_page_size / 1024);
@@ -594,7 +611,7 @@ static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
     }
 
     // Each core reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
-    uint64_t bytes_per_core = static_cast<uint64_t>(cfg.num_iterations) * cfg.eth_pages_per_bank * cfg.eth_page_size;
+    uint64_t bytes_per_core = static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
 
     // 1.35 GHz assumed clock: bytes/cycle × 1.35e9 cycles/s ÷ 1e9 bytes/GB = bytes/cycle × 1.35
     constexpr double kClockGHz = 1.35;
@@ -689,7 +706,9 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     auto mesh_workload = distributed::MeshWorkload();
     mesh_workload.add_program(target, build_program(device, cfg));
 
-    // distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+    for (uint32_t i = 0; i < cfg.num_iterations - 1; ++i) {
+        distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+    }
     distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/true);
     distributed::Finish(cq);
 
@@ -698,21 +717,26 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
 
     log_info(
         LogTest,
-        "MaxUtilWorkload [single-device] done: device={}, grid=[{},{}]->[{},{}], tiles={}, iters={}",
+        "MaxUtilWorkload [single-device] done: device={}, grid=[{},{}]->[{},{}], tiles={}, "
+        "enqueues={}, inner_iters={}",
         device->id(),
         cfg.grid_start.x,
         cfg.grid_start.y,
         cfg.grid_end.x,
         cfg.grid_end.y,
         cfg.num_tiles,
-        cfg.num_iterations);
+        cfg.num_iterations,
+        cfg.num_wl_loops);
 
     return true;
 }
 
 /// Runs the workload on every device in the mesh simultaneously.
 static bool run_all_devices(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_tiles, uint32_t num_iterations) {
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t num_tiles,
+    uint32_t num_iterations,
+    uint32_t num_wl_loops) {
     auto& cq = mesh_device->mesh_command_queue();
 
     // Phase 1: Pre-fill on all devices
@@ -721,7 +745,7 @@ static bool run_all_devices(
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         IDevice* device = mesh_device->get_device(coord[0], coord[1]);
-        MaxUtilConfig cfg = full_grid_config(device, num_tiles, num_iterations);
+        MaxUtilConfig cfg = full_grid_config(device, num_tiles, num_iterations, num_wl_loops);
 
         auto prefill_prog = build_prefill_program(device, cfg);
         device_configs[device] = cfg;
@@ -757,6 +781,9 @@ static bool run_all_devices(
         log_info(LogTest, "Main program queuing: device={}", device->id());
     }
 
+    for (uint32_t i = 0; i < num_iterations - 1; ++i) {
+        distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+    }
     distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/true);
     distributed::Finish(cq);
 
@@ -773,6 +800,39 @@ static bool run_all_devices(
 // Test entry points
 // ---------------------------------------------------------------------------
 
+/// Returns the number of iterations to use for stress / all-devices tests.
+/// Reads MAX_UTIL_NUM_ITERATIONS from the environment; defaults to 1.
+static uint32_t get_num_iterations() {
+    const char* env = std::getenv("MAX_UTIL_NUM_ITERATIONS");
+    if (env != nullptr) {
+        try {
+            int val = std::stoi(env);
+            if (val > 0) {
+                return static_cast<uint32_t>(val);
+            }
+        } catch (...) {
+        }
+        log_warning(LogTest, "MAX_UTIL_NUM_ITERATIONS='{}' is not a positive integer – using default of 1", env);
+    }
+    return 1;
+}
+
+/// Reads MAX_UTIL_NUM_WL_LOOPS from the environment; defaults to 1000.
+static uint32_t get_num_wl_loops() {
+    const char* env = std::getenv("MAX_UTIL_NUM_WL_LOOPS");
+    if (env != nullptr) {
+        try {
+            int val = std::stoi(env);
+            if (val > 0) {
+                return static_cast<uint32_t>(val);
+            }
+        } catch (...) {
+        }
+        log_warning(LogTest, "MAX_UTIL_NUM_WL_LOOPS='{}' is not a positive integer – using default of 1000", env);
+    }
+    return 1000;
+}
+
 /// Quick smoke run: 2x2 grid on device 0, one iteration.
 void max_util_smoke(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     MaxUtilConfig cfg;
@@ -780,19 +840,28 @@ void max_util_smoke(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     cfg.grid_end = {1, 1};
     cfg.num_tiles = 8;
     cfg.num_iterations = 1;
+    cfg.num_wl_loops = 1;
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
 
 /// Sustained stress run on device 0: all available cores, many iterations.
 void max_util_stress(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     IDevice* device = mesh_device->impl().get_device(0);
-    MaxUtilConfig cfg = full_grid_config(device, /*num_tiles=*/8, /*num_iterations=*/1000);
+    uint32_t num_iterations = get_num_iterations();
+    uint32_t num_wl_loops = get_num_wl_loops();
+    log_info(LogTest, "MaxUtilWorkload_Stress: num_iterations={}, num_wl_loops={}", num_iterations, num_wl_loops);
+    MaxUtilConfig cfg =
+        full_grid_config(device, /*num_tiles=*/8, /*num_iterations=*/num_iterations, /*num_wl_loops=*/num_wl_loops);
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
 
 /// All-devices stress run: every device in the mesh, all cores, many iterations.
 void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device) {
-    EXPECT_TRUE(run_all_devices(mesh_device, /*num_tiles=*/8, /*num_iterations=*/1000));
+    uint32_t num_iterations = get_num_iterations();
+    uint32_t num_wl_loops = get_num_wl_loops();
+    log_info(LogTest, "MaxUtilWorkload_AllDevices: num_iterations={}, num_wl_loops={}", num_iterations, num_wl_loops);
+    EXPECT_TRUE(run_all_devices(
+        mesh_device, /*num_tiles=*/8, /*num_iterations=*/num_iterations, /*num_wl_loops=*/num_wl_loops));
 }
 
 }  // namespace unit_tests::didt::max_util_workload
