@@ -32,7 +32,6 @@ class LegacyVsNonLegacyTest
 // This test requires simulator environment
 TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     auto is_legacy_kernel = GetParam();
-    tt::tt_metal::MetalContext::instance().rtoptions().set_force_jit_compile(true);
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device->get_devices()[0];
 
@@ -131,12 +130,33 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         // check to find the shared kernel ID and just verify counts. Follow on checks will have to be updated
         // as well as this assumption was made for all the checks for simplicity.
         // Kernel ID: DM 0-3 → 1, DM 4-6 → 2, DM 7 → 3
-        uint32_t expected_kernel_id = (dm <= 3) ? 1u : (dm <= 6) ? 2u : 3u;
+        uint32_t expected_kernel_id = 0;
+        if (dm <= 3) {
+            expected_kernel_id = 1;
+        } else if (dm <= 6) {
+            expected_kernel_id = 2;
+        } else {
+            expected_kernel_id = 3;
+        }
         EXPECT_EQ(kernel_id, expected_kernel_id) << "dm=" << dm;
 
         // 2. Verify num_sw_threads & my_thread_id
-        uint32_t expected_num_threads = (dm <= 3) ? 4u : (dm <= 6) ? 3u : 1u;
-        uint32_t expected_thread_id = (dm <= 3) ? dm : (dm <= 6) ? (dm - 4) : 0u;
+        uint32_t expected_num_threads = 0;
+        if (dm <= 3) {
+            expected_num_threads = 4;
+        } else if (dm <= 6) {
+            expected_num_threads = 3;
+        } else {
+            expected_num_threads = 1;
+        }
+        uint32_t expected_thread_id = 0;
+        if (dm <= 3) {
+            expected_thread_id = dm;
+        } else if (dm <= 6) {
+            expected_thread_id = dm - 4;
+        } else {
+            expected_thread_id = 0;
+        }
         EXPECT_EQ(num_sw_threads, expected_num_threads) << "dm=" << dm;
         EXPECT_EQ(my_thread_id, expected_thread_id) << "dm=" << dm;
 
@@ -150,7 +170,14 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
             EXPECT_EQ(thread_0_hartid, dm) << "dm=" << dm << " (legacy)";
         } else {
             // For threaded kernels, DM 0-3 are in the same binary, DM 4-6 are in the same binary, and DM 7 is in a different binary.
-            uint32_t expected_t0 = (dm <= 3) ? 0u : (dm <= 6) ? 4u : 7u;
+            uint32_t expected_t0 = 0;
+            if (dm <= 3) {
+                expected_t0 = 0;
+            } else if (dm <= 6) {
+                expected_t0 = 4;
+            } else {
+                expected_t0 = 7;
+            }
             EXPECT_EQ(thread_0_hartid, expected_t0) << "dm=" << dm << " (non-legacy)";
         }
 
@@ -207,14 +234,14 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
             }
         }
 
-        // 8. Check that initiailized thread local variables have the correct value.
-        // I.e. incrementing the varaible in one DM does not affect the value in another DM.
+        // 8. Check that initialized thread local variables have the correct value.
+        // I.e. incrementing the variable in one DM does not affect the value in another DM.
         // TODO: Initializing thread local variables does not work yet. Once they work,
         // update this check with the correct values.
         EXPECT_EQ(thread_local_start, 0u) << "dm=" << dm;
         EXPECT_EQ(thread_local_end, 1u) << "dm=" << dm;
 
-        // 9. Check that uninitiailized thread local variables have the correct value.
+        // 9. Check that uninitialized thread local variables have the correct value.
         // Same as #8, but variables are cleared to 0 at the start.
         EXPECT_EQ(uninitialized_thread_local_start, 0u) << "dm=" << dm;
         EXPECT_EQ(uninitialized_thread_local_end, 1u) << "dm=" << dm;

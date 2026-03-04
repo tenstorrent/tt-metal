@@ -43,10 +43,12 @@ uint32_t _start() {
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
     uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
     uint32_t thread_0_hartid = hartid;
-    for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-        if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
-            thread_0_hartid = j;
-            break;
+    if (launch_msg->kernel_config.enables & (1u << hartid)) {
+        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
+            if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
+                thread_0_hartid = j;
+                break;
+            }
         }
     }
 
