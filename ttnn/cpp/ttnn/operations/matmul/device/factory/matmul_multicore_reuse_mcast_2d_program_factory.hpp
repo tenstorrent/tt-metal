@@ -28,6 +28,9 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         uint32_t start_core_y{};
         bool transpose_mcast{};
         std::vector<CoreCoord> cores;
+        // Tracking for view buffer support (zero-copy batch selection)
+        mutable uint32_t in0_root_buffer_start_tile{};
+        mutable uint32_t in1_root_buffer_start_tile{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

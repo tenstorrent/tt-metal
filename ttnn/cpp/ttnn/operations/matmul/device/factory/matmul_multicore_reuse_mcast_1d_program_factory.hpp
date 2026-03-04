@@ -19,6 +19,9 @@ struct matmul_mcast_1d_common_override_variables_t {
     std::vector<CoreCoord> cores;
     uint32_t num_cores_with_work{};
     ttnn::prim::Matmul1DType type{};
+    // Tracking for view buffer support (zero-copy batch selection)
+    mutable uint32_t in0_root_buffer_start_tile{};
+    mutable uint32_t in1_root_buffer_start_tile{};
 };
 
 struct MatmulMultiCoreReuseMcast1DProgramFactory {

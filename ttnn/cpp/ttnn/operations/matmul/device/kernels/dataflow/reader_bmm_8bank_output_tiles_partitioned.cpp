@@ -21,6 +21,8 @@ void kernel_main() {
     uint32_t output_tile_start_id = get_arg_val<uint32_t>(9);
     uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
     uint32_t MtNt = get_arg_val<uint32_t>(11);
+    uint32_t src0_start_tile_id = get_arg_val<uint32_t>(12);
+    uint32_t src1_start_tile_id = get_arg_val<uint32_t>(13);
 
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
     constexpr auto src0_args = TensorAccessorArgs<1>();
@@ -37,12 +39,12 @@ void kernel_main() {
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-    uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
+    uint32_t itileA = src0_start_tile_id + output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
     // Keep track of end of output row and end of output batch
     uint32_t outbatch = output_tile_start_id % MtNt;
     uint32_t itileB_batch = output_tile_start_id % Nt;
-    uint32_t itileB = itileB_batch;  // input1 col = output col if we are bcasting
+    uint32_t itileB = src1_start_tile_id + itileB_batch;  // input1 col = output col if we are bcasting
     if (bcast_B == 0) {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
     }

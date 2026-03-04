@@ -295,6 +295,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
+    // Compute start tile offsets for view buffers (zero-copy batch selection)
+    auto in0_region = in0_buffer->root_buffer_region();
+    auto in1_region = in1_buffer->root_buffer_region();
+    uint32_t in0_root_buffer_start_tile = in0_region.offset / in0_buffer->page_size();
+    uint32_t in1_root_buffer_start_tile = in1_region.offset / in1_buffer->page_size();
+
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
         in0_sender_compile_time_args = {
@@ -925,7 +931,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_buffer->address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
+                (std::uint32_t)(in0_tensor_start_tile_id_stride * output_idx_y + in0_root_buffer_start_tile),  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
                 (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
@@ -964,7 +970,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_buffer->address(),
-                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)(in1_tensor_start_tile_id_stride * output_idx_x + in1_root_buffer_start_tile),  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
@@ -1036,7 +1042,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         start_core,
         cores,
         num_cores_with_work,
-        ttnn::prim::Matmul1DType::MCAST_IN0};
+        ttnn::prim::Matmul1DType::MCAST_IN0,
+        in0_root_buffer_start_tile,
+        in1_root_buffer_start_tile};
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
@@ -1207,6 +1215,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     const auto in1_tensor_next_block_stride = in0_block_w * in1_tensor_stride_h;
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
+
+    // Compute start tile offsets for view buffers (zero-copy batch selection)
+    auto in0_region = in0_buffer->root_buffer_region();
+    auto in1_region = in1_buffer->root_buffer_region();
+    uint32_t in0_root_buffer_start_tile = in0_region.offset / in0_buffer->page_size();
+    uint32_t in1_root_buffer_start_tile = in1_region.offset / in1_buffer->page_size();
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
@@ -1720,7 +1734,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_buffer->address(),
-                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)(in1_tensor_start_tile_id_stride * output_idx_x + in1_root_buffer_start_tile),  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)start_core_noc.x,  // in1_mcast_dest_noc_start_x
                 (std::uint32_t)start_core_noc.y,  // in1_mcast_dest_noc_start_y
@@ -1820,7 +1834,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         std::vector<uint32_t> mm_in0_sender_args = {
             // in0 tensor args
             (std::uint32_t)in0_buffer->address(),
-            (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
+            (std::uint32_t)(in0_tensor_start_tile_id_stride * output_idx_y + in0_root_buffer_start_tile),  // in0_tensor_start_tile_id
             // in0 mcast args
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_x
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_y
@@ -1842,7 +1856,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         start_core,
         cores,
         0,
-        ttnn::prim::Matmul1DType::MCAST_IN1};
+        ttnn::prim::Matmul1DType::MCAST_IN1,
+        in0_root_buffer_start_tile,
+        in1_root_buffer_start_tile};
 }
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
@@ -2569,7 +2585,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         CoreCoord{0, 0},
         worker_cores_vec,
         0,
-        ttnn::prim::Matmul1DType::GATHER_IN0};
+        ttnn::prim::Matmul1DType::GATHER_IN0,
+        0,  // gather_in0 doesn't currently support view buffers
+        0};
 }
 
 inline void override_mcast_in1_program_parameters(
@@ -2603,6 +2621,16 @@ inline void override_mcast_in1_program_parameters(
     bool src0_sharded = input_tensors[0].is_sharded();
     bool out_sharded = output_tensors[0].is_sharded();
 
+    // Compute new root buffer start tiles and delta for view buffer support
+    auto in0_region = src_buffer_a->root_buffer_region();
+    auto in1_region = src_buffer_b->root_buffer_region();
+    uint32_t new_in0_root_buffer_start_tile = in0_region.offset / src_buffer_a->page_size();
+    uint32_t new_in1_root_buffer_start_tile = in1_region.offset / src_buffer_b->page_size();
+    int32_t in0_delta = static_cast<int32_t>(new_in0_root_buffer_start_tile) -
+                        static_cast<int32_t>(override_variables.in0_root_buffer_start_tile);
+    int32_t in1_delta = static_cast<int32_t>(new_in1_root_buffer_start_tile) -
+                        static_cast<int32_t>(override_variables.in1_root_buffer_start_tile);
+
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
 
     // Manually unroll sender core
@@ -2611,11 +2639,17 @@ inline void override_mcast_in1_program_parameters(
         auto& reader_runtime_args =
             reader_runtime_args_by_core[override_variables.start_core.x][override_variables.start_core.y];
         reader_runtime_args[0] = src_buffer_a->address();
+        // Update in0 start tile id with delta for view buffer support
+        reader_runtime_args[1] = static_cast<uint32_t>(
+            static_cast<int32_t>(reader_runtime_args[1]) + in0_delta);
 
         // in1 sender
         auto& sender_writer_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(1), override_variables.start_core);
         sender_writer_runtime_args[0] = src_buffer_b->address();
+        // Update in1 start tile id with delta for view buffer support
+        sender_writer_runtime_args[1] = static_cast<uint32_t>(
+            static_cast<int32_t>(sender_writer_runtime_args[1]) + in1_delta);
         sender_writer_runtime_args[7] = dst_buffer->address();
         if (bias_tensor.has_value()) {
             sender_writer_runtime_args[18] = (*bias_buffer)->address();
@@ -2633,9 +2667,16 @@ inline void override_mcast_in1_program_parameters(
 
         // in0 sender
         reader_runtime_args[0] = src_buffer_a->address();
+        // Update in0 start tile id with delta for view buffer support
+        reader_runtime_args[1] = static_cast<uint32_t>(
+            static_cast<int32_t>(reader_runtime_args[1]) + in0_delta);
         // in1 receiver
         writer_runtime_args[2] = dst_buffer->address();
     }
+
+    // Update tracked root buffer start tiles
+    override_variables.in0_root_buffer_start_tile = new_in0_root_buffer_start_tile;
+    override_variables.in1_root_buffer_start_tile = new_in1_root_buffer_start_tile;
 
     if (src0_sharded) {
         if (override_variables.extract_shard_sub_blocks) {
@@ -2682,6 +2723,16 @@ static void override_mcast_in0_program_parameters(
     bool src1_sharded = input_tensors[1].is_sharded();
     bool out_sharded = output_tensors[0].is_sharded();
 
+    // Compute new root buffer start tiles and delta for view buffer support
+    auto in0_region = src_buffer_a->root_buffer_region();
+    auto in1_region = src_buffer_b->root_buffer_region();
+    uint32_t new_in0_root_buffer_start_tile = in0_region.offset / src_buffer_a->page_size();
+    uint32_t new_in1_root_buffer_start_tile = in1_region.offset / src_buffer_b->page_size();
+    int32_t in0_delta = static_cast<int32_t>(new_in0_root_buffer_start_tile) -
+                        static_cast<int32_t>(override_variables.in0_root_buffer_start_tile);
+    int32_t in1_delta = static_cast<int32_t>(new_in1_root_buffer_start_tile) -
+                        static_cast<int32_t>(override_variables.in1_root_buffer_start_tile);
+
     // Manually unroll sender core
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(1), *src_buffer_a);
@@ -2690,6 +2741,9 @@ static void override_mcast_in0_program_parameters(
         auto& reader_sender_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(0), override_variables.start_core);
         reader_sender_runtime_args[0] = src_buffer_a->address();
+        // Update in0 start tile id with delta for view buffer support
+        reader_sender_runtime_args[1] = static_cast<uint32_t>(
+            static_cast<int32_t>(reader_sender_runtime_args[1]) + in0_delta);
     }
 
     if (src1_sharded) {
@@ -2709,6 +2763,9 @@ static void override_mcast_in0_program_parameters(
 
         // in1 sender
         writer_runtime_args[0] = src_buffer_b->address();
+        // Update in1 start tile id with delta for view buffer support
+        writer_runtime_args[1] = static_cast<uint32_t>(
+            static_cast<int32_t>(writer_runtime_args[1]) + in1_delta);
         writer_runtime_args[7] = dst_buffer->address();
         if (bias_tensor.has_value()) {
             writer_runtime_args[18] = (*bias_buffer)->address();
@@ -2718,6 +2775,10 @@ static void override_mcast_in0_program_parameters(
     if (out_sharded) {
         UpdateDynamicCircularBufferAddress(program, override_variables.cbs.at(3), *dst_buffer);
     }
+
+    // Update tracked root buffer start tiles
+    override_variables.in0_root_buffer_start_tile = new_in0_root_buffer_start_tile;
+    override_variables.in1_root_buffer_start_tile = new_in1_root_buffer_start_tile;
 }
 
 inline void override_gather_in0_program_parameters(

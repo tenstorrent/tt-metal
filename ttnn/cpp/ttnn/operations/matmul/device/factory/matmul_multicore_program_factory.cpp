@@ -78,6 +78,12 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     uint32_t src1_addr = src1_buffer->address();
     uint32_t dst_addr = dst_buffer->address();
 
+    // Compute start tile offsets for view buffers (zero-copy batch selection)
+    auto src0_region = src0_buffer->root_buffer_region();
+    auto src1_region = src1_buffer->root_buffer_region();
+    uint32_t src0_start_tile_id = src0_region.offset / src0_buffer->page_size();
+    uint32_t src1_start_tile_id = src1_region.offset / src1_buffer->page_size();
+
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig src0_cb_config =
@@ -186,7 +192,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
              uint32_t(bcast_batch),
              num_tiles_written,
              num_output_tiles_per_core,
-             MtNt});
+             MtNt,
+             src0_start_tile_id,
+             src1_start_tile_id});
         tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, num_output_tiles_per_core, num_tiles_written});
         num_tiles_written += num_output_tiles_per_core;
     }
@@ -210,12 +218,20 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     auto* src_dram_buffer_b = tensor_args.input_tensors.at(1).buffer();
     auto* dst_dram_buffer = tensor_return_value.at(0).buffer();
 
+    // Compute start tile offsets for view buffers (zero-copy batch selection)
+    auto src0_region = src_dram_buffer_a->root_buffer_region();
+    auto src1_region = src_dram_buffer_b->root_buffer_region();
+    uint32_t src0_start_tile_id = src0_region.offset / src_dram_buffer_a->page_size();
+    uint32_t src1_start_tile_id = src1_region.offset / src_dram_buffer_b->page_size();
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
             runtime_args[1] = src_dram_buffer_b->address();
+            runtime_args[12] = src0_start_tile_id;
+            runtime_args[13] = src1_start_tile_id;
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
