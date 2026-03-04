@@ -240,7 +240,7 @@ def slice_sampling_params_for_local_submeshes(sampling_params, batch_size, data_
 
 def get_default_mesh_device_param():
     """
-    Select a safe default mesh size for paramized tests.
+    Select a safe default mesh size for parameterized tests.
 
     In distributed runs, use the global system mesh size from the mesh graph descriptor
     instead of len(get_device_ids()), which can reflect host-local visibility.
