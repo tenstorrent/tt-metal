@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .assigner import CompressedTensorAssigner, CompressedTensorResult
-from .compressed_tensor import CompressedTensor
+from .compressed_tensor import CompressedTensor, compute_shard_page_mapping
 from .tile_utils import (
     DEFAULT_TILE_HW,
     COMPRESSED_FORMATS,
@@ -22,4 +22,5 @@ __all__ = [
     "ttnn_quantize_fn",
     "bfp_tile_packed_size",
     "DEFAULT_TILE_HW",
+    "compute_shard_page_mapping",
 ]
