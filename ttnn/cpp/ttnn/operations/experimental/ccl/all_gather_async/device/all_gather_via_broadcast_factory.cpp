@@ -49,7 +49,6 @@ AllGatherViaBroadcastFactory::cached_mesh_workload_t AllGatherViaBroadcastFactor
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-
 CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
     std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
@@ -101,7 +100,6 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
         ring_size, ring_index, operation_attributes.topology, true);
     // Get worker cores, assuming 1 worker per link
-
     uint32_t num_workers_per_link = 1;
 
     TT_ASSERT(operation_attributes.sub_device_id.has_value(), "function currently does not support subdevices");
@@ -185,7 +183,6 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
                                 // semaphore
-
     auto* mesh_device = input_tensor.device();
     CoreCoord barrier_core;
     for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
