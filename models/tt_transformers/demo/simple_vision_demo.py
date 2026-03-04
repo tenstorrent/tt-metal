@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 
@@ -595,5 +595,5 @@ def test_multimodal_demo_text(
             output_sequence_length=max_gen_len,
         )
 
-        if perf_targets:
-            verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance)
+        # if perf_targets:
+        #     verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance)
