@@ -88,11 +88,11 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
 
     // Get mesh buffers
-    auto query_mesh_buffer = query.mesh_buffer();
-    auto key_mesh_buffer = key.mesh_buffer();
-    auto value_mesh_buffer = value.mesh_buffer();
-    auto output_mesh_buffer = output.mesh_buffer();
-    auto intermediates_mesh_buffer = intermediates.mesh_buffer();
+    auto query_mesh_buffer = query.mesh_buffer_leak_ownership();
+    auto key_mesh_buffer = key.mesh_buffer_leak_ownership();
+    auto value_mesh_buffer = value.mesh_buffer_leak_ownership();
+    auto output_mesh_buffer = output.mesh_buffer_leak_ownership();
+    auto intermediates_mesh_buffer = intermediates.mesh_buffer_leak_ownership();
 
     // Iterate over all device coordinates in the mesh
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
@@ -191,11 +191,11 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
     const auto ring_direction = operation_attributes.ring_direction;
 
     // Get mesh buffers
-    auto query_mesh_buffer = query.mesh_buffer();
-    auto key_mesh_buffer = key.mesh_buffer();
-    auto value_mesh_buffer = value.mesh_buffer();
-    auto output_mesh_buffer = output.mesh_buffer();
-    auto intermediates_mesh_buffer = intermediates.mesh_buffer();
+    auto query_mesh_buffer = query.mesh_buffer_leak_ownership();
+    auto key_mesh_buffer = key.mesh_buffer_leak_ownership();
+    auto value_mesh_buffer = value.mesh_buffer_leak_ownership();
+    auto output_mesh_buffer = output.mesh_buffer_leak_ownership();
+    auto intermediates_mesh_buffer = intermediates.mesh_buffer_leak_ownership();
 
     // Iterate over cached programs and update runtime arguments
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
