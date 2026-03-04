@@ -54,11 +54,18 @@ _python_io_data: list = []
 
 
 def _collect_tensor_ids(value) -> list:
-    """Recursively extract tensor_id ints from ttnn.Tensor objects."""
+    """Recursively extract tensor_id ints from ttnn.Tensor and torch.Tensor objects."""
     import ttnn
 
+    try:
+        import torch
+
+        _tensor_types = (ttnn.Tensor, torch.Tensor)
+    except ImportError:
+        _tensor_types = (ttnn.Tensor,)
+
     ids: list[int] = []
-    if isinstance(value, ttnn.Tensor):
+    if isinstance(value, _tensor_types):
         tid = getattr(value, "tensor_id", None)
         if tid is not None:
             ids.append(int(tid))
@@ -78,10 +85,10 @@ def begin_graph_capture(run_mode=None):
         if ttnn.CONFIG.enable_fast_runtime_mode:
             logger.warning(
                 "Graph capture started with enable_fast_runtime_mode=true (fast dispatch). "
-                "FastOperation records arguments and output tensor IDs, but does not "
-                "assign versioned tensor IDs (force=True) or per-operation captured graphs. "
-                "For full tensor connectivity parity, disable fast runtime mode. "
-                "Set TTNN_CONFIG_OVERRIDES or use ttnn.manage_config to disable fast runtime mode."
+                "FastOperation records arguments, tensor IDs, and output tensor IDs, "
+                "but does not produce per-operation captured sub-graphs. "
+                "For full captured-graph detail, disable fast runtime mode via "
+                "TTNN_CONFIG_OVERRIDES or ttnn.manage_config."
             )
     if run_mode is None:
         return _cpp_begin_graph_capture()
@@ -123,7 +130,7 @@ def _safe_arg_str(v):
 def record_python_operation(name, function_args, function_kwargs):
     """Record a Python-level operation's arguments and I/O tensor ids.
 
-    Called from ``runtime_decorator.call_wrapper`` (runtime_decorator.call_wrapper)
+    Called from ``FastOperation.__call__`` and ``runtime_decorator.call_wrapper``
     to capture the Python-visible arguments (named kwargs + positional args)
     that the C++ graph trace does not see.
     """
