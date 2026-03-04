@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,17 +58,20 @@ public:
     }
 
     void send(uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
+
+        auto packet_read_addr = cb_out_page_start;
+        auto dest_addr = tensor_page_addr;
         constexpr uint32_t packets_per_outpage = out_page_size / packet_size;
         for (uint32_t packet = 0; packet < packets_per_outpage; packet++) {
-            auto packet_read_addr = cb_out_page_start + packet * packet_size;
-            auto write_offset = packet * packet_size;
             noc_async_writes_flushed();
             fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 fabric_connection,
                 unicast_route_id,
                 packet_read_addr,
-                tt::tt_fabric::NocUnicastCommandHeader{tensor_page_addr + write_offset},
+                tt::tt_fabric::NocUnicastCommandHeader{dest_addr},
                 static_cast<uint16_t>(0u) /*packet_size*/);
+            packet_read_addr += packet_size;
+            dest_addr += packet_size;
         }
     }
 
@@ -117,6 +120,8 @@ public:
         scatter_header.noc_address[scatter_header.chunk_count++] = tensor_page_addr;
 
         if (scatter_header.chunk_count == num_out_pages_per_packet) {
+
+            noc_async_writes_flushed();
             fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                 fabric_connection,
                 scatter_route_id,
