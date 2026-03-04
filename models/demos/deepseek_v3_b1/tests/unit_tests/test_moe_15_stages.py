@@ -163,6 +163,9 @@ def test_bcast_moe_two_stage_pipeline(
             downstream_d2d_socket_page_size=embedding_size_bytes,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+            h2d_socket_fifo_size=token_size_bytes * 2,
+            d2h_socket_fifo_size=embedding_fifo_size,
+            d2h_socket_page_size=embedding_size_bytes,
         )
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")
@@ -170,7 +173,10 @@ def test_bcast_moe_two_stage_pipeline(
     # ── Get downstream socket for reduce aggregator to send to pipeline exit ──
     downstream_socket = None
     if my_mesh_id >= 1:
-        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+        if my_mesh_id == num_procs - 1:
+            downstream_socket = pipeline_block.host_io.get_upstream_socket()
+        else:
+            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
         logger.info(f"[rank={my_mesh_id}] downstream socket wired to pipeline exit")
 
     # ── MoE tensor setup (stage 0: golden validation, stage 1: MoE compute + validation) ──
@@ -393,19 +399,19 @@ def test_bcast_moe_two_stage_pipeline(
         logger.info(f"[rank={my_mesh_id}] MoE + reduce completed")
 
     # ── Stage 0: D2H loopback read + golden validation ───────────────────────
-    if is_stage0:
-        logger.info("[rank=0] waiting for D2H result from pipeline loopback")
+    if mesh_device.get_system_mesh_id() == 15:
+        logger.info("[rank=15] waiting for D2H result from pipeline loopback")
         num_elements = embedding_size_bytes // 2
         received_tensor_torch = torch.zeros(1, num_elements, dtype=torch.bfloat16)
         d2h_output_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         pipeline_block.read_output(d2h_output_tensor)
         d2h_result_torch = ttnn.to_torch(d2h_output_tensor)
-        logger.info(f"[rank=0] D2H read complete, shape={d2h_result_torch.shape}")
-        logger.info(f"[rank=0] D2H first 5 values: {d2h_result_torch[0, :5]}")
+        logger.info(f"[rank=15] D2H read complete, shape={d2h_result_torch.shape}")
+        logger.info(f"[rank=15] D2H first 5 values: {d2h_result_torch[0, :5]}")
 
         d2h_nonzero = torch.count_nonzero(d2h_result_torch)
-        logger.info(f"[rank=0] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
+        logger.info(f"[rank=15] D2H non-zero elements: {d2h_nonzero}/{d2h_result_torch.numel()}")
         assert d2h_nonzero > 0, "D2H output is all zeros — reduce or D2D0 pipeline failed"
 
     ttnn.distributed_context_barrier()
