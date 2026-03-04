@@ -71,6 +71,9 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
 
+    def get_lm_head_sharded_output_mem_config(self, prefetcher=None):
+        return ttnn.DRAM_MEMORY_CONFIG
+
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
 
