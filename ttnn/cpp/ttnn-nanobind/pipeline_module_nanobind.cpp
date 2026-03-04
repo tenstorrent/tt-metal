@@ -14,7 +14,7 @@
 namespace ttnn::pipeline_module {
 
 void bind_blitz_decode_pipeline(nb::module_& mod) {
-    using tt::tt_metal::experimental::distributed::BlitzDecodePipelineStage;
+    using tt::tt_metal::experimental::blitz::BlitzDecodePipelineStage;
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
@@ -31,7 +31,7 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
     mod.def(
         "generate_blitz_decode_pipeline",
         [](tt::tt_metal::distributed::MeshDevice& mesh_device) {
-            return tt::tt_metal::experimental::distributed::generate_blitz_decode_pipeline(mesh_device);
+            return tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(mesh_device);
         },
         nb::arg("mesh_device"),
         R"doc(
