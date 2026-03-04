@@ -80,7 +80,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
