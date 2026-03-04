@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 
 import torch
@@ -36,6 +37,10 @@ from models.tt_transformers.tt.common import (
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
+
+
+def _deepseek_kvdbg_enabled() -> bool:
+    return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
 class Generator(WarmupForwardMixin):
@@ -85,14 +90,14 @@ class Generator(WarmupForwardMixin):
             return
         self.already_warmed_up_prefill = True
 
-        sampling_params = self._create_sampling_params(
-            can_sample_on_device,
-            non_greedy_decoding_on_device,
-            None,
-            mode="prefill",
-        )
-
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
+
+        skip_sequence_lengths = False
+
+        logger.warning("Batched prefill in TTT is not supported")
+
+        # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
+        sampling_parameters_sweeped = False
 
         for model_id in range(self.data_parallel):
             # each model sees each sampling_params at least once
@@ -104,41 +109,60 @@ class Generator(WarmupForwardMixin):
                 ):
                     continue
 
-                warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
-                warmup_empty_slots = list(range(1))
+                for batch_size in [1, 32]:
+                    if batch_size == 32:
+                        # TODO: Remove continue when batched prefill is supported
+                        continue
 
-                logger.info(f"Warming up prefill for sequence length: {supported_length}")
+                    warmup_tokens = torch.zeros(batch_size, supported_length, dtype=torch.long)
+                    warmup_prompt_lens = torch.tensor([supported_length] * batch_size, dtype=torch.long)
+                    warmup_empty_slots = list(range(batch_size))
 
-                page_table_warmup = None
-                # second check is some tests set the kv_cache to [None] instead of None
-                if kv_cache is not None and kv_cache[model_id] is not None:
-                    block_size = get_block_size(kv_cache[model_id])
-                    num_blocks = num_blocks_in_seq(supported_length, block_size)
-                    page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
+                    page_table_warmup = None
+                    # second check is some tests set the kv_cache to [None] instead of None
+                    if kv_cache is not None and kv_cache[model_id] is not None:
+                        block_size = get_block_size(kv_cache[model_id])
+                        num_blocks = num_blocks_in_seq(supported_length, block_size)
+                        page_table_warmup = torch.zeros(batch_size, num_blocks, dtype=torch.int32)
 
-                # chunked prefill not supported without paged attention
-                if page_table_warmup is None and max_prefill_chunk_size_cutoff(
-                    supported_length, self.model_args[0].max_prefill_chunk_size
-                ):
-                    logger.warning(
-                        "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
-                    )
+                    # chunked prefill not supported without paged attention
+                    if page_table_warmup is None and max_prefill_chunk_size_cutoff(
+                        supported_length, self.model_args[0].max_prefill_chunk_size
+                    ):
+                        logger.warning(
+                            f"Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
+                        )
+                        skip_sequence_lengths = True
+                        break
+
+                    if not sampling_parameters_sweeped:
+                        sampling_params = self._create_sampling_params(
+                            can_sample_on_device=can_sample_on_device,
+                            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+                            batch_size=batch_size,
+                        )
+                    else:
+                        sampling_params = [None]
+
+                    for param in sampling_params:
+                        logger.info(
+                            f"Warming up prefill for sequence length: {supported_length} for batch size: {batch_size} with sampling params: {param}"
+                        )
+                        self.prefill_forward_text(
+                            warmup_tokens,
+                            page_table_warmup,
+                            kv_cache,
+                            warmup_prompt_lens,
+                            warmup_empty_slots,
+                            enable_trace,
+                            model_id,
+                            param,
+                        )
+
+                    sampling_parameters_sweeped = True
+
+                if skip_sequence_lengths:
                     break
-                for param in sampling_params:
-                    logger.info(
-                        f"Warming up prefill for sequence length: {supported_length} with sampling params: {param}"
-                    )
-                    self.prefill_forward_text(
-                        warmup_tokens,
-                        page_table_warmup,
-                        kv_cache,
-                        warmup_prompt_lens,
-                        warmup_empty_slots,
-                        enable_trace,
-                        model_id,
-                        param,
-                    )
 
     def _capture_trace_prefill(
         self,
@@ -146,8 +170,12 @@ class Generator(WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        global_user_id=None,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        prefill_kwargs = {"page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -191,6 +219,7 @@ class Generator(WarmupForwardMixin):
         prefill_seq_len=None,
         **kwargs,
     ):
+        global_user_id = kwargs.get("global_user_id", None)
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -198,6 +227,7 @@ class Generator(WarmupForwardMixin):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                global_user_id=global_user_id,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -210,6 +240,7 @@ class Generator(WarmupForwardMixin):
             prefill_ids,
             page_table=page_table,
             model_id=model_id,
+            global_user_id=global_user_id,
         )
 
         return tt_out_trace
@@ -223,8 +254,12 @@ class Generator(WarmupForwardMixin):
         user_id=0,
         page_table=None,
         model_id=-1,
+        global_user_id=None,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        prefill_kwargs = {"page_table": page_table}
+        if global_user_id is not None:
+            prefill_kwargs["global_user_id"] = global_user_id
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
@@ -266,7 +301,13 @@ class Generator(WarmupForwardMixin):
                 getattr(self.model[0], "_supports_on_device_sampling", False)
                 and getattr(self.model[0], "sampling", None) is not None
             )
-            self.warmup_model_prefill(kv_cache, enable_trace, sampling_on_device_enabled, sampling_on_device_enabled)
+
+            self.warmup_model_prefill(
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                can_sample_on_device=sampling_on_device_enabled,
+                non_greedy_decoding_on_device=sampling_on_device_enabled,
+            )
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -306,7 +347,8 @@ class Generator(WarmupForwardMixin):
                 seq_len - num_cached_tokens
             )  # Without the cached tokens, then padded
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
-            local_kwargs["global_user_id"] = user_id  # Pass global user_id for row-sharded page table targeting
+            if getattr(self.model[model_id], "users_row_sharded", False):
+                local_kwargs["global_user_id"] = user_id  # Row-sharded models need this for page table targeting
             sampling_enabled = (
                 sampling_on_device_requested
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
@@ -344,6 +386,20 @@ class Generator(WarmupForwardMixin):
                 if page_table is not None
                 else None
             )
+            if page_table_user is not None and _deepseek_kvdbg_enabled():
+                sample = []
+                if page_table_user.numel():
+                    flat = page_table_user.reshape(-1)
+                    sample = flat[: min(16, flat.numel())].tolist()
+                logger.debug(
+                    "KVDBG deepseek prefill user global={} local={} seq_len={} cached={} page_table_shape={} sample={}",
+                    user_id,
+                    group_user_id,
+                    seq_len,
+                    num_cached_tokens,
+                    list(page_table_user.shape),
+                    sample,
+                )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
@@ -1214,7 +1270,10 @@ class Generator(WarmupForwardMixin):
         read_events = []
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
-                outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
+                outputs = (
+                    tt_out[i][0].cpu(blocking=False),
+                    tt_out[i][1].cpu(blocking=False) if tt_out[i][1] is not None else None,
+                )  # logits  # log-probs
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
                 outputs = tt_out[i].cpu(blocking=False)

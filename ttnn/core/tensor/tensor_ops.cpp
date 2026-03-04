@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tensor/tensor_ops.hpp"
 
 #include "ttnn/common/queue_id.hpp"
@@ -17,7 +18,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 
 namespace {
 

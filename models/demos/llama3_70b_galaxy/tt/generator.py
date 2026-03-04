@@ -27,6 +27,13 @@ from models.common.sampling import SamplingParams, format_sampling_params
 from models.common.warmup import WarmupForwardMixin
 
 
+def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
+    """
+    Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    """
+    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+
+
 def get_padded_prefill_len(seq_len: int) -> int:
     """
     Get the padded prefill length for a given sequence length.
@@ -78,14 +85,14 @@ class Generator(WarmupForwardMixin):
         ]
         self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
         self.prev_page_table = None
-        self.prefill_traces_warmup = False
+        self.prefill_warmup_completed = False
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.enable_split_sampling = True
         self.model.enable_internal_trace = self.enable_split_sampling
 
-    def warmup_prefill_traces(
+    def prefill_warmup(
         self,
         tokens: torch.Tensor,
         page_table=None,
@@ -97,21 +104,28 @@ class Generator(WarmupForwardMixin):
         tt_out_logits_all_users=None,
     ):
         # Avoids an infinite loop
-        self.prefill_traces_warmup = True
+        self.prefill_warmup_completed = True
+
+        # Llama70b always supports on-device sampling from metal
+        sampling_on_device_enabled = True
+
+        # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
+        sampling_parameters_sweeped = False
 
         self.model.switch_mode("prefill")
-        logger.info("Warming up prefill traces for all supported sequence lengths")
-        supported_seqlens = (
-            self.model.tt_ccl.support_seqlens
-        )  # caching because running prefill can switch mode to decode
-        for supported_length in supported_seqlens:
-            logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
+        logger.info("Warming up prefill for all supported sequence lengths up to max sequence length")
+        warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
+        # caching because running prefill can switch mode to decode
+        for warmup_sequence_length in warmup_sequence_lengths:
+            logger.info(f"Creating warmup tensor for sequence length: {warmup_sequence_length}")
             # Capture trace for both
             for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
                 # For batched prefill this needs to be *32
-                if batch == 32 and supported_length == 4096:
-                    # For batched prefill max batch sequence length is 2048 or lower (128k limit)
-                    logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
+                if batch == 32 and warmup_sequence_length >= 4096:
+                    # For batched prefill max batch sequence length is 2048 or lower (128k limit), so we skip warmup for sequence lengths >= 4096
+                    logger.info(
+                        f"Skipping warm up step on batched prefill for sequence length {warmup_sequence_length}"
+                    )
                     continue
                 if batch == 32:
                     current_batch = page_table.shape[0]
@@ -123,21 +137,37 @@ class Generator(WarmupForwardMixin):
                         warmup_page_table = page_table
                 else:
                     warmup_page_table = page_table
-                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                warmup_tokens = torch.zeros(batch, warmup_sequence_length, dtype=torch.long)
+                warmup_prompt_lens = torch.tensor([warmup_sequence_length] * batch, dtype=torch.long)
                 warmup_empty_slots = list(range(batch))
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    warmup_page_table,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    enable_trace,
-                    sampling_params,
-                    warmup_empty_slots,
-                    tt_out_logits_all_users,
-                )
+
+                if not sampling_parameters_sweeped:
+                    sampling_params_list = self._create_sampling_params(
+                        can_sample_on_device=sampling_on_device_enabled,
+                        non_greedy_decoding_on_device=sampling_on_device_enabled,
+                        batch_size=batch,
+                    )
+                else:
+                    sampling_params_list = [None]
+
+                for sampling_params in sampling_params_list:
+                    logger.info(
+                        f"Warming up prefill sequence length: {warmup_sequence_length} for batch size: {batch} with sampling params: {sampling_params}"
+                    )
+                    self.prefill_forward_text(
+                        warmup_tokens,
+                        warmup_page_table,
+                        kv_cache,
+                        warmup_prompt_lens,
+                        enable_trace,
+                        sampling_params,
+                        warmup_empty_slots,
+                        tt_out_logits_all_users,
+                    )
+                sampling_parameters_sweeped = True
+
         # trace_id_prefill dict check
-        logger.info("Prefill traces warmup completed")
+        logger.info("Prefill warmup completed")
 
     def prefill_forward_text(
         self,
@@ -157,8 +187,8 @@ class Generator(WarmupForwardMixin):
             x == 0 for x in start_pos
         ), f"Prefix caching is not supported for llama3_70b_galaxy, got start_pos: {start_pos}"
 
-        if self.prefill_traces_warmup is False:
-            self.warmup_prefill_traces(
+        if self.prefill_warmup_completed is False:
+            self.prefill_warmup(
                 tokens,
                 page_table,
                 kv_cache,
@@ -362,7 +392,7 @@ class Generator(WarmupForwardMixin):
             if isinstance(tt_sampled, list):
                 tt_sampled = tt_sampled[0]
 
-            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0])
+            sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
             # sampled_tokens has 32 entries ordered by slot.
             sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
@@ -867,7 +897,7 @@ class Generator(WarmupForwardMixin):
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)
-        self.warmup_prefill_traces(
+        self.prefill_warmup(
             tokens=None,
             page_table=page_table,
             kv_cache=kv_cache,

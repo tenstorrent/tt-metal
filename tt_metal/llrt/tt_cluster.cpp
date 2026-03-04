@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
@@ -1466,6 +1467,16 @@ uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_by
         return this->hal_->get_dma_alignment();
     }
     return 1;
+}
+
+umd::ClusterDescriptor* Cluster::get_cluster_desc() const {
+    TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
+    return this->cluster_desc_;
+}
+
+const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
+    TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+    return driver_;
 }
 
 }  // namespace tt

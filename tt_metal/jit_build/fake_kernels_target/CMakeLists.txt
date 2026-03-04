@@ -77,6 +77,7 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/${ARCH_NAME_PREFIX}/noc"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/${ARCH_NAME_PREFIX}/${ARCH_NAME_LOWER}_defines"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"
+        "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_NAME_LOWER}/common/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"

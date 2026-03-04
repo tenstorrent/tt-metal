@@ -42,7 +42,7 @@ MESH_ROOT2 = 2
 MESH_ROOT1 = 3
 
 
-def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate) -> int:
+def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate, use_torus: bool = False) -> int:
     """Determine the role of a device based on its coordinate and the root coordinate."""
     if coord[0] == root_coord[0] and coord[1] == root_coord[1]:
         return MESH_ROOT1
@@ -54,8 +54,24 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate)
     if my_row == root_row:
         return MESH_ROOT2
 
-    # ROOT3: the other inner row (if ROOT1 is at row 1, ROOT3 is at row 2, and vice versa)
-    root3_row = 2 if root_row == 1 else 1
+    # ROOT3 coord
+    if use_torus:
+        # Torus: root must be at corner (row 0 or 3), ROOT3 is opposite corner
+        if root_row == 0:
+            root3_row = 3
+        elif root_row == 3:
+            root3_row = 0
+        else:
+            raise ValueError(f"Torus mode requires root at corner row (0 or 3), got row {root_row}")
+    else:
+        # Linear: root must be at inner row (1 or 2), ROOT3 is the other inner row
+        if root_row == 1:
+            root3_row = 2
+        elif root_row == 2:
+            root3_row = 1
+        else:
+            raise ValueError(f"Linear mode requires root at inner row (1 or 2), got row {root_row}")
+
     if my_row == root3_row:
         return MESH_ROOT3
 
@@ -297,6 +313,7 @@ class ReduceToOneB1:
         enable_d2d0_output: bool = False,  # Enable D2D_0 aggregation output
         d2d0_infrastructure: Optional[dict] = None,
         num_iterations: int = 1,  # Pre-created D2D_0 infrastructure
+        is_torus: bool = False,
     ) -> tuple:
         """
         Execute reduce-to-one operation using generic_op with optional D2D_0 aggregation output.
@@ -333,9 +350,7 @@ class ReduceToOneB1:
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
 
-        # Validate root_coord
-        if root_coord[0] not in [1, 2]:
-            raise ValueError(f"Root coordinate row must be 1 or 2, got {root_coord[0]}")
+        use_torus = is_torus and root_coord[0] in [0, 3]
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
@@ -404,6 +419,22 @@ class ReduceToOneB1:
         shard_grid = input_sample.memory_config().shard_spec.grid
         shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
 
+        # Create global semaphores for worker→fabric signaling
+        # Compute num_workers_per_column from input shard grid (same for all devices)
+        sample_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
+        sample_columns = {}
+        for c in sample_cores:
+            sample_columns.setdefault(c.x, []).append(c)
+        num_worker_fabric_sems = len(sample_columns[sorted(sample_columns.keys())[0]])
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        worker_fabric_sem_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        worker_fabric_global_sems = [
+            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_worker_fabric_sems)
+        ]
+        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
+
         # Create or use provided D2D_0 infrastructure
         d2d0_infra = None
         if enable_d2d0_output:
@@ -420,7 +451,7 @@ class ReduceToOneB1:
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                role = get_device_role(coord, root_coord)
+                role = get_device_role(coord, root_coord, use_torus)
                 is_leaf = role == MESH_LEAF
                 is_root3 = role == MESH_ROOT3
                 is_root2 = role == MESH_ROOT2
@@ -492,10 +523,16 @@ class ReduceToOneB1:
 
                 # Determine destination coordinate based on role
                 if is_leaf:
-                    if row == 0:
-                        dest_coord = ttnn.MeshCoordinate(row + 1, col)
-                    else:  # row == 3
-                        dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                    if use_torus:
+                        if row == 1:
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
+                        else:  # row == 2
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                    else:
+                        if row == 0:
+                            dest_coord = ttnn.MeshCoordinate(row + 1, col)
+                        else:  # row == 3
+                            dest_coord = ttnn.MeshCoordinate(row - 1, col)
                 elif is_root3:
                     dest_coord = ttnn.MeshCoordinate(root_coord[0], col)
                 elif is_root2:
@@ -596,7 +633,7 @@ class ReduceToOneB1:
                         fabric_core_phys.x,  # fabric_core_noc_x
                         fabric_core_phys.y,  # fabric_core_noc_y
                         slot_idx,  # my_slot_idx
-                        slot_idx,  # worker_sem_id (same as slot_idx for simplicity)
+                        worker_fabric_sem_addrs[slot_idx],  # worker_sem_addr
                         dst_l1_addr,  # dst_l1_addr
                         dst_sem_addr,  # dst_sem_addr
                         output_tensor_device.buffer_address(),  # output_base_addr
@@ -605,10 +642,9 @@ class ReduceToOneB1:
                     ]
                     brisc_per_core_args.append((core, worker_args))
 
-                # Fabric cores BRISC args: worker semaphore IDs (fabric args appended later)
+                # Fabric cores BRISC args: worker semaphore addresses (fabric args appended later)
                 for fc in fabric_cores:
-                    fabric_args = list(range(num_workers_per_column))  # Worker sem IDs
-                    brisc_per_core_args.append((fc, fabric_args))
+                    brisc_per_core_args.append((fc, list(worker_fabric_sem_addrs)))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -752,27 +788,30 @@ class ReduceToOneB1:
                 kernel_result = unified_kernel.get_kernel_descriptors()
                 fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
 
-                # Create semaphores for worker→fabric synchronization
+                # Worker→fabric semaphores are global (created before the loop)
                 semaphore_descriptors = []
-                for worker_idx in range(num_workers_per_column):
-                    sem_desc = ttnn.SemaphoreDescriptor(
-                        id=worker_idx,
-                        core_type=ttnn.CoreType.WORKER,
-                        core_ranges=fabric_core_set,
-                        initial_value=0,
-                    )
-                    semaphore_descriptors.append(sem_desc)
 
                 # === Program Descriptor ===
                 all_kernels = kernel_result.kernels
 
                 # Add D2D_0 aggregator kernel to ROOT1 device program if enabled
                 if is_root1 and d2d0_infra is not None:
+                    # Determine if D2D_0 needs fabric to send to downstream
+                    d2d0_downstream_socket = d2d0_infra["d2d0_downstream_socket"]
+                    d2d0_downstream_recv_device_coord = d2d0_downstream_socket.get_connection_config()[
+                        0
+                    ].receiver_core.device_coord
+                    my_fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    downstream_fabric_node_id = d2d0_downstream_socket.get_fabric_node_id(
+                        ttnn.SocketEndpoint.RECEIVER, d2d0_downstream_recv_device_coord
+                    )
+                    use_fabric_on_sender = my_fabric_node_id != downstream_fabric_node_id
+                    # print("use fabric on sender: ", use_fabric_on_sender)
                     d2d0_kernel = ReduceToOneB1.create_d2d0_aggregator_kernel(
                         d2d0_infra,
                         payload_size_bytes,  # Per-worker page size
                         len(shard_cores),  # Number of workers
-                        use_fabric_on_sender=False,  # Fabric usage set by test based on D2D_1 location
+                        use_fabric_on_sender=use_fabric_on_sender,
                     )
                     all_kernels = all_kernels + [d2d0_kernel]
 
@@ -783,7 +822,7 @@ class ReduceToOneB1:
                 )
 
                 # Add fabric connection args for fabric cores (must be done after program creation)
-                # ROOT1 doesn't send via fabric, so skip fabric setup
+                # ROOT1 doesn't send via fabric for exit socket, so skip that fabric setup
                 if not is_root1:
                     fabric_kernel_idx = fabric_group.brisc_kernel_index
                     for fc_idx, fc in enumerate(fabric_cores):
@@ -798,6 +837,30 @@ class ReduceToOneB1:
                             fc,
                         )
                         fabric_rt_args_ref.extend(fabric_conn_args)
+
+                # Add fabric connection args for D2D_0 aggregator kernel if it needs fabric
+                if is_root1 and d2d0_infra is not None and use_fabric_on_sender:
+                    # print("appending fabric rt for D2D_0\n")
+                    d2d0_kernel_idx = len(all_kernels) - 1  # D2D_0 kernel is the last one added
+                    d2d0_core = d2d0_infra["d2d0_core"]
+
+                    # print("set rt args to []")
+                    # Initialize runtime args to empty list before extending with fabric args
+                    program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y] = []
+                    d2d0_rt_args_ref = program.kernels[d2d0_kernel_idx].runtime_args[d2d0_core.x][d2d0_core.y]
+                    # print("getting rt args ref\n")
+                    # Set up fabric connections for D2D_0 kernel
+                    # Use same number of links as determined by socket config
+                    num_d2d0_links = len(d2d0_downstream_socket.get_connection_config())
+                    for link_idx in range(num_d2d0_links):
+                        d2d0_fabric_args = ttnn.setup_fabric_connection(
+                            my_fabric_node_id,
+                            downstream_fabric_node_id,
+                            link_idx,
+                            program,
+                            d2d0_core,
+                        )
+                        d2d0_rt_args_ref.extend(d2d0_fabric_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 

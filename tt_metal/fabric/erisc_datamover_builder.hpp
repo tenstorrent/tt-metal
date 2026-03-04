@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
@@ -542,7 +541,7 @@ public:
     [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
 
     // Helper for `get_compile_time_args`
-    void get_telemetry_compile_time_args(uint32_t risc_id, std::vector<uint32_t>& ct_args) const;
+    void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 

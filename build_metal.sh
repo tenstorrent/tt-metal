@@ -38,6 +38,7 @@ show_help() {
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
+    echo "  --disable-pch                    Disable precompiled headers"
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
@@ -76,6 +77,7 @@ build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
 build_static_libs="OFF"
+pch="ON"
 unity_builds="ON"
 light_metal_trace="ON"
 build_packages="OFF"
@@ -114,6 +116,7 @@ build-programming-examples
 build-tt-train
 build-packages
 build-static-libs
+disable-pch
 disable-unity-builds
 disable-light-metal-trace
 release
@@ -194,6 +197,8 @@ while true; do
             enable_fake_kernels_target="ON";;
         --enable-lto)
             enable_lto="ON";;
+        --disable-pch)
+	    pch="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -272,6 +277,7 @@ echo "INFO: Enable time trace: $enable_time_trace"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
+echo "INFO: Enable PCH: $pch"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
@@ -352,6 +358,10 @@ if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DTT_INSTALL=OFF")
 fi
 
+if [ "$pch" = "OFF" ]; then
+    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON")
+fi
+
 if [ "$unity_builds" = "ON" ]; then
     cmake_args+=("-DTT_UNITY_BUILDS=ON")
 else
@@ -402,7 +412,7 @@ if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
 fi
 
-# toolchain and cxx_compiler settings would conflict with eachother
+# toolchain and cxx_compiler settings would conflict with each other
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"

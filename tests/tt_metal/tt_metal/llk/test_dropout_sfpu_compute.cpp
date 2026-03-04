@@ -216,6 +216,7 @@ bool test_dropout_standalone(
              num_tiles});
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail
