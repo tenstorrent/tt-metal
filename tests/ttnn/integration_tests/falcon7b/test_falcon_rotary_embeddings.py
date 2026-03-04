@@ -114,7 +114,7 @@ def test_ttnn_functional_apply_rotary_embeddings(
     ],
 )
 def test_torch_functional_falcon_generate_rotary_embeddings(model_name, input_shape, device):
-    # TODO: test reseting of cossin cache
+    # TODO: test resetting of cossin cache
     batch, num_kv_heads, query_length, head_dim = input_shape
     config = transformers.FalconConfig.from_pretrained(model_name)
     model = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(config).eval()

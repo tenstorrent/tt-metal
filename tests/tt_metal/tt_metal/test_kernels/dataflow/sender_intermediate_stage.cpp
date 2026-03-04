@@ -56,7 +56,7 @@ void kernel_main() {
             // noc_async_write and noc_semaphore_set_remote are ordered
             noc_semaphore_set_remote(l1_valid_value_addr, receiver_semaphore_noc_addr);
 
-            // this barrier is not needed, sempahore inter-lock already guarantees that we won't overwrite local CB with
+            // this barrier is not needed, semaphore inter-lock already guarantees that we won't overwrite local CB with
             // new data ie, it is safe to pop here, because the data in the CB won't actually be overwritten until the
             // receiver has set the semaphore (which means it was received) this barrier would hurt performance for
             // smaller transfers (<16KB), but for larger transfers it wouldn't make a difference
