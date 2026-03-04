@@ -1,28 +1,34 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // LayerNorm - Compute Kernel
-// 10-phase pipeline per tile-row:
-//   1. Tilize (cb_in -> cb_tilized)
-//   2. Mean reduce (cb_tilized -> cb_mean)
-//   3. Subtract mean (cb_tilized - cb_mean -> cb_centered)
-//   4. Square (cb_centered -> cb_normalized as temp)
-//   5. Variance reduce (cb_normalized temp -> cb_var)
-//   6. Add eps + rsqrt (cb_var -> cb_var in-place)
-//   7. Normalize (cb_centered * cb_var -> cb_normalized)
-//   8. Scale by gamma (cb_normalized * cb_gamma -> cb_normalized, conditional)
-//   9. Shift by beta (cb_normalized + cb_beta -> cb_normalized, conditional)
-//  10. Untilize (cb_normalized -> cb_out)
+// Stage 1: tilize + untilize passthrough (identity)
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
-#include "api/compute/eltwise_unary/rsqrt.h"
+
+constexpr uint32_t cb_in = tt::CBIndex::c_0;
+constexpr uint32_t cb_tilized = tt::CBIndex::c_1;
+constexpr uint32_t cb_out = tt::CBIndex::c_17;
+
+// Compile-time args
+constexpr uint32_t Wt = get_compile_time_arg_val(0);
+constexpr uint32_t nblocks_per_core = get_compile_time_arg_val(1);
+constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+constexpr uint32_t has_beta = get_compile_time_arg_val(3);
 
 void kernel_main() {
-    // Stub: compute kernel
-    // Real implementation will execute the 10-phase normalization pipeline
-    // per tile-row for nblocks_per_core iterations.
+    // Hardware init for tilize: srcA=srcB=cb_in, output=cb_tilized
+    compute_kernel_hw_startup(cb_in, cb_tilized);
+
+    for (uint32_t block = 0; block < nblocks_per_core; ++block) {
+        // Phase 1: Tilize (cb_in -> cb_tilized)
+        compute_kernel_lib::tilize<cb_in, cb_tilized, compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit>(
+            Wt, 1);
+
+        // Phase 10: Untilize (cb_tilized -> cb_out)
+        compute_kernel_lib::
+            untilize<Wt, cb_tilized, cb_out, compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit>(1);
+    }
 }

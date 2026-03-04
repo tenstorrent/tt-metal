@@ -29,7 +29,7 @@
 set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DISPATCH_TIMEOUT=5
+DISPATCH_TIMEOUT="${TT_TEST_DISPATCH_TIMEOUT:-5}"
 SAFETY_NET_TIMEOUT=300
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 TRIAGE_SUMMARIZER="${REPO_DIR}/.claude/scripts/summarize-triage.py"

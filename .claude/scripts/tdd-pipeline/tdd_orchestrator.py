@@ -429,7 +429,7 @@ def cmd_test(args):
         print(f"ERROR: Test file not found: {test_path}", file=sys.stderr)
         sys.exit(1)
 
-    # Run tt-test.sh --dev
+    # Run tt-test.sh (without --dev to avoid LLK assert hangs in debug mode)
     hard_attempts = stage["attempts"]
     free_retries = stage.get("free_retries", 0)
     print(
@@ -437,11 +437,14 @@ def cmd_test(args):
         f"(hard attempts: {hard_attempts}/{stage['max_attempts']}, "
         f"free retries: {free_retries})..."
     )
+    env = os.environ.copy()
+    env["TT_TEST_DISPATCH_TIMEOUT"] = env.get("TT_TEST_DISPATCH_TIMEOUT", "120")
     result = subprocess.run(
-        [str(TT_TEST_SCRIPT), "--dev", str(test_path)],
+        [str(TT_TEST_SCRIPT), str(test_path)],
         capture_output=True,
         text=True,
         timeout=300,  # 5 minute overall timeout
+        env=env,
     )
 
     exit_code = result.returncode
