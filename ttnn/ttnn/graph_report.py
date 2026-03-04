@@ -1288,7 +1288,7 @@ def import_report(
 
             # Save mesh coordinate mapping if present (matches old save_mesh_descriptor behavior)
             if "mesh_coordinate_mapping" in report and report["mesh_coordinate_mapping"]:
-                mesh_path = output_dir / "mesh_coordinate_mapping.yaml"
+                mesh_path = output_dir / "physical_chip_mesh_coordinate_mapping_1_of_1.yaml"
                 if not mesh_path.exists():  # Only write once
                     with open(mesh_path, "w") as f:
                         f.write(report["mesh_coordinate_mapping"])
@@ -1424,7 +1424,7 @@ def import_report(
         if total_stats.get("cluster_descriptor"):
             print(f"  - cluster_descriptor.yaml saved")
         if total_stats.get("mesh_coordinate_mapping"):
-            print(f"  - mesh_coordinate_mapping.yaml saved")
+            print(f"  - physical_chip_mesh_coordinate_mapping_1_of_1.yaml saved")
         if generate_svgs:
             print(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
 
