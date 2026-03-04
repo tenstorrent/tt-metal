@@ -252,10 +252,13 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
+            DPRINT << "H2D Send pages downstream done" << ENDL();
         }
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
+        DPRINT << "H2D Notify sender" << ENDL();
         socket_notify_sender(receiver_socket);
+        DPRINT << "H2d Notify sender done" << ENDL();
         invalidate_l1_cache();
     }
 
