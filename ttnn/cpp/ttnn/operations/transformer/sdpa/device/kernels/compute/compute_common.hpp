@@ -1406,6 +1406,7 @@ template <
     uint32_t cb_scale_in,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
     bool use_attention_sink,
@@ -1501,8 +1502,8 @@ void sdpa_inner_loop(
                 q_high_idx = Skt;
             }
         } else if (sdpa_type == RING) {
-            const uint32_t nb = q_iter / (local_q_start * q_num_chunks);
-            const uint32_t nq = (q_iter % (local_q_start * q_num_chunks)) / q_num_chunks;
+            const uint32_t nb = q_iter / (NH * q_num_chunks);
+            const uint32_t nq = (q_iter % (NH * q_num_chunks)) / q_num_chunks;
             const uint32_t q_chunk = q_iter % q_num_chunks;
 
             if (is_causal) {
@@ -1512,7 +1513,6 @@ void sdpa_inner_loop(
             }
             if (is_balanced) {
                 if (q_chunk < q_num_chunks / 2) {
-                    DPRINT << "SKIPPING COMPUTE FOR Q: " << q_chunk << " HEAD: " << nq << ENDL();
                     continue;
                 }
             }
@@ -1909,6 +1909,7 @@ void sdpa_standard(
         0,  // cb_scale_in (not used)
         Sq_chunk_t,
         Sk_chunk_t,
+        0,  // NH (not used)
         DHt,
         vDHt,
         use_attention_sink,
@@ -2029,6 +2030,7 @@ void sdpa_joint(
         0,  // cb_scale_in (not used)
         Sq_chunk_t,
         Sk_chunk_t,
+        0,  // NH (not used)
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
@@ -2103,6 +2105,7 @@ template <
     uint32_t cb_scale_in,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32>
@@ -2166,6 +2169,7 @@ void sdpa_ring(
         cb_scale_in,
         Sq_chunk_t,
         Sk_chunk_t,
+        NH,
         DHt,
         vDHt,
         false,  // use_attention_sink (not used)
@@ -2188,11 +2192,11 @@ void sdpa_ring(
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        global_q_start,      // iter_q_start
-        global_q_end,        // iter_q_end
-        q_num_chunks,        // q_num_chunks (number of local q chunks)
-        iter_k_chunk_start,  // local_q_start (actually NH)
-        0,                   // chunked_q_chunk_offset (not used)
+        global_q_start,  // iter_q_start
+        global_q_end,    // iter_q_end
+        q_num_chunks,    // q_num_chunks (number of local q chunks)
+        0,               // local_q_start (not used)
+        0,               // chunked_q_chunk_offset (not used)
         0,
         iter_k_chunk_end,
         q_chunk_tiles,
@@ -2284,6 +2288,7 @@ void sdpa_windowed(
         0,  // cb_scale_in (not used)
         Sq_chunk_t,
         Sk_chunk_t,
+        0,  // NH (not used)
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
