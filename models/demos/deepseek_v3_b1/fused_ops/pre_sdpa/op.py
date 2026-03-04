@@ -47,7 +47,8 @@ class PreSDPA:
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
-        position_ids,
+        local_position_ids,
+        global_position_ids,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
@@ -60,9 +61,17 @@ class PreSDPA:
         heads_per_row=8,
         nope_dim=512,
         rope_dim=64,
+        kv_cache_update=True,
     ):
         """
-        PyTorch reference implementation for validation.
+        PyTorch reference implementation of the fused PreSDPA pipeline:
+          RMSNorm → Matmul → GatherReduce → RMSNorm2 → Matmul2 → Matmul3(Qnope) + RoPE(Qrope)
+          → [optional] DKV Matmul → KV RMSNorm → K RoPE → KV cache update
+          → FlashMLA decode
+
+        The KV cache branch is controlled by kv_cache_update.  When False the
+        cache is used as-is (no new entry is written), which models non-owning
+        SP devices that only run MLA over their existing local cache.
 
         Args:
             input_tensor: Input tensor (torch.Tensor) [1, K]
@@ -74,19 +83,34 @@ class PreSDPA:
                                     e.g., [64, 128, 512] for batched matmul on Qnope heads
             sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
             cos_tensor: Cos tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
-            position_ids: Position indices (torch.Tensor) [batch] for decode mode
-            epsilon: Small value to avoid division by zero
+            local_position_ids: Device-local position indices (torch.Tensor) [batch].
+                          Used for KV cache write position and MLA sequence length.
+                          In SP mode this is the normalized position within the device's
+                          local KV cache slice.
+            global_position_ids: Global position indices (torch.Tensor) [batch].
+                          Used for Q/K RoPE cos/sin table lookup, since the rotation
+                          tables are full-length and replicated across all SP devices.
+            dkv_matmul_weights_tensor: DKV matmul weights (torch.Tensor) [K, nope_dim + rope_dim]
+            dkv_rmsnorm_gamma_tensor: DKV RMSNorm gamma (torch.Tensor) [1, nope_dim]
+            kv_cache_tensor: KV cache (torch.Tensor) [1, 1, seq_len, nope_dim + rope_dim]
+            scale: Scale factor for FlashMLA
+            epsilon: Small value to avoid division by zero (default 1e-6)
             num_qnope_heads: Number of Qnope heads (default 64)
             num_qrope_heads: Number of Qrope heads (default 64)
             qnope_head_dim: Dimension per Qnope head (default 128)
             qrope_head_dim: Dimension per Qrope head (default 64)
             heads_per_row: Number of heads per grid row (default 8)
+            nope_dim: NOPE dimension / KV nope dim (default 512)
+            rope_dim: RoPE dimension / KV rope dim (default 64)
+            kv_cache_update: When True (default), compute new KV entry and write it into
+                             the cache at local_position_ids[0].  When False, skip the
+                             KV cache update and use the cache as-is for MLA.
 
         Returns:
-            Tuple of (qnope_output, qrope_output, sdpa_interleaved):
-            - qnope_output: [num_qnope_heads, 1, qnope_out_dim] after matmul3
-            - qrope_output: [num_qrope_heads, 1, qrope_head_dim] after RoPE
-            - sdpa_interleaved: [8, 8, 576] interleaved QNOPE/QROPE output for SDPA
+            Tuple of (full_q, new_kv, mla_output):
+            - full_q: [1, 1, num_qnope_heads, nope_dim + rope_dim] combined Q heads
+            - new_kv: [1, 1, 1, nope_dim + rope_dim] new KV entry (None when kv_cache_update is False)
+            - mla_output: [num_heads * heads_per_row, nope_dim] MLA attention output
         """
         from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
@@ -95,7 +119,6 @@ class PreSDPA:
             normalized = x * torch.rsqrt(variance + epsilon)
             return normalized * gamma
 
-        position_id = position_ids[0]
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         matmul_result = input_layernorm @ matmul_weights_tensor
@@ -107,39 +130,31 @@ class PreSDPA:
         qrope_heads = matmul2_result[:, num_qnope_heads * qnope_head_dim :].reshape(num_qrope_heads, 1, qrope_head_dim)
 
         # Matmul3: Batched matmul on Qnope heads
-        # [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
         qnope_output = torch.bmm(qnope_heads, matmul3_weights_tensor)
 
-        # Apply RoPE to Qrope heads
-        # qrope_heads: [num_qrope_heads, 1, qrope_head_dim] = [64, 1, 64]
-        # Reshape for RopeSingleCore.golden: [batch, n_heads, seq_len, head_dim] = [1, 64, 1, 64]
-        qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)  # [1, 64, 1, 64]
-        # position_ids_expanded: [batch, seq_len] = [1, 1]
-        position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
-        # Apply RoPE
+        # Apply RoPE to Qrope heads (cos/sin indexed by global position)
+        qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)
+        global_position_ids_expanded = global_position_ids.unsqueeze(1)
         qrope_output_reshaped = RopeSingleCore.golden(
-            qrope_reshaped_for_rope, cos_tensor, sin_tensor, position_ids_expanded
+            qrope_reshaped_for_rope, cos_tensor, sin_tensor, global_position_ids_expanded
         )
-        # Reshape back: [1, 64, 1, 64] -> [64, 1, 64]
-        qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)  # [64, 1, 64]
+        qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)
 
-        # Combine QNOPE and QROPE outputs
-        combined_head_dim = nope_dim + rope_dim  # 512 + 64 = 576
-
+        combined_head_dim = nope_dim + rope_dim
         full_q = torch.concat([qnope_output, qrope_output], dim=-1).reshape(1, 1, num_qnope_heads, combined_head_dim)
 
-        # KV Cache Branch
-        dkv = input_layernorm @ dkv_matmul_weights_tensor
-        kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
-        kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
-        k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
-
-        # from 0 to position id, the kv cache is valid
         full_kv = kv_cache_tensor.to(full_q.dtype)
-        new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
-        full_kv[:, :, position_id, :] = new_kv
+        new_kv = None
 
-        output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+        if kv_cache_update:
+            dkv = input_layernorm @ dkv_matmul_weights_tensor
+            kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
+            kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
+            k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, global_position_ids).squeeze(0)
+            new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
+            full_kv = torch.cat([full_kv, new_kv], dim=2)
+
+        output = FlashMLADecode.golden(full_q, full_kv, local_position_ids, nope_dim, scale).squeeze()
         return full_q, new_kv, output
 
     @staticmethod
@@ -1073,6 +1088,8 @@ class PreSDPA:
         ]
 
         # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
+        flash_mla_program_config = FlashMLADecode.ProgramConfig()
+        device_chunk_size = flash_mla_program_config.device_chunk_size
         kv_cache_brisc_named_compile_time_args = [
             ("krope_output_cb", krope_output_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
@@ -1095,7 +1112,6 @@ class PreSDPA:
 
         # Flash MLA named compile-time args
         # a lot of the setup is reused from the FlashMLADecode op
-        flash_mla_program_config = FlashMLADecode.ProgramConfig()
         k_chunk_size = flash_mla_program_config.k_chunk_size
         num_q_heads_per_core = 8
         k_shape = kv_cache_tensor.padded_shape
@@ -2178,16 +2194,22 @@ class PreSDPA:
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
                 position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
 
+                kv_cache_sp_named_compile_time_args = [
+                    ("kv_cache_device_chunk_size", device_chunk_size),
+                    ("kv_cache_sp_device_idx", row),
+                    ("kv_cache_num_sp_devices", mesh_rows),
+                ]
+
                 # TRISC common runtime args (shared scalar values)
                 trisc_common_runtime_args = [
                     epsilon_packed,  # idx 0
                     scalar_packed,  # idx 1
                     scalar2_packed,  # idx 2
                     kv_scalar_packed,  # idx 3
-                    kv_cache_input_cb,
-                    kv_cache_output_cb,
-                    kv_cache_intermed_cb,
-                    position_ids_tensor_addr,
+                    kv_cache_input_cb,  # idx 4
+                    kv_cache_output_cb,  # idx 5
+                    kv_cache_intermed_cb,  # idx 6
+                    position_ids_tensor_addr,  # idx 7
                 ]
 
                 qrope_ncrisc_addr_args = [
@@ -2227,6 +2249,7 @@ class PreSDPA:
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
                     + krope_ncrisc_addr_args
+                    + kv_cache_sp_named_compile_time_args
                     + mla_ncrisc_named_compile_time_args
                 )
                 ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
@@ -2247,6 +2270,7 @@ class PreSDPA:
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args
+                    + kv_cache_sp_named_compile_time_args
                     + mla_brisc_named_compile_time_args
                 )
                 brisc_common_runtime_args = [k_addr, position_ids_tensor_addr]
@@ -2265,6 +2289,7 @@ class PreSDPA:
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args
                     + kv_cache_trisc_named_compile_time_args
+                    + kv_cache_sp_named_compile_time_args
                     + mla_trisc_named_compile_time_args
                 )
 
