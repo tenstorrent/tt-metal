@@ -27,6 +27,7 @@ class TorchDispatchModule(torch.nn.Module):
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
         hidden_dim: int = 7 * 1024,
+        num_ep_ranks: int = 1,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -46,6 +47,7 @@ class TorchDispatchModule(torch.nn.Module):
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
         self.seq_len_per_chip = seq_len_per_chip
+        self.num_ep_ranks = num_ep_ranks
 
         # Oversized buffer to simplify dispatch logic
         self.dispatched_shape = (num_chips, self.experts_per_chip, self.max_dispatched_tokens_per_expert, hidden_dim)
@@ -71,6 +73,59 @@ class TorchDispatchModule(torch.nn.Module):
             (self.num_chips, self.experts_per_chip), dtype=torch.int32
         )  # total tokens dispatched to each expert per chip
 
+    def _dispatch_single_rank(
+        self,
+        x: torch.Tensor,
+        weights: torch.Tensor,
+        indices: torch.Tensor,
+    ):
+        """Dispatch tokens for a single EP rank."""
+        # Reset buffers
+        dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
+        dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
+        chip_to_n_routed_expert_counter = torch.zeros((self.num_chips, self.n_routed_experts), dtype=torch.int32)
+
+        # Count tokens per expert per chip
+        for chip in range(self.num_chips):
+            for token in range(self.seq_len_per_chip):
+                for topk_indice in range(self.num_experts_per_tok):
+                    routed_expert = indices[chip, token, topk_indice]
+                    chip_to_n_routed_expert_counter[chip, routed_expert] += 1
+
+        # Compute offsets
+        cum_sum = torch.cumsum(chip_to_n_routed_expert_counter, dim=0)
+        chip_to_n_routed_expert_offset = torch.vstack(
+            [torch.zeros([1, self.n_routed_experts], dtype=torch.int32), cum_sum[:-1]]
+        )
+        chip_to_routed_expert_tokens = cum_sum[-1].view(self.num_chips, self.experts_per_chip).to(torch.int32)
+
+        # Dispatch tokens and metadata
+        for chip in range(self.num_chips):
+            for token in range(self.seq_len_per_chip):
+                for topk_indice in range(self.num_experts_per_tok):
+                    routed_expert = indices[chip, token, topk_indice]
+                    expert_chip = routed_expert // self.experts_per_chip
+                    expert_index_within_chip = routed_expert % self.experts_per_chip
+                    dst_index = chip_to_n_routed_expert_offset[chip, routed_expert]
+
+                    dispatched_buffer[expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                    dispatched_metadata[expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
+                        [
+                            chip,
+                            token,
+                            topk_indice,
+                            routed_expert,
+                            torch.tensor(weights[chip, token, topk_indice].item(), dtype=torch.bfloat16)
+                            .view(torch.int16)
+                            .item(),
+                        ]
+                        + [0] * (self.metadata_len - 5),
+                        dtype=dispatched_metadata.dtype,
+                    )
+                    chip_to_n_routed_expert_offset[chip, routed_expert] += 1
+
+        return dispatched_buffer, dispatched_metadata, chip_to_routed_expert_tokens
+
     def forward(
         self,
         x: torch.Tensor,
@@ -85,14 +140,32 @@ class TorchDispatchModule(torch.nn.Module):
 
         Args:
             x: Input tensor of shape (num_chips, seq_len, hidden_dim)
-            weights: Router weights of shape (num_chips, seq_len, num_experts_per_tok)
+            weights: Router weights of shape (num_ep_ranks, num_chips, seq_len, num_experts_per_tok) or
+                     (num_chips, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
 
         Returns:
-            dispatched: Dispatched tokens of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
-            metadata: Metadata tensor of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-            experts_counter: Counter tracking tokens per expert of shape (num_chips, experts_per_chip)
+            If num_ep_ranks == 1:
+                dispatched: shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                metadata: shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+                experts_counter: shape (num_chips, experts_per_chip)
+            If num_ep_ranks > 1:
+                dispatched: shape (num_ep_ranks, num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+                metadata: shape (num_ep_ranks, num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+                experts_counter: shape (num_chips, experts_per_chip) - same for all ranks since indices are shared
         """
+        # Handle weights with num_ep_ranks dimension: (num_ep_ranks, num_chips, seq_len, num_experts_per_tok)
+        if weights.dim() == 4 and weights.shape[0] == self.num_ep_ranks:
+            # Process all EP ranks and stack results
+            dispatched_list = []
+            metadata_list = []
+            experts_counter = None
+            for r in range(self.num_ep_ranks):
+                dispatched, metadata, counter = self._dispatch_single_rank(x, weights[r], indices)
+                dispatched_list.append(dispatched)
+                metadata_list.append(metadata)
+                experts_counter = counter  # Same for all ranks since indices are shared
+            return torch.stack(dispatched_list), torch.stack(metadata_list), experts_counter
 
         assert (
             self.num_chips == x.shape[0] == weights.shape[0] == indices.shape[0]
@@ -104,43 +177,4 @@ class TorchDispatchModule(torch.nn.Module):
             self.num_experts_per_tok == indices.shape[-1]
         ), f"Last dimension of indices must match num_experts_per_tok {self.num_experts_per_tok}, got {indices.shape[-1]}"
 
-        ###
-        # prep data for efficient dispatch: count tokens per expert per chip to compute offsets for where to write in the dispatched buffer
-
-        for chip in range(self.num_chips):
-            for token in range(self.seq_len_per_chip):
-                for topk_indice in range(self.num_experts_per_tok):
-                    routed_expert = indices[chip, token, topk_indice]
-                    self.chip_to_n_routed_expert_counter[chip, routed_expert] += 1
-
-        # this should be local to each chip
-        cum_sum = torch.cumsum(self.chip_to_n_routed_expert_counter, dim=0)
-        chip_to_n_routed_expert_offset = torch.vstack(
-            [torch.zeros([1, self.n_routed_experts], dtype=torch.int32), cum_sum[:-1]]
-        )  # base offset for each expert in the dispatched buffer
-        # this should be local to each chip
-        chip_to_routed_expert_tokens = cum_sum[-1].view(self.num_chips, self.experts_per_chip).to(torch.int32)
-
-        ###
-        # dispatching tokens and metadata to experts
-        for chip in range(self.num_chips):
-            for token in range(self.seq_len_per_chip):
-                for topk_indice in range(self.num_experts_per_tok):
-                    routed_expert = indices[chip, token, topk_indice]
-                    # logger.debug(f"Chip {chip} dispatching token {token} to expert [{topk_indice}]={routed_expert}")
-
-                    expert_chip = routed_expert // self.experts_per_chip
-                    expert_index_within_chip = routed_expert % self.experts_per_chip
-                    dst_index = chip_to_n_routed_expert_offset[chip, routed_expert]
-
-                    self.dispatched_buffer[expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
-                    self.dispatched_metadata[expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
-                        [chip, token, topk_indice, routed_expert, weights[chip, token, topk_indice]]
-                        + [0] * (self.metadata_len - 5),
-                        dtype=torch.float32,
-                    )
-                    chip_to_n_routed_expert_offset[chip, routed_expert] += 1
-
-        # chip_to_routed_expert_tokens is needed to run experts
-        # metadata and chip_to_routed_expert_tokens are needed for combine step to route expert outputs back to original token positions
-        return self.dispatched_buffer, self.dispatched_metadata, chip_to_routed_expert_tokens
+        return self._dispatch_single_rank(x, weights, indices)

@@ -154,6 +154,7 @@ def test_ttnn_dispatch_combine(
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Generate test inputs
+    # For 2D mesh, generate different weights per EP rank
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
             num_chips=num_chips_sp,
@@ -162,6 +163,7 @@ def test_ttnn_dispatch_combine(
             n_routed_experts=n_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            num_ep_ranks=num_chips_rep,
         )
         logger.info("Using PREDICTABLE test data for debugging")
     else:
@@ -173,26 +175,55 @@ def test_ttnn_dispatch_combine(
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seed=42,
+            num_ep_ranks=num_chips_rep,
         )
         logger.info("Using RANDOM test data")
 
     logger.info(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
-    # Convert torch tensors to TTNN tensors
-    mesh_mapper = ttnn.ShardTensor2dMesh(
+    # x and indices: replicated across EP ranks
+    mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
         dims=(sp_axis, None),  # Shard on sp_axis, replicate on other axis
     )
 
+    # weights: sharded across BOTH axes (different per EP rank) for 2D mesh
+    # weights shape: (num_ep_ranks, num_chips_sp, seq_len, num_experts_per_tok)
+    # For 1D mesh (num_chips_rep=1): squeeze the EP rank dimension and use replicated mapper
+    # For 2D mesh: shard both axes
+    if num_chips_rep > 1:
+        # For sp_axis=0: mesh axis 0 (rows) = num_chips_sp, mesh axis 1 (cols) = num_ep_ranks
+        #   dims = (1, 0): shard tensor dim 1 (num_chips_sp) on mesh axis 0, tensor dim 0 (num_ep_ranks) on mesh axis 1
+        # For sp_axis=1: mesh axis 0 (rows) = num_ep_ranks, mesh axis 1 (cols) = num_chips_sp
+        #   dims = (0, 1): shard tensor dim 0 (num_ep_ranks) on mesh axis 0, tensor dim 1 (num_chips_sp) on mesh axis 1
+        if sp_axis == 0:
+            weights_dims = (1, 0)
+        else:
+            weights_dims = (0, 1)
+        mesh_mapper_weights = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=weights_dims,
+        )
+        weights_for_ttnn = weights
+    else:
+        # For 1D mesh, squeeze the num_ep_ranks dimension since it's 1
+        mesh_mapper_weights = mesh_mapper_replicated
+        weights_for_ttnn = weights.squeeze(0)  # Remove the num_ep_ranks=1 dimension
+
     tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
     tt_weights = ttnn.from_torch(
-        weights, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        weights_for_ttnn,
+        mesh_mapper=mesh_mapper_weights,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
     )
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+        indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
     )
 
     # Initialize TTNN dispatch module
@@ -229,7 +260,7 @@ def test_ttnn_dispatch_combine(
     logger.info(f"  Counter values: {experts_tok_counter=}")
     tt_experts_tok_counter = ttnn.from_torch(
         experts_tok_counter,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=mesh_mapper_replicated,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,

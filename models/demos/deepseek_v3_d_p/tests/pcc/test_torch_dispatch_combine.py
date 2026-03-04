@@ -9,12 +9,9 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import (
-    compute_constants,
-    initialize_test_inputs,
-)
+from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.common import compute_constants, initialize_test_inputs
 
 
 @pytest.mark.parametrize(
@@ -44,6 +41,8 @@ def test_torch_dispatch_combine(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seed=42,
     )
+    # Squeeze the ep_rank dimension since this is a single-rank pure torch test
+    weights = weights.squeeze(0)
 
     # Initialize dispatch and combine modules
     dispatch_module = TorchDispatchModule(
