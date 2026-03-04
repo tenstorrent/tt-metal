@@ -265,7 +265,7 @@ def get_transformation_mat(head_dim: int, device) -> ttnn.Tensor:
 
 def rearrange_to_interleaved(x: torch.Tensor) -> torch.Tensor:
     """
-    Rearrange tensor from non-interleaved to interleaved RoPE format.
+    Rearrange tensor from non-interleaved to interleaved RoPE format (PyTorch version).
 
     Qwen3-TTS uses non-interleaved RoPE that pairs dimensions (i, i+64).
     TTNN rotary_embedding_llama uses interleaved format that pairs (2i, 2i+1).
@@ -293,7 +293,7 @@ def rearrange_to_interleaved(x: torch.Tensor) -> torch.Tensor:
 
 def rearrange_to_noninterleaved(x: torch.Tensor) -> torch.Tensor:
     """
-    Rearrange tensor from interleaved to non-interleaved RoPE format.
+    Rearrange tensor from interleaved to non-interleaved RoPE format (PyTorch version).
     Inverse of rearrange_to_interleaved.
 
     This function rearranges:
@@ -311,6 +311,83 @@ def rearrange_to_noninterleaved(x: torch.Tensor) -> torch.Tensor:
     x2 = x[..., 1::2]  # odd indices: d64, d65, d66, ...
 
     return torch.cat([x1, x2], dim=-1)
+
+
+def ttnn_rearrange_to_interleaved(x: ttnn.Tensor) -> ttnn.Tensor:
+    """
+    Rearrange TTNN tensor from non-interleaved to interleaved RoPE format.
+    Pure TTNN implementation - compatible with trace capture.
+
+    Converts: [..., d0, d1, ..., d63, d64, d65, ..., d127]
+    To:       [..., d0, d64, d1, d65, ..., d63, d127]
+
+    For a tensor of shape [B, H, S, D] where D=128:
+    1. Reshape to [B, H, S, 2, 64] - split into two halves
+    2. Permute to [B, H, S, 64, 2] - bring pairs together
+    3. Reshape back to [B, H, S, 128] - flatten
+
+    Args:
+        x: TTNN tensor with shape [batch, num_heads, seq_len, head_dim]
+
+    Returns:
+        Rearranged TTNN tensor with same shape
+    """
+    shape = x.shape
+    batch = shape[0]
+    num_heads = shape[1]
+    seq_len = shape[2]
+    head_dim = shape[3]
+    half_dim = head_dim // 2
+
+    # Reshape: [B, H, S, D] -> [B, H, S, 2, D//2]
+    x_reshaped = ttnn.reshape(x, (batch, num_heads, seq_len, 2, half_dim))
+
+    # Permute: [B, H, S, 2, D//2] -> [B, H, S, D//2, 2]
+    x_permuted = ttnn.permute(x_reshaped, (0, 1, 2, 4, 3))
+
+    # Reshape back: [B, H, S, D//2, 2] -> [B, H, S, D]
+    x_interleaved = ttnn.reshape(x_permuted, (batch, num_heads, seq_len, head_dim))
+
+    return x_interleaved
+
+
+def ttnn_rearrange_to_noninterleaved(x: ttnn.Tensor) -> ttnn.Tensor:
+    """
+    Rearrange TTNN tensor from interleaved to non-interleaved RoPE format.
+    Pure TTNN implementation - compatible with trace capture.
+    Inverse of ttnn_rearrange_to_interleaved.
+
+    Converts: [..., d0, d64, d1, d65, ..., d63, d127]
+    To:       [..., d0, d1, ..., d63, d64, d65, ..., d127]
+
+    For a tensor of shape [B, H, S, D] where D=128:
+    1. Reshape to [B, H, S, 64, 2] - group pairs
+    2. Permute to [B, H, S, 2, 64] - separate halves
+    3. Reshape back to [B, H, S, 128] - flatten
+
+    Args:
+        x: TTNN tensor with shape [batch, num_heads, seq_len, head_dim]
+
+    Returns:
+        Rearranged TTNN tensor with same shape
+    """
+    shape = x.shape
+    batch = shape[0]
+    num_heads = shape[1]
+    seq_len = shape[2]
+    head_dim = shape[3]
+    half_dim = head_dim // 2
+
+    # Reshape: [B, H, S, D] -> [B, H, S, D//2, 2]
+    x_reshaped = ttnn.reshape(x, (batch, num_heads, seq_len, half_dim, 2))
+
+    # Permute: [B, H, S, D//2, 2] -> [B, H, S, 2, D//2]
+    x_permuted = ttnn.permute(x_reshaped, (0, 1, 2, 4, 3))
+
+    # Reshape back: [B, H, S, 2, D//2] -> [B, H, S, D]
+    x_noninterleaved = ttnn.reshape(x_permuted, (batch, num_heads, seq_len, head_dim))
+
+    return x_noninterleaved
 
 
 def compute_mrope_cos_sin_for_ttnn(
