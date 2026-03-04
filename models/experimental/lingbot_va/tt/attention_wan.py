@@ -310,6 +310,10 @@ class WanAttention(Module):
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
             q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            # wan_fused_rmsnorm_post_allgather expects 4D [1, B, L, D]; ensure K/V are 4D (prompt may be 3D).
+            if len(k_1BNF.shape) == 3:
+                k_1BNF = ttnn.unsqueeze(k_1BNF, 0)
+                v_1BNF = ttnn.unsqueeze(v_1BNF, 0)
 
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
