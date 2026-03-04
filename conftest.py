@@ -524,7 +524,7 @@ def get_default_fabric_tensix_config():
 
 
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, device_params):
+def root_mesh_device(request, silicon_arch_name, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -585,6 +585,11 @@ def mesh_device(request, silicon_arch_name, device_params):
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
+
+
+@pytest.fixture
+def mesh_device(root_mesh_device):
+    return root_mesh_device
 
 
 @pytest.fixture(scope="function")
