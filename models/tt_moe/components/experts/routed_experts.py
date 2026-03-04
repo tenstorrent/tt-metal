@@ -27,7 +27,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class Experts(AbstractModule):
+class RoutedExperts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
 
     @classmethod
@@ -236,3 +236,7 @@ class Experts(AbstractModule):
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         return cls._forward(x, cfg)
+
+
+# Backward compatibility alias
+Experts = RoutedExperts

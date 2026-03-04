@@ -37,7 +37,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class MoEGate(AbstractModule):
+class GroupedTopKRouter(AbstractModule):
     """MoE gate module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
@@ -519,3 +519,7 @@ class MoEGate(AbstractModule):
         )
 
         return ttnn_output
+
+
+# Backward compatibility alias
+MoEGate = GroupedTopKRouter

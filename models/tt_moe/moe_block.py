@@ -7,9 +7,6 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
-from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
@@ -30,9 +27,12 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.tt_moe.collectives.ccl import CCL
+from models.tt_moe.components.experts.routed_experts import RoutedExperts as MoEExperts
+from models.tt_moe.components.routers.grouped_topk_router import GroupedTopKRouter as MoEGate
 
 
-class MoE(SharedStateAddOn, AbstractModule):
+class MoEBlock(SharedStateAddOn, AbstractModule):
     """MoE module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
@@ -505,3 +505,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
+
+
+# Backward compatibility alias
+MoE = MoEBlock
