@@ -203,7 +203,7 @@ jobs:
   resolve-artifacts:
     runs-on: ubuntu-latest
     needs: [build-artifact]
-    if: ${{ always() && !cancelled() }}
+    if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
     outputs:
       dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
       build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
