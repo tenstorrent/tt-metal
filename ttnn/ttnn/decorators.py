@@ -210,6 +210,19 @@ def set_tensor_id(tensor, force=False):
         raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
 
 
+def get_output_tensor_ids(output):
+    """Return the list of tensor_id ints from all tensors in *output*.
+
+    Tensor IDs must already be assigned (via ``set_tensor_id``).
+    """
+    ids = []
+    for t in get_all_tensors(output):
+        tid = getattr(t, "tensor_id", None)
+        if tid is not None:
+            ids.append(int(tid))
+    return ids
+
+
 def set_output_tensor_id_decorator(function):
     @wraps(function)
     def call_wrapper(*function_args, **function_kwargs):
@@ -471,14 +484,8 @@ class FastOperation:
                 ttnn.graph.track_function_end()
 
         if tracking:
-            output_tensors = get_all_tensors(result)
-            set_tensor_id(output_tensors, force=True)
-            output_tensor_ids = []
-            for t in output_tensors:
-                tid = getattr(t, "tensor_id", None)
-                if tid is not None:
-                    output_tensor_ids.append(int(tid))
-            ttnn.graph.store_output_tensor_ids(output_tensor_ids)
+            set_tensor_id(get_all_tensors(result), force=True)
+            ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(result))
 
         return result
 
@@ -718,13 +725,7 @@ class Operation:
                     captured_graph = ttnn.graph.end_graph_capture()
 
                 if ttnn.graph.is_graph_capture_active():
-                    output_tensors = get_all_tensors(output)
-                    output_tensor_ids = []
-                    for t in output_tensors:
-                        tid = getattr(t, "tensor_id", None)
-                        if tid is not None:
-                            output_tensor_ids.append(int(tid))
-                    ttnn.graph.store_output_tensor_ids(output_tensor_ids)
+                    ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(output))
                     ttnn.graph.store_captured_graph(captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
