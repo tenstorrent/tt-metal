@@ -827,26 +827,30 @@ def run_model_forward_test(
         )
 
     # Create reference model with HF format weights
-    reference_model = GptOssForCausalLM(config)
-    reference_model.load_state_dict(state_dict_hf, strict=False)
-    reference_model.eval()
+    if state_dict_hf is not None:
+        logger.info("Setting up reference model...")
+        reference_model = GptOssForCausalLM(config)
+        reference_model.load_state_dict(state_dict_hf, strict=False)
+        reference_model.eval()
 
-    # # Create random input tokens
-    input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+        # # Create random input tokens
+        input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
 
-    # Create position IDs
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
-
-    # Run reference forward pass
-    with torch.no_grad():
-        reference_output = reference_model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            attention_mask=None,  # Let the model handle masking
-            use_cache=False,
+        # Create position IDs
+        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+        logger.info(
+            f"Running reference forward pass with input_ids shape {input_ids.shape} and position_ids shape {position_ids.shape}..."
         )
-        reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
-
+        # Run reference forward pass
+        with torch.no_grad():
+            reference_output = reference_model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=None,  # Let the model handle masking
+                use_cache=False,
+            )
+            reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+            logger.info(f"Reference forward pass completed. Output shape: {reference_logits.shape}")
     # Prepare inputs for TT model
     if is_decode:
         # Decode mode: use ttnn_decode_forward
@@ -993,9 +997,9 @@ def test_model(
     config = setup["config"]
     logger.info(f"Loaded model config: {config}")
     # Override number of layers
-    # original_num_layers = config.num_hidden_layers
-    # config.num_hidden_layers = num_layers
-    # logger.info(f"Overriding num_hidden_layers from {original_num_layers} to {num_layers}")
+    original_num_layers = config.num_hidden_layers
+    config.num_hidden_layers = num_layers
+    logger.info(f"Overriding num_hidden_layers from {original_num_layers} to {num_layers}")
 
     # Set attention implementation
     config._attn_implementation = "eager"

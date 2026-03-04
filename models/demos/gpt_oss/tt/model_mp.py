@@ -180,8 +180,10 @@ class ModelWithMP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.layers = []
+        self.last_submesh_id = 0
         for layer_idx in range(hf_config.num_hidden_layers):
             submesh_id = worker_for_task(layer_idx, hf_config.num_hidden_layers, self.mesh_shape[1])
+            self.last_submesh_id = submesh_id
             print("Assigning layer ", layer_idx, " to submesh ", submesh_id)
             self.layers.append(
                 DecoderLayer(
@@ -201,8 +203,10 @@ class ModelWithMP:
                     use_throughput_experts=use_throughput_experts,
                 )
             )
+
+        logger.info(f"Last Submesh ID is {self.last_submesh_id}, placing norm and lm_head on this submesh")
         self.norm = RMSNorm(
-            self.mp_submeshes[-1],
+            self.mp_submeshes[self.last_submesh_id],
             hf_config,
             substate(state_dict, "model.norm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
@@ -229,7 +233,7 @@ class ModelWithMP:
 
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
-            device=self.mp_submeshes[-1],
+            device=self.mp_submeshes[self.last_submesh_id],
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded.weight"),
@@ -436,9 +440,8 @@ class ModelWithMP:
         logits = hidden_states
 
         # Norm and lm_head are on the last submesh; copy there if we are not already
-        last_submesh_id = num_submeshes - 1
-        if current_submesh_id != last_submesh_id:
-            copied = self._copy_hidden_states_between_submeshes(hidden_states, current_submesh_id, last_submesh_id)
+        if current_submesh_id != self.last_submesh_id:
+            copied = self._copy_hidden_states_between_submeshes(hidden_states, current_submesh_id, self.last_submesh_id)
             hidden_states.deallocate(True)
             hidden_states = copied
             logits = hidden_states
@@ -477,7 +480,7 @@ class ModelWithMP:
         # padded_vocab_size before column-parallel sharding, so each device's
         # matmul output is already tile-aligned (per_device_padded width).
         # logger.info("Synchronzing last submesh")
-        ttnn.synchronize_device(self.mp_submeshes[-1])
+        ttnn.synchronize_device(self.mp_submeshes[self.last_submesh_id])
         return logits
 
     def ttnn_decode_forward(
