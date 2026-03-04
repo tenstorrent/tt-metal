@@ -295,7 +295,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_links = operation_attributes.num_links;
     uint32_t pad2_num_links = operation_attributes.pad2_num_links;
-    uint32_t total_fabric_cores = num_links * 2 + (is_2d ? pad2_num_links * 2 : 0);
+    uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
     if (total_fabric_cores > compute_grid_size.x) {
         // Reduce pad2_num_links first (W-fabric), then num_links (H-fabric) if still too many
         uint32_t max_total = compute_grid_size.x;
