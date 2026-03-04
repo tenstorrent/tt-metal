@@ -387,6 +387,8 @@ TEST_CASES = [
     (3, 19, "random", 16, 8, 9, 1),
     # WAN-like: sq7, sk16, 5 K chunks with 6 padded tiles (non-subblock-aligned padding)
     (3, 5, "random", 16, 6, 7, 1),
+    # Same as above but single Q chunk (isolates one Q iteration with pad6)
+    (1, 5, "random", 16, 6, 7, 1),
     # Single K-chunk padded (isolates reduced path from SALAD)
     (1, 1, "random", 16, 8, 7, 1),
     # Two K-chunks padded (minimal SALAD: 1 standard + 1 reduced)
@@ -411,6 +413,7 @@ TEST_IDS = [
     "3q_5k-random-sk4-sbh2-pad1",
     "3q_19k-random-sk16-pad8-sq9",
     "3q_5k-random-sk16-pad6",
+    "1q_5k-random-sk16-pad6",
     "1q_1k-random-sk16-pad8",
     "1q_2k-random-sk16-pad8",
 ]
@@ -714,4 +717,34 @@ def test_padded_s160_k512_sbh1(request):
         head_dim_t=4,
         subblock_h=1,
         padded_k_tiles=11,
+    )
+
+
+# ---------------------------------------------------------------------------
+# No-padding code size baseline
+# ---------------------------------------------------------------------------
+
+
+def test_nopad_codesize_baseline(request):
+    """No-padding baseline: padded_k_tiles=0 so effective_Sk == Sk_chunk_t.
+    The reduced-path template (call_step_reduced) is dead code — the constexpr
+    condition `padded_k_tiles > 0` is false, so the compiler eliminates the
+    branch and does NOT instantiate the narrower sdpa_inner_loop_step template.
+
+    Compare the JIT-compiled trisc2 binary size from this test against a padded
+    test (e.g. test_sdpa_single_core[3q_5k-random-sk16-pad6]) to measure the
+    code size overhead of the skip-padding dual-path instantiation.
+
+    Dimensions match 3q_5k-random-sk16-pad6 exactly, minus the padding."""
+    run_sdpa_single_core_test(
+        "nopad_codesize_baseline",
+        num_q_chunks=3,
+        num_k_chunks=5,
+        data_mode="random",
+        save_inputs_only=request.config.getoption("--save-inputs", default=False),
+        sq_chunk_t=7,
+        sk_chunk_t=16,
+        head_dim_t=4,
+        subblock_h=1,
+        padded_k_tiles=0,
     )

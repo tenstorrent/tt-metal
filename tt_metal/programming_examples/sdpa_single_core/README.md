@@ -115,6 +115,7 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 | `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 4 | 4 | 2 | 1 | 0 | `fa_rand` |
 | `3q_19k-random-sk16-pad8-sq9` | 3 | 19 | 9 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
 | `3q_5k-random-sk16-pad6` | 3 | 5 | 7 | 16 | 4 | 1 | 6 | 0 | `fa_rand` |
+| `1q_5k-random-sk16-pad6` | 1 | 5 | 7 | 16 | 4 | 1 | 6 | 0 | `fa_rand` |
 | `1q_1k-random-sk16-pad8` | 1 | 1 | 7 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
 | `1q_2k-random-sk16-pad8` | 1 | 2 | 7 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
 
