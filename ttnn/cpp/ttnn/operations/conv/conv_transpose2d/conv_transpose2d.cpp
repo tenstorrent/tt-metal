@@ -361,9 +361,9 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     DataType output_dtype;
     Tensor* weight_tensor;
     OptionalRefTensor bias_tensor;
-    bool has_bias_;
+    bool has_bias;
     DataType weight_dtype_;
-    uint32_t weight_logical_shape_3_;
+    uint32_t weight_logical_shape_3;
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
@@ -409,9 +409,9 @@ public:
         output_dtype(output_dtype),
         weight_tensor(&weight_tensor),
         bias_tensor(bias_tensor),
-        has_bias_(bias_tensor.has_value()),
+        has_bias(bias_tensor.has_value()),
         weight_dtype_(weight_tensor.dtype()),
-        weight_logical_shape_3_(weight_tensor.logical_shape()[3]),
+        weight_logical_shape_3(weight_tensor.logical_shape()[3]),
         conv_config(conv_config),
         compute_config(compute_config),
         device(device),
@@ -454,9 +454,9 @@ public:
         output_dtype(output_dtype),
         weight_tensor(nullptr),
         bias_tensor(std::nullopt),
-        has_bias_(has_bias),
+        has_bias(has_bias),
         weight_dtype_(weight_dtype),
-        weight_logical_shape_3_(weight_logical_shape_3),
+        weight_logical_shape_3(weight_logical_shape_3),
         conv_config(conv_config),
         compute_config(compute_config),
         device(device),
@@ -686,7 +686,7 @@ public:
             input_dtype,
             output_dtype,
             output_slice_width,
-            has_bias_,
+            has_bias,
             false,
             in_channels_padded);
         log_debug(
@@ -758,7 +758,7 @@ public:
                 output_channels,
                 output_slice_height,
                 output_slice_width,
-                weight_logical_shape_3_,
+                weight_logical_shape_3,
                 conv2d_dims.full_input_height,
                 conv2d_dims.full_input_width,
                 device->compute_with_storage_grid_size(),
@@ -771,7 +771,7 @@ public:
                 dilation,
                 padding_n4,
                 groups,
-                has_bias_,
+                has_bias,
                 compute_config);
         }
         TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
