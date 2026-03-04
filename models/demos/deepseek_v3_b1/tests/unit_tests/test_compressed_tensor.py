@@ -13,7 +13,6 @@ from models.demos.deepseek_v3_b1.compressed_tensor import (
     COMPRESSED_FORMATS,
     CompressedTensor,
     CompressedTensorAssigner,
-    bfp_tile_packed_size,
     ttnn_quantize_fn,
 )
 from models.demos.deepseek_v3_b1.compressed_tensor.metrics import metric_value
@@ -24,238 +23,83 @@ from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import (
 )
 
 
-def test_from_torch_round_trip():
-    """Create CompressedTensor via from_torch, unpack, and verify PCC."""
-    torch.manual_seed(42)
-    x = torch.randn(128, 128)
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(x, assigner)
-
-    print(f"{ct}")
-    print(f"Tile counts: {ct.tile_counts}")
-
-    assert ct.tile_counts["bfp8"] > 0 and ct.tile_counts["bfp4"] > 0, f"Expected mix: {ct.tile_counts}"
-
-    recovered = ct.to_torch()
-    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
-    print(f"Round-trip PCC: {pcc:.6f}")
-    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
-
-
-def test_assignment_stored_correctly():
-    """The assignment tensor should round-trip through ttnn uint8 storage."""
-    torch.manual_seed(0)
-    x = torch.randn(64, 64)
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    result = assigner.assign(x, ttnn_quantize_fn)
-    ct = CompressedTensor(x, result.assignment)
-
-    recovered_assignment = ct.get_assignment()
-    assert (recovered_assignment == result.assignment).all(), "Assignment round-trip mismatch"
-
-
-def test_data_bytes_matches_packed_size():
-    """data_bytes property should match actual packed tensor size."""
-    torch.manual_seed(42)
-    x = torch.randn(128, 128)
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(x, assigner)
-
-    actual_size = ttnn.to_torch(ct.data).numel()
-    print(f"data_bytes={ct.data_bytes}, actual tensor size={actual_size}")
-    assert ct.data_bytes == actual_size, f"data_bytes {ct.data_bytes} != actual {actual_size}"
-
-
-def test_packed_size_savings():
-    """CompressedTensor with mixed formats should use fewer bytes than uniform bfp8."""
-    torch.manual_seed(99)
-    x = torch.randn(128, 128)
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(x, assigner)
-
-    uniform_bfp8_bytes = ct.num_tiles * bfp_tile_packed_size(7)
-
-    print(f"{ct}")
-    print(
-        f"Savings: {uniform_bfp8_bytes - ct.data_bytes} bytes "
-        f"({100 * (1 - ct.data_bytes / uniform_bfp8_bytes):.1f}%)"
-    )
-    assert (
-        ct.data_bytes <= uniform_bfp8_bytes
-    ), f"Mixed ({ct.data_bytes}) should be <= uniform bfp8 ({uniform_bfp8_bytes})"
-
-
-def test_bfp0_tiles():
-    """bfp0 regions unpack as zeros, bfp8 regions preserve data."""
-    torch.manual_seed(42)
-    x = torch.randn(128, 128)
-    # Top-left 2x2 tiles: large values → need bfp8
-    x[:64, :64] *= 100.0
-    # Bottom-right 2x2 tiles: tiny values (~1e-5) → bfp0 is acceptable
-    x[64:, 64:] *= 1e-5
-
-    # PCC for bfp8 quality, bfp0 uses its own MAE threshold internally
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.99, formats=["bfp8", "bfp0"], bfp0_mae_threshold=1e-4)
-    ct = CompressedTensor.from_torch(x, assigner)
-
-    print(f"{ct}")
-    assert ct.tile_counts["bfp0"] > 0, f"Expected some bfp0 tiles: {ct.tile_counts}"
-    assert ct.tile_counts["bfp8"] > 0, f"Expected some bfp8 tiles: {ct.tile_counts}"
-    assert ct.data_bytes < ct.num_tiles * bfp_tile_packed_size(7), "bfp0 should reduce total bytes"
-
-    recovered = ct.to_torch()
-    tile_hw = 32
-    assign = ct.get_assignment()
-
-    for tr in range(ct.tiles_h):
-        for tc in range(ct.tiles_w):
-            fmt = COMPRESSED_FORMATS[assign[tr, tc]]
-            ref_tile = x[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
-            rec_tile = recovered[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw]
-            if fmt == "bfp0":
-                assert (rec_tile == 0).all(), f"bfp0 tile ({tr},{tc}) should be all zeros"
-            else:
-                assert rec_tile.abs().max() > 0, f"bfp8 tile ({tr},{tc}) should be non-zero"
-                pcc = metric_value(ref_tile.numpy(), rec_tile.numpy(), "pcc")
-                print(f"  tile ({tr},{tc}) [{fmt}]: PCC={pcc:.6f}")
-                assert pcc > 0.99, f"bfp8 tile ({tr},{tc}) PCC {pcc:.4f} too low"
-
-
-def test_bfp2_cpp_matches_python():
-    """Validate C++ bfp2 pack→unpack matches the Python quantize_dequantize_bfp emulation.
-
-    Tests multiple tiles with varied data: random, large, small, negative, zero.
-    """
-    torch.manual_seed(0)
-    x = torch.randn(256, 256)  # 8x8 = 64 tiles
-    # Add variety: some large, some tiny, some zeros
-    x[:64, :64] *= 100.0
-    x[64:128, 64:128] *= 1e-4
-    x[128:160, 128:160] = 0.0
-
-    xn = x.numpy()
+def _check_bfp2_cpp_vs_python(xn: np.ndarray, label: str):
+    """Helper: verify C++ bfp2 pack→unpack matches Python for every tile."""
     tile_hw = 32
     tiles_h, tiles_w = xn.shape[0] // tile_hw, xn.shape[1] // tile_hw
     num_mismatches = 0
-
     for tr in range(tiles_h):
         for tc in range(tiles_w):
             tile_np = xn[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw].copy()
-
-            # C++ path: pack then unpack
             packed = pack_bfp_tile(tile_np, mant_bits=1)
             cpp_result = unpack_bfp_tile(packed, mant_bits=1)
-
-            # Python path
             py_result = quantize_dequantize_bfp(tile_np, mant_bits=1)
-
             if not np.array_equal(cpp_result, py_result):
                 max_diff = np.max(np.abs(cpp_result - py_result))
-                print(f"  MISMATCH tile ({tr},{tc}): max diff = {max_diff}")
+                print(f"  MISMATCH {label} tile ({tr},{tc}): max diff = {max_diff}")
                 num_mismatches += 1
-
-    print(f"bfp2 C++ vs Python: {tiles_h * tiles_w} tiles, {num_mismatches} mismatches")
-    assert num_mismatches == 0, f"{num_mismatches} tiles had C++ vs Python mismatch"
-
-
-def test_4d_tensor_round_trip():
-    """CompressedTensor should handle 4D tensors (batch dims folded into height)."""
-    torch.manual_seed(42)
-    x = torch.randn(2, 3, 64, 128)  # batch=2x3, 2x4 tiles per batch → total 12x4 tile grid
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(x, assigner)
-
-    print(f"{ct}")
-    print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
-    assert ct.tiles_h == (2 * 3 * 64) // 32  # 12
-    assert ct.tiles_w == 128 // 32  # 4
-    assert ct.num_tiles == 48
-
-    recovered = ct.to_torch()
-    assert recovered.shape == x.shape, f"Shape mismatch: {recovered.shape} != {x.shape}"
-
-    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
-    print(f"4D round-trip PCC: {pcc:.6f}")
-    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+    print(f"bfp2 C++ vs Python [{label}]: {tiles_h * tiles_w} tiles, {num_mismatches} mismatches")
+    assert num_mismatches == 0, f"{label}: {num_mismatches} tiles had C++ vs Python mismatch"
 
 
-# ---------------------------------------------------------------------------
-# On-device tests
-# ---------------------------------------------------------------------------
+def test_bfp2_cpp_matches_python():
+    """Validate C++ bfp2 pack→unpack matches Python with varied data patterns."""
+    torch.manual_seed(0)
+    x = torch.randn(256, 256)
+    x[:64, :64] *= 100.0
+    x[64:128, 64:128] *= 1e-4
+    x[128:160, 128:160] = 0.0
+    _check_bfp2_cpp_vs_python(x.numpy(), "basic_256x256")
 
 
-def test_device_round_trip(device):
-    """Pack on host, place on device via from_torch(device=), unpack after read-back."""
-    torch.manual_seed(42)
-    x = torch.randn(128, 128)
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(x, assigner, device=device)
-
-    print(f"{ct}")
-    print(f"Tile counts: {ct.tile_counts}")
-
-    assert ct.tile_counts["bfp8"] > 0 and ct.tile_counts["bfp4"] > 0, f"Expected mix: {ct.tile_counts}"
-
-    # unpack() handles from_device internally
-    recovered = ct.to_torch()
-    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
-    print(f"Device round-trip PCC: {pcc:.6f}")
-    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low after device round-trip"
+def test_bfp2_cpp_matches_python_large():
+    """bfp2 C++ vs Python on a large tensor (7168x32, DeepSeek-like shape)."""
+    torch.manual_seed(1)
+    x = torch.randn(7168, 32)
+    _check_bfp2_cpp_vs_python(x.numpy(), "large_7168x32")
 
 
-def test_device_with_memory_config(device):
-    """Place data in DRAM and assignment in L1 using separate memory configs."""
-    torch.manual_seed(42)
-    x = torch.randn(128, 128)
+def test_bfp2_cpp_matches_python_edge_cases():
+    """bfp2 C++ vs Python with edge-case data: inf, denormals, alternating signs, constants."""
+    tile_hw = 32
+    tiles = []
 
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(
-        x,
-        assigner,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        assignment_memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    # All zeros
+    tiles.append(np.zeros((tile_hw, tile_hw), dtype=np.float32))
 
-    print(f"{ct}")
+    # All same positive value
+    tiles.append(np.full((tile_hw, tile_hw), 42.0, dtype=np.float32))
 
-    # Verify tensors are on device with correct memory configs
-    assert ttnn.is_tensor_storage_on_device(ct.data)
-    assert ttnn.is_tensor_storage_on_device(ct.assignment)
+    # All same negative value
+    tiles.append(np.full((tile_hw, tile_hw), -0.001, dtype=np.float32))
 
-    # Unpack and verify PCC
-    recovered = ct.to_torch()
-    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
-    print(f"DRAM data + L1 assignment round-trip PCC: {pcc:.6f}")
-    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+    # Alternating +1/-1 checkerboard
+    checker = np.ones((tile_hw, tile_hw), dtype=np.float32)
+    checker[::2, ::2] = -1.0
+    checker[1::2, 1::2] = -1.0
+    tiles.append(checker)
 
+    # Very large values (near float32 max exponent)
+    tiles.append(np.full((tile_hw, tile_hw), 1e38, dtype=np.float32))
 
-def test_device_shared_memory_config(device):
-    """Single memory_config applies to both data and assignment."""
-    torch.manual_seed(42)
-    x = torch.randn(128, 128)
+    # Denormals (very small but nonzero)
+    tiles.append(np.full((tile_hw, tile_hw), 1e-40, dtype=np.float32))
 
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(
-        x,
-        assigner,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Mixed: one element huge, rest tiny
+    mixed = np.full((tile_hw, tile_hw), 1e-6, dtype=np.float32)
+    mixed[0, 0] = 1e6
+    tiles.append(mixed)
 
-    assert ttnn.is_tensor_storage_on_device(ct.data)
-    assert ttnn.is_tensor_storage_on_device(ct.assignment)
+    # Random with high dynamic range per row
+    rng = np.random.RandomState(99)
+    dynamic = rng.randn(tile_hw, tile_hw).astype(np.float32)
+    for row in range(tile_hw):
+        dynamic[row, :] *= 10.0 ** (row - 16)
+    tiles.append(dynamic)
 
-    recovered = ct.to_torch()
-    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
-    print(f"Shared DRAM memory config PCC: {pcc:.6f}")
-    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
+    # Stack into a single tensor: 8 tiles in a column
+    x = np.concatenate(tiles, axis=0)  # (8*32, 32)
+    _check_bfp2_cpp_vs_python(x, "edge_cases")
 
 
 def _div_up(a, b):
@@ -362,24 +206,6 @@ def test_device_block_sharded(device):
     pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
     print(f"Block-sharded PCC: {pcc:.6f}")
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low after block-sharded round-trip"
-
-
-def test_4d_tensor_on_device(device):
-    """4D compressed tensor placed on device and read back."""
-    torch.manual_seed(42)
-    x = torch.randn(2, 3, 64, 128)
-
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
-    ct = CompressedTensor.from_torch(x, assigner, device=device)
-
-    print(f"{ct}")
-    assert ttnn.is_tensor_storage_on_device(ct.data)
-
-    recovered = ct.to_torch()
-    assert recovered.shape == x.shape
-    pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
-    print(f"4D device round-trip PCC: {pcc:.6f}")
-    assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
 
 
 # ---------------------------------------------------------------------------

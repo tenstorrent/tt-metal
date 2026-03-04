@@ -165,6 +165,10 @@ class CompressedTensor:
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
     ) -> None:
+        assert (
+            memory_config is not None and memory_config.is_sharded()
+        ), "CompressedTensor requires a sharded memory_config (kernel needs contiguous tile data in L1/DRAM)"
+
         # Fold batch dims into height
         h = 1
         for d in tensor.shape[:-1]:
@@ -180,13 +184,13 @@ class CompressedTensor:
         self.data = None  # ttnn.Tensor: uint8, packed BFP tile bytes
         self.assignment = None  # ttnn.Tensor: uint8, 2-bit packed format indices
         self.spec = None  # ttnn.TensorSpec: logical shape/dtype/layout
-        self.max_shard_size = 0  # bytes per shard (0 if not sharded)
+        self.max_shard_size = 0  # bytes per shard
 
         # --- Assignment (host-side, for packing/unpacking) ---
         self._assignment_flat = None  # flat row-major int8 — indexed by page
         self._tile_mant_bits = []  # mant_bits per tile, in pack order (for unpack)
 
-        # --- Shard mapping (sharded only, populated by _pack_sharded) ---
+        # --- Shard mapping (populated by _pack_sharded) ---
         self._shard_mapping = []  # [(CoreCoord, [page_idx, ...]), ...] from C++
         self._core_assignment = {}  # {(x,y): int8[num_shard_pages]} format index per page on that core
 
@@ -196,9 +200,7 @@ class CompressedTensor:
         ), f"Assignment shape {assignment.shape} doesn't match tile grid ({self.tiles_h}, {self.tiles_w})"
 
         self._assignment_flat = assignment.astype(np.int8).ravel().copy()
-
-        is_sharded = memory_config is not None and memory_config.is_sharded()
-        self._pack_data_and_assignment(tensor, memory_config, assignment_memory_config, is_sharded, device)
+        self._pack_data_and_assignment(tensor, memory_config, assignment_memory_config, device)
 
     # ==================================================================
     # Public API
@@ -230,9 +232,7 @@ class CompressedTensor:
         if ttnn.is_tensor_storage_on_device(data_tensor):
             data_tensor = ttnn.from_device(data_tensor)
         flat_np = ttnn.to_torch(data_tensor).squeeze().numpy().astype(np.uint8)
-        if self.max_shard_size > 0:
-            return self._unpack_sharded(flat_np)
-        return self._unpack_flat(flat_np)
+        return self._unpack_sharded(flat_np)
 
     def get_assignment(self) -> np.ndarray:
         """Get assignment as (tiles_h, tiles_w) numpy array."""
@@ -287,35 +287,27 @@ class CompressedTensor:
     # Packing (top-level)
     # ==================================================================
 
-    def _pack_data_and_assignment(self, tensor, memory_config, assignment_memory_config, is_sharded, device):
-        """Pack data and assignment, create ttnn tensors, set self.data/assignment/spec."""
-        if is_sharded:
-            data_bytes, self._tile_mant_bits, data_memory_config, self.max_shard_size = self._pack_sharded(
-                tensor, memory_config
-            )
-            if assignment_memory_config is not None:
-                assert (
-                    assignment_memory_config.is_sharded()
-                ), "assignment_memory_config must be sharded when data memory_config is sharded"
-                assign_buffer_type = assignment_memory_config.buffer_type
-            else:
-                assign_buffer_type = memory_config.buffer_type
-            assign_bytes, assign_mem = self._pack_sharded_assignment(
-                tensor.shape,
-                memory_config,
-                assign_buffer_type,
-                assignment_memory_config,
-            )
+    def _pack_data_and_assignment(self, tensor, memory_config, assignment_memory_config, device):
+        """Pack data and assignment into sharded ttnn tensors."""
+        data_bytes, self._tile_mant_bits, data_memory_config, self.max_shard_size = self._pack_sharded(
+            tensor, memory_config
+        )
+        if assignment_memory_config is not None:
+            assert (
+                assignment_memory_config.is_sharded()
+            ), "assignment_memory_config must be sharded when data memory_config is sharded"
+            assign_buffer_type = assignment_memory_config.buffer_type
         else:
-            data_bytes, self._tile_mant_bits = self._pack_flat(tensor)
-            data_memory_config = memory_config
-            packed_assign = _pack_assignment(self._assignment_flat.astype(np.uint8))
-            assign_bytes = torch.from_numpy(packed_assign).unsqueeze(0)
-            assign_mem = assignment_memory_config or memory_config
+            assign_buffer_type = memory_config.buffer_type
+        assign_bytes, assign_mem = self._pack_sharded_assignment(
+            tensor.shape,
+            memory_config,
+            assign_buffer_type,
+            assignment_memory_config,
+        )
 
         logical_shape = ttnn.Shape(list(tensor.shape))
-        buffer_type = memory_config.buffer_type if memory_config is not None else ttnn.BufferType.DRAM
-        self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, buffer_type)
+        self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, memory_config.buffer_type)
 
         self.data = ttnn.from_torch(
             data_bytes,
@@ -371,17 +363,6 @@ class CompressedTensor:
         assign_config = self._make_sharded_mem_config(mem_cfg, shard_bytes)
 
         return assign_torch, assign_config
-
-    def _pack_flat(self, tensor):
-        """Pack tiles into flat uint8 buffer (no sharding). Returns (data_torch, tile_mant_bits)."""
-        data_np = self._to_2d(tensor)
-        chunks, tile_mant_bits = [], []
-        for page_idx in range(self.tiles_h * self.tiles_w):
-            packed, mant_bits = self._pack_page(data_np, page_idx)
-            tile_mant_bits.append(mant_bits)
-            chunks.append(packed)
-        flat_np = np.concatenate(chunks)
-        return torch.from_numpy(flat_np.copy()).unsqueeze(0), tile_mant_bits
 
     # ==================================================================
     # Packing helpers
@@ -466,21 +447,6 @@ class CompressedTensor:
     # ==================================================================
     # Unpacking
     # ==================================================================
-
-    def _unpack_flat(self, flat_np):
-        """Unpack a flat (non-sharded) packed buffer."""
-        out = np.zeros((self.tiles_h * self.tile_hw, self.tiles_w * self.tile_hw), dtype=np.float32)
-        offset = 0
-        tiles_w, tile_hw = self.tiles_w, self.tile_hw
-        for page_idx in range(self.tiles_h * self.tiles_w):
-            mant_bits = self._tile_mant_bits[page_idx]
-            size = bfp_tile_packed_size(mant_bits)
-            if mant_bits > 0:
-                tr, tc = page_idx // tiles_w, page_idx % tiles_w
-                tile = unpack_bfp_tile(flat_np[offset : offset + size], mant_bits)
-                out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
-            offset += size
-        return torch.from_numpy(out).reshape(self.shape)
 
     def _unpack_sharded(self, flat_np):
         """Unpack a sharded packed buffer (skip shard padding)."""
