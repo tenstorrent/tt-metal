@@ -1027,6 +1027,35 @@ struct SenderKernelTrafficConfig {
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
+    template <bool BENCHMARK_MODE>
+    FORCE_INLINE void send_packets_stateful(
+        SenderKernelTrafficConfig* traffic_config,
+        const tt::tt_fabric::WorkerToFabricEdmSenderImpl<false, 0>* const conn,
+        const uint32_t num_packets,
+        const uint32_t num_warmup,
+        uint32_t& wait_accum,
+        uint32_t& advance_accum,
+        uint32_t& noc_accum,
+        uint32_t& loop_accum,
+        uint32_t& prev_t) {
+        // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
+        // Phase 1: Warmup — send actual headers to fill all buffer slots
+        const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
+        for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
+            traffic_config->template send_one_packet<BENCHMARK_MODE, false>(
+                wait_accum, advance_accum, noc_accum, loop_accum, prev_t);
+        }
+
+        conn->setup_credit_update_noc_state();
+
+        // Phase 2: Steady state — credit-only sends with stateful NOC
+        for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
+            traffic_config->template send_one_packet<BENCHMARK_MODE, true>(
+                wait_accum, advance_accum, noc_accum, loop_accum, prev_t);
+        }
+    }
+
+
     // Send exactly one packet per call (round-robin scheduling)
     // Returns: true if packet was sent, false if blocked (no credits)
     // In BENCHMARK_MODE, accumulators and prev_t are passed by reference to avoid L1 traffic.
@@ -1043,11 +1072,11 @@ struct SenderKernelTrafficConfig {
         }
 
         // STEP 2: Wait for space
+        connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE, enable_l1_dcache>(connection_ptr_, connection_idx_);
         if constexpr (BENCHMARK_MODE) {
             // uint32_t t0 = get_timestamp_32b();
             // loop_accum += (t0 - prev_t);
 
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE, enable_l1_dcache>(connection_ptr_, connection_idx_);
             // uint32_t t1 = get_timestamp_32b();
             // wait_accum += (t1 - t0);
 
@@ -1066,7 +1095,6 @@ struct SenderKernelTrafficConfig {
                 // noc_accum += (prev_t - t2);
             }
         } else {
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE, enable_l1_dcache>(connection_ptr_, connection_idx_);
 
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {

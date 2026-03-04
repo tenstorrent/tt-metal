@@ -77,6 +77,7 @@ void kernel_main() {
     uint32_t loop_accum = 0;                // time in outer loop overhead
     uint32_t prev_t = get_timestamp_32b();  // dummy initial timestamp
 
+    // If there is only one traffic config we can use the stateful API for NOC writes
     if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
         // Optimized single-config path: simple counted loop, no flag logic
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
@@ -87,19 +88,10 @@ void kernel_main() {
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
         // Phase 1: Warmup — send actual headers to fill all buffer slots
         const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
-        for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
-            traffic_config->template send_one_packet<BENCHMARK_MODE, false>(
-                wait_accum, advance_accum, noc_accum, loop_accum, prev_t);
-        }
 
-        // Set up stateful NOC cmd buf for credit updates (one-time cost)
-        conn->setup_credit_update_noc_state();
+        traffic_config->template send_packets_stateful<BENCHMARK_MODE>(
+            traffic_config, conn, num_packets, num_warmup, wait_accum, advance_accum, noc_accum, loop_accum, prev_t);
 
-        // Phase 2: Steady state — credit-only sends with stateful NOC
-        for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
-            traffic_config->template send_one_packet<BENCHMARK_MODE, true>(
-                wait_accum, advance_accum, noc_accum, loop_accum, prev_t);
-        }
     } else {
         while (packets_left_to_send) {
             packets_left_to_send = false;
