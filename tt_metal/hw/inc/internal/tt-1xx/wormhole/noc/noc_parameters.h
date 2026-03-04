@@ -65,7 +65,7 @@
 
 #define NOC_STATUS(cnt) (NOC_REGS_START_ADDR + 0x200 + ((cnt) * 4))
 // status/performance counter registers
-// IMPROVE: add offsets for misc. debug status regiters
+// IMPROVE: add offsets for misc. debug status registers
 
 #define NIU_SLV_POSTED_WR_REQ_STARTED 0x3D
 #define NIU_SLV_NONPOSTED_WR_REQ_STARTED 0x3C
@@ -251,7 +251,7 @@
 #define NOC_MCAST_ADDR_START_X(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 #define NOC_MCAST_ADDR_START_Y(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + 3 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 
-// Addres formats
+// Address formats
 
 #define NOC_XY_ADDR(x, y, addr)                                                                                      \
     ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) | \

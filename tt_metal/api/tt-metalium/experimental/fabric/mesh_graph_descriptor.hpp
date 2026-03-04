@@ -285,7 +285,7 @@ private:
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in separate PR
     void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
     void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 

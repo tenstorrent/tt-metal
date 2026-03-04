@@ -467,7 +467,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
         }
     } else {
         // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
-        // If using fabric, upstream would have already initalized to the proper config for dispatch
+        // If using fabric, upstream would have already initialized to the proper config for dispatch
         if (descriptor_.cluster().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =

@@ -845,7 +845,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 
 // `dst_type` is "Don't care" on Wormhole, it's required on Blackhole to workaround bug that manifests with noc
 // transactions using all 4 memory ports. Issuing inline writes and atomics requires all 4 memory ports to accept the
-// transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
+// transaction at the same time. If one port on the recipient has no back-pressure then the transaction will hang
 // because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
 // inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
 template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
@@ -1429,7 +1429,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 /**
  * The stateful NOC commands provide granular control over NOC register programming by writing
  * only a subset of registers for each transaction. This approach leverages the fact that many
- * transactions re-use certain values (e.g. length, coordinates) while varying others.
+ * transactions reuse certain values (e.g. length, coordinates) while varying others.
  *
  * This design provides significant advantages over previous stateful APIs:
  * - Fine-grained control: Users can specify exactly which registers to update per transaction
@@ -1439,7 +1439,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  *
  * The flags parameter uses a bitmask approach to specify which registers to program.
  * Making template functions with a long list of booleans makes understanding what registers
- * are being set tedious. This is an attempt to pack that data in a way thats ~easy to visually parse.
+ * are being set tedious. This is an attempt to pack that data in a way that's ~easy to visually parse.
  *
  * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
  * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)
