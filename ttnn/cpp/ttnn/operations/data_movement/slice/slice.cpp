@@ -97,14 +97,25 @@ ttnn::Tensor SliceOperation::invoke(
             modified_begins[input_rank - 2] % tile_shape[0] == 0);
     };
 
+    auto is_slicing_within_tile = [&modified_begins, &modified_ends, &input_rank, &tile_shape]() -> bool {
+        uint32_t h_begin = modified_begins[input_rank - 2];
+        uint32_t h_end = modified_ends[input_rank - 2];
+        uint32_t w_begin = modified_begins[input_rank - 1];
+        uint32_t w_end = modified_ends[input_rank - 1];
+        bool h_within = (h_end - h_begin) < tile_shape[0] && (h_begin / tile_shape[0] == (h_end - 1) / tile_shape[0]);
+        bool w_within = (w_end - w_begin) < tile_shape[1] && (w_begin / tile_shape[1] == (w_end - 1) / tile_shape[1]);
+        return h_within || w_within;
+    };
+
     bool rm_only = false;
     bool one_dimensional = input_rank == 1;
     bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
+    bool slicing_within_tile = input_tensor.layout() == Layout::TILE ? is_slicing_within_tile() : false;
 
     Tensor input = input_tensor;
-    rm_only =
-        (input_tensor.layout() == Layout::TILE &&
-         (!no_step || one_dimensional || input_tensor.is_sharded() || !handled_tile_alignment));
+    rm_only = (input_tensor.layout() != Layout::TILE) ||
+              (input_tensor.layout() == Layout::TILE &&
+               (!no_step || one_dimensional || slicing_within_tile || !handled_tile_alignment));
     if (rm_only) {
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
