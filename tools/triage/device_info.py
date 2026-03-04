@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 from run_checks import run as get_run_checks
 
@@ -41,6 +42,8 @@ def get_device_info(device: Device) -> DeviceInfoRow:
         try:
             raw = device.arc_block.get_register_store().read_register("ARC_RESET_SCRATCH0")
             postcode = hex(raw)
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception as e:
             postcode = f"error: {e}"
     else:
