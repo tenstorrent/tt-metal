@@ -573,13 +573,15 @@ def prepare_dense_layer_weights(
     bdw: BlitzDecodeWeights,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
+    *,
+    move_to_device: bool = False,
 ) -> DeepSeekV3DenseLayerWeights:
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False)
-    routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False)
+    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
     assert isinstance(routed, DenseRoutedExpertWeights)
     return DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
