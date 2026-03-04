@@ -1,10 +1,10 @@
 import ttnn
 import torch
-from models.common.lightweightmodule import LightweightModule
+from models.tt_dit.layers.module import Module
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 
-class TtWanRotaryPosEmbed(LightweightModule):
+class WanRotaryPosEmbed(Module):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,

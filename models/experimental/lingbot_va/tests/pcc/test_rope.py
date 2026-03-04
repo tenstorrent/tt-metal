@@ -4,14 +4,14 @@
 import torch
 import ttnn
 from models.common.metrics import compute_pcc
-from models.experimental.lingbot_va.tt.wan_RoPE import TtWanRotaryPosEmbed
-from models.experimental.lingbot_va.reference.model import WanRotaryPosEmbed
+from models.experimental.lingbot_va.tt.wan_RoPE import WanRotaryPosEmbed
+from models.experimental.lingbot_va.reference.model import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from loguru import logger
 
 
 def test_wan_rotary_pos_embed():
     """
-    Test comparing TT TtWanRotaryPosEmbed with PyTorch reference WanRotaryPosEmbed.
+    Test comparing TT WanRotaryPosEmbed with PyTorch reference TorchWanRotaryPosEmbed.
     """
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
 
@@ -22,8 +22,8 @@ def test_wan_rotary_pos_embed():
     theta = 10000.0
 
     # Initialize PyTorch reference model
-    logger.info("Initializing PyTorch WanRotaryPosEmbed")
-    torch_rope = WanRotaryPosEmbed(
+    logger.info("Initializing PyTorch TorchWanRotaryPosEmbed")
+    torch_rope = TorchWanRotaryPosEmbed(
         attention_head_dim=attention_head_dim,
         patch_size=patch_size,
         max_seq_len=max_seq_len,
@@ -32,8 +32,8 @@ def test_wan_rotary_pos_embed():
     torch_rope.eval()
 
     # Initialize TT model
-    logger.info("Initializing TT TtWanRotaryPosEmbed")
-    tt_rope = TtWanRotaryPosEmbed(
+    logger.info("Initializing TT WanRotaryPosEmbed")
+    tt_rope = WanRotaryPosEmbed(
         mesh_device=mesh_device,
         attention_head_dim=attention_head_dim,
         patch_size=patch_size,

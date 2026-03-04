@@ -15,7 +15,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from loguru import logger
 
 import ttnn
@@ -33,6 +32,7 @@ from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
 
 from .attention_wan import WanAttention
+from .wan_RoPE import WanRotaryPosEmbed
 
 
 # Lingbot-VA config (from reference model.py)
@@ -295,10 +295,11 @@ class WanTransformer3DModel(Module):
         self.action_dim = action_dim
 
         head_dim = dim // num_heads
-        self.rope = TorchWanRotaryPosEmbed(
-            head_dim,
-            patch_size,
-            rope_max_seq_len,
+        self.rope = WanRotaryPosEmbed(
+            mesh_device=self.mesh_device,
+            attention_head_dim=head_dim,
+            patch_size=patch_size,
+            max_seq_len=rope_max_seq_len,
         )
 
         self.patch_embedding = WanPatchEmbed(
@@ -560,6 +561,7 @@ class WanTransformer3DModel(Module):
         spatial: torch.Tensor,
         prompt: torch.Tensor,
         timestep: torch.Tensor,
+        grid_id: torch.Tensor,
         action_mode: bool = False,
     ) -> torch.Tensor:
         """
