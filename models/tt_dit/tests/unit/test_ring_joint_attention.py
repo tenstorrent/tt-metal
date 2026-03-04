@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import time
+
+import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -255,14 +256,24 @@ def run_ring_joint_sdpa(
         run_iters(tt_out_list, tt_joint_out_list)
         ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
         ttnn.synchronize_device(submesh)
+        ttnn.distributed_context_barrier()
         logger.info("Execute trace")
         ttnn.execute_trace(submesh, trace_id, blocking=False)
         ttnn.release_trace(submesh, trace_id)
         ttnn.synchronize_device(submesh)
-
+        ttnn.distributed_context_barrier()
     else:
         logger.info("Run without trace")
+        run_iters([], [])
+        ttnn.synchronize_device(submesh)
+        ttnn.distributed_context_barrier()
+        start_time = time.time()
         run_iters(tt_out_list, tt_joint_out_list)
+        ttnn.synchronize_device(submesh)
+        ttnn.distributed_context_barrier()
+        end_time = time.time()
+        logger.info(f"E2E execution time: {end_time - start_time:.6f} seconds")
+        logger.info(f"Time per iter: {(end_time - start_time) / n_iters * 1e3:.3f} ms")
 
     if not skip_check:
         pt_Q = torch.cat([Q, joint_Q], dim=2)
@@ -442,12 +453,8 @@ all_parallel_config_ids = [
     ids=benchmark_model_input_shapes.keys(),
 )
 @pytest.mark.parametrize("parallel_config", all_parallel_configs, ids=all_parallel_config_ids)
-@pytest.mark.parametrize(
-    "q_chunk_size", [64, 96, 128, 224], ids=["q64", "q96", "q128", "q224"]
-)
-@pytest.mark.parametrize(
-    "k_chunk_size", [96, 128, 224, 256], ids=["k96", "k128", "k224", "k256"]
-)
+@pytest.mark.parametrize("q_chunk_size", [64, 96, 128, 224], ids=["q64", "q96", "q128", "q224"])
+@pytest.mark.parametrize("k_chunk_size", [96, 128, 224, 256], ids=["k96", "k128", "k224", "k256"])
 @pytest.mark.parametrize(
     "n_iters, trace_enabled, skip_check",
     [(1, False, False), (3, False, True), (5, True, True)],
@@ -457,7 +464,11 @@ all_parallel_config_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            },
             ttnn.Topology.Ring,
         ),
     ],
@@ -982,7 +993,11 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
             ttnn.Topology.Linear,
         ),
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 10000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 10000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            },
             ttnn.Topology.Ring,
         ),
     ],
