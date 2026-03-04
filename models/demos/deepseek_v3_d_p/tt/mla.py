@@ -346,7 +346,6 @@ class ttMLA:
 
         # concat rope and nope
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
-        tt_q = ttnn.typecast(tt_q, dtype=ttnn.bfloat8_b)
 
         # kv
         tt_kv = ttnn.linear(
