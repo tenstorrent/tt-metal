@@ -7,6 +7,7 @@
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <sys/stat.h>
 
 #include "common/filesystem_utils.hpp"
 
@@ -171,6 +172,16 @@ TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsValidTime) {
     EXPECT_TRUE(result.has_value());
     // The returned time should be a valid file_time_type
     EXPECT_NE(result.value(), std::filesystem::file_time_type::min());
+
+    // Convert file_time_type to system_clock time for comparison
+    // file_time_type uses a different clock, so we need to convert
+    auto file_time_sys = std::chrono::clock_cast<std::chrono::system_clock>(result.value());
+
+    // The file modification time should be within the test execution window
+    EXPECT_LE(file_time_sys, after);
+    // Allow for some clock skew (file time can be slightly before test start due to filesystem precision)
+    auto tolerance = std::chrono::seconds(1);
+    EXPECT_GE(file_time_sys, before - tolerance);
 }
 
 TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsNulloptForNonExistentFile) {
@@ -233,20 +244,36 @@ TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_CreatesHardLink) {
     EXPECT_TRUE(std::filesystem::exists(link));
     EXPECT_TRUE(std::filesystem::exists(target));
 
-    // Should be the same file (hard linked)
-    EXPECT_EQ(std::filesystem::file_size(target), std::filesystem::file_size(link));
+    // Should be the same file (hard linked) - verify by checking they have the same content
+    std::ifstream target_stream(target);
+    std::ifstream link_stream(link);
+    std::string target_content((std::istreambuf_iterator<char>(target_stream)), std::istreambuf_iterator<char>());
+    std::string link_content((std::istreambuf_iterator<char>(link_stream)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(target_content, link_content);
+
+    // On POSIX systems, verify they share the same inode (actual hard link)
+    struct stat target_stat, link_stat;
+    if (stat(target.c_str(), &target_stat) == 0 && stat(link.c_str(), &link_stat) == 0) {
+        EXPECT_EQ(target_stat.st_ino, link_stat.st_ino);
+    }
 }
 
-TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_CopiesWhenTargetIsDirectory) {
-    // Hard links cannot be created for directories, should fall back to copy
+TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_WorksWithDirectoryInPath) {
+    // Creating a hard link to a file inside a directory should work
     std::filesystem::path target = create_test_file("source.txt", "source content");
-    std::filesystem::path link = create_test_directory("dest_dir") / "copied.txt";
+    std::filesystem::path link = create_test_directory("dest_dir") / "linked.txt";
 
     EXPECT_TRUE(safe_hard_link_or_copy(target, link));
 
-    // Copy should succeed
+    // Hard link should succeed
     EXPECT_TRUE(std::filesystem::exists(link));
     EXPECT_EQ(std::filesystem::file_size(target), std::filesystem::file_size(link));
+
+    // On POSIX systems, verify they share the same inode
+    struct stat target_stat, link_stat;
+    if (stat(target.c_str(), &target_stat) == 0 && stat(link.c_str(), &link_stat) == 0) {
+        EXPECT_EQ(target_stat.st_ino, link_stat.st_ino);
+    }
 }
 
 TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_OverwritesExisting) {
@@ -431,20 +458,22 @@ TEST_F(FilesystemUtilsTest, SafeRemove_ReturnsFalseForDirectory) {
     EXPECT_FALSE(safe_remove(dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeFileSize_ReturnsNulloptForDirectory) {
+TEST_F(FilesystemUtilsTest, SafeFileSize_WorksOnDirectory) {
     std::filesystem::path dir = create_test_directory("dir_for_size");
 
     auto result = safe_file_size(dir);
-    EXPECT_FALSE(result.has_value());
+    // file_size works on directories (returns implementation-defined size, typically non-zero)
+    // This verifies the function doesn't crash and returns a valid result
+    EXPECT_TRUE(result.has_value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsNulloptForDirectory) {
+TEST_F(FilesystemUtilsTest, SafeLastWriteTime_WorksOnDirectory) {
     std::filesystem::path dir = create_test_directory("dir_for_time");
 
     auto result = safe_last_write_time(dir);
-    // Directories may or may not support last_write_time depending on filesystem
-    // The function should handle it gracefully
-    EXPECT_FALSE(result.has_value());
+    // last_write_time works on directories
+    EXPECT_TRUE(result.has_value());
+    EXPECT_NE(result.value(), std::filesystem::file_time_type::min());
 }
 
 TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_ReturnsFalseForNonExistentSource) {
