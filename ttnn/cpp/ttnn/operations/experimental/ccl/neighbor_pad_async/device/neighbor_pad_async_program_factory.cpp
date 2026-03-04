@@ -289,12 +289,45 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
     // Get worker cores
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;  // kernel arrays sized for pad2_num_links * 2 = 8 targets
-    uint32_t num_h_fabric_cores = operation_attributes.num_links * 2;
-    uint32_t num_w_fabric_cores = is_2d ? (operation_attributes.pad2_num_links * 2) : 0;
+
+    // Cap num_links and pad2_num_links so total fabric cores fit within the device compute grid width.
+    // WH has 8x8 logical grid vs BH's 14x10, so large link counts can exceed the grid.
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    uint32_t num_links = operation_attributes.num_links;
+    uint32_t pad2_num_links = operation_attributes.pad2_num_links;
+    uint32_t total_fabric_cores = num_links * 2 + (is_2d ? pad2_num_links * 2 : 0);
+    if (total_fabric_cores > compute_grid_size.x) {
+        // Reduce pad2_num_links first (W-fabric), then num_links (H-fabric) if still too many
+        uint32_t max_total = compute_grid_size.x;
+        uint32_t h_cores = num_links * 2;
+        if (is_2d) {
+            uint32_t available_for_w = (max_total > h_cores) ? (max_total - h_cores) : 0;
+            pad2_num_links = available_for_w / 2;
+            if (pad2_num_links == 0) {
+                // H-fabric alone exceeds grid, reduce num_links too
+                pad2_num_links = 1;
+                num_links = (max_total - 2) / 2;  // reserve 2 cores for 1 W link
+            }
+        } else {
+            num_links = max_total / 2;
+        }
+        log_warning(
+            tt::LogOp,
+            "neighbor_pad_async: Capped num_links from {} to {} and pad2_num_links from {} to {} "
+            "to fit device compute grid width {}",
+            operation_attributes.num_links,
+            num_links,
+            operation_attributes.pad2_num_links,
+            pad2_num_links,
+            compute_grid_size.x);
+    }
+
+    uint32_t num_h_fabric_cores = num_links * 2;
+    uint32_t num_w_fabric_cores = is_2d ? (pad2_num_links * 2) : 0;
     TT_FATAL(
-        operation_attributes.pad2_num_links <= MAX_PAD2_NUM_LINKS,
+        pad2_num_links <= MAX_PAD2_NUM_LINKS,
         "pad2_num_links ({}) exceeds maximum supported ({}). Kernel Phase 2 signal target arrays are sized for {}.",
-        operation_attributes.pad2_num_links,
+        pad2_num_links,
         MAX_PAD2_NUM_LINKS,
         MAX_PAD2_NUM_LINKS * 2);
     CoreCoord core_grid(num_h_fabric_cores, 1);
@@ -407,8 +440,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         // L1 recv buffer on W fabric cores: fabric-delivered W padding data arrives here
         // instead of going directly to DRAM. With multi-link, each link processes a subset
         // of rows, so buffer is sized for the max per-link portion (not full w_outer_dim_size).
-        w_rows_per_link = w_outer_dim_size / operation_attributes.pad2_num_links;
-        w_extra_rows = w_outer_dim_size % operation_attributes.pad2_num_links;
+        w_rows_per_link = w_outer_dim_size / pad2_num_links;
+        w_extra_rows = w_outer_dim_size % pad2_num_links;
         uint32_t max_w_link_rows = w_rows_per_link + (w_extra_rows > 0 ? 1 : 0);
         uint32_t w_recv_total_sticks = max_w_link_rows * max_w_padding;
         uint32_t w_recv_buf_size = w_recv_total_sticks * page_size;
@@ -430,7 +463,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t num_directions = 2;
     uint32_t link_offset_start_id = 0;
     uint32_t writer_link_offset_start_id = 0;  // separate offset for writer (uses output row width)
-    for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
+    for (uint32_t link = 0; link < num_links; link++) {
         uint32_t link_dims_to_read = 0;
 
         // direction 0 means pad left (top), 1 means pad right (bottom)
@@ -587,8 +620,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<KernelHandle> local_writer_kernel_ids;
     std::vector<CoreCoord> local_copy_core_coords;
     {
-        auto compute_grid = mesh_device->compute_with_storage_grid_size();
-        CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid.x - 1, compute_grid.y - 1}));
+        CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
         CoreRangeSet fabric_cores = worker_core_ranges;
         if (is_2d) {
             fabric_cores = fabric_cores.merge(w_fabric_core_range);
@@ -718,7 +750,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             num_sticks_per_halo_dim,
             operation_attributes.pad2_left);
 
-        for (uint32_t w_link = 0; w_link < operation_attributes.pad2_num_links; w_link++) {
+        for (uint32_t w_link = 0; w_link < pad2_num_links; w_link++) {
             // Per-link work distribution: split w_outer_dim_size rows across pad2_num_links
             uint32_t w_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
             uint32_t w_link_count = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
@@ -853,12 +885,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .local_reader_kernel_ids = std::move(local_reader_kernel_ids),
             .local_writer_kernel_ids = std::move(local_writer_kernel_ids),
             .local_copy_core_coords = std::move(local_copy_core_coords),
-            .num_links = operation_attributes.num_links,
+            .num_links = num_links,
             .num_directions = num_directions,
             .w_reader_kernel_ids = std::move(w_reader_kernel_ids),
             .w_writer_kernel_ids = std::move(w_writer_kernel_ids),
             .w_fabric_core_coords = std::move(w_fabric_logical_cores),
-            .num_w_links = is_2d ? operation_attributes.pad2_num_links : 0});
+            .num_w_links = is_2d ? pad2_num_links : 0});
 }
 
 }  // namespace ttnn::experimental::prim
