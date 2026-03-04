@@ -7,7 +7,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.conv1d import TTConv1d
+from models.demos.rvc.tt_impl.conv1d import Conv1d
 
 LRELU_SLOPE = 0.1
 
@@ -77,12 +77,12 @@ class WN:
         self.hidden_channels = hidden_channels
         self.n_layers = n_layers
         self.gin_channels = gin_channels
-        self.in_layers: list[TTConv1d] = []
-        self.res_skip_layers: list[TTConv1d] = []
+        self.in_layers: list[Conv1d] = []
+        self.res_skip_layers: list[Conv1d] = []
 
-        self.cond_layer: TTConv1d | None = None
+        self.cond_layer: Conv1d | None = None
         if gin_channels != 0:
-            self.cond_layer = TTConv1d(
+            self.cond_layer = Conv1d(
                 device=device,
                 in_channels=gin_channels,
                 out_channels=2 * hidden_channels * n_layers,
@@ -93,7 +93,7 @@ class WN:
             dilation = dilation_rate**i
             padding = int((kernel_size * dilation - dilation) / 2)
             self.in_layers.append(
-                TTConv1d(
+                Conv1d(
                     device=device,
                     in_channels=hidden_channels,
                     out_channels=2 * hidden_channels,
@@ -105,7 +105,7 @@ class WN:
 
             res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
             self.res_skip_layers.append(
-                TTConv1d(
+                Conv1d(
                     device=device,
                     in_channels=hidden_channels,
                     out_channels=res_skip_channels,
@@ -184,12 +184,12 @@ class ResBlock1:
         conv_config: ttnn.Conv1dConfig | None = None,
         compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
-        self.convs1: list[TTConv1d] = []
-        self.convs2: list[TTConv1d] = []
+        self.convs1: list[Conv1d] = []
+        self.convs2: list[Conv1d] = []
         self.lrelu_slope = LRELU_SLOPE
         for d_value in dilation:
             self.convs1.append(
-                TTConv1d(
+                Conv1d(
                     device=device,
                     in_channels=channels,
                     out_channels=channels,
@@ -200,7 +200,7 @@ class ResBlock1:
                 )
             )
             self.convs2.append(
-                TTConv1d(
+                Conv1d(
                     device=device,
                     in_channels=channels,
                     out_channels=channels,
@@ -237,11 +237,11 @@ class ResBlock2:
         conv_config: ttnn.Conv1dConfig | None = None,
         compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
-        self.convs: list[TTConv1d] = []
+        self.convs: list[Conv1d] = []
         self.lrelu_slope = LRELU_SLOPE
         for d_value in dilation:
             self.convs.append(
-                TTConv1d(
+                Conv1d(
                     device=device,
                     in_channels=channels,
                     out_channels=channels,
@@ -280,7 +280,7 @@ class ResidualCouplingLayer:
         if channels % 2 != 0:
             raise ValueError("channels should be divisible by 2")
         self.half_channels = channels // 2
-        self.pre = TTConv1d(
+        self.pre = Conv1d(
             device=device,
             in_channels=self.half_channels,
             out_channels=hidden_channels,
@@ -296,7 +296,7 @@ class ResidualCouplingLayer:
             conv_config=conv_config,
             compute_config=compute_config,
         )
-        self.post = TTConv1d(
+        self.post = Conv1d(
             device=device,
             in_channels=hidden_channels,
             out_channels=self.half_channels,
