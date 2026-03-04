@@ -9,10 +9,6 @@ Computes: output = A @ decompress(B_compressed)
 Uses custom_mm_block init/uninit with a custom _run_ that does
 per-tile format reconfig + variable address increment.
 ct_dim=1 (N=32 only). kt_dim must be even.
-
-A: bf16 HEIGHT_SHARDED, [M, K] per core
-B: CompressedTensor (mixed bfp8/bfp4/bfp2/bfp0), WIDTH_SHARDED, [K, N=32] per core
-output: bf16 WIDTH_SHARDED, [M, N=32] per core
 """
 
 import ttnn
@@ -38,8 +34,9 @@ class MatmulCustomCompressed:
         out_shard_shape = output_tensor.memory_config().shard_spec.shape
         num_tiles_k = a_shard_shape[1] // 32
 
-        assert out_shard_shape[1] == 32, f"N must be 32 (ct_dim=1), got {out_shard_shape[1]}"
+        out_w = out_shard_shape[1] // 32
         assert num_tiles_k % 2 == 0, f"num_tiles_k must be even, got {num_tiles_k}"
+        assert out_w >= 1, f"out_w must be >= 1, got {out_w}"
 
         # CB indices
         cb_in0 = 0
@@ -74,6 +71,7 @@ class MatmulCustomCompressed:
             ("cb_in1", cb_in1),
             ("cb_out", cb_out),
             ("num_tiles_k", num_tiles_k),
+            ("out_w", out_w),
             ("cb_in0_num_pages", num_tiles_k),
             ("cb_in1_num_pages", 1),
             ("assign_l1_addr", assign_l1_addr),
