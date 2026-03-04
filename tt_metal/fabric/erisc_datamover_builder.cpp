@@ -1269,7 +1269,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // Credit amortization named compile-time args
-    // Only enabled when there is a single sender channel on VC0 (common 1D case)
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
     if (actual_sender_channels_vc0 == 1) {
