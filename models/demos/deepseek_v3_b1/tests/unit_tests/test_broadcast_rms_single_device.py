@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSN
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
 
 
 @pytest.mark.parametrize(
@@ -77,27 +78,25 @@ def test_broadcast_rms_single_device(
     # Create gamma tensor
     torch_gamma = torch.randn(tuple(output_shape), dtype=torch.bfloat16)
 
-    # Convert tensors to device using mesh_device fixture
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=mesh_device,
+        mesh_rows=1,
+        mesh_cols=1,
+        sender_row=0,
+        sender_col=0,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=1,
+        input_tensor_torch=torch_input,
+        create_output_tensor_mesh=True,
+        create_semaphores=False,  # skip_ccl=True path does not require semaphores
     )
-
-    # Intermediate tensor (same shape/config as input)
-    intermediate_tensor = ttnn.from_torch(
-        torch.zeros_like(torch_input),
-        device=mesh_device,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    input_tensor = bcast_inputs.input_tensor_mesh
+    intermediate_tensor = bcast_inputs.output_tensor_mesh
 
     gamma_tensor = ttnn.from_torch(
         torch_gamma,

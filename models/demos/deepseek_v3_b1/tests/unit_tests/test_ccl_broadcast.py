@@ -100,7 +100,7 @@ def test_ccl_broadcast(
     # Create submesh
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
-    bcast_core = (0, 0)
+    bcast_core = ttnn.CoreCoord(0, 0)
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
         mesh_rows=mesh_rows,
@@ -261,7 +261,7 @@ def test_ccl_broadcast_loop(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    bcast_core = (0, 0)
+    bcast_core = ttnn.CoreCoord(0, 0)
     test_inputs = build_broadcast_test_inputs(
         mesh_device=submesh,
         mesh_rows=mesh_rows,
@@ -352,7 +352,7 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     slice_size = output_shape[0]
-    bcast_core = (0, 0)
+    bcast_core = ttnn.CoreCoord(0, 0)
 
     for host_iter in range(num_host_iters):
         sender_tensor = _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, host_iter)

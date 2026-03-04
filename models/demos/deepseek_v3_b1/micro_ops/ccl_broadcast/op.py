@@ -24,16 +24,18 @@ class BroadcastConfig:
         output_tensor,
         root_coord,
         semaphores,
+        socket=None,
         chunk_size_bytes=None,
         cb_start_offset=0,
         num_links=1,
-        num_iterations=1,
     ):
         self.mesh_device = mesh_device
         self.input_tensor_mesh = input_tensor_mesh
         self.output_tensor = output_tensor
+        self.root_coord = ttnn.MeshCoordinate(int(root_coord[0]), int(root_coord[1]))
         self.root_row = int(root_coord[0])
         self.root_col = int(root_coord[1])
+        self.socket = socket
         if not isinstance(semaphores, (list, tuple)):
             semaphores = [semaphores]
         self.semaphores = list(semaphores)
@@ -45,7 +47,9 @@ class BroadcastConfig:
             raise ValueError(f"num_links ({self.num_links}) exceeds MAX_NUM_LINKS ({MAX_NUM_LINKS})")
         if len(self.semaphores) != self.num_links:
             raise ValueError(f"Expected {self.num_links} semaphores, got {len(self.semaphores)}")
-        self.num_iterations = num_iterations
+        self._socket_config_addr = 0
+        self._socket_page_size = 0
+        self._socket_num_pages = 0
 
         self.mesh_rows = mesh_device.shape[0]
         self.mesh_cols = mesh_device.shape[1]
@@ -67,14 +71,27 @@ class BroadcastConfig:
         self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
+        if self.socket is not None:
+            self._socket_config_addr = int(self.socket.get_config_buffer_address())
+            self._socket_page_size = int(self.tensor_size_bytes)
+            self._socket_num_pages = 1
 
         self._resolve_chunk_size(chunk_size_bytes)
         self._setup_fabric_rt_arg_count = None
         self._compute_topology_and_args()
+        self.cb_ids = {"bcast_data": self.cb_start_offset}
 
     @property
     def num_cbs_needed(self):
-        return len(self.get_cb_descriptors(0, 0))
+        return self.num_cb_ids_reserved
+
+    @property
+    def num_cb_ids_reserved(self):
+        return 1
+
+    @property
+    def has_bypass_socket_reader(self):
+        return False
 
     def _resolve_chunk_size(self, chunk_size_bytes):
         max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
@@ -146,6 +163,7 @@ class BroadcastConfig:
         self._per_device = {}
         for row in range(self.mesh_rows):
             for col in range(self.mesh_cols):
+                coord = ttnn.MeshCoordinate(row, col)
                 idx = row * self.mesh_cols + col
                 input_tensor_device = self.input_tensors_per_device[idx]
                 output_tensor_device = self.output_tensors_per_device[idx]
@@ -162,7 +180,7 @@ class BroadcastConfig:
                 dst_coords = self._compute_dst_coords(row, col)
                 dst_nodes = [self.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for r, c in dst_coords]
 
-                self._per_device[(row, col)] = {
+                self._per_device[coord] = {
                     "is_root": row == self.root_row and col == self.root_col,
                     "num_neighbors": len(dst_nodes),
                     "dst_nodes": dst_nodes,
@@ -177,10 +195,17 @@ class BroadcastConfig:
                     "my_fabric_node_id": self.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)),
                 }
 
-    def get_named_ct_args(self, row, col):
-        d = self._per_device[(row, col)]
+    def is_root(self, coord):
+        return coord == self.root_coord
+
+    def uses_socket(self, coord):
+        # Root-only ingress policy.
+        return self.socket is not None and self.is_root(coord)
+
+    def get_writer_named_ct_args(self, coord):
+        d = self._per_device[coord]
         return [
-            ("bcast_cb0_id", self.cb_start_offset),
+            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_tensor0_page_size", self.tensor0_page_size),
@@ -190,11 +215,19 @@ class BroadcastConfig:
             ("bcast_chunk_size_bytes", self.chunk_size_bytes),
             ("bcast_last_chunk_size_bytes", self.last_chunk_size_bytes),
             ("bcast_num_chunks", self.num_chunks),
-            ("bcast_num_iterations", self.num_iterations),
         ]
 
-    def get_common_rt_args(self, row, col):
-        d = self._per_device[(row, col)]
+    def get_reader_named_ct_args(self, coord):
+        d = self._per_device[coord]
+        return [
+            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_num_pages_to_read", self.num_pages_to_read),
+            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
+        ]
+
+    def get_writer_common_rt_args(self, coord):
+        d = self._per_device[coord]
         sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in self.semaphores]
         sem_addrs += [0] * (MAX_NUM_LINKS - len(sem_addrs))
         return [
@@ -205,8 +238,13 @@ class BroadcastConfig:
             sem_addrs[1],  # index 4 (link 1 or dummy)
         ]
 
-    def append_per_core_rt_args(self, row, col, program, kernel_idx, core):
-        d = self._per_device[(row, col)]
+    def get_reader_common_rt_args(self, coord):
+        if not self.uses_socket(coord):
+            return [0, 0, 0]
+        return [self._socket_config_addr, self._socket_page_size, self._socket_num_pages]
+
+    def append_writer_per_core_rt_args(self, coord, program, kernel_idx, core):
+        d = self._per_device[coord]
         if d["num_neighbors"] == 0:
             return 0
 
@@ -231,15 +269,15 @@ class BroadcastConfig:
                 writer_rt_args_ref.extend(setup_args)
         return len(writer_rt_args_ref) - before_len
 
-    def get_cb_descriptors(self, row, col):
-        d = self._per_device[(row, col)]
-        return [ttnn.cb_descriptor_from_sharded_tensor(self.cb_start_offset, d["input_tensor_device"])]
+    def get_cb_descriptors(self, coord):
+        d = self._per_device[coord]
+        return [ttnn.cb_descriptor_from_sharded_tensor(self.cb_ids["bcast_data"], d["input_tensor_device"])]
 
-    def get_worker_core(self, row, col):
-        return self._per_device[(row, col)]["worker_core"]
+    def get_worker_core(self, coord):
+        return self._per_device[coord]["worker_core"]
 
-    def get_worker_core_set(self, row, col):
-        return self._per_device[(row, col)]["worker_core_set"]
+    def get_worker_core_set(self, coord):
+        return self._per_device[coord]["worker_core_set"]
 
 
 class DeepseekMinimalBroadcast:
@@ -268,11 +306,20 @@ class DeepseekMinimalBroadcast:
         output_tensor,
         sender_coord,
         semaphores=None,
+        socket=None,
+        skip_ccl=False,
         chunk_size_bytes=None,
         cb_start_offset=0,
         num_links=1,
-        num_iterations=1,
     ):
+        if skip_ccl:
+            return BypassBroadcastConfig(
+                mesh_device=mesh_device,
+                input_tensor_mesh=input_tensor_mesh,
+                root_coord=sender_coord,
+                socket=socket,
+                cb_start_offset=cb_start_offset,
+            )
         if semaphores is None:
             raise ValueError("Expected semaphore(s) via `semaphores`")
         return BroadcastConfig(
@@ -281,10 +328,10 @@ class DeepseekMinimalBroadcast:
             output_tensor=output_tensor,
             root_coord=sender_coord,
             semaphores=semaphores,
+            socket=socket,
             chunk_size_bytes=chunk_size_bytes,
             cb_start_offset=cb_start_offset,
             num_links=num_links,
-            num_iterations=num_iterations,
         )
 
     @staticmethod
@@ -319,10 +366,11 @@ class DeepseekMinimalBroadcast:
             output_tensor=output_tensor,
             sender_coord=sender_coord,
             semaphores=semaphores,
+            socket=None,
+            skip_ccl=False,
             chunk_size_bytes=chunk_size_bytes,
             cb_start_offset=0,
             num_links=num_links,
-            num_iterations=num_iterations,
         )
 
         # Create mesh program descriptor
@@ -332,19 +380,22 @@ class DeepseekMinimalBroadcast:
         # Use unified kernel for both reader and writer roles
         ccl_kernel_path = "models/demos/deepseek_v3_b1/micro_ops/ccl_broadcast/kernels/ccl_broadcast_kernel.cpp"
 
+        common_named_ct_args = [("bcast_num_iterations", num_iterations)]
+
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 # Create unified kernel descriptor for CCL broadcast
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=ccl_kernel_path,
-                    core_ranges=config.get_worker_core_set(row, col),
-                    ncrisc_named_compile_time_args=config.get_named_ct_args(row, col),
-                    brisc_named_compile_time_args=config.get_named_ct_args(row, col),
-                    ncrisc_common_runtime_args=config.get_common_rt_args(row, col),
+                    core_ranges=config.get_worker_core_set(coord),
+                    ncrisc_named_compile_time_args=config.get_writer_named_ct_args(coord) + common_named_ct_args,
+                    brisc_named_compile_time_args=config.get_reader_named_ct_args(coord) + common_named_ct_args,
+                    ncrisc_common_runtime_args=config.get_writer_common_rt_args(coord),
+                    brisc_common_runtime_args=config.get_reader_common_rt_args(coord),
                     # Per-core runtime args: empty for NCRISC (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        ncrisc_args=[(config.get_worker_core(row, col), [])],
+                        ncrisc_args=[(config.get_worker_core(coord), [])],
                     ),
                 )
 
@@ -352,10 +403,10 @@ class DeepseekMinimalBroadcast:
                 program = ttnn.ProgramDescriptor(
                     kernels=unified_kernel.get_kernel_descriptors().kernels[:2],
                     semaphores=[],
-                    cbs=config.get_cb_descriptors(row, col),
+                    cbs=config.get_cb_descriptors(coord),
                 )
 
-                config.append_per_core_rt_args(row, col, program, kernel_idx=0, core=config.get_worker_core(row, col))
+                config.append_writer_per_core_rt_args(coord, program, kernel_idx=0, core=config.get_worker_core(coord))
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
@@ -363,3 +414,152 @@ class DeepseekMinimalBroadcast:
         result = ttnn.generic_op([input_tensor_mesh, output_tensor], mesh_program_descriptor)
 
         return result
+
+
+class BypassBroadcastConfig:
+    """
+    Skip-CCL broadcast shim that preserves the same interface as BroadcastConfig.
+    This allows fused ops to stay config-driven without branching on broadcast internals.
+    """
+
+    def __init__(
+        self,
+        mesh_device,
+        input_tensor_mesh,
+        root_coord,
+        socket=None,
+        cb_start_offset=0,
+    ):
+        self.mesh_device = mesh_device
+        self.input_tensor_mesh = input_tensor_mesh
+        self.root_coord = ttnn.MeshCoordinate(int(root_coord[0]), int(root_coord[1]))
+        self.socket = socket
+        self.cb_start_offset = cb_start_offset
+        self.cb_ids = {"bcast_data": self.cb_start_offset}
+        self.num_links = 1
+        self.chunk_size_bytes = 0
+        self.last_chunk_size_bytes = 0
+        self.num_chunks = 0
+        self._socket_config_addr = 0
+        self._socket_page_size = 0
+        self._socket_num_pages = 0
+        # Bypass path intentionally avoids any broadcast topology/fabric setup.
+        # It only retains minimal metadata needed for helper args and placement.
+        self._per_device = {}
+
+        input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        input_sample = input_tensors_per_device[0]
+        tile_height, tile_width = input_sample.tile.tile_shape
+        element_size = dtype_size(input_sample.dtype)
+        # Needed for socket reader page sizing in skip+socket mode.
+        self.tensor0_page_size = tile_height * tile_width * element_size
+        shard_spec = input_sample.memory_config().shard_spec
+        shard_height, shard_width = shard_spec.shape
+        if shard_height % tile_height != 0 or shard_width % tile_width != 0:
+            raise ValueError(
+                f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
+            )
+        self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
+        self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
+        if self.socket is not None:
+            self._socket_config_addr = int(self.socket.get_config_buffer_address())
+            self._socket_page_size = int(self.tensor_size_bytes)
+            self._socket_num_pages = 1
+
+        mesh_rows = mesh_device.shape[0]
+        mesh_cols = mesh_device.shape[1]
+        for row in range(mesh_rows):
+            for col in range(mesh_cols):
+                coord = ttnn.MeshCoordinate(row, col)
+                idx = row * mesh_cols + col
+                input_tensor_device = input_tensors_per_device[idx]
+                input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
+                shard_grid_start = input_shard_grid.bounding_box().start
+                worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
+                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
+                self._per_device[coord] = {
+                    "is_root": coord == self.root_coord,
+                    "worker_core": worker_core,
+                    "worker_core_set": worker_core_set,
+                }
+
+    @property
+    def num_cb_ids_reserved(self):
+        return 1
+
+    @property
+    def num_cbs_needed(self):
+        return self.num_cb_ids_reserved
+
+    @property
+    def has_bypass_socket_reader(self):
+        return self.socket is not None
+
+    def is_root(self, coord):
+        return coord == self.root_coord
+
+    def uses_socket(self, coord):
+        return self.socket is not None and self.is_root(coord)
+
+    def get_writer_named_ct_args(self, coord):
+        d = self._per_device[coord]
+        return [
+            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_num_pages_to_read", self.num_pages_to_read),
+            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_tensor0_page_size", self.tensor0_page_size),
+            ("bcast_num_neighbors", 0),
+            ("bcast_num_links", 1),
+            ("bcast_is_root", 1 if d["is_root"] else 0),
+            ("bcast_chunk_size_bytes", 0),
+            ("bcast_last_chunk_size_bytes", 0),
+            ("bcast_num_chunks", 0),
+        ]
+
+    def get_reader_named_ct_args(self, coord):
+        d = self._per_device[coord]
+        return [
+            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_num_pages_to_read", self.num_pages_to_read),
+            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
+        ]
+
+    def get_socket_reader_ct_args(self, coord, target_cb, target_num_pages=None):
+        if target_cb in self.cb_ids.values():
+            raise ValueError("target_cb must not collide with broadcast-private cb ids")
+        d = self._per_device[coord]
+        num_pages_to_read = self.num_pages_to_read if target_num_pages is None else int(target_num_pages)
+        if num_pages_to_read <= 0:
+            raise ValueError("target_num_pages must be greater than zero")
+        return [
+            ("bcast_cb0_id", int(target_cb)),
+            ("bcast_num_pages_to_read", num_pages_to_read),
+            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
+        ]
+
+    def get_socket_reader_rt_args(self, coord):
+        if not self.uses_socket(coord):
+            return [0, 0, 0]
+        return [self._socket_config_addr, self._socket_page_size, self._socket_num_pages]
+
+    def get_writer_common_rt_args(self, coord):
+        return []
+
+    def get_reader_common_rt_args(self, coord):
+        if not self.uses_socket(coord):
+            return [0, 0, 0]
+        return [self._socket_config_addr, self._socket_page_size, self._socket_num_pages]
+
+    def append_writer_per_core_rt_args(self, coord, program, kernel_idx, core):
+        return 0
+
+    def get_cb_descriptors(self, coord):
+        return []
+
+    def get_worker_core(self, coord):
+        return self._per_device[coord]["worker_core"]
+
+    def get_worker_core_set(self, coord):
+        return self._per_device[coord]["worker_core_set"]

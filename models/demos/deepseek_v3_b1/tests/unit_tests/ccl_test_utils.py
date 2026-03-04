@@ -50,8 +50,8 @@ def build_broadcast_test_inputs(
     if input_tensor_torch is None:
         input_tensor_torch = torch.rand(output_shape, dtype=torch.bfloat16)
 
-    if isinstance(bcast_core, tuple):
-        bcast_core = ttnn.CoreCoord(*bcast_core)
+    if not isinstance(bcast_core, ttnn.CoreCoord):
+        raise TypeError(f"bcast_core must be ttnn.CoreCoord, got {type(bcast_core)}")
 
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(bcast_core, bcast_core)})
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
