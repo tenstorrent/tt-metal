@@ -6,7 +6,7 @@
 // IN0 Receiver (RISCV_1) — Non-left-column cores
 //
 // Receives block_h rows of X tiles via row multicast from the left-column
-// sender. Outer loop iterates num_m_blocks × num_k_blocks times.
+// sender. Outer loop over m_blocks, inner loop over k_blocks.
 // ============================================================================
 
 #include "api/dataflow/dataflow_api.h"
@@ -21,7 +21,7 @@ constexpr uint32_t num_m_blocks = get_compile_time_arg_val(3);
 constexpr uint32_t in0_mcast_sender_semaphore_id = get_compile_time_arg_val(4);
 constexpr uint32_t in0_mcast_receiver_semaphore_id = get_compile_time_arg_val(5);
 
-constexpr uint32_t x_tiles_per_recv = block_h * block_size;
+constexpr uint32_t x_tiles_per_block = block_h * block_size;
 constexpr uint32_t num_k_blocks = (Wt + block_size - 1U) / block_size;
 
 void kernel_main() {
@@ -37,9 +37,9 @@ void kernel_main() {
     const uint64_t sender_semaphore_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, mcast_sender_semaphore_addr);
 
     for (uint32_t mb = 0U; mb < num_m_blocks; ++mb) {
-        for (uint32_t k = 0U; k < num_k_blocks; ++k) {
+        for (uint32_t k_block = 0U; k_block < num_k_blocks; ++k_block) {
             mcast_receiver_reserve_and_receive(
-                cb_in0_idx, x_tiles_per_recv, receiver_sem_ptr, sender_semaphore_noc_addr);
+                cb_in0_idx, x_tiles_per_block, receiver_sem_ptr, sender_semaphore_noc_addr);
         }
     }
 }

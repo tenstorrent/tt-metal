@@ -31,8 +31,8 @@ ttnn::Tensor swiglu_fw(
             return ttnn_fixed::matmul(gated, w2);
         }
         case SwigluFwPath::GateUp: {
-            // Design A: 2-step pipeline
-            // Step 1: M = SiLU(X @ W1) * (X @ W3) — custom fused gate-up kernel
+            // 2-step pipeline:
+            // Step 1: M = SiLU(X @ W1) * (X @ W3) — fused gate-up kernel
             ttnn::Tensor M = swiglu_gate_up(input_tensor, w1, w3);
             // Step 2: Y = M @ W2 — standard matmul
             return ttnn::matmul(M, w2);

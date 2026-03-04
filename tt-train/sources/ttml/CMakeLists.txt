@@ -163,7 +163,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
-    # SwiGLU Gate-Up (Design A Step 1: M = SiLU(X@W1) * (X@W3))
+    # SwiGLU Gate-Up: M = SiLU(X@W1) * (X@W3)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_gate_up/swiglu_gate_up.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_gate_up/device/swiglu_gate_up_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_gate_up/device/swiglu_gate_up_program_factory.cpp

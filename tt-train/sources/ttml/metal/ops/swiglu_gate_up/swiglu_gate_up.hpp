@@ -8,8 +8,7 @@
 
 namespace ttml::metal {
 
-// SwiGLU Gate-Up operation (Design A Step 1):
-//   M = SiLU(X @ W1) * (X @ W3)
+// SwiGLU Gate-Up: M = SiLU(X @ W1) * (X @ W3)
 //
 // Uses 2D multicast matmul tiling for efficient DRAM bandwidth utilization.
 // X is read once per K-block and shared across both W1 and W3 matmuls.

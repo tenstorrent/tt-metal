@@ -34,7 +34,6 @@ constexpr auto kCbSiluIndex = tt::CBIndex::c_7;     // SiLU(XW1) intermediate
 
 constexpr uint32_t kBlockSize = 4U;
 constexpr uint32_t kTilesPerBatch = kBlockSize * kBlockSize;
-constexpr uint32_t kL1UsableBytes = 1300U * 1024U;
 
 // Runtime arg indices for IN0 sender
 constexpr uint32_t kIn0SenderXAddrIdx = 0U;
@@ -90,16 +89,17 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     uint32_t per_core_M = (total_M_tiles + num_cores_r - 1U) / num_cores_r;
     uint32_t per_core_N = (hidden_Wt + num_cores_c - 1U) / num_cores_c;
     uint32_t per_core_N_rounded = round_up(per_core_N, kBlockSize);
-    uint32_t num_n_blocks = per_core_N_rounded / kBlockSize;
 
     // block_h: number of M tile-rows processed per K-loop pass.
     // Larger block_h amortizes weight reads across more M rows.
     // L1 = (2*block_h*kBlockSize + 4*kTilesPerBatch + 4*kBlockSize + 3*block_h*per_core_N_rounded) * tile_size
     //       ^-- X (dbl-buf)         ^-- W1+W3 (dbl-buf)  ^-- sigmoid+silu (dbl-buf)  ^-- xw1_acc+xw3_acc+m_out
+    const uint32_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t baseline_weight_l1 = (4U * kTilesPerBatch + 4U * kBlockSize) * single_tile_size;
     uint32_t per_row_l1 = (2U * kBlockSize + 3U * per_core_N_rounded) * single_tile_size;
     uint32_t max_block_h =
-        (kL1UsableBytes > baseline_weight_l1) ? (kL1UsableBytes - baseline_weight_l1) / per_row_l1 : 1U;
+        (available_L1_in_bytes > baseline_weight_l1) ? (available_L1_in_bytes - baseline_weight_l1) / per_row_l1 : 1U;
     uint32_t block_h = std::clamp(max_block_h, 1U, per_core_M);
     uint32_t num_m_blocks = (per_core_M + block_h - 1U) / block_h;
 
@@ -233,8 +233,6 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
         block_h,
         num_m_blocks,
         per_core_N,
-        per_core_N_rounded,
-        num_n_blocks,
         in1_mcast_sender_semaphore_id,
         in1_mcast_receiver_semaphore_id,
     };
@@ -260,8 +258,6 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
             block_h,
             num_m_blocks,
             per_core_N,
-            per_core_N_rounded,
-            num_n_blocks,
             in1_mcast_sender_semaphore_id,
             in1_mcast_receiver_semaphore_id,
         };

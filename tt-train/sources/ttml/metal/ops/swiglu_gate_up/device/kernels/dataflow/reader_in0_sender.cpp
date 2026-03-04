@@ -6,7 +6,7 @@
 // IN0 Sender (RISCV_1) — Left column cores
 //
 // Reads block_h rows of X tiles from DRAM per K-block and multicasts across
-// the row. Outer loop iterates num_m_blocks times.
+// the row. Outer loop over m_blocks, inner loop over k_blocks.
 // ============================================================================
 
 #include <algorithm>
@@ -23,7 +23,8 @@ constexpr uint32_t num_m_blocks = get_compile_time_arg_val(3);
 constexpr uint32_t in0_mcast_sender_semaphore_id = get_compile_time_arg_val(4);
 constexpr uint32_t in0_mcast_receiver_semaphore_id = get_compile_time_arg_val(5);
 
-constexpr uint32_t x_tiles_per_send = block_h * block_size;
+constexpr uint32_t x_tiles_per_block = block_h * block_size;
+constexpr uint32_t num_k_blocks = (Wt + block_size - 1U) / block_size;
 
 void kernel_main() {
     uint32_t ra = 0U;
@@ -60,12 +61,13 @@ void kernel_main() {
     };
 
     for (uint32_t mb = 0U; mb < num_m_blocks; ++mb) {
-        for (uint32_t k_block_start = 0U; k_block_start < Wt; k_block_start += block_size) {
+        for (uint32_t k_block = 0U; k_block < num_k_blocks; ++k_block) {
+            const uint32_t k_block_start = k_block * block_size;
             const uint32_t k_block_size = std::min(block_size, Wt - k_block_start);
 
             if (num_receivers > 0U) {
                 mcast_sender_wait_for_receivers(sender_sem_ptr, num_receivers);
-                cb_reserve_back(cb_in0_idx, x_tiles_per_send);
+                cb_reserve_back(cb_in0_idx, x_tiles_per_block);
                 uint32_t l1_addr = get_write_ptr(cb_in0_idx);
 
                 for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
@@ -92,7 +94,7 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    x_tiles_per_send * tile_bytes,
+                    x_tiles_per_block * tile_bytes,
                     num_receivers + 1U);
                 mcast_sender_signal_receivers_loopback(
                     receiver_sem_ptr,
@@ -102,9 +104,9 @@ void kernel_main() {
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
                     num_receivers + 1U);
-                cb_push_back(cb_in0_idx, x_tiles_per_send);
+                cb_push_back(cb_in0_idx, x_tiles_per_block);
             } else {
-                cb_reserve_back(cb_in0_idx, x_tiles_per_send);
+                cb_reserve_back(cb_in0_idx, x_tiles_per_block);
                 uint32_t l1_addr = get_write_ptr(cb_in0_idx);
                 for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
                     uint32_t m = mb * block_h + m_sub;
@@ -124,7 +126,7 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_in0_idx, x_tiles_per_send);
+                cb_push_back(cb_in0_idx, x_tiles_per_block);
             }
         }
     }
