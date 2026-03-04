@@ -11,7 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
+from tests.nightly.t3000.ccl.test_all_to_all_combine import get_cluster_dims
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import prepare_w0_w1_tensor, prepare_w2_tensor
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import _device_mesh_iterator  # TODO (AM) bad form
 
@@ -364,6 +364,18 @@ def _device_mesh_iterator(mesh_shape):
             yield m0, m1, device
 
 
+def get_batch_cluster_idxr(replication_axis, batch, batch_per_device):
+    def _idxr(m0, m1, b):
+        if replication_axis == 0:
+            return m1 * batch + m0 * batch_per_device + b
+        elif replication_axis == 1:
+            return m0 * batch + m1 * batch_per_device + b
+        else:
+            return b
+
+    return _idxr
+
+
 def gen_combine_golden(
     torch_dispatch_input_tensor,  # [512, 1, 1, H]
     torch_w0_tensors,  # [E, L, 1, H, N]
@@ -377,6 +389,13 @@ def gen_combine_golden(
     cluster_axis,
     mesh_shape,
 ):
+    torch.set_printoptions(
+        threshold=float("inf"),  # Print all elements (no truncation)
+        linewidth=200,  # Wider lines before wrapping
+        precision=10,  # Decimal places for floats
+        # sci_mode=False,          # Disable scientific notation
+    )
+
     # 8, 16, 128
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
@@ -384,17 +403,22 @@ def gen_combine_golden(
     torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([cluster_factor, 1, 1, 1])
 
     torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * cluster_factor, hidden_size).bfloat16()
-    batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
+    batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch, batches_per_device)
     for m0, m1, d in _device_mesh_iterator(mesh_shape):
+        lower_expert = cluster_size * m1 * 2
+        upper_expert = cluster_size * (m1 + 1) * 2
+
         for b in range(batches_per_device):
             global_b = batch_rep_idxr(m0, m1, b)
             token = torch_dispatch_input_tensor[global_b, :, :, :]
             for k in range(select_experts_k):
-                e = torch_dispatch_input_expert_indices[global_b, :, :, k]
-                # TODO: (GR) actual expert index
-                contrib = gen_matmul_golden(token, torch_w0_tensors[0], torch_w1_tensors[0], torch_w2_tensors[0])
+                e = torch_dispatch_input_expert_indices[global_b, :, :, k].item()
 
-                torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
+                if e >= lower_expert and e < upper_expert:
+                    # TODO: (GR) use actual expert index
+                    contrib = gen_matmul_golden(token, torch_w0_tensors[0], torch_w1_tensors[0], torch_w2_tensors[0])
+
+                    torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
 
     return torch_combine_ref_tensor
 
@@ -403,6 +427,14 @@ def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_gold
     torch_combine_output = ttnn.to_torch(
         tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
     )
+
+    # torch.set_printoptions(
+    #     threshold=float("inf"),  # Print all elements (no truncation)
+    #     linewidth=200,  # Wider lines before wrapping
+    #     precision=10,  # Decimal places for floats
+    #     # sci_mode=False,          # Disable scientific notation
+    # )
+    # print(torch_combine_output[0:1, :, 0:4])
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
@@ -432,7 +464,7 @@ def gen_output_reference(
         # loop over each selected expert
         for k in range(num_selected_experts):
             # determine which expert to use
-            expert = torch_dispatch_input_expert_indices[token, :, :, k]
+            expert = torch_dispatch_input_expert_indices[token, :, :, k].item()
 
             # get the output
             matmul_golden = gen_matmul_golden(
