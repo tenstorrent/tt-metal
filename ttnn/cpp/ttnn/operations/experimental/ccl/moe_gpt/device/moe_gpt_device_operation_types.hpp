@@ -33,10 +33,14 @@ struct tensor_args_t {
     // Pre-allocated tilize output tensor (DRAM, written to by tilize writer)
     std::optional<Tensor> tilize_output;
 
-    bool has_tilize_args() const {
+    // Check if all tilize input tensors are present (NOT tilize_output)
+    bool has_tilize_inputs() const {
         return sparse_buffer.has_value() && expert_indices.has_value() && expert_scores.has_value() &&
-               expert_mapping.has_value() && tilize_output.has_value();
+               expert_mapping.has_value();
     }
+
+    // Check if ALL tilize tensors are present including output (TILIZE_TO_DRAM mode)
+    bool has_tilize_args() const { return has_tilize_inputs() && tilize_output.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;
