@@ -1257,7 +1257,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         )
 
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
-        print(f"use_paged: {use_paged}")
 
         if past_key_values is not None:
             layer_idx = self._fallback_torch_layer.layer_idx
@@ -1413,12 +1412,13 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             key_states = self._to_replicated(key_states)
             value_states = self._to_replicated(value_states)
 
-        # --- L1 HEIGHT_SHARDED config required by paged_update_cache ---
         tile_size = 32
         shard_h = ((self.num_heads + tile_size - 1) // tile_size) * tile_size
+
+        core_grid = ttnn.CoreGrid(y=1, x=batch_size)
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(shard_h, self.qk_head_dim),
-            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
