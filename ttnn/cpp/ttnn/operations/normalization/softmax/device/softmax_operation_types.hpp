@@ -9,7 +9,10 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <string>
+#include <variant>
 
 namespace ttnn {
 // Softmax program configuration structs
@@ -61,5 +64,13 @@ struct SoftmaxInputs {
     const Tensor& input_tensor;
     const std::optional<const Tensor> mask;
 };
+
+// Helper function to add RECIP_LEGACY_COMPAT define based on program_config
+inline void add_recip_legacy_compat_define(
+    std::map<std::string, std::string>& defines, const ttnn::SoftmaxProgramConfig& program_config) {
+    if (std::visit([](const auto& config) { return config.recip_legacy_compat; }, program_config)) {
+        defines["RECIP_LEGACY_COMPAT"] = "true";
+    }
+}
 
 }  // namespace ttnn::prim
