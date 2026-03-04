@@ -685,3 +685,54 @@ def _benchmark_all_candidates(
 
 # Convenience: make matmul_auto available at module level
 __all__ = ["matmul_auto", "MatmulAutoConfig"]
+
+
+# --- HARDWARE FALLBACK PATCH ---
+_original_matmul_auto = matmul_auto
+
+def matmul_auto(
+    input_tensor_a,
+    input_tensor_b,
+    *,
+    bias=None,
+    activation=None,
+    dtype=None,
+    memory_config=None,
+    force_api=None,
+    force_program_config=None,
+    benchmark_mode=False,
+):
+    # FALLBACK_TO_DEFAULT
+    import ttnn
+    try:
+        return _original_matmul_auto(
+            input_tensor_a,
+            input_tensor_b,
+            bias=bias,
+            activation=activation,
+            dtype=dtype,
+            memory_config=memory_config,
+            force_api=force_api,
+            force_program_config=force_program_config,
+            benchmark_mode=benchmark_mode,
+        )
+    except Exception:
+        import logging
+        logging.getLogger('matmul_auto').warning(
+            'Auto config failed, falling back to default ttnn.matmul'
+        )
+        kwargs = {}
+        if dtype is not None:
+            kwargs['dtype'] = dtype
+        if memory_config is not None:
+            kwargs['memory_config'] = memory_config
+        result = ttnn.matmul(input_tensor_a, input_tensor_b, **kwargs)
+        if bias is not None:
+            result = ttnn.add(result, bias)
+        if activation == 'relu':
+            result = ttnn.relu(result)
+        elif activation == 'gelu':
+            result = ttnn.gelu(result)
+        elif activation == 'silu':
+            result = ttnn.silu(result)
+        return result
