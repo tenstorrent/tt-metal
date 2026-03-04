@@ -14,8 +14,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
-LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
-
 
 def _get_diffusers_pipeline(is_ci_env):
     pipeline = DiffusionPipeline.from_pretrained(
@@ -92,6 +90,7 @@ def run_unet_model(
     is_ci_env,
     is_ci_v2_env,
     model_location_generator,
+    lora_path,
     iterations=1,
 ):
     assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
@@ -112,9 +111,9 @@ def run_unet_model(
         lora_weights_manager=lora_mgr,
     )
 
-    lora_mgr.load_lora_weights(LORA_PATH)
+    lora_mgr.load_lora_weights(lora_path)
     lora_mgr.fuse_lora(lora_scale=1.0)
-    pipeline.load_lora_weights(LORA_PATH)
+    pipeline.load_lora_weights(lora_path)
     pipeline.fuse_lora(lora_scale=1.0)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -220,6 +219,7 @@ def test_unet(
     is_ci_v2_env,
     model_location_generator,
     reset_seeds,
+    lora_path,
 ):
     run_unet_model(
         device,
@@ -232,4 +232,5 @@ def test_unet(
         is_ci_env,
         is_ci_v2_env,
         model_location_generator,
+        lora_path,
     )

@@ -4,6 +4,7 @@
 
 
 import pytest
+import ttnn
 import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
@@ -102,8 +103,15 @@ def run_demo_inference(
         ),
     )
 
+    profiler.start("load_lora_weights")
     tt_sdxl.load_lora_weights(lora_path)
+    profiler.end("load_lora_weights")
+
+    profiler.start("fuse_lora")
     tt_sdxl.fuse_lora()
+    profiler.end("fuse_lora")
+
+    ttnn.synchronize_device(ttnn_device)
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
@@ -204,6 +212,8 @@ def run_demo_inference(
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
+    tt_sdxl.unload_lora_weights()
+
     return images
 
 
@@ -282,10 +292,10 @@ def run_demo_inference(
     ],
     ids=["default_additional_parameters"],
 )
-@pytest.mark.parametrize(
-    "lora_path",
-    ["lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"],
-)
+# @pytest.mark.parametrize(
+#     "lora_path",
+#     ["lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"],
+# )
 def test_demo(
     validate_fabric_compatibility,
     mesh_device,

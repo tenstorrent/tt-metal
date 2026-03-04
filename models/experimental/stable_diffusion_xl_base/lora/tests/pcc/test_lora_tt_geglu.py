@@ -18,8 +18,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
-
 
 def _get_diffusers_pipeline(is_ci_env):
     pipeline = DiffusionPipeline.from_pretrained(
@@ -39,7 +37,7 @@ def _get_diffusers_pipeline(is_ci_env):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
+def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds, lora_path):
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 
@@ -49,9 +47,9 @@ def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env,
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
     tt_geglu = TtGEGLU(device, state_dict, module_path, ModelOptimisations(), lora_weights_manager=lora_mgr)
 
-    lora_mgr.load_lora_weights(LORA_PATH)
+    lora_mgr.load_lora_weights(lora_path)
     lora_mgr.fuse_lora(lora_scale=1.0)
-    pipeline.load_lora_weights(LORA_PATH)
+    pipeline.load_lora_weights(lora_path)
     pipeline.fuse_lora(lora_scale=1.0)
 
     try:

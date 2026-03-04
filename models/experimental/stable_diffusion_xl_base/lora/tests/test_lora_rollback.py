@@ -42,18 +42,17 @@ def _run_forward(tt_sdxl, pipeline, prompt, negative_prompt):
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
-    "prompt, negative_prompt, lora_prompt, lora_path",
+    "prompt, negative_prompt, lora_prompt",
     [
         (
             "An astronaut riding a green horse",
             "disturbing",
             "A Coloring Book of an astronaut riding a green horse",
-            "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors",
         )
     ],
 )
 @torch.no_grad()
-def test_lora_rollback(mesh_device, is_ci_env, prompt, negative_prompt, lora_prompt, lora_path):
+def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_prompt, lora_prompt):
     prepare_device(mesh_device, use_cfg_parallel=False)
 
     pipeline = DiffusionPipeline.from_pretrained(

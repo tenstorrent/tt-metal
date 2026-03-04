@@ -20,11 +20,6 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# LORA_PATH = "lora_weights/crayons_v1_sdxl.safetensors"
-# LORA_PATH = "lora_weights/PS1Redmond-PS1Game-Playstation1Graphics.safetensors"
-# LORA_PATH = "lora_weights/ColoringBookRedmond-ColoringBook-ColoringBookAF.safetensors"
-LORA_PATH = "lora_weights/pytorch_lora_weights.safetensors"
-
 
 def _get_lora_impacted_weights(sd):
     """
@@ -109,7 +104,7 @@ def _build_reference_weights(peft_sd):
     indirect=True,
 )
 @torch.no_grad()
-def test_lora_fusion_pcc(mesh_device):
+def test_lora_fusion_pcc(mesh_device, lora_path):
     torch_pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -127,13 +122,13 @@ def test_lora_fusion_pcc(mesh_device):
     tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
     lora_manager = tt_pipeline._lora_weights_manager
 
-    lora_manager.load_lora_weights(LORA_PATH)
+    lora_manager.load_lora_weights(lora_path)
     assert lora_manager.has_lora_adapter()
 
     lora_manager.fuse_lora(lora_scale=1.0)
 
     # Build PEFT reference
-    torch_pipeline.load_lora_weights(LORA_PATH)
+    torch_pipeline.load_lora_weights(lora_path)
     torch_pipeline.fuse_lora()
 
     peft_unet_state_dict = torch_pipeline.unet.state_dict()

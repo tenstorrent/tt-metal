@@ -180,13 +180,15 @@ class TtSDXLPipeline(LightweightModule):
     def fuse_lora(self, lora_scale=1.0):
         if self._lora_weights_manager.has_lora_adapter():
             logger.info("Fusing LoRA weights on TT device...")
-            self._lora_weights_manager.fuse_lora(lora_scale=lora_scale)
+            with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+                self._lora_weights_manager.fuse_lora(lora_scale=lora_scale)
 
     def load_lora_weights(self, lora_path):
         self._lora_weights_manager.load_lora_weights(lora_path)
 
     def unload_lora_weights(self):
-        self._lora_weights_manager.unload_lora_weights()
+        with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+            self._lora_weights_manager.unload_lora_weights()
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
