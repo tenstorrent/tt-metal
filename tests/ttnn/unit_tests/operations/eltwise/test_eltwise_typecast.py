@@ -71,6 +71,20 @@ npu_layout = ttnn.Layout.TILE
         (torch.int, ttnn.uint16, ttnn.int32),
         (torch.int, ttnn.int32, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.uint16),
+        (torch.bfloat16, ttnn.bfloat16, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.bfloat16),
+        (torch.float32, ttnn.float32, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.float32),
+        (torch.int, ttnn.int32, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.int32),
+        (torch.int, ttnn.uint16, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.uint16),
+        (torch.int, ttnn.uint32, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.uint32),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.bfloat8_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.bfloat4_b),
     ),
 )
 @pytest.mark.parametrize(
@@ -103,8 +117,15 @@ class TestTypecast:
     ):
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
+        in_low = 0
+        in_high = 100
+        if tt_output_dtype == ttnn.uint8:
+            in_low = -257
+            in_high = 257
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=100), pt_input_dtype)
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=in_low, high=in_high), pt_input_dtype
+            )
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["tt_input_dtype"] = [tt_input_dtype]
