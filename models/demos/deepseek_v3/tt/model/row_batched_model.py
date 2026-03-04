@@ -268,7 +268,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
 
         ccl = cfg["lm_head"]["ccl"]
-
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         x = LMHead1D.forward_prefill(x, cfg["lm_head"])
         return x
