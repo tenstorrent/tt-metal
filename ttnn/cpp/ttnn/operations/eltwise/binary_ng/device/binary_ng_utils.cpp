@@ -684,6 +684,11 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
         return !is_uneven(a);
     }
 
+    if (b.has_value() && b->logical_shape().volume() == 1 &&
+        a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && !is_uneven(a)) {
+        return true;
+    }
+
     // a and b identical shape, no broadcast on any dimension
     if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
         if (is_uneven(a) || is_uneven(*b)) {
