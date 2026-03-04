@@ -566,16 +566,13 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
     local_indices_width = V if multi_step_reduction else per_device_vocab
 
     def _make_local_indices():
-        indices = torch.zeros(1, 1, B, local_indices_width, dtype=torch.int32)
         if multi_step_reduction:
             half = local_indices_width // 2
-            for i in range(half):
-                indices[:, :, :, i] = i
-                indices[:, :, :, half + i] = i
+            r = torch.arange(half, dtype=torch.int32)
+            row = torch.cat([r, r])
         else:
-            for i in range(local_indices_width):
-                indices[:, :, :, i] = i
-        return indices
+            row = torch.arange(local_indices_width, dtype=torch.int32)
+        return row.unsqueeze(0).unsqueeze(0).expand(1, 1, B, -1).contiguous()
 
     local_idx_defaults = dict(
         dtype=ttnn.uint16,
