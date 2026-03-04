@@ -411,7 +411,6 @@ void kernel_main() {
 
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
     if constexpr (Core::is_sdpa_forwarder_core) {
-        uint32_t offset_fabric_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_forwarder_args = {
             .buffer_base = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
