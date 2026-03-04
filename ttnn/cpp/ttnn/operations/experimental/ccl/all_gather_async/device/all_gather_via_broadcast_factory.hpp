@@ -78,5 +78,4 @@ AllGatherViaBroadcastFactoryProgramArtifacts build_all_gather_via_broadcast_prog
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-
 }  // namespace ttnn
