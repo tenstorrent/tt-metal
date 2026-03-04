@@ -5,7 +5,7 @@ Add roofline analysis to experiment results.
 For each TP=1 experiment, runs the roofline model to get theoretical
 minimum times and FLOP counts, then computes:
   - roofline_perc: what fraction of roofline is achieved (higher = better)
-  - mfu_perc: model FLOP utilization vs peak BF16 (160 TFLOPs/s)
+  - mfu_perc: model FLOP utilization vs peak BF16
 
 Usage:
     python add_roofline.py experiments/all_results.json /path/to/tt-train-roofline
@@ -16,15 +16,27 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 DEFAULT_BF16_PEAK_TFLOPS = 160.0
 
-TIMING_RE = re.compile(
-    r"(Forward|Backward|Optimizer|Grad Clip|Total):\s+([\d.]+)\s+ms\s+\(([\d.]+)\s+TFLOPs\)"
-)
+_run_model_roofline = None
+
+
+def _init_roofline(roofline_dir: str | Path):
+    """Add roofline_dir to sys.path and import the roofline tool."""
+    global _run_model_roofline
+    if _run_model_roofline is not None:
+        return
+
+    roofline_dir = str(Path(roofline_dir).resolve())
+    if roofline_dir not in sys.path:
+        sys.path.insert(0, roofline_dir)
+
+    from roofline.examples.training import run_model_roofline
+
+    _run_model_roofline = run_model_roofline
 
 
 def find_training_config(entry: dict) -> str | None:
@@ -38,42 +50,29 @@ def find_training_config(entry: dict) -> str | None:
     return None
 
 
-def run_roofline(
-    roofline_dir: Path, config_path: str, batch: int, hardware: str = "p100"
-) -> dict | None:
-    """Run roofline tool and parse output."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "roofline.examples.training",
-        "--config",
-        config_path,
-        "--batch",
-        str(batch),
-        "--hardware",
-        hardware,
-        "--no-plot",
-    ]
+def run_roofline(config_path: str, hardware: str = "p100") -> dict | None:
+    """Run roofline tool programmatically and return the result dictionary.
 
+    All model, batch, and parallelism settings are read from the training
+    config YAML so the roofline tool sees the full picture (including CCL).
+    """
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=str(roofline_dir), timeout=120
+        result = _run_model_roofline(
+            config=config_path,
+            hardware=hardware,
+            plot_memory=False,
+            verbose=False,
         )
-    except subprocess.TimeoutExpired:
+    except Exception as e:
+        print(f"  Roofline failed for {config_path}: {e}")
         return None
 
-    if result.returncode != 0:
+    if not result or "timing_breakdown" not in result:
+        err = result.get("error", "") if isinstance(result, dict) else ""
+        print(f"  Roofline returned no timing_breakdown for {config_path}: {err}")
         return None
 
-    parsed = {}
-    for m in TIMING_RE.finditer(result.stdout):
-        phase = m.group(1).lower().replace(" ", "_")
-        parsed[phase] = {
-            "roofline_ms": float(m.group(2)),
-            "flops_tflops": float(m.group(3)),
-        }
-
-    return parsed if parsed else None
+    return result
 
 
 def get_measured_phase_ms(entry: dict, phase: str) -> float | None:
@@ -94,40 +93,52 @@ def enrich_roofline(
     results: list[dict],
     roofline_dir: str | Path,
     hardware: str = "p100",
-    peak_tflops: float = DEFAULT_BF16_PEAK_TFLOPS,
+    peak_tflops: float | None = None,
 ) -> int:
     """Add roofline data to TP=1 experiments in-place. Returns count of annotated entries."""
-    roofline_dir = Path(roofline_dir)
+    _init_roofline(roofline_dir)
     tp1_entries = [e for e in results if e.get("experiment", {}).get("tp", 1) == 1]
 
     for entry in tp1_entries:
-        _enrich_one(entry, roofline_dir, hardware, peak_tflops)
+        _enrich_one(entry, hardware, peak_tflops)
 
     return sum(1 for e in results if "roofline" in e)
 
 
-def _enrich_one(entry, roofline_dir, hardware, peak_tflops):
+def _extract_phase(timing_breakdown: dict, phase: str) -> dict:
+    """Extract roofline_ms and flops_tflops from a timing_breakdown phase entry."""
+    phase_data = timing_breakdown.get(phase, {})
+    return {
+        "roofline_ms": phase_data.get("time_ms", 0),
+        "flops_tflops": phase_data.get("tflops", 0),
+    }
+
+
+def _enrich_one(entry, hardware, peak_tflops_override):
     exp = entry.get("experiment", {})
-    local_batch = exp.get("local_batch", 1)
     uses_checkpointing = exp.get("runner_type") == "memory_efficient"
 
     config_path = find_training_config(entry)
     if not config_path:
         return
 
-    roofline = run_roofline(roofline_dir, config_path, local_batch, hardware)
-    if not roofline:
+    result = run_roofline(config_path, hardware)
+    if not result:
         return
 
-    rf_fwd = roofline.get("forward", {})
-    rf_bwd = roofline.get("backward", {})
-    rf_opt = roofline.get("optimizer", {})
+    timing = result["timing_breakdown"]
+    peak_tflops = peak_tflops_override or result.get("hardware", {}).get(
+        "peak_tflops_hifi4", DEFAULT_BF16_PEAK_TFLOPS
+    )
+
+    rf_fwd = _extract_phase(timing, "forward")
+    rf_bwd = _extract_phase(timing, "backward")
+    rf_opt = _extract_phase(timing, "optimizer")
 
     if uses_checkpointing:
         rf_bwd = {
-            "roofline_ms": rf_bwd.get("roofline_ms", 0) + rf_fwd.get("roofline_ms", 0),
-            "flops_tflops": rf_bwd.get("flops_tflops", 0)
-            + rf_fwd.get("flops_tflops", 0),
+            "roofline_ms": rf_bwd["roofline_ms"] + rf_fwd["roofline_ms"],
+            "flops_tflops": rf_bwd["flops_tflops"] + rf_fwd["flops_tflops"],
         }
 
     roofline_data = {"checkpointing_adjusted": uses_checkpointing}
@@ -140,8 +151,8 @@ def _enrich_one(entry, roofline_dir, hardware, peak_tflops):
         ("backward", rf_bwd, meas_bwd),
         ("optimizer", rf_opt, meas_opt),
     ]:
-        r_ms = rf.get("roofline_ms", 0)
-        r_flops = rf.get("flops_tflops", 0)
+        r_ms = rf["roofline_ms"]
+        r_flops = rf["flops_tflops"]
         phase_data = {"roofline_ms": round(r_ms, 4), "flops_tflops": round(r_flops, 4)}
         if meas_ms and meas_ms > 0:
             phase_data["measured_ms"] = round(meas_ms, 3)
@@ -151,15 +162,9 @@ def _enrich_one(entry, roofline_dir, hardware, peak_tflops):
             )
         roofline_data[label] = phase_data
 
-    rf_total_ms = (
-        rf_fwd.get("roofline_ms", 0)
-        + rf_bwd.get("roofline_ms", 0)
-        + rf_opt.get("roofline_ms", 0)
-    )
+    rf_total_ms = rf_fwd["roofline_ms"] + rf_bwd["roofline_ms"] + rf_opt["roofline_ms"]
     rf_total_flops = (
-        rf_fwd.get("flops_tflops", 0)
-        + rf_bwd.get("flops_tflops", 0)
-        + rf_opt.get("flops_tflops", 0)
+        rf_fwd["flops_tflops"] + rf_bwd["flops_tflops"] + rf_opt["flops_tflops"]
     )
     meas_total = entry.get("throughput", {}).get(
         "step_time_ms"
@@ -189,14 +194,17 @@ def main():
     )
     parser.add_argument(
         "--hardware",
-        default="p100",
+        default="bh_glx",
         help="Hardware config for roofline tool (default: p100)",
     )
     parser.add_argument(
         "--peak-tflops",
         type=float,
-        default=DEFAULT_BF16_PEAK_TFLOPS,
-        help=f"Peak BF16 TFLOPs/s for MFU calculation (default: {DEFAULT_BF16_PEAK_TFLOPS})",
+        default=None,
+        help=(
+            "Peak BF16 TFLOPs/s for MFU calculation. "
+            "If not set, uses the value from the roofline hardware config."
+        ),
     )
     args = parser.parse_args()
 
