@@ -375,7 +375,7 @@ void noc_multicast_write_inline_src_include(
       incr = 0x80 (increase by 0x80),
       current value = 0x21C0,
 
-  then the aligned value is 0x2100, and the new value is:
+  then the aligned valud is 0x2100, and the new value is:
       0x2100 + ((0x1C0 + 0x80) % 0x100) = 0x2140.
 
   <noc_coordinate> => NOC ID portion of addr (unicast)
@@ -484,7 +484,7 @@ void noc_multicast_atomic_read_and_increment(
     uint32_t transaction_id);
 
 /*
-  Set command buffer ID (0-3) to use for the next command issued.
+  Set command buffer ID (0-3) to use for the next commmand issued.
 */
 void noc_set_cmd_buf(uint32_t cmd_buf_id);
 
@@ -494,7 +494,7 @@ void noc_set_cmd_buf(uint32_t cmd_buf_id);
 uint32_t noc_get_cmd_buf();
 
 /*
-  Set NOC instance (0-1) to use for the next command issued.
+  Set NOC instance (0-1) to use for the next commmand issued.
 */
 void noc_set_active_instance(uint32_t noc_id);
 

@@ -34,7 +34,7 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    // TODO: initialize globals and bss
+    // TODO: initilaize globals and bss
     uint32_t hartid = internal_::get_hw_thread_idx();
     extern uint32_t __tdata_lma[];
     // for now this works for legacy kernels, we need to revisit this for new kernels

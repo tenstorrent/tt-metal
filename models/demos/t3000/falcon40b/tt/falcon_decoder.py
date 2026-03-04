@@ -260,7 +260,7 @@ class TtFalconDecoderLayer:
         )
         attention_output, outputs = attn_outputs[0], attn_outputs[1:]
 
-        # Add attn output to residual first in place to save memory
+        # Add attn output to residiual first in place to save memory
         # Note that this is only correct in inference when dropout is disabled
         output = ttnn.add(
             output,
@@ -368,7 +368,7 @@ class TtFalconDecoderLayer:
         )
         attention_output, outputs = attn_outputs[0], attn_outputs[1:]
 
-        # Add attn output to residual first in place to save memory
+        # Add attn output to residiual first in place to save memory
         # Note that this is only correct in inference when dropout is disabled
         output = ttnn.add(
             output,

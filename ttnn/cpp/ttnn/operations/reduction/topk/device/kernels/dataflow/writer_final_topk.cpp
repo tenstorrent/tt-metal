@@ -9,7 +9,7 @@ void kernel_main() {
     const uint32_t dst_addr0 = get_arg_val<uint32_t>(0);  // DRAM address for TopK values output tensor
     const uint32_t dst_addr1 = get_arg_val<uint32_t>(1);  // DRAM address for TopK indices output tensor
 
-    // Compile time args
+    // Compiletime args
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(0);      // Final values circular buffer
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(1);  // Final indices circular buffer
     constexpr uint32_t Ht = get_compile_time_arg_val(2);
