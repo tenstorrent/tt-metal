@@ -55,19 +55,6 @@ class TtDispatchModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
 
-        # Oversized buffer to simplify dispatch logic
-        self.dispatched_shape = (num_chips, self.experts_per_chip, self.max_dispatched_tokens_per_expert, hidden_dim)
-        self.dispatched_metadata_shape = (
-            num_chips,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
-            self.metadata_len,
-        )
-
-        self.dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
-        self.dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
-
-        ###
         # prep data for efficient dispatch: count tokens per expert per chip to compute offsets for where to write in the dispatched buffer
         self.chip_to_n_routed_expert_counter = torch.zeros(
             (self.num_chips, self.n_routed_experts), dtype=torch.int32

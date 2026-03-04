@@ -46,16 +46,21 @@ void PrefillCombineDeviceOperation::validate_on_program_cache_miss(
         "Output memory config must be DRAM interleaved, not sharded");
 
     // Validate tensor shapes are compatible
+    // Dispatch outputs are 5D: (per_device_batch, 1, experts_per_chip, max_dispatched_tokens, hidden_dim/metadata_len)
+    // Counter is 2D: (per_device_batch, experts_per_chip)
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
     auto metadata_shape = tensor_args.dispatched_metadata.tensor_spec().logical_shape();
     auto counter_shape = tensor_args.experts_tok_counter.tensor_spec().logical_shape();
 
     TT_FATAL(
         dispatched_shape[0] == metadata_shape[0] && dispatched_shape[0] == counter_shape[0],
-        "First dimension (num_chips) must match across all input tensors");
+        "First dimension (per_device_batch) must match across all input tensors");
     TT_FATAL(
-        dispatched_shape[1] == metadata_shape[1] && dispatched_shape[1] == counter_shape[1],
-        "Second dimension (experts_per_chip) must match across dispatched and metadata tensors");
+        dispatched_shape[2] == metadata_shape[2] && dispatched_shape[2] == counter_shape[1],
+        "experts_per_chip dimension must match: dispatched[2]={}, metadata[2]={}, counter[1]={}",
+        dispatched_shape[2],
+        metadata_shape[2],
+        counter_shape[1]);
 }
 
 void PrefillCombineDeviceOperation::validate_on_program_cache_hit(
@@ -71,14 +76,15 @@ PrefillCombineDeviceOperation::spec_return_value_t PrefillCombineDeviceOperation
     uint32_t per_device_batch = dispatched_shape[0];  // Should be 1 for sharded input
     uint32_t hidden_dim = dispatched_shape[-1];
 
-    // Output shape: (num_chips, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-    // For sharded input on dim 0, per-device shape is (1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-    auto output_shape = ttnn::Shape({
-        per_device_batch,
-        operation_attributes.seq_len_per_chip,
-        operation_attributes.num_experts_per_tok,
-        hidden_dim
-    });
+    // Output shape: (per_device_batch, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    // The extra dimension (1) allows proper composition across 2D mesh
+    // For sharded input on dim 0, per-device shape is (1, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    auto output_shape = ttnn::Shape(
+        {per_device_batch,
+         1,
+         operation_attributes.seq_len_per_chip,
+         operation_attributes.num_experts_per_tok,
+         hidden_dim});
 
     // Memory config and layout
     auto mem_config = operation_attributes.output_mem_config;

@@ -327,6 +327,10 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         writer_defines["DIRECTIONS"] = ccl::common::stringify(directions);
     }
 
+    if (operation_attributes.axis.has_value()) {
+        writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
+
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_combine/device/kernels/dataflow/writer_prefill_combine.cpp",

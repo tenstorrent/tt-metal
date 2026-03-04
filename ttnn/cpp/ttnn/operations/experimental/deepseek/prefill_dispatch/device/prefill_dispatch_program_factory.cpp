@@ -323,9 +323,11 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
         log_debug(
             tt::LogOp,
-            "Created packet header CB with size {} bytes for {} headers",
+            "Created packet header CB: packet_header_size_bytes={}, total_cb_size={}, num_headers={}, topology={}",
+            packet_header_size_bytes,
             packet_header_cb_size,
-            num_packet_headers);
+            num_packet_headers,
+            static_cast<int>(topology));
     }
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {

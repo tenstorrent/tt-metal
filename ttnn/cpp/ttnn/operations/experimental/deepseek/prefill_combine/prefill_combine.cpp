@@ -8,6 +8,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::experimental::deepseek::prefill_combine {
 
@@ -24,6 +25,10 @@ ttnn::Tensor ExecutePrefillCombine::invoke(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology) {
+    // Get device and subdevice info
+    auto* mesh_device = dispatched_buffer.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
@@ -36,17 +41,11 @@ ttnn::Tensor ExecutePrefillCombine::invoke(
         num_links.value_or(1));
 
     std::optional<uint32_t> axis = cluster_axis;
-    uint32_t num_links_ = num_links.value_or(1);
+    uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
     auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
-
-    // Get device and subdevice info
-    auto* mesh_device = dispatched_buffer.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     auto memory_config_ = memory_config.value_or(dispatched_buffer.memory_config());
 

@@ -90,10 +90,10 @@ PrefillDispatchDeviceOperation::spec_return_value_t PrefillDispatchDeviceOperati
     // Define output shapes - these are PER-DEVICE shapes (not global shapes)
     // When sharded on dim 0, each device should get shape [1, ...]
     auto dispatch_buffer_shape =
-        ttnn::Shape({per_device_batch, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
+        ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
     auto dispatch_metadata_shape =
-        ttnn::Shape({per_device_batch, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
-    auto counter_shape = ttnn::Shape({per_device_batch, experts_per_chip});
+        ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
+    auto counter_shape = ttnn::Shape({1, per_device_batch, experts_per_chip});
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(

@@ -120,6 +120,45 @@ void kernel_main() {
                     << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
                     << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip << ENDL();
 
+#ifdef AXIS
+    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
+    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+
+    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
+    // Based on cluster axis, we only need to dispatch to the devices that are along the axis
+    // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
+    // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
+    // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
+    // device_end_idx is the end of the column
+    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
+    constexpr uint32_t device_end_idx =
+        (axis == ReplicateGroup::COLS)
+            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
+#else
+    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
+    constexpr uint32_t dispatch_devices = num_devices;
+    constexpr uint32_t dispatch_index = linearized_mesh_coord;
+    constexpr uint32_t device_begin_idx = 0;
+    constexpr uint32_t device_end_idx = num_devices;
+    constexpr uint32_t device_stride = 1;
+#endif
+
+    DPRINT_DISPATCH << "dispatch_devices=" << dispatch_devices << ". axis=" << (int)axis << " mesh_rows=" << mesh_rows
+                    << " mesh_cols=" << mesh_cols << ENDL();
+    DPRINT_DISPATCH << "Fabric configuration: max_packet_size=" << fabric_max_packet_size
+                    << " l1_alignment=" << l1_alignment << " num_links=" << num_links
+                    << " topology=" << (uint32_t)topology << " device_begin_idx=" << device_begin_idx
+                    << " device_end_idx=" << device_end_idx << " device_stride=" << device_stride << ENDL();
+
+    if constexpr (is_1d_topology<topology>()) {
+        DPRINT_DISPATCH << "Using 1D topology fabric send" << ENDL();
+    } else {
+        DPRINT_DISPATCH << "Using non-1D topology fabric send" << ENDL();
+    }
 #ifndef DEST_CHIP_ID
 #define DEST_CHIP_ID  // TODO
 #endif
@@ -157,10 +196,9 @@ void kernel_main() {
 
     // Set up packet headers from CB (cb_packet_header_id from compile-time args)
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
-    auto* unicast_packet_header =
-        reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
-    auto* metadata_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
-        packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
+    auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+    auto* metadata_packet_header =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
     DPRINT_DISPATCH << "DEBUG: Before open_direction_connections_barrier" << ENDL();
     open_direction_connections_barrier(directions, fabric_connections);
@@ -176,39 +214,13 @@ void kernel_main() {
         src_chip_id,
         mesh_rows,
         mesh_cols,
-        ReplicateGroup::NONE,  // Send to all devices
+        axis,
         num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
     DPRINT_DISPATCH << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
 
-#ifdef AXIS
-    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
-    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
-    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
-
-    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
-    // Based on cluster axis, we only need to dispatch to the devices that are along the axis
-    // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
-    // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
-    // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
-    // device_end_idx is the end of the column
-    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
-    constexpr uint32_t device_end_idx =
-        (axis == ReplicateGroup::COLS)
-            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
-            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
-    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
-#else
-    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
-    constexpr uint32_t dispatch_devices = num_devices;
-    constexpr uint32_t dispatch_index = linearized_mesh_coord;
-    constexpr uint32_t device_begin_idx = 0;
-    constexpr uint32_t device_end_idx = num_devices;
-    constexpr uint32_t device_stride = 1;
-#endif
-
     // Wait for all devices to complete fabric initialization
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
+    // noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
+    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
 
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
@@ -249,10 +261,14 @@ void kernel_main() {
         uint16_t* weights = (uint16_t*)(get_read_ptr(cb_weights_id));  // this is really a bfloat16 data
         for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
             auto routed_expert = indices[k];
-            auto expert_chip = routed_expert / experts_per_chip;
+            // hack
+            // routed_expert = device_begin_idx;
+            auto expert_chip_og = routed_expert / experts_per_chip;
+            auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
             auto expert_index_within_chip = routed_expert % experts_per_chip;
 
-            DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")" << ENDL();
+            DPRINT << "token" << token_idx << "  Expert [" << k << "]=" << routed_expert << "  (chip=" << expert_chip_og
+                   << " =>" << expert_chip << ")" << ENDL();
 
             auto& offset = offsets[routed_expert];
 
@@ -265,8 +281,9 @@ void kernel_main() {
                 metadata_addr_gen.get_noc_addr(0) + page_idx * aligned_metadata_page_size * 4;  // int32 = 4 bytes
 
             if (expert_chip == linearized_mesh_coord) {
-                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
-                // For local dispatch, we can directly write to the output buffer without going through the fabric
+                // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." <<
+                // ENDL(); For local dispatch, we can directly write to the output buffer without going through the
+                // fabric
                 noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
                 noc_async_writes_flushed();  // is it formally needed?
 
@@ -285,23 +302,38 @@ void kernel_main() {
                 noc_async_writes_flushed();
 
             } else {
-                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
-                                << " chip." << ENDL();
+                // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
+                //                 << " chip." << ENDL();
+                // auto expert_chip_og = expert_chip;;
+                // expert_chip = expert_chip * device_stride + device_begin_idx;
+                // if (expert_chip >= device_end_idx) {
+                //     DPRINT << "ERROR:    Expert [" << k << "]=" << routed_expert << " maps to chip " << expert_chip
+                //     << " which is outside of dispatch range." << ENDL();
+                //     return;
+                // }
+                // DPRINT << "expert_chip_og=" << expert_chip_og
+                //         << " => expert_chip=" << expert_chip
+                //        << " device_begin_idx=" << device_begin_idx
+                //        << " device_end_idx=" << device_end_idx
+                //        << " device_stride=" << device_stride
+                //        << ENDL();
                 if constexpr (is_1d_topology<topology>()) {
-                    fabric_send_chip_unicast_noc_unicast_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
-                        output_addr_gen,
-                        fabric_connections,
-                        unicast_packet_header,
-                        expert_chip,  // linearized_dest_mesh_coord
-                        input_token_read_addr,
-                        page_idx,
-                        (int)aligned_output_page_size,  // bfloat16 = 2 bytes
-                        l1_alignment);
+                    if (true) {
+                        fabric_send_chip_unicast_noc_unicast_1d<
+                            linearized_mesh_coord,
+                            topology,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size>(
+                            output_addr_gen,
+                            fabric_connections,
+                            unicast_packet_header,
+                            expert_chip,  // linearized_dest_mesh_coord
+                            input_token_read_addr,
+                            page_idx,
+                            (int)aligned_output_page_size,  // bfloat16 = 2 bytes
+                            l1_alignment);
+                    }
 
                     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
                     volatile tt_l1_ptr int32_t* metadata =
@@ -314,60 +346,27 @@ void kernel_main() {
                     metadata[3] = routed_expert;
                     metadata[4] = weights[k];
 
-                    fabric_send_chip_unicast_noc_unicast_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
-                        metadata_addr_gen,
-                        fabric_connections,
-                        metadata_packet_header,
-                        expert_chip,  // linearized_dest_mesh_coord
-                        metadata_cb_addr,
-                        page_idx,
-                        (int)aligned_metadata_page_size,  // int32 = 4 bytes
-                        l1_alignment);
+                    if (true) {
+                        fabric_send_chip_unicast_noc_unicast_1d<
+                            linearized_mesh_coord,
+                            topology,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size>(
+                            metadata_addr_gen,
+                            fabric_connections,
+                            metadata_packet_header,
+                            expert_chip,  // linearized_dest_mesh_coord
+                            metadata_cb_addr,
+                            page_idx,
+                            (int)aligned_metadata_page_size,  // int32 = 4 bytes
+                            l1_alignment);
+                    }
+                } else {
+                    // Not implemented
+                    DPRINT << "Error: 2D topology fabric not implemented." << ENDL();
+                    return;
                 }
-                // } else {
-                // TODO:
-                //     // Fast fail - untested path
-                //     DPRINT << "Fabric send for non-1D topology is currently untested. Failing fast." << ENDL();
-                //     return;
-
-                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
-                //         output_addr_gen,
-                //         fabric_connections,
-                //         unicast_packet_header,
-                //         dest_chip_ids[expert_chip],
-                //         dest_mesh_ids[expert_chip],
-                //         input_token_read_addr,
-                //         page_idx,
-                //         (int)aligned_output_page_size * 2,  // bfloat16 = 2 bytes
-                //         l1_alignment);
-
-                //     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
-                //     volatile tt_l1_ptr int32_t* metadata =
-                //         reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
-
-                //     // Set actual metadata values
-                //     metadata[0] = linearized_mesh_coord;
-                //     metadata[1] = token_idx;
-                //     metadata[2] = k;
-                //     metadata[3] = routed_expert;
-                //     metadata[4] = weights[k];
-
-                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
-                //         metadata_addr_gen,
-                //         fabric_connections,
-                //         metadata_packet_header,
-                //         dest_chip_ids[expert_chip],
-                //         dest_mesh_ids[expert_chip],
-                //         metadata_cb_addr,
-                //         page_idx,
-                //         (int)aligned_metadata_page_size,  // int32 = 4 bytes
-                //         l1_alignment);
-                // }
             }
 
             offset++;
