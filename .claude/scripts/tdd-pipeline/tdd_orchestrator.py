@@ -438,7 +438,7 @@ def cmd_test(args):
         f"free retries: {free_retries})..."
     )
     result = subprocess.run(
-        [str(TT_TEST_SCRIPT), "--dev", str(test_path)],
+        [str(TT_TEST_SCRIPT), str(test_path)],
         capture_output=True,
         text=True,
         timeout=300,  # 5 minute overall timeout

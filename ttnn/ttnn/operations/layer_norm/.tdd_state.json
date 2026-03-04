@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/layer_norm",
   "spec_path": "ttnn/ttnn/operations/layer_norm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 0,
-  "last_passing_commit": null,
+  "current_stage_index": 1,
+  "last_passing_commit": "350a091c1c14951620cf9a2c7c885b9b4a23c91a",
   "stages": [
     {
       "name": "data_pipeline",
@@ -32,12 +32,32 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
-      "commit": null,
-      "attempts": 0,
+      "status": "passed",
+      "commit": "350a091c1c14951620cf9a2c7c885b9b4a23c91a",
+      "attempts": 1,
       "free_retries": 0,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "hang_unknown",
+          "summary": "Hang detected (stuck: unknown)",
+          "details": {
+            "stuck_riscv": null,
+            "stuck_function": null,
+            "stuck_cb": null,
+            "core_count": null,
+            "triage_path": "/tmp/tt-test-triage-dev0.log"
+          },
+          "suggested_action": "Check triage log at /tmp/tt-test-triage-dev0.log for more details. Verify all three kernels (reader/compute/writer) are making progress.",
+          "attempt": 1,
+          "free_retries": 0,
+          "cost": "HARD",
+          "stage": "data_pipeline",
+          "remaining_attempts": 5,
+          "remaining_free_retries": 10,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "subtract_mean",
@@ -63,7 +83,7 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,

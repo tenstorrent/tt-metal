@@ -43,8 +43,10 @@ void kernel_main() {
     constexpr uint32_t has_bias = get_compile_time_arg_val(3);
 
     // Hardware startup: initialize unpack/math/pack pipelines.
-    // cb_in is the primary input; cb_untilize_out is the final output.
-    compute_kernel_hw_startup(cb_in, cb_untilize_out);
+    // Args: input_a=cb_in, input_b=cb_scaler, output=cb_out
+    // The CB IDs must match those used by the first operation after startup.
+    // tilize helper will reconfigure internally as needed.
+    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
     // ---- Stage 1: data_pipeline passthrough ----
     // For each tile-row:
