@@ -86,6 +86,7 @@ def run_dit_rms_norm_unary_fused_test(
     h = shape[-2]
 
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    # torch_input = torch.randint(0, 10, shape, dtype=torch.bfloat16)
     torch_weight = torch.ones(shape[-1], dtype=torch.bfloat16) if use_weight else None
     torch_bias = torch.rand(shape[-1], dtype=torch.bfloat16) if use_bias else None
 

@@ -199,7 +199,9 @@ void push_row_major_blocks_to_cb(
     for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
         const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
         const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
-        DPRINT << "[rm_reader] pushing row-major block to cb_in_rm, block.start=" << block.start() << ENDL();
+        DPRINT << "[rm_reader] pushing row-major block to cb_in_rm, block.start=" << block.start()
+               << ", block size=" << block.size() << ", full block size=" << block.full_block_size()
+               << ", row bytes = " << row_read_bytes << ENDL();
 
         cb_reserve_back(cb_id_in_rm, block.full_block_size());  // DEADLOCK HERE
         uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
