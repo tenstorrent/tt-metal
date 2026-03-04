@@ -3587,7 +3587,11 @@ class ModelArgs:
                 self.cached_hf_model = model
             else:
                 model = self.cached_hf_model
-            model.model.layers = model.model.layers[: self.n_layers]
+            if hasattr(model.model, "layers"):
+                model.model.layers = model.model.layers[: self.n_layers]
+            elif hasattr(model.model, "language_model") and hasattr(model.model.language_model, "layers"):
+                # Multimodal models (e.g. Mistral3) nest the text decoder under language_model
+                model.model.language_model.layers = model.model.language_model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
             return wrapper

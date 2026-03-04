@@ -13,7 +13,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from ttnn import ConcatMeshToTensor
 
@@ -27,7 +27,6 @@ def reference_conv2d_patch(model_args):
     return layer
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -77,6 +76,7 @@ def test_conv2d_inference(
 
     reference_model = reference_conv2d_patch(model_args)
     reference_model.load_state_dict(partial_state_dict)
+    reference_model = reference_model.to(dtype=torch.bfloat16)
     reference_output = reference_model(input_tensor)
 
     tt_model = TtMistralConv2dPatch(
@@ -101,9 +101,10 @@ def test_conv2d_inference(
 
     # 1. Restore batch dim
     tt_output_torch = tt_output_torch.unsqueeze(0)
-    # 1 1024 4096
     # 2. Permute to match Conv2D output: (N, C_out, H_out, W_out)
-    tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, 1024, 64, 64)
+    H_out = H // kernel_size
+    W_out = W // kernel_size
+    tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, out_channels, H_out, W_out)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
