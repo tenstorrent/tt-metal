@@ -405,7 +405,7 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        const std::set<DataMovementProcessor>& dm_processors_) :
+        const std::set<DataMovementProcessor>& dm_processors) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -415,12 +415,12 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config),
-        dm_processors_(dm_processors_.begin(), dm_processors_.end()) {
+        dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarDataMovementKernel is only supported on Quasar");
         TT_FATAL(
-            config.num_threads_per_cluster == dm_processors_.size(),
+            config.num_threads_per_cluster == dm_processors.size(),
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");

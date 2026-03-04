@@ -10,7 +10,7 @@
 // Layout: 9 x uint32_t (36 bytes) per slot.
 enum TlsCheckResultIndex : uint32_t {
     TLS_CHECK_KERNEL_ID = 0,
-    TLS_CHECK_NUM_KERNEL_THREADS = 1,
+    TLS_CHECK_NUM_THREADS = 1,
     TLS_CHECK_MY_THREAD_ID = 2,
     TLS_CHECK_HART_ID = 3,
     TLS_CHECK_THREAD_0_HART_ID = 4,

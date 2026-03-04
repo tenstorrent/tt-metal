@@ -111,7 +111,7 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     for (uint32_t dm = 0; dm < NUM_DM_CORES; dm++) {
         const uint32_t offset = dm * TLS_CHECK_RESULT_SLOT_WORDS;
         uint32_t kernel_id = dram_data[offset + TLS_CHECK_KERNEL_ID];
-        uint32_t num_kernel_threads = dram_data[offset + TLS_CHECK_NUM_KERNEL_THREADS];
+        uint32_t num_sw_threads = dram_data[offset + TLS_CHECK_NUM_THREADS];
         uint32_t my_thread_id = dram_data[offset + TLS_CHECK_MY_THREAD_ID];
         uint32_t hartid = dram_data[offset + TLS_CHECK_HART_ID];
         uint32_t thread_0_hartid = dram_data[offset + TLS_CHECK_THREAD_0_HART_ID];
@@ -125,32 +125,44 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         uint32_t uninitialized_thread_local_start = dram_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_START];
         uint32_t uninitialized_thread_local_end = dram_data[offset + TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END];
 
-        // 1. Kernel ID: DM 0-3 → 1, DM 4-6 → 2, DM 7 → 3
+        // 1. Check that each set is running the correct kernel by verifying the hard-coded kernel ID number.
+        // This check assumes that the threaded kernels are assigned sequentially to the DMs, which is how they
+        // are currently assigned by CreateKernel(). If this assumption is violated in the future, update this 
+        // check to find the shared kernel ID and just verify counts. Follow on checks will have to be updated 
+        // as well as this assumption was made for all the checks for simplicity.
+        // Kernel ID: DM 0-3 → 1, DM 4-6 → 2, DM 7 → 3
         uint32_t expected_kernel_id = (dm <= 3) ? 1u : (dm <= 6) ? 2u : 3u;
         EXPECT_EQ(kernel_id, expected_kernel_id) << "dm=" << dm;
 
-        // 2. num_kernel_threads & my_thread_id
+        // 2. Verify num_sw_threads & my_thread_id
         uint32_t expected_num_threads = (dm <= 3) ? 4u : (dm <= 6) ? 3u : 1u;
         uint32_t expected_thread_id = (dm <= 3) ? dm : (dm <= 6) ? (dm - 4) : 0u;
-        EXPECT_EQ(num_kernel_threads, expected_num_threads) << "dm=" << dm;
+        EXPECT_EQ(num_sw_threads, expected_num_threads) << "dm=" << dm;
         EXPECT_EQ(my_thread_id, expected_thread_id) << "dm=" << dm;
 
-        // 3. hartid matches DM #
+        // 3. Verify that hartid matches DM #
         EXPECT_EQ(hartid, dm) << "dm=" << dm;
 
-        // 4. thread_0_hartid
+        // 4. Verify that the DM is pointing to the correct binary. The specific
+        // check here is the lowest hartid with the same kernel ID.
         if (is_legacy_kernel) {
+            // For legacy kernels, each DM has its own binary.
             EXPECT_EQ(thread_0_hartid, dm) << "dm=" << dm << " (legacy)";
         } else {
+            // For threaded kernels, DM 0-3 are in the same binary, DM 4-6 are in the same binary, and DM 7 is in a different binary.
             uint32_t expected_t0 = (dm <= 3) ? 0u : (dm <= 6) ? 4u : 7u;
             EXPECT_EQ(thread_0_hartid, expected_t0) << "dm=" << dm << " (non-legacy)";
         }
 
-        // 5. global start & end
+        // 5. Check that initialized global variables have the correct start and end values.
+        // Initialized globals are set to 5, then incremented by 1 for each DM in sequence.
         if (is_legacy_kernel) {
+            // For legacy kernels, globals are not shared.
             EXPECT_EQ(global_start, 5u) << "dm=" << dm << " (legacy)";
             EXPECT_EQ(global_end, 6u) << "dm=" << dm << " (legacy)";
         } else {
+            // For threaded kernels, globals are shared between DMs in the same set, so values
+            // start at 5 with the first DM in the set (DM 0, 4, 7) and increment by 1 for each DM in sequence.
             if (dm <= 3) {
                 EXPECT_EQ(global_start, 5u + dm) << "dm=" << dm;
                 EXPECT_EQ(global_end, 6u + dm) << "dm=" << dm;
@@ -163,10 +175,8 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
             }
         }
 
-        // 6. global address
-        if (is_legacy_kernel) {
-            (void)global_addr;
-        } else {
+        // 6. For threaded kernels, check that the global variable address is shared between DMs in the same set.
+        if (!is_legacy_kernel) {
             if (dm <= 3) {
                 EXPECT_EQ(global_addr, ref_addr_0_3) << "dm=" << dm;
             } else if (dm <= 6) {
@@ -179,7 +189,8 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
             }
         }
 
-        // 7. uninitialized global start & end
+        // 7. Check that uninitialized global variables have the correct start and end values.
+        // Uninitialized globals are cleared to 0, then incremented by 1 for each DM in sequence.
         if (is_legacy_kernel) {
             EXPECT_EQ(uninitialized_global_start, 0u) << "dm=" << dm;
             EXPECT_EQ(uninitialized_global_end, 1u) << "dm=" << dm;
@@ -196,14 +207,20 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
             }
         }
 
-        // 8. thread local start & end
+        // 8. Check that initiailized thread local variables have the correct value.
+        // I.e. incrementing the varaible in one DM does not affect the value in another DM.
+        // TODO: Initializing thread local variables does not work yet. Once they work,
+        // update this check with the correct values.
         EXPECT_EQ(thread_local_start, 0u) << "dm=" << dm;
         EXPECT_EQ(thread_local_end, 1u) << "dm=" << dm;
 
-        // 9. uninitialized thread local start & end
+        // 9. Check that uninitiailized thread local variables have the correct value.
+        // Same as #8, but variables are cleared to 0 at the start.
         EXPECT_EQ(uninitialized_thread_local_start, 0u) << "dm=" << dm;
         EXPECT_EQ(uninitialized_thread_local_end, 1u) << "dm=" << dm;
     }
+
+    // For legacy kernels, check that the global variable addresses are unique.
     if (is_legacy_kernel) {
         std::set<uint64_t> addrs;
         for (uint32_t dm = 0; dm < NUM_DM_CORES; dm++) {
@@ -211,6 +228,8 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         }
         EXPECT_EQ(addrs.size(), NUM_DM_CORES) << "Legacy: all global addresses should be unique";
     }
+
+    // For both legacy & threaded kernels, check that the thread local variable addresses are unique.
     std::set<uint64_t> thread_local_addrs;
     for (uint32_t dm = 0; dm < NUM_DM_CORES; dm++) {
         thread_local_addrs.insert(slot_thread_local_addr(dm));

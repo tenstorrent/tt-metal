@@ -56,7 +56,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* result = (tt_l1_ptr uint32_t*)((uintptr_t)l1_result_addr);
     result[TLS_CHECK_KERNEL_ID] = kernel_id;
-    result[TLS_CHECK_NUM_KERNEL_THREADS] = get_num_kernel_threads();
+    result[TLS_CHECK_NUM_THREADS] = get_num_threads();
     result[TLS_CHECK_MY_THREAD_ID] = get_my_thread_id();
     result[TLS_CHECK_HART_ID] = (uint32_t)hartid;
     result[TLS_CHECK_THREAD_0_HART_ID] = thread_0_hartid;
