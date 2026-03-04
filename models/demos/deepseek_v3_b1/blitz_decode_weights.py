@@ -14,7 +14,7 @@ each sub-weight at a known byte offset within the fused shard.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import torch
 from loguru import logger
@@ -667,8 +667,9 @@ class BlitzDecodeWeights:
         * **kv_norm** — BFP16 (1×32 tiles) on dedicated core (0, 8).
 
         Args:
-            o_proj_weights:     Raw o_proj tensor, shape ``(16384, 7168)``.
-                TP-sharded on the height dim across ``mla_tp`` devices.
+            o_proj_weights:     Raw o_proj tensor, shape
+                ``(8192 * mla_tp, 7168)``.  TP-sharded on the height
+                dim across mesh columns.
             gate_mm_weights:    Raw gate_mm tensor, shape (7168, 256).
                 Replicated across TP devices.
             attn_norm:      Pre-SDPA attention-input RMSNorm gamma, shape (1, 7168).
@@ -684,7 +685,7 @@ class BlitzDecodeWeights:
 
         return overlap_tensors(
             [
-                [("o_proj", o_proj_weights, cfg.o_proj)],
+                [("o_proj", o_proj_weights, replace(cfg.o_proj, raw_tensor_shape=tuple(o_proj_weights.shape)))],
                 [("gate_mm", gate_mm_weights, cfg.gate_mm)],
                 [
                     ("attn_norm", attn_norm, cfg.attn_norm),
