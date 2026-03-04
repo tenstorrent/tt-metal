@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import Deco
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -85,6 +86,7 @@ def generate_reference_io(
 
 def run_test_forward_pass_decoder2d(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    fabric_config,
     module_path,
     reference_layer_idx,
     mode,
@@ -139,7 +141,7 @@ def run_test_forward_pass_decoder2d(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, fabric_config)
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
         paged_config,
@@ -207,7 +209,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
@@ -251,6 +253,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 )
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    device_params,
     module_path,
     reference_layer_idx,
     mode,
@@ -272,6 +275,7 @@ def test_forward_pass(
 
     test_closure(
         DecoderBlockClass,
+        device_params["fabric_config"],
         module_path,
         reference_layer_idx,
         mode,
