@@ -15,9 +15,7 @@ on:
           # - llama3_evals
           - llama3_8b_dp
           - llama3_70b_dp
-          - falcon7b
           - sentence_bert
-          - whisper
           - sd35
           - flux1
           - gpt-oss
