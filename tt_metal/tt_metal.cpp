@@ -820,11 +820,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     auto device_id = device->id();
 
-    program.impl().allocate_circular_buffers(device);
-    program.impl().validate_circular_buffer_core_ranges(device);
-    program.impl().validate_circular_buffer_region(device);
-    program.impl().allocate_dataflow_buffers(device);
-    program.impl().validate_dataflow_buffer_region(device);
+    // Individual device allocators don't track mesh buffer allocations, so use the
+    // MeshDevice for validation when available to correctly detect CB/L1 buffer overlaps.
+    auto mesh_device = device->get_mesh_device();
+    const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
+
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();

@@ -589,4 +589,47 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
     }
 }
 
+TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndMeshL1BuffersCollision) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
+
+        auto buffer_size = page_size * 128;
+        distributed::ReplicatedBufferConfig replicated_config = {
+            .size = buffer_size,
+        };
+        distributed::DeviceLocalBufferConfig local_config = {
+            .page_size = buffer_size,
+            .buffer_type = tt::tt_metal::BufferType::L1,
+        };
+        auto l1_mesh_buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+
+        auto core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
+        CoreRange cr(core, core);
+        CoreRangeSet cr_set({cr});
+        initialize_program(program_, cr_set);
+
+        uint32_t num_pages =
+            ((l1_mesh_buffer->address() - mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1)) /
+             max_cbs_ / page_size) +
+            1;
+        CBConfig cb_config = {.num_pages = num_pages};
+        for (uint32_t buffer_id = 0; buffer_id < max_cbs_; buffer_id++) {
+            CircularBufferConfig config1 =
+                CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}})
+                    .set_page_size(buffer_id, cb_config.page_size);
+            CreateCircularBuffer(program_, core, config1);
+        }
+
+        EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
+}
+
 }  // end namespace basic_tests::circular_buffer
