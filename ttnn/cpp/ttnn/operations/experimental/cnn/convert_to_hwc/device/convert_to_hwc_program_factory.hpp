@@ -9,7 +9,7 @@
 #include "convert_to_hwc_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
-namespace ttnn::operations::experimental::cnn::program {
+namespace ttnn::experimental::prim {
 
 struct ConvertToHWCSharedVariables {
     tt::tt_metal::CBHandle cb_in{};
@@ -29,18 +29,16 @@ struct ConvertToHWCProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const CnnParams& operation_attributes, const CnnInputs& tensor_args, Tensor& tensor_return_value);
+        const ConvertToHwcParams& operation_attributes,
+        const ConvertToHwcInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const CnnParams& operation_attributes,
-        const CnnInputs& tensor_args,
+        const ConvertToHwcParams& operation_attributes,
+        const ConvertToHwcInputs& tensor_args,
         Tensor& tensor_return_value);
 };
-
-}  // namespace ttnn::operations::experimental::cnn::program
-
-namespace ttnn::operations::experimental::cnn::detail {
 
 // Named constants for circular buffer indices
 namespace CBIndex {
@@ -93,4 +91,4 @@ struct ConvertToHwcConfig {
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor);
 
-}  // namespace ttnn::operations::experimental::cnn::detail
+}  // namespace ttnn::experimental::prim

@@ -4,10 +4,13 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #else
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
 #endif
 
 void kernel_main() {
@@ -26,18 +29,19 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
 
-    // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_page(i, tensor_accessor, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb_in0.reserve_back(onetile);
+        noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in0.push_back(onetile);
     }
 }

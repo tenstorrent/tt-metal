@@ -13,14 +13,13 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
 #include "api/debug/dprint_pages.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(1);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(2);
@@ -101,4 +100,3 @@ void MAIN {
     }
     cb_pop_front(reduce_scalar_cb, onetile);
 }
-}  // namespace NAMESPACE

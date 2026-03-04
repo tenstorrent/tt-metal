@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {
+namespace ttnn::experimental::prim {
 
 struct SplitQueryKeyValueAndSplitHeadsParams {
     CoreCoord compute_with_storage_grid_size;
@@ -22,4 +22,4 @@ struct SplitQueryKeyValueAndSplitHeadsInputs {
     std::vector<std::optional<Tensor>> output_tensors;
 };
 
-}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads
+}  // namespace ttnn::experimental::prim

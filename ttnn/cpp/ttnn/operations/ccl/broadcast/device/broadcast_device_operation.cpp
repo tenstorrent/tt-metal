@@ -4,22 +4,11 @@
 
 #include "ttnn/operations/ccl/broadcast/device/broadcast_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl::broadcast {
-
-BroadcastDeviceOperation::program_factory_t BroadcastDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::BroadcastProgramFactory{};
-}
-
-void BroadcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
+namespace ttnn::prim {
 void BroadcastDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -71,9 +60,6 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<BroadcastDeviceOperation>(
         operation_attributes.sender_coord,
         operation_attributes.num_links,
@@ -82,14 +68,10 @@ tt::stl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
         operation_attributes.topology,
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
-}  // namespace ttnn::operations::ccl::broadcast
-
-namespace ttnn::prim {
-ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_t broadcast(
+Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     uint32_t num_links,
@@ -97,8 +79,6 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    using OperationType = ttnn::operations::ccl::broadcast::BroadcastDeviceOperation;
-
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -123,8 +103,8 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t(
+    return ttnn::device_operation::launch<BroadcastDeviceOperation>(
+        BroadcastParams(
             sender_coord,
             num_links,
             num_devices,
@@ -132,6 +112,6 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
             ccl_topology,
             cluster_axis,
             sub_device_id),
-        OperationType::tensor_args_t{.input_tensor = input_tensor});
+        BroadcastInputs{.input_tensor = input_tensor});
 }
 }  // namespace ttnn::prim

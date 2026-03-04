@@ -46,6 +46,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RELU_MAX:
         case UnaryOpType::RELU_MIN:
         case UnaryOpType::POWER:
+        case UnaryOpType::POWER_ITERATIVE:
         case UnaryOpType::LEAKY_RELU:
         case UnaryOpType::ELU:
         case UnaryOpType::GELU:
@@ -58,6 +59,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
         case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::XIELU:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:

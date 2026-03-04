@@ -21,6 +21,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """PyTorch DeepSeek model."""
+"""
+Original (?) link - https://huggingface.co/deepseek-ai/DeepSeek-R1-0528/blob/main/modeling_deepseek.py
+Changes:
+- added meta_style parameter for meta-style RoPE
+- added bitonic sort to MoEGate and force topk(sorted=True)
+- big changes in Attention
+--- <yalrawwash@tenstorrent.com>: main difference is that K and V are independent in huggingface implementation, but in TT implementation KV is a shared tensor.
+                                  Q is also no longer independent of KV in TT implementation. Leads to fewer matrix multiplications.
+--- send empty value_cache to DynamicCache.update
+- DeepseekV3PreTrainedModel now inherits GenerationMixin
+- removed weights initialization in DeepseekV3ForCausalLM
+- RMSNorm initialized with randn (vs ones)
+- small transformers version compatibility fixes
+"""
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
@@ -1385,14 +1399,16 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         if self._use_flash_attention_2:
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        # else: # NOTE: in testing, both for the full model and for separate modules, we use the -inf mask format, not the ones with 1s and 0s
-        #     # 4d mask is passed through the layers
-        #     attention_mask = _prepare_4d_causal_attention_mask(
-        #         attention_mask,
-        #         (batch_size, seq_length),
-        #         inputs_embeds,
-        #         past_key_values_length,
-        #     )
+        else:
+            # hotfix: since in test_utils.py we pass 4d mask, then we skip it
+            if (attention_mask is None) or (len(attention_mask.shape) == 2):
+                # 4d mask is passed through the layers
+                attention_mask = _prepare_4d_causal_attention_mask(
+                    attention_mask,
+                    (batch_size, seq_length),
+                    inputs_embeds,
+                    past_key_values_length,
+                )
 
         # embed positions
         hidden_states = inputs_embeds

@@ -7,9 +7,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
-struct ReshapeRMProgramFactory {
+struct ReshapeViewRMProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle reader_kernel_id2{};
@@ -20,13 +20,15 @@ struct ReshapeRMProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const ReshapeParams& operation_attributes, const ReshapeInputs& tensor_args, Tensor& tensor_return_value);
+        const ReshapeViewParams& operation_attributes,
+        const ReshapeViewInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const ReshapeParams& operation_attributes,
-        const ReshapeInputs& tensor_args,
+        const ReshapeViewParams& operation_attributes,
+        const ReshapeViewInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

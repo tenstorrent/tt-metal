@@ -32,6 +32,11 @@ BidirectionalFabricSocket::get_distributed_context() const {
     return send_socket_.get_config().distributed_context;
 }
 
+const std::vector<tt::tt_metal::distributed::SocketConnection>& BidirectionalFabricSocket::get_socket_connections()
+    const {
+    return send_socket_.get_config().socket_connection_config;
+}
+
 std::unique_ptr<BidirectionalFabricSocket> BidirectionalFabricSocket::create(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     tt::tt_metal::distributed::multihost::Rank rank,

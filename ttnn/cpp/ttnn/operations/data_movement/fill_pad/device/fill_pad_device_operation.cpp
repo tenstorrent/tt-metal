@@ -8,19 +8,9 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "fill_pad_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::fill_pad {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-
-FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::FillPadProgramFactory{};
-}
-
-void FillPadDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void FillPadDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
@@ -41,11 +31,8 @@ Tensor FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-}  // namespace ttnn::operations::data_movement::fill_pad
-
-namespace ttnn::prim {
 ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
-    using OperationType = ttnn::operations::data_movement::fill_pad::FillPadDeviceOperation;
+    using OperationType = ttnn::prim::FillPadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .fill_value = fill_value,
@@ -53,4 +40,5 @@ ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig&
         },
         OperationType::tensor_args_t{.input = input});
 }
+
 }  // namespace ttnn::prim

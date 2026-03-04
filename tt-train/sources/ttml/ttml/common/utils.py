@@ -3,9 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Utility functions for transformer training."""
+
+from __future__ import annotations
+
 import os, random
 from time import time
 import numpy as np
+import ttnn
 import ttml
 
 
@@ -108,8 +112,8 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
     logits_mask[:, :, :, vocab_size:] = 1e4
     return ttml.autograd.Tensor.from_numpy(
-        logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
-    )  # [1,1,1,T], bfloat16"
+        logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+    )  # [1,1,1,T], bfloat16
 
 
 class PerformanceMeter:

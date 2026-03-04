@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -17,22 +18,12 @@ void MorehClipGradNormStep2Operation::validate_inputs(
     if (tensor_args.total_norm.has_value()) {
         check_tensor(tensor_args.total_norm, "moreh_clip_grad_norm_step2", "total_norm");
     }
-};
-
-MorehClipGradNormStep2Operation::program_factory_t MorehClipGradNormStep2Operation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-};
+}
 
 void MorehClipGradNormStep2Operation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehClipGradNormStep2Operation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
+}
 
 MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Operation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -44,7 +35,7 @@ MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Opera
     return TensorSpec(
         Shape{1, 1},
         TensorLayout(tensor_args.tmp_pow_sum.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
-};
+}
 
 MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Operation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -54,7 +45,7 @@ MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Ope
 
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.tmp_pow_sum.device());
-};
+}
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step2
 

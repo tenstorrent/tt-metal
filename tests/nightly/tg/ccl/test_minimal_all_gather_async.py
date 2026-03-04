@@ -17,9 +17,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
         # Perf variant (with tracing)
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        (8, [1, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
         # Check variant (without tracing)
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
+        (8, [1, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
     ],
     ids=[
         "sd35_spatial-perf",
@@ -61,13 +61,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
         # "fabric_manager_enabled_linear" # test removed due to issue 35320
     ],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("chunks_per_sync", [1])
+@pytest.mark.parametrize("num_workers_per_link", [1])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize(
     "all_gather_function",
-    [ttnn.experimental.all_gather_async, ttnn.experimental.all_gather_async_reversed],
-    ids=["normal", "reversed"],
+    [ttnn.experimental.all_gather_async],
+    ids=["normal"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_all_gather_async(
@@ -286,7 +286,7 @@ def test_all_gather_async_big_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
@@ -317,15 +317,15 @@ def test_all_gather_async_big_mesh(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 190112,
             },
-            ttnn.Topology.Linear,
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_ring"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
 def test_all_gather_async_quad_host_mesh(

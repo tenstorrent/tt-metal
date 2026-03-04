@@ -7,7 +7,7 @@
 #include "fast_reduce_nc_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::experimental::prim {
 
 struct FastReduceNCProgramFactory {
     struct shared_variables_t {
@@ -20,13 +20,15 @@ struct FastReduceNCProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const DetailParams& operation_attributes, const DetailInputs& tensor_args, Tensor& tensor_return_value);
+        const FastReduceNCParams& operation_attributes,
+        const FastReduceNCInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const DetailParams& operation_attributes,
-        const DetailInputs& tensor_args,
+        const FastReduceNCParams& operation_attributes,
+        const FastReduceNCInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::experimental::prim

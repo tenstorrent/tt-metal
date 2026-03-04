@@ -5,23 +5,13 @@
 #include "neighbor_pad_async_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::neighbor_pad {
-
-NeighborPadAsyncDeviceOperation::program_factory_t NeighborPadAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return NeighborPadAsyncMeshWorkloadFactory{};
-}
-
-void NeighborPadAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
+namespace ttnn::experimental::prim {
 void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", args.dim);
@@ -104,9 +94,6 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
         args.dim,
         args.padding_left,
@@ -119,16 +106,14 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.ring_size,
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation::tensor_return_value_t
-neighbor_pad_async(
+Tensor neighbor_pad_async(
     const Tensor& input_tensor,
     int32_t dim,
     uint32_t padding_left,
@@ -142,7 +127,7 @@ neighbor_pad_async(
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
-    using OperationType = ttnn::operations::experimental::ccl::neighbor_pad::NeighborPadAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
     uint32_t num_devices;

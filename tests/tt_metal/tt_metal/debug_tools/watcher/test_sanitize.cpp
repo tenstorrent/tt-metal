@@ -57,6 +57,7 @@ enum watcher_features_t {
     SanitizeL1Overflow,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
+    SanitizeNOCMulticastInvalidRange,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -201,6 +202,9 @@ void RunTestOnCore(
     uint32_t l1_overflow_addr = 0;
     uint32_t eth_src_overflow_addr_words = 0;
     uint32_t eth_dest_overflow_addr_words = 0;
+    bool use_multicast_semaphore_inc = false;
+    uint32_t mcast_dst_end_x = 0;
+    uint32_t mcast_dst_end_y = 0;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -225,6 +229,17 @@ void RunTestOnCore(
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
+        case SanitizeNOCMulticastInvalidRange: {
+            // Use actual Tensix worker cores with an invalid multicast range (start > end for NOC0).
+            use_multicast_semaphore_inc = true;
+            auto grid_size = device->compute_with_storage_grid_size();
+            CoreCoord mcast_start = device->worker_core_from_logical_core({grid_size.x - 1, grid_size.y - 1});
+            CoreCoord mcast_end = device->worker_core_from_logical_core({0, 0});
+            output_buf_noc_xy = mcast_start;
+            mcast_dst_end_x = mcast_end.x;
+            mcast_dst_end_y = mcast_end.y;
+            break;
+        }
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -247,7 +262,10 @@ void RunTestOnCore(
          bad_linked_transaction,
          l1_overflow_addr,
          eth_src_overflow_addr_words,
-         eth_dest_overflow_addr_words});
+         eth_dest_overflow_addr_words,
+         use_multicast_semaphore_inc,
+         mcast_dst_end_x,
+         mcast_dst_end_y});
 
     // Run the kernel, expect an exception here
     try {
@@ -265,9 +283,9 @@ void RunTestOnCore(
     std::string expected;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
+    std::string risc_name = (is_eth_core) ? "erisc" : "BRISC";
     if (use_ncrisc) {
-        risc_name = "ncrisc";
+        risc_name = "NCRISC";
     }
     switch (feature) {
         case SanitizeNOCAddress:
@@ -432,6 +450,26 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 (eth_dest_overflow_addr_words << 4));
+        } break;
+        case SanitizeNOCMulticastInvalidRange: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
+                "bytes from local L1[{:#08x}] to Tensix core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "L1[addr=0x{:08x}] (multicast invalid range).",
+                device->id(),
+                (is_eth_core) ? "acteth" : "worker",
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                0,  // l1_addr is 0 for address-only sanitization
+                output_buf_noc_xy.x,
+                output_buf_noc_xy.y,
+                mcast_dst_end_x,
+                mcast_dst_end_y,
+                output_buffer_addr);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -652,6 +690,15 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthDestL1Overflow) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeEthDestL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMulticastInvalidRange);
         },
         this->devices_[0]);
 }

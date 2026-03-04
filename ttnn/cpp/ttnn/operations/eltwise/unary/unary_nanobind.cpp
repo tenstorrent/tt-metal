@@ -44,17 +44,15 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             INT32 is supported only for Tensor-scalar-scalar version.
         )doc",
@@ -68,8 +66,8 @@ void bind_unary_clamp(nb::module_& mod, const unary_operation_t& operation) {
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) {
                 return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
@@ -127,17 +125,15 @@ void bind_unary_composite_optional_floats_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {9}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {10}
         )doc",
@@ -160,8 +156,8 @@ void bind_unary_composite_optional_floats_with_default(
         ttnn::nanobind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               std::optional<Tensor> parameter_a,
-               std::optional<Tensor> parameter_b,
+               const std::optional<Tensor>& parameter_a,
+               const std::optional<Tensor>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -193,8 +189,7 @@ void bind_unary_operation(
     const std::string& math,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "",
-    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -213,17 +208,15 @@ void bind_unary_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {5}
 
@@ -233,8 +226,7 @@ void bind_unary_operation(
         math,
         range,
         supported_dtype,
-        note,
-        example_tensor);
+        note);
 
     bind_registered_operation(
         mod,
@@ -260,8 +252,7 @@ void bind_unary_operation_subcoregrids(
     const std::string& math,
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "",
-    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -281,17 +272,15 @@ void bind_unary_operation_subcoregrids(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {5}
 
@@ -301,8 +290,7 @@ void bind_unary_operation_subcoregrids(
         math,
         range,
         supported_dtype,
-        note,
-        example_tensor);
+        note);
 
     bind_registered_operation(
         mod,
@@ -348,17 +336,15 @@ void bind_unary_sqrt_operation(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {2}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {3}
         )doc",
@@ -411,17 +397,15 @@ void bind_unary_operation_overload_complex(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -480,17 +464,15 @@ void bind_unary_operation_overload_complex_return_complex(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {2}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {3}
             More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
@@ -552,17 +534,15 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {3}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {4}
         )doc",
@@ -623,17 +603,15 @@ void bind_unary_operation_with_float_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -694,17 +672,15 @@ void bind_unary_operation_with_scalar_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 1, 2, 3, 4, 5, 6
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -766,17 +742,15 @@ void bind_unary_operation_with_float_parameter_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -832,17 +806,15 @@ void bind_unary_composite_with_default_float(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -903,17 +875,15 @@ void bind_unary_operation_with_int_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -973,17 +943,15 @@ void bind_unary_operation_with_dim_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -1039,17 +1007,15 @@ void bind_unary_rdiv(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {8}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {9}
         )doc",
@@ -1107,17 +1073,15 @@ void bind_softplus(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
@@ -1144,6 +1108,63 @@ void bind_softplus(nb::module_& mod) {
 }
 
 template <typename unary_operation_t>
+void bind_xielu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies xIELU (Expanded Integral of the Exponential Linear Unit) to :attr:`input_tensor` element-wise.
+        This is a custom piecewise trainable activation function derived from "Deriving Activation Functions Using Integration" paper:
+        https://arxiv.org/abs/2411.13010
+
+        With beta = 0.5 and eps = -1e-6:
+            x > 0 :  alpha_p * x^2 + beta * x
+            x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
+            alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+        )doc");
+
+    bind_registered_operation(
+        mod,
+        ttnn::xielu,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input,
+               const float alpha_p,
+               const float alpha_n,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input, alpha_p, alpha_n, memory_config, output_tensor);
+            },
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("alpha_p") = 0.8f,
+            nb::arg("alpha_n") = 0.8f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
+}
+
+template <typename unary_operation_t>
 void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -1164,17 +1185,15 @@ void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, FLOAT32
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
         )doc",
@@ -1202,6 +1221,8 @@ template <typename unary_operation_t>
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
+        Deprecated in favor of ttnn.sigmoid.
+
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -1219,17 +1240,15 @@ void bind_sigmoid_accurate(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
@@ -1254,7 +1273,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
 }
 
 template <typename unary_operation_t>
-void bind_sigmoid_mode_appx(nb::module_& mod) {
+void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1267,7 +1286,7 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
 
         Keyword Args:
             vector_mode (int, optional): Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            mode (ttnn.SigmoidMode, optional): Select sigmoid mode to use. Defaults to `SigmoidMode.Accurate`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1275,20 +1294,27 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::sigmoid.base_name(),
         ttnn::sigmoid.python_fully_qualified_name());
+
+    mod.attr("SigmoidMode") =
+        nb::enum_<Sigmoid::SigmoidMode>(mod, "SigmoidMode")
+            .value("Accurate", Sigmoid::SigmoidMode::ACCURATE, "Most accurate, but least performant.")
+            .value(
+                "AccurateWithFastExp",
+                Sigmoid::SigmoidMode::ACCURATE_FAST_EXP,
+                "Similar to accurate, but uses fast and approximate exp")
+            .value("FastApproximate", Sigmoid::SigmoidMode::FAST_APPROXIMATE, "Fastest, but least accurate.");
 
     bind_registered_operation(
         mod,
@@ -1298,15 +1324,15 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
                const int vector_mode,
-               const bool parameter,
+               const Sigmoid::SigmoidMode sigmoid_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
+                return self(input_tensor, vector_mode, sigmoid_mode, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("vector_mode") = 4,
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("mode") = Sigmoid::SigmoidMode::ACCURATE,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()});
 }
@@ -1332,17 +1358,15 @@ void bind_unary_chain(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
@@ -1386,17 +1410,15 @@ void bind_identity(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, BFLOAT8_B, FLOAT32, UINT32, UINT16, UINT8
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::identity.base_name(),
         ttnn::identity.python_fully_qualified_name());
@@ -1424,9 +1446,7 @@ void bind_unary_composite(
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& supported_layout = "TILE",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& note = "",
-    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1444,19 +1464,17 @@ void bind_unary_composite(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {4}
                  - {5}
-                 - {6}
 
-            {7}
+            {6}
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1464,9 +1482,7 @@ void bind_unary_composite(
         range,
         supported_dtype,
         supported_layout,
-        supported_rank,
-        note,
-        example_tensor);
+        note);
 
     bind_registered_operation(
         mod,
@@ -1497,30 +1513,28 @@ void bind_unary_composite_int_with_default(
         {5}
 
         .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \mathrm{{{2}}})
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
+            {2} (int, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -1579,17 +1593,15 @@ void bind_unary_composite_floats_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {8}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {9}
         )doc",
@@ -1646,17 +1658,15 @@ void bind_unary_composite_int(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1710,17 +1720,15 @@ void bind_unary_threshold(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1777,17 +1785,15 @@ void bind_unary_composite_float_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {5}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {6}
         )doc",
@@ -1833,17 +1839,15 @@ void bind_unary_logit(nb::module_& mod, const unary_operation_t& operation, cons
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - FLOAT32, BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
 
         Example:
@@ -1894,17 +1898,15 @@ void bind_unary_composite_rpow(
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
 
             {7}
         )doc",
@@ -1939,7 +1941,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::abs,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|abs|(\mathrm{{input\_tensor}}_i))doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::acos,
@@ -1957,7 +1959,7 @@ void py_module(nb::module_& mod) {
         ttnn::atan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|atan|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::atanh,
@@ -1969,7 +1971,7 @@ void py_module(nb::module_& mod) {
         ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::acosh,
@@ -1982,28 +1984,28 @@ void py_module(nb::module_& mod) {
         ttnn::erfinv,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|erfinv|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         mod,
         ttnn::exp2,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|exp2|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         mod,
         ttnn::expm1,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|expm1|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation_subcoregrids(
         mod,
         ttnn::floor,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids(
         mod,
         ttnn::trunc,
@@ -2021,19 +2023,19 @@ void py_module(nb::module_& mod) {
         ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
     bind_unary_operation(
         mod,
         ttnn::ceil,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::mish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
         "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::hardmish,
@@ -2059,7 +2061,7 @@ void py_module(nb::module_& mod) {
         ttnn::i0,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::i1,
@@ -2072,31 +2074,31 @@ void py_module(nb::module_& mod) {
         ttnn::isfinite,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isfinite|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isnan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isnan|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isneginf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isneginf|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::isposinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isposinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::lez,
@@ -2108,7 +2110,7 @@ void py_module(nb::module_& mod) {
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
     bind_unary_operation_subcoregrids(
         mod,
         ttnn::ltz,
@@ -2120,13 +2122,13 @@ void py_module(nb::module_& mod) {
         ttnn::neg,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
 
     bind_unary_operation_overload_complex_return_complex(
         mod,
@@ -2138,19 +2140,19 @@ void py_module(nb::module_& mod) {
         ttnn::relu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::relu6,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::sign,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sign|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::signbit,
@@ -2174,7 +2176,7 @@ void py_module(nb::module_& mod) {
         ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         mod,
@@ -2187,13 +2189,13 @@ void py_module(nb::module_& mod) {
         ttnn::tan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc",
         "Supported input range is (-1.45, 1.45)",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::log_sigmoid,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         mod,
         ttnn::bitwise_not,
@@ -2273,7 +2275,7 @@ void py_module(nb::module_& mod) {
         "value",
         "The value parameter for the Heaviside function",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_float_parameter(
         mod,
         ttnn::leaky_relu,
@@ -2295,7 +2297,7 @@ void py_module(nb::module_& mod) {
         "lower_limit",
         "The min value for ReLU function",
         "This will carry out ReLU operation at min value instead of the standard 0",
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(System memory is not supported.)doc");
     bind_unary_operation_with_float_parameter(
         mod, ttnn::rpow, "exponent", "exponent value. Non-positive values are not supported.", "");
@@ -2314,7 +2316,7 @@ void py_module(nb::module_& mod) {
         "fill_value",
         "The value to be filled in the output tensor",
         "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc",
         R"doc(Host memory is not supported.)doc");
 
     // Unary ops with dim parameter
@@ -2376,10 +2378,11 @@ void py_module(nb::module_& mod) {
 
     // Other unaries (unary chain operations)
     bind_softplus<decltype(ttnn::softplus)>(mod);
+    bind_xielu<decltype(ttnn::xielu)>(mod);
     bind_tanh_like(mod, ttnn::tanh);
     bind_tanh_like(mod, ttnn::tanhshrink);
     bind_sigmoid_accurate<decltype(ttnn::sigmoid_accurate)>(mod);
-    bind_sigmoid_mode_appx<decltype(ttnn::sigmoid)>(mod);
+    bind_sigmoid<decltype(ttnn::sigmoid)>(mod);
 
     bind_unary_chain<decltype(ttnn::unary_chain)>(mod);
     bind_identity<decltype(ttnn::identity)>(mod);
@@ -2390,39 +2393,33 @@ void py_module(nb::module_& mod) {
         ttnn::cosh,
         R"doc(Performs cosh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::digamma,
         R"doc(Performs digamma function on :attr:`input_tensor`.)doc",
         "[supported for values greater than 0].",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        "",
-        R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
+        R"doc(TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::lgamma,
         R"doc(Performs lgamma function on :attr:`input_tensor`.)doc",
         "[supported for value greater than 0].",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::multigammaln,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",
         "[supported range 1.6 to inf].",
-        R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        "",
-        R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
+        R"doc(BFLOAT16, FLOAT32)doc",
+        R"doc(TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::sinh,
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite(
         mod,
         ttnn::var_hw,
@@ -2436,27 +2433,21 @@ void py_module(nb::module_& mod) {
         ttnn::normalize_hw,
         R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16)doc",
-        R"doc(ROW_MAJOR, TILE)doc",
-        R"doc(4)doc",
-        "",
-        R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
+        R"doc(BFLOAT16, FLOAT32)doc",
+        R"doc(ROW_MAJOR, TILE)doc");
     bind_unary_composite(
         mod,
         ttnn::logical_not_,
         R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
     bind_unary_composite(
         mod,
         ttnn::normalize_global,
         R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16)doc",
-        R"doc(ROW_MAJOR, TILE)doc",
-        R"doc(4)doc",
-        "",
-        R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
+        R"doc(BFLOAT16, FLOAT32)doc",
+        R"doc(ROW_MAJOR, TILE)doc");
 
     bind_unary_composite_optional_floats_with_default(
         mod,
@@ -2495,16 +2486,30 @@ void py_module(nb::module_& mod) {
         "diagonal",
         "diagonal value",
         0,
-        R"doc(Performs tril function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(
+        Returns the lower triangular part of :attr:`input_tensor` by zeroing out elements above the specified :attr:`diagonal`.
+        Elements on and below the given :attr:`diagonal` are preserved, while elements above it are set to zero.
+
+        - ``diagonal = 0`` selects the main diagonal (keeps elements on and below the main diagonal)
+        - ``diagonal > 0`` selects a diagonal above the main diagonal (keeps more elements)
+        - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps fewer elements)
+        )doc",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_int_with_default(
         mod,
         ttnn::triu,
         "diagonal",
         "diagonal value",
         0,
-        R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(
+        Returns the upper triangular part of :attr:`input_tensor` by zeroing out elements below the specified :attr:`diagonal`.
+        Elements on and above the given :attr:`diagonal` are preserved, while elements below it are set to zero.
+
+        - ``diagonal = 0`` selects the main diagonal (keeps elements on and above the main diagonal)
+        - ``diagonal > 0`` selects a diagonal above the main diagonal (keeps fewer elements)
+        - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps more elements)
+        )doc",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_int_parameter(
         mod,
         ttnn::round,
@@ -2538,11 +2543,11 @@ void py_module(nb::module_& mod) {
         "None",
         R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using rounding_mode.
 
-        Input tensor must have BFLOAT16 data type.
+        Input tensor must have BFLOAT16 or FLOAT32 data type.
 
-        Output tensor will have BFLOAT16 data type.)doc",
+        Output tensor will have BFLOAT16 or FLOAT32 data type.)doc",
 
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32)doc",
         R"doc(System memory is not supported.)doc");
 
     // Bind bitcast operation
@@ -2562,17 +2567,15 @@ void py_module(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - BFLOAT16, FLOAT32, INT32, UINT16, UINT32
-                 - TILE
-                 - 2, 3, 4
+                 - TILE, ROW_MAJOR
         )doc",
         ttnn::bitcast.base_name());
 

@@ -200,15 +200,15 @@ init_packages() {
                 "python3-dev"
                 "python3-pip"
                 "python3-venv"
+                "python3-pkg-resources" # needed for setuptools
                 "libhwloc-dev"
                 "libnuma-dev"
                 "libatomic1"
                 "libstdc++6"
-                "libboost-dev"
                 "libtbb-dev"
                 "libcapstone-dev"
-                "libc++-17-dev"
-                "libc++abi-17-dev"
+                "libc++-20-dev"
+                "libc++abi-20-dev"
                 "wget"
                 "curl"
                 "xxd"
@@ -238,7 +238,6 @@ init_packages() {
                 "numactl-devel"
                 "libatomic"
                 "libstdc++"
-                "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
                 "wget"
@@ -322,18 +321,21 @@ install_llvm() {
         return
     fi
 
-    LLVM_VERSION="17"
-    echo "[INFO] Checking if LLVM $LLVM_VERSION is already installed..."
-    if command -v clang-$LLVM_VERSION &> /dev/null; then
-        echo "[INFO] LLVM $LLVM_VERSION is already installed. Skipping installation."
+    # Install LLVM 20:
+    # - clang-20: default toolchain for tt-metal (build_metal.sh) and tt-train
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
+    chmod u+x $TEMP_DIR/llvm.sh
+
+    echo "[INFO] Checking if LLVM 20 is already installed..."
+    if command -v clang-20 &> /dev/null; then
+        echo "[INFO] LLVM 20 is already installed. Skipping installation."
     else
-        echo "[INFO] Installing LLVM $LLVM_VERSION..."
-        TEMP_DIR=$(mktemp -d)
-        wget -P $TEMP_DIR https://apt.llvm.org/llvm.sh
-        chmod u+x $TEMP_DIR/llvm.sh
-        $TEMP_DIR/llvm.sh $LLVM_VERSION
-        rm -rf "$TEMP_DIR"
+        echo "[INFO] Installing LLVM 20..."
+        $TEMP_DIR/llvm.sh 20
     fi
+
+    rm -rf "$TEMP_DIR"
 }
 
 install_sfpi() {

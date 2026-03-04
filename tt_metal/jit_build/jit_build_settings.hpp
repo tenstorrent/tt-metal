@@ -31,6 +31,8 @@ public:
     // Called to process the user named compile time args
     virtual void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
+    // Called to process additional include paths (e.g., kernel source directory for relative includes)
+    virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 
     virtual ~JitBuildSettings() = default;
 };

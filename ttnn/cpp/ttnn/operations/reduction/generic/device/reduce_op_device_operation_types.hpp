@@ -10,9 +10,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "common.hpp"
 
-namespace ttnn::operations::reduction::generic {
+namespace ttnn::prim {
 
-struct GenericParams {
+struct ReduceParams {
     tt::tt_metal::ReduceOpMath math_op{};
     tt::tt_metal::ReduceOpDim dim{};
     float scaler{1.0f};
@@ -20,10 +20,7 @@ struct GenericParams {
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    bool negate{false};
 };
 
-struct GenericInputs {
-    Tensor input_tensor;
-};
-
-}  // namespace ttnn::operations::reduction::generic
+}  // namespace ttnn::prim

@@ -13,31 +13,31 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 
-namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct RingJointSDPAParams {
     std::string joint_strategy;
     std::optional<float> scale;
     std::size_t logical_n = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
-    std::optional<SDPAProgramConfig> program_config;
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    experimental::ccl::ring_attention_all_gather_async::operation_attributes_t all_gather_operation_attributes;
-    experimental::ccl::ring_attention_all_gather_async::tensor_args_t all_gather_tensor_args;
+    experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
+    experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
 
     // We need a constructor, because all_gather_struct is not default initializable.
-    operation_attributes_t(
+    RingJointSDPAParams(
         std::string joint_strategy,
         std::optional<float> scale,
         std::size_t logical_n,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
-        std::optional<SDPAProgramConfig> program_config,
+        std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
         DeviceComputeKernelConfig compute_kernel_config,
-        experimental::ccl::ring_attention_all_gather_async::operation_attributes_t all_gather_operation_attributes,
-        experimental::ccl::ring_attention_all_gather_async::tensor_args_t all_gather_tensor_args,
+        experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
+        experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
@@ -73,7 +73,7 @@ struct operation_attributes_t {
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
 };
 
-struct tensor_args_t {
+struct RingJointSDPAInputs {
     Tensor input_q;
     Tensor input_k;
     Tensor input_v;
@@ -84,16 +84,16 @@ struct tensor_args_t {
     Tensor gathered_v;
 };
 
-struct tensor_return_value_t {
+struct RingJointSDPAResult {
     Tensor output;
     Tensor joint_output;
     Tensor lse_output;
 };
 
-struct spec_return_value_t {
+struct RingJointSDPAResultSpec {
     TensorSpec output;
     TensorSpec joint_output;
     TensorSpec lse_output;
 };
 
-}  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa
+}  // namespace ttnn::prim

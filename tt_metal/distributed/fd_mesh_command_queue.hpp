@@ -6,14 +6,13 @@
 
 #include "mesh_command_queue_base.hpp"
 
-#include "impl/dispatch/command_queue.hpp"
-
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
@@ -199,13 +198,17 @@ private:
     // so the main thread can handle the exception
     std::atomic<bool> thread_exception_state_ = false;
 
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -227,7 +230,8 @@ public:
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
         std::shared_ptr<CQSharedState>& cq_shared_state,
-        std::function<std::lock_guard<std::mutex>()> lock_api_function);
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context);
 
     ~FDMeshCommandQueue() override;
 

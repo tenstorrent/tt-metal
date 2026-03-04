@@ -4,13 +4,12 @@
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::detail {
+namespace ttnn::prim::detail {
 
 uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
     return std::visit(
@@ -23,7 +22,8 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 }
                 if (tensor.dtype() == DataType::UINT16) {
                     uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
-                    return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
+                    return ttnn::operations::data_movement::pack_two_uint16_into_uint32(
+                        {uint16_pad_value, uint16_pad_value});
                 }
                 TT_FATAL(
                     tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32 or
@@ -38,7 +38,8 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 }
                 if (tensor.dtype() == DataType::UINT16) {
                     uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
-                    return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
+                    return ttnn::operations::data_movement::pack_two_uint16_into_uint32(
+                        {uint16_pad_value, uint16_pad_value});
                 }
                 TT_FATAL(
                     tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::INT32 or
@@ -51,4 +52,4 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
         pad_value);
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::detail
+}  // namespace ttnn::prim::detail

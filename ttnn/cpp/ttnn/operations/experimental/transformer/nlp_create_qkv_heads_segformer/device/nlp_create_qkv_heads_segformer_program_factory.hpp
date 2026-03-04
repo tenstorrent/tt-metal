@@ -7,7 +7,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::program {
+namespace ttnn::experimental::prim {
 
 struct NlpCreateQkvHeadsSegformerSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -23,13 +23,13 @@ struct NlpCreateQkvHeadsSegformerProgramFactory {
     static cached_program_t create(
         const NlpCreateQkvHeadsSegformerParams& operation_attributes,
         const NlpCreateQkvHeadsSegformerInputs& tensor_args,
-        tensor_return_value_t& output);
+        NlpCreateQkvHeadsSegformerResult& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const NlpCreateQkvHeadsSegformerParams& operation_attributes,
         const NlpCreateQkvHeadsSegformerInputs& tensor_args,
-        tensor_return_value_t& output);
+        NlpCreateQkvHeadsSegformerResult& output);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::program
+}  // namespace ttnn::experimental::prim

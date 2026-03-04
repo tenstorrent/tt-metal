@@ -9,7 +9,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <vector>
 
-namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async {
+namespace ttnn::experimental::prim {
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables {
     tt::tt_metal::KernelHandle worker_sender_reader_forward_kernel_id{};
@@ -28,11 +28,11 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    using operation_attributes_t = ring_attention_all_gather_async::operation_attributes_t;
+    using operation_attributes_t = RingAttentionAllGatherAsyncParams;
 
-    using tensor_args_t = ring_attention_all_gather_async::tensor_args_t;
+    using tensor_args_t = RingAttentionAllGatherAsyncInputs;
 
-    using tensor_return_value_t = ring_attention_all_gather_async::tensor_return_value_t;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     static cached_mesh_workload_t create_mesh_workload(
         const operation_attributes_t& operation_attributes,
@@ -55,19 +55,19 @@ private:
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 };
-}  // namespace ttnn::operations::experimental::ccl::ring_attention_all_gather_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn {
-using RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables = operations::experimental::ccl::
-    ring_attention_all_gather_async::RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables;
+using RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables =
+    experimental::prim::RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables;
 
 RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables
 ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate> forward_device_coord,
+    std::optional<MeshCoordinate> backward_device_coord,
     std::vector<Tensor>& output_tensor,
     int32_t dim,
     uint32_t num_links,
@@ -77,7 +77,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 
 void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
     const RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables& shared_variables,

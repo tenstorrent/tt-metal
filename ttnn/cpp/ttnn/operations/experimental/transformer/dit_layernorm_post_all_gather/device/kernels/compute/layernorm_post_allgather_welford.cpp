@@ -15,15 +15,13 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
@@ -43,14 +41,23 @@ void MAIN {
 
     constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
     constexpr uint32_t do_beta = get_compile_time_arg_val(5);
+    constexpr uint32_t gamma_is_batched = get_compile_time_arg_val(6);
+    constexpr uint32_t beta_is_batched = get_compile_time_arg_val(7);
+    constexpr uint32_t Ht = get_compile_time_arg_val(8);
+
+    constexpr uint32_t Wt_round_up_block_sizes = get_compile_time_arg_val(9);
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
 
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
 
     cb_wait_front(cb_eps, 1);  // broadcast epsilon is ready
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; tile_row++) {
+        // Calculate global tile row and batch index
+        uint32_t global_tile_row = tile_row_start + tile_row;
+        uint32_t batch_idx = global_tile_row / Ht;
         // Combine per-device stats into mean/variance
         norm::kernel_util::compute::combine_welford_partials(
             cb_stats,
@@ -128,7 +135,7 @@ void MAIN {
                 reconfig_data_format(norm_target_cb, cb_gamma);
                 pack_reconfig_data_format(gamma_out_cb);
                 mul_bcast_rows_init_short(norm_target_cb, cb_gamma);
-                // Cumulative wait on cb_gamma
+
                 cb_wait_front(cb_gamma, col_tile + block_size);
                 cb_wait_front(norm_target_cb, block_size);
 
@@ -156,7 +163,7 @@ void MAIN {
                 reconfig_data_format(cb_intermediate, cb_beta);
                 pack_reconfig_data_format(cb_out);
                 add_bcast_rows_init_short(cb_intermediate, cb_beta);
-                // Cumulative wait on cb_beta
+
                 cb_wait_front(cb_beta, col_tile + block_size);
                 cb_wait_front(cb_intermediate, block_size);
                 cb_reserve_back(cb_out, block_size);
@@ -176,8 +183,30 @@ void MAIN {
         // free up per-row resources
         cb_pop_front(cb_stats_reduced, stats_tile_stride);
         cb_pop_front(cb_recip_sqrt_var, 1);
+
+        // Check if next tile_row is in a different batch - if so, pop gamma/beta
+        if (tile_row + 1 < num_tile_rows) {
+            uint32_t next_global_tile_row = tile_row_start + tile_row + 1;
+            uint32_t next_batch_idx = next_global_tile_row / Ht;
+            if (next_batch_idx != batch_idx) {
+                // Pop gamma/beta to prepare for next batch
+                if constexpr (do_gamma && gamma_is_batched) {
+                    cb_pop_front(cb_gamma, Wt_round_up_block_sizes);
+                }
+                if constexpr (do_beta && beta_is_batched) {
+                    cb_pop_front(cb_beta, Wt_round_up_block_sizes);
+                }
+            }
+        }
+    }
+
+    // Pop remaining gamma/beta at the end (if batched, only the last batch's data)
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt_round_up_block_sizes);
+    }
+    if constexpr (do_beta) {
+        cb_pop_front(cb_beta, Wt_round_up_block_sizes);
     }
 
     cb_pop_front(cb_eps, 1);
 }
-}  // namespace NAMESPACE

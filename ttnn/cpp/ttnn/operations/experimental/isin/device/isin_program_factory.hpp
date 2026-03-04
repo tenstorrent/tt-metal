@@ -10,7 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/device_operation.hpp>
 
-namespace ttnn::operations::experimental::isin {
+namespace ttnn::experimental::prim {
 struct IsInProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -20,9 +20,8 @@ struct IsInProgramFactory {
 
     using cached_program_t = device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const IsinParams&, const IsinInputs&, tensor_return_value_t&);
-    static void override_runtime_arguments(
-        cached_program_t&, const IsinParams&, const IsinInputs&, tensor_return_value_t&);
+    static cached_program_t create(const IsinParams&, const IsinInputs&, Tensor&);
+    static void override_runtime_arguments(cached_program_t&, const IsinParams&, const IsinInputs&, Tensor&);
 };
 
-}  // namespace ttnn::operations::experimental::isin
+}  // namespace ttnn::experimental::prim

@@ -1,6 +1,9 @@
 Lab 1: Single Core Matrix Multiplication
 ########################################
 
+.. contents:: Table of Contents
+   :depth: 2
+
 Introduction
 ************
 
@@ -38,7 +41,7 @@ This means that elements of each row are stored contiguously in memory, with row
 
 Consider a ``3x4`` matrix ``A``:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/a_matrix_3x4.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/a_matrix_3x4.jpg
    :width: 250
    :alt: A 3x4 Matrix A
    :align: center
@@ -46,7 +49,7 @@ Consider a ``3x4`` matrix ``A``:
 
 Using row-major layout, this matrix is stored in memory as:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/matrix_3x4_row_major.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/matrix_3x4_row_major.jpg
    :width: 750
    :alt: A 3x4 Matrix A in Row-Major Layout
    :align: center
@@ -214,7 +217,7 @@ In this model, the host CPU runs a standard C++ program. In that program, develo
 allocate memory on the device, and dispatch kernels to Tensix cores. Kernel code is also written in C++.
 A high-level view of a Tenstorrent device in the system is shown in Figure 1:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tensix_device_on_card.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_device_on_card.jpg
    :width: 900
    :alt: High-level View of Tensix Device on PCIe Card
    :align: center
@@ -266,7 +269,7 @@ This **tiled layout** is the main memory layout used by the Tenstorrent architec
 
 Consider an example of a ``9x4`` matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/row_major_layout.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/row_major_layout.png
    :width: 600
    :alt: Row-Major Layout of a 9x4 Matrix
    :align: center
@@ -277,7 +280,7 @@ Numbers in the matrix in Figure 2 indicate memory addresses that the correspondi
 
 In tiled memory layout with tile size ``3x2``, this matrix is stored in memory as shown in Figure 3:
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tiled_layout.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_layout.png
    :width: 600
    :alt: Tiled Layout of a 9x4 Matrix
    :align: center
@@ -358,13 +361,13 @@ Key points will be highlighted in this text. Detailed comments are provided in t
 Exercise 2: Running the Example Program
 =======================================
 
-If you haven't already done so, clone an appropriate release of the TT-Metalium repository from https://github.com/tenstorrent/tt-metal
-Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
+If you haven't already done so, follow the instructions at
+https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#source to clone the TT-Metalium repository and build from source.
+Once the build is complete, set the environment variable and run the example program:
 
 .. code-block:: bash
 
    export TT_METAL_HOME=$PWD
-   ./build_metal.sh
    ./build/ttnn/examples/example_lab_eltwise_binary
 
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
@@ -403,7 +406,7 @@ steps, all of which use uniform interfaces (CBs) to promote code reuse.
 Each circular buffer is assumed to have only one reader kernel and one writer kernel.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/cb_data_flow.jpg
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/cb_data_flow.jpg
    :width: 900
    :alt: Kernel Data Flow Through Circular Buffers
    :align: center
@@ -420,7 +423,7 @@ Each kernel interacts with the buffers as follows:
 This mechanism ensures that each kernel only proceeds when the necessary data is ready, preventing race conditions and enabling asynchronous,
 pipelined execution across the hardware. Different kernel types are mapped to the Tensix core, whose high-level diagram is shown in Figure 5.
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tensix_core.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tensix_core.png
    :width: 600
    :alt: Top-Level Diagram of Tensix Core
    :align: center
@@ -531,7 +534,7 @@ The function can be summarized by the following pseudo-code:
    read_runtime_arguments()
    read_compile_time_arguments()
    create_address_generators()
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        transfer_tile_from_dram_to_circular_buffer(in0, i)
        transfer_tile_from_dram_to_circular_buffer(in1, i)
    }
@@ -576,7 +579,7 @@ The function can be summarized by the following pseudo-code:
 
    read_compile_time_arguments()
    initialize_tensix_engine_for_elementwise_addition()
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        add_tiles_in_input_circular_buffers()
        write_result_to_output_circular_buffer()
    }
@@ -641,7 +644,7 @@ The kernel code can be summarized by the following pseudo-code:
 
 .. code-block:: cpp
 
-   for (i in 0 .. n_tiles) {
+   for (i in 0 .. n_tiles - 1) {
        transfer_tile_from_circular_buffer_to_dram(out0, i)
    }
 
@@ -865,7 +868,7 @@ needing deep knowledge of the underlying Tenstorrent architecture, while still a
 
 
 Exercise 4: Using DPRINT to Debug a Kernel
-------------------------------------------
+==========================================
 
 Add DPRINT statements to the writer kernel in our example program to print:
 
@@ -916,14 +919,14 @@ by running the following from the ``tt-metal`` directory:
    ./create_venv.sh
    source python_env/bin/activate
    scripts/install_debugger.sh
-   pip install -r tools/triage/requirements.txt
+   uv pip install -r tools/triage/requirements.txt
 
 Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate``
 if you open a new terminal later.
 
 
 Exercise 5: Using tt-triage to Debug a Hang
--------------------------------------------
+===========================================
 
 To illustrate how ``tt-triage`` can be used to debug a hang, we will use the ``lab_eltwise_binary`` example program.
 You can introduce a very simple artificial hang by commenting out the calls to ``cb_pop_front``
@@ -972,7 +975,7 @@ Note that the log file uses names BRISC and NCRISC for the two RISC-V processors
 (RISC-V 0 and RISC-V 4 in Figure 5), and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 5).
 
 Exercise 6: Using Device Profiling to Profile Kernels
------------------------------------------------------
+=====================================================
 
 #. **Make sure code is built with Release option**
 
@@ -1041,7 +1044,7 @@ accumulate products over all those K-tiles.
 
 Consider the concrete example shown in Figure 6.
 
-.. figure:: https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/labs/lab1/tiled_matrix_mul_example.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab1/tiled_matrix_mul_example.png
    :width: 1200
    :alt: Tiled Matrix Multiplication Example
    :align: center
@@ -1119,7 +1122,7 @@ and ``C0``, ..., ``C5`` as the "elements" of a ``3x2`` tile matrix.
 The computation of ``C`` from ``A`` and ``B`` then follows the standard non-tiled matrix multiplication algorithm,
 except that each "element" is itself a 2D tile, and each element-wise multiply is a smaller matrix multiplication.
 
-This view fits neatly into the Tenstorrent architecture, where each Tensix core can perform matrix multiplication on two tiles in a single instruction.
+This view fits neatly into the Tenstorrent architecture, with Tensix cores designed to perform matrix multiplication directly on two tiles.
 All that needs to be done is to present the tiles of ``A`` and ``B`` to the matrix engine in the correct order, and accumulate results into the correct output tile.
 
 Exercise 7: Implementing Matrix Multiplication in TT-Metalium
@@ -1163,10 +1166,10 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    so your code only needs to generate indices in the right order.
 
 #. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
-   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To initialize the Tensix Engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
-   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
+   To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/hw/inc/api/compute/matmul.h``.
    This function accumulates the result into the destination register; i.e. it adds to the existing values in the register rather than overwriting existing content.
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
    ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <unordered_set>
@@ -55,7 +55,7 @@ private:
     MappedDevice get_system_mapped_device(const MeshCoordinate& coord) const;
 
 public:
-    Impl();
+    explicit Impl(const tt::tt_fabric::ControlPlane& control_plane);
 
     const DistributedCoordinateTranslator& coordinate_translator() const;
 
@@ -84,16 +84,16 @@ MappedDevice SystemMesh::Impl::get_system_mapped_device(const MeshCoordinate& co
 }
 
 // Implementation of public methods
-SystemMesh::Impl::Impl() :
-    mesh_id_(MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0]),
+SystemMesh::Impl::Impl(const tt::tt_fabric::ControlPlane& control_plane) :
+    mesh_id_(control_plane.get_local_mesh_id_bindings()[0]),
     coordinate_translator_(
-        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        control_plane.get_physical_mesh_shape(
             mesh_id_,  //
             tt::tt_fabric::MeshScope::GLOBAL),
-        MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+        control_plane.get_physical_mesh_shape(
             mesh_id_,  //
             tt::tt_fabric::MeshScope::LOCAL),
-        MetalContext::instance().get_control_plane().get_local_mesh_offset()),
+        control_plane.get_local_mesh_offset()),
     system_mapped_devices_(initialize_mapped_devices(mesh_id_, coordinate_translator_.global_shape())) {
     log_debug(
         LogDistributed,
@@ -103,7 +103,7 @@ SystemMesh::Impl::Impl() :
         coordinate_translator_.local_offset());
 
     // Get local physical coordinates
-    const auto& local_physical_translation_map = get_system_mesh_coordinate_translation_map();
+    const auto local_physical_translation_map = get_system_mesh_coordinate_translation_map(control_plane);
     TT_FATAL(
         local_physical_translation_map.shape() == coordinate_translator_.local_shape(),
         "Local coordinates shape mismatch: {} != {}",
@@ -142,6 +142,22 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     const MeshShape& system_shape = coordinate_translator_.global_shape();
     const MeshShape requested_shape = shape.value_or(system_shape);
     mapped_devices.mesh_shape = requested_shape;
+
+    // Validate requested mesh shape has valid size
+    const size_t requested_size = requested_shape.mesh_size();
+    const size_t system_size = system_shape.mesh_size();
+    TT_FATAL(
+        requested_size > 0,
+        "Requested mesh shape {} has zero devices (mesh_size=0). MeshShape must have at least one device.",
+        requested_shape);
+    TT_FATAL(
+        requested_size <= system_size,
+        "Requested mesh shape {} requires {} devices, but only {} devices are available in the system mesh {}.",
+        requested_shape,
+        requested_size,
+        system_size,
+        system_shape);
+
     const size_t system_dimensions = system_shape.dims();
 
     const MeshCoordinate system_offset = [&offset, system_dimensions]() {
@@ -240,12 +256,12 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     return mapped_devices;
 }
 
-SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
+SystemMesh::SystemMesh(const tt::tt_fabric::ControlPlane& control_plane) :
+    pimpl_(std::make_unique<Impl>(control_plane)) {}
 
-SystemMesh& SystemMesh::instance() {
-    static tt::stl::Indestructible<SystemMesh> instance;
-    return instance.get();
-}
+SystemMesh::~SystemMesh() = default;
+
+SystemMesh& SystemMesh::instance() { return MetalContext::instance().get_system_mesh(); }
 
 const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translator().global_shape(); }
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }

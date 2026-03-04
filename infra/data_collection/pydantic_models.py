@@ -569,3 +569,63 @@ class OpRun(BaseModel):
     run_end_ts: datetime = Field(description="Timestamp with timezone when the sweeps run ended.")
     status: RunStatus = Field(description="Overall run status aggregated from testcases.")
     tests: List[OpTest] = Field(description="List of tests executed in the run.")
+
+
+class JobFailureCluster(BaseModel):
+    """
+    Contains information about job failure clusters, grouping similar job failures together.
+
+    Each record represents a specific job failure that has been clustered with similar failures.
+    The model includes attributes for the specific job being analyzed, centroid data (representative
+    failure for the group), and oldest job data (the oldest run that had the same error as the
+    currently failing run, tracking regression history).
+    """
+
+    # Attributes for the specific job being analyzed
+    github_job_id: int = Field(description="GitHub job identifier for the specific job being analyzed.")
+    github_job_link: str = Field(description="Link to the GitHub job for the specific job being analyzed.")
+    job_name: str = Field(description="Name of the job being analyzed.")
+    job_error_message: str = Field(description="Error message from the job failure.")
+    job_slack_ts: Optional[datetime] = Field(
+        None,
+        description="Timestamp with timezone when the Slack message for this specific failure was sent.",
+    )
+    job_commit_hash: str = Field(description="Commit hash associated with the job failure.")
+    is_nd: bool = Field(description="Non-Deterministic flag indicating if the failure is flaky.")
+    slack_message_link: Optional[str] = Field(None, description="URL to the Slack message related to this job failure.")
+
+    # Centroid Data (The representative failure for this group)
+    centroid_job_id: int = Field(description="Job ID of the representative failure for this cluster group.")
+    centroid_job_link: str = Field(description="Link to the representative failure for this cluster group.")
+    centroid_job_name: str = Field(description="Name of the representative failure for this cluster group.")
+    centroid_job_error_message: str = Field(
+        description="Error message of the representative failure for this cluster group."
+    )
+    centroid_job_slack_ts: Optional[datetime] = Field(
+        None,
+        description="Timestamp when the Slack message for the representative failure for this cluster group was sent.",
+    )
+    centroid_job_commit_hash: str = Field(
+        description="Commit hash of the representative failure for this cluster group."
+    )
+
+    # Oldest Job Data (The oldest run that had the same error as the currently failing run)
+    oldest_job_id: int = Field(
+        description="Job ID of the oldest run that had the same error as the currently failing run."
+    )
+    oldest_job_link: str = Field(
+        description="Link to the oldest run that had the same error as the currently failing run."
+    )
+    oldest_job_name: str = Field(
+        description="Name of the oldest run that had the same error as the currently failing run."
+    )
+    oldest_job_error_message: str = Field(
+        description="Error message of the oldest run that had the same error as the currently failing run."
+    )
+    oldest_job_slack_ts: Optional[datetime] = Field(
+        None,
+        description="Timestamp when the Slack message for the oldest run that had the same error as the currently failing run was sent.",
+    )
+    oldest_job_commit_hash: str = Field(
+        description="Commit hash of the oldest run that had the same error as the currently failing run."
+    )

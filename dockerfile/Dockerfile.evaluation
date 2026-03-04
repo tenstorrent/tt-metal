@@ -7,7 +7,7 @@ RUN apt update && apt install -y python3 python3-pip git
 
 # Install uv with version pinning (centralized in install-uv.sh)
 COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
 # Install Python deps (skip venv)
 COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/

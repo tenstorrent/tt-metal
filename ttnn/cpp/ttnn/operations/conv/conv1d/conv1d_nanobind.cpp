@@ -16,6 +16,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "conv1d.hpp"
 #include "ttnn/types.hpp"
@@ -23,10 +24,7 @@
 namespace ttnn::operations::conv::conv1d {
 
 void bind_conv1d(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::conv1d,
-        R"doc(
+    const auto* doc = R"doc(
         Applies a 1D convolution over an input signal composed of several input planes. Implemented as a 2D Convolution of input height 1 and input width as input_length.
 
         Args:
@@ -59,68 +57,31 @@ void bind_conv1d(nb::module_& mod) {
             - tuple[ttnn.Tensor, int]: The output tensor, and its length, if return_output_dim = True
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its weights and biases, if return_weights_and_bias = True
             - tuple[ttnn.Tensor, int, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, its length, and its weights and biases, if return_output_dim = True and return_weights_and_bias = True
-        )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::conv1d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::MeshDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_length,
-               uint32_t kernel_size,
-               uint32_t stride,
-               std::variant<std::array<uint32_t, 2>, uint32_t> padding,
-               uint32_t dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const Conv1dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               bool return_output_dim,
-               bool return_weights_and_bias) -> Result {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_length,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
-            nb::kw_only(),
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::arg("device"),
-            nb::arg("in_channels"),
-            nb::arg("out_channels"),
-            nb::arg("batch_size"),
-            nb::arg("input_length"),
-            nb::arg("kernel_size"),
-            nb::arg("stride") = 1,
-            nb::arg("padding") = 0,
-            nb::arg("dilation") = 1,
-            nb::arg("groups") = 1,
-            nb::arg("dtype") = nb::none(),
-            nb::arg("bias_tensor") = nb::none(),
-            nb::arg("conv_config") = nb::none(),
-            nb::arg("compute_config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("return_output_dim") = false,
-            nb::arg("return_weights_and_bias") = false});
+        )doc";
+
+    ttnn::bind_function<"conv1d">(
+        mod,
+        doc,
+        &ttnn::conv1d,
+        nb::kw_only(),
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("device"),
+        nb::arg("in_channels"),
+        nb::arg("out_channels"),
+        nb::arg("batch_size"),
+        nb::arg("input_length"),
+        nb::arg("kernel_size"),
+        nb::arg("stride") = 1,
+        nb::arg("padding") = 0,
+        nb::arg("dilation") = 1,
+        nb::arg("groups") = 1,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::arg("conv_config") = nb::none(),
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("return_output_dim") = false,
+        nb::arg("return_weights_and_bias") = false);
 }
 }  // namespace ttnn::operations::conv::conv1d

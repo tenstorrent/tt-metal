@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "hostdev/dev_msgs.h"
+#include "internal/hw_thread.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>
@@ -33,11 +34,10 @@ constexpr uint32_t helper(const char (&s)[N]) {
 
 template <uint32_t x>
 inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
-    *debug_waypoint = x;
+    debug_waypoint[internal_::get_hw_thread_idx()] = x;
 }
 
-#define WATCHER_WAYPOINT_MAILBOX \
-    (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[PROCESSOR_INDEX])
+#define WATCHER_WAYPOINT_MAILBOX (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint)))
 
 #define WAYPOINT(x) write_debug_waypoint<helper(x)>(WATCHER_WAYPOINT_MAILBOX)
 

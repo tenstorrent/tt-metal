@@ -21,20 +21,7 @@ inline constexpr bool is_ncrisc = false;
 inline constexpr bool is_brisc = false;
 inline constexpr bool is_trisc = true;
 #include "tools/profiler/kernel_profiler.hpp"
-#include "compute_kernel_api/blank.h"
-#endif
-
-// ============================================================================
-// Unified kernel entry point macro
-// ============================================================================
-#if defined(COMPILE_FOR_TRISC)
-#define KERNEL_ENTRY      \
-    namespace NAMESPACE { \
-    void MAIN
-#define KERNEL_END }
-#else
-#define KERNEL_ENTRY void kernel_main()
-#define KERNEL_END
+#include "api/compute/blank.h"
 #endif
 
 // ============================================================================

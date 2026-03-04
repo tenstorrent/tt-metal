@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/math.hpp"
@@ -17,7 +16,7 @@
 #include <string>
 #include <variant>
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -47,7 +46,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGatherProgramFactory::create(
     const FusedRmsnormPreAllGatherParams& operation_attributes,
     const FusedRmsnormPreAllGatherInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -245,7 +244,7 @@ void FusedRMSNormPreAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const FusedRmsnormPreAllGatherParams& /*operation_attributes*/,
     const FusedRmsnormPreAllGatherInputs& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -271,4 +270,4 @@ void FusedRMSNormPreAllGatherProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather::program
+}  // namespace ttnn::experimental::prim

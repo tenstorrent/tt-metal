@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/moe/device/moe_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <optional>
@@ -12,18 +13,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::moe {
-
-MoeDeviceOperation::program_factory_t MoeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::MoeProgramFactory{};
-}
-
-void MoeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
+namespace ttnn::prim {
 void MoeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -82,10 +72,6 @@ Tensor MoeDeviceOperation::create_output_tensors(const operation_attributes_t& a
 
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
-
-}  // namespace ttnn::operations::reduction::moe
-
-namespace ttnn::prim {
 ttnn::Tensor moe(
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,
@@ -93,15 +79,15 @@ ttnn::Tensor moe(
     uint16_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& preallocated_output_tensor) {
-    using OperationType = ttnn::operations::reduction::moe::MoeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<MoeDeviceOperation>(
+        MoeParams{
             .k = k,
             .output_memory_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG)},
-        OperationType::tensor_args_t{
+        MoeInputs{
             .input = input_tensor,
             .expert_mask = expert_mask_tensor,
             .topk_mask = topk_mask_tensor,
             .preallocated_output = preallocated_output_tensor});
 }
+
 }  // namespace ttnn::prim

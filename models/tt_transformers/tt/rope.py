@@ -13,7 +13,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
-from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
+from models.tt_transformers.tt.prefetcher import Prefetcher
+from ttnn import replicate_tensor_to_mesh_mapper
 
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
@@ -121,6 +122,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         beta_slow: float,
         mscale: float,
         mscale_all_dim: float,
+        truncate: bool = True,
         device: Optional[Any] = None,
     ) -> None:
         self.scaling_factor = factor
@@ -129,6 +131,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         self.beta_slow = beta_slow
         self.mscale = mscale
         self.mscale_all_dim = mscale_all_dim
+        self.truncate = truncate
         super().__init__(dim, max_position_embeddings, base, device)
 
     # Inverse dim formula to find dim based on number of rotations
@@ -139,11 +142,14 @@ class YarnRotaryEmbedding(RotaryEmbedding):
     # Find dim range bounds based on rotations
     @staticmethod
     def yarn_find_correction_range(
-        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int
-    ) -> Tuple[int, int]:
-        low = math.floor(YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
-        high = math.ceil(YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
-        return max(low, 0), min(high, dim - 1)  # Clamp values just in case
+        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int, truncate: bool = True
+    ) -> Tuple[float, float]:
+        low = YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings)
+        high = YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings)
+        if truncate:
+            low = math.floor(low)
+            high = math.ceil(high)
+        return max(low, 0), min(high, dim - 1)
 
     @staticmethod
     def yarn_get_mscale(scale: float, mscale: float) -> float:
@@ -175,6 +181,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
             dim,
             self.base,
             self.original_max_position_embeddings,
+            self.truncate,
         )
         inv_freq_mask = 1.0 - YarnRotaryEmbedding.yarn_linear_ramp_mask(low, high, dim // 2).to(
             device=device, dtype=torch.float32
@@ -347,6 +354,7 @@ def get_rot_mats(
     theta: float,
     rope_scaling: Optional[RopeScaling],
     datatype: Any = ttnn.bfloat16,
+    rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
 ) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
@@ -358,18 +366,17 @@ def get_rot_mats(
     cos_matrix = ttnn.from_torch(
         cos_matrix,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=rot_mats_layout,
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
     sin_matrix = ttnn.from_torch(
         sin_matrix,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=rot_mats_layout,
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
-
     return [cos_matrix, sin_matrix]
 
 
@@ -384,10 +391,14 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling] = None,
         use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
+        shard_batch_to_mesh_dim: Optional[int] = 1,
+        prefetcher: Optional[Prefetcher] = None,
     ) -> None:
         super().__init__()
+
         self.use_qk_fused = use_qk_fused
         self.original_batch_size = batch_size
+        self.prefetcher = prefetcher
 
         # NOTE: If qk fused ops (rotary embedding + paged cache update) are used
         # we need to double the batch size in order to replicate the transformation matrix on double the batch size number of cores
@@ -397,13 +408,17 @@ class RotarySetup(LightweightModule):
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.doubled_batch_size // list(device.shape)[1], 1)
+            self.batch_size_per_device_group = max(
+                self.doubled_batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1
+            )
         else:
             self.batch_size_per_device_group = self.doubled_batch_size
+        # Always use (8, 8) on wormhole (compute_with_storage_grid_size returns (8, 9) on Galaxy)
         self.core_grid = (
-            ttnn.CoreCoord(8, 8) if ttnn.get_arch_name() == "blackhole" else device.compute_with_storage_grid_size()
+            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
         )
 
+        self.start_core = ttnn.CoreCoord(1, 0)
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
             head_dim=head_dim,
@@ -412,15 +427,49 @@ class RotarySetup(LightweightModule):
             theta=rope_theta,
             rope_scaling=rope_scaling,
             datatype=datatype,
+            rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        self.batch_grid = ttnn.num_cores_to_corerangeset(self.doubled_batch_size, self.core_grid, row_wise=True)
+        self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats(
+            head_dim=head_dim,
+            device=device,
+            seq_len=max_seq_len,
+            theta=rope_theta,
+            rope_scaling=rope_scaling,
+            datatype=datatype,
+            rot_mats_layout=ttnn.TILE_LAYOUT,
+        )
+
+        def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):
+            if ttnn.get_arch_name() == "blackhole":
+                if prefetcher is not None:
+                    return ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                        start_core,
+                        batch_size_per_device_group,
+                        prefetcher.all_worker_cores_range_set,
+                        row_wise=True,
+                    )
+                else:
+                    # Use batch_size (which is doubled_batch_size for fused QK) to determine the number of cores
+                    if batch_size % 32 == 0:
+                        return ttnn.CoreGrid(y=8, x=8)
+                    return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
+            else:
+                return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
+
+        self.batch_grid = get_batch_grid(
+            self.batch_size_per_device_group,
+            self.core_grid,
+            self.start_core,
+            self.batch_size_per_device_group,
+            self.prefetcher,
+        )
 
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
             1,
-            self.doubled_batch_size,
+            self.batch_size_per_device_group,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
@@ -437,15 +486,7 @@ class RotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=(
-                ShardTensor2dMesh(
-                    device,
-                    dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
-                    mesh_shape=list(device.shape),
-                )
-                if self.is_mesh_device
-                else None
-            ),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
@@ -458,6 +499,17 @@ class RotarySetup(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
+
+    def get_trans_mat_on_sub_core_grids(
+        self, x: ttnn.Tensor, sub_core_grids: ttnn.CoreRangeSet, use_qk_fused: bool = False
+    ) -> ttnn.Tensor:
+        # Reshape the cos/sin matrices to the sub-core grids
+        # This function is only used when sub core grids is enabled via prefetcher
+        orig_mem_cfg = x.memory_config()
+        x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x_reshaped = ttnn.reshape(x_dram, [1, 64 if use_qk_fused else 32, 1, 128], sub_core_grids=sub_core_grids)
+        x_restored = ttnn.to_memory_config(x_reshaped, orig_mem_cfg)
+        return x_restored
 
     def get_both_trans_mats(self) -> Dict[str, ttnn.Tensor]:
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
@@ -505,7 +557,9 @@ class RotarySetup(LightweightModule):
         return rot_idxs
 
     def get_rot_mats(
-        self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
+        self,
+        position_idxs: Union[torch.Tensor, ttnn.Tensor],
+        return_rot_idxs: bool = False,
     ) -> List[ttnn.Tensor]:
         device = self.device
 
@@ -516,34 +570,64 @@ class RotarySetup(LightweightModule):
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
         # Send the idxs to device
-
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         embedding_layout = ttnn.TILE_LAYOUT
-        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
-        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, head_dim]
+
+        if self.prefetcher is not None:
+            trans_mat_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core,
+                self.batch_size_per_device_group,
+                self.prefetcher.all_worker_cores_range_set,
+                row_wise=True,
+            )
+            mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.head_dim),
+                core_grid=trans_mat_core_grids,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            trans_mat_core_grids = None
+            mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+        cos = ttnn.embedding(
+            rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
+        )  # [1, batch, head_dim]
+        sin = ttnn.embedding(
+            rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
+        )  # [1, batch, head_dim]
+
+        if self.batch_size_per_device_group % ttnn.TILE_SIZE == 0 and self.prefetcher is not None:
+            cos = self.get_trans_mat_on_sub_core_grids(cos, trans_mat_core_grids, use_qk_fused=self.use_qk_fused)
+            sin = self.get_trans_mat_on_sub_core_grids(sin, trans_mat_core_grids, use_qk_fused=self.use_qk_fused)
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
-        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
+        if self.prefetcher is None:
+            cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
+            sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 
-        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size_per_device_group, :, :]
-            sin = sin[:, : self.batch_size_per_device_group, :, :]
+            mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.head_dim),
+                core_grid=self.batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
+                cos = cos[:, : self.batch_size_per_device_group, :, :]
+                sin = sin[:, : self.batch_size_per_device_group, :, :]
 
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=self.batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
+            cos = ttnn.interleaved_to_sharded(
+                cos, mem_config
+            )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
+            sin = ttnn.interleaved_to_sharded(
+                sin, mem_config
+            )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
 
         if return_rot_idxs:
             return [cos, sin], rot_idxs

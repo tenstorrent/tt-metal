@@ -12,7 +12,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::kv_cache::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
@@ -232,4 +232,4 @@ void FillCacheMultiCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::kv_cache::program
+}  // namespace ttnn::prim

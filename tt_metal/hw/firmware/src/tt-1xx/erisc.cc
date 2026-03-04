@@ -9,6 +9,7 @@
 #include "internal/risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -38,6 +39,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -125,7 +131,7 @@ void __attribute__((noinline)) Application(void) {
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
             if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
                 WAYPOINT("R");
-                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
+                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
                 iram_setup();
 #endif

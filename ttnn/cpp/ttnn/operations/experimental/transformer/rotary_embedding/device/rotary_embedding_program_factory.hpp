@@ -7,7 +7,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding::program {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -30,13 +30,13 @@ struct RotaryEmbeddingProgramFactory {
     static cached_program_t create(
         const RotaryEmbeddingParams& operation_attributes,
         const RotaryEmbeddingInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const RotaryEmbeddingParams& operation_attributes,
         const RotaryEmbeddingInputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding::program
+}  // namespace ttnn::experimental::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,10 @@
 #include "factories/untilize_multi_core_sub_core_grids_program_factory.hpp"
 #include "factories/untilize_multi_core_block_program_factory.hpp"
 #include "factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp"
+#include "factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 #include "factories/untilize_multi_core_parallelize_column_program_factory.hpp"
 #include "factories/untilize_multi_core_program_factory.hpp"
+#include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "untilize_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -26,23 +28,28 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);
 
 }  // namespace untilize_helpers
 
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+
 struct UntilizeDeviceOperation {
-    using operation_attributes_t = ttnn::operations::data_movement::untilize_types::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::data_movement::untilize_types::tensor_args_t;
-    using shape_return_value_t = ttnn::operations::data_movement::untilize_types::shape_return_value_t;
-    using tensor_return_value_t = ttnn::operations::data_movement::untilize_types::tensor_return_value_t;
-    using spec_return_value_t = ttnn::operations::data_movement::untilize_types::spec_return_value_t;
+    using operation_attributes_t = UntilizeOperationAttributes;
+    using tensor_args_t = UntilizeTensorArgs;
+    using shape_return_value_t = UntilizeShapeReturnValue;
+    using tensor_return_value_t = UntilizeTensorReturnValue;
+    using spec_return_value_t = UntilizeSpecReturnValue;
     using program_factory_t = std::variant<
-        program::UntilizeSingleCoreProgramFactory,
-        program::UntilizeMultiCoreSubCoreGridsProgramFactory,
-        program::UntilizeMultiCoreBlockProgramFactory,
-        program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory,
-        program::UntilizeMultiCoreParallelizeColumnProgramFactory,
-        program::UntilizeMultiCoreProgramFactory>;
+        UntilizeSingleCoreProgramFactory,
+        UntilizeMultiCoreSubCoreGridsProgramFactory,
+        UntilizeMultiCoreBlockProgramFactory,
+        UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory,
+        UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory,
+        UntilizeMultiCoreParallelizeColumnProgramFactory,
+        UntilizeMultiCoreProgramFactory,
+        UntilizeMultiCoreNDShardInputProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -64,10 +71,8 @@ struct UntilizeDeviceOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& op_attr, const tensor_args_t& inputs, tensor_return_value_t& output);
 };
-}  // namespace ttnn::operations::data_movement
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+Tensor untilize(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     bool use_multicore,
@@ -77,4 +82,5 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
     bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type);
+
 }  // namespace ttnn::prim

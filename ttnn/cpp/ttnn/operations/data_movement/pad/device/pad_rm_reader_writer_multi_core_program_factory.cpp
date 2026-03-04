@@ -9,7 +9,9 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
 inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
@@ -391,4 +393,4 @@ void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

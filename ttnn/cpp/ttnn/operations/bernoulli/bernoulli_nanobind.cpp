@@ -31,9 +31,24 @@ void bind_bernoulli_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Example:
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.empty(3, 3).uniform_(0, 1), dtype=torch.bfloat16)), device=device)
-            >>> output = ttnn.bernoulli(input)
+        Note:
+            This operation supports tensors according to the following data types and layouts:
+
+            .. list-table:: input tensor and output tensor (if provided)
+                :header-rows: 1
+
+                * - dtype
+                    - layout
+                * - BFLOAT16, FLOAT32
+                    - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Height, Width, Block, and ND Sharded: DRAM and L1
+
+            Limitations:
+                -  The input tensor must be on the device.
+                -  If provided, the output tensor must be on the device and must have the same shape as the input tensor.
 
         )doc";
 

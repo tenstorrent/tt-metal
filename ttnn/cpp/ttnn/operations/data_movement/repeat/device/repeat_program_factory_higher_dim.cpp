@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -20,7 +19,7 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 
-namespace ttnn::operations::data_movement::repeat::program {
+namespace ttnn::prim {
 
 RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::create(
     const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -160,4 +159,4 @@ void RepeatProgramFactoryHigherDim::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::repeat::program
+}  // namespace ttnn::prim

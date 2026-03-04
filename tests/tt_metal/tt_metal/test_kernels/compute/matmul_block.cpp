@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t block_tile_dim = get_compile_time_arg_val(0);
     uint32_t dst_tile_rows = get_compile_time_arg_val(1);
     uint32_t dst_tile_cols = get_compile_time_arg_val(2);
@@ -68,4 +67,3 @@ void MAIN {
 
     release_dst();
 }
-}  // namespace NAMESPACE

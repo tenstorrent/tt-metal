@@ -16,7 +16,6 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -30,10 +29,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
  * recover from a "bad" state.
@@ -43,10 +38,6 @@ using std::vector;
 using namespace tt::tt_metal;
 
 int main(int argc, char** /*argv*/) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     // Any arg means that we shouldn't do teardown.
     bool skip_teardown = (argc > 1);
     if (skip_teardown) {

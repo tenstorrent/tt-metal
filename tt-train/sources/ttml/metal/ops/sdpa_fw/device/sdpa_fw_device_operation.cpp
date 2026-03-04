@@ -12,16 +12,6 @@
 
 namespace ttml::metal::ops::sdpa_fw::device {
 
-SDPAForwardDeviceOperation::program_factory_t SDPAForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SDPAForwardProgramFactory{};
-}
-
-void SDPAForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& query = tensor_args.query;
@@ -133,6 +123,17 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             qSt);
     }
 
+    // Validate mask type and mask tensor consistency
+    TT_FATAL(
+        !(args.mask_type == AttentionMaskType::Arbitrary && !tensor_args.mask.has_value()),
+        "AttentionMaskType::Arbitrary requires a mask tensor to be provided.");
+
+    TT_FATAL(
+        !(args.mask_type != AttentionMaskType::Arbitrary && tensor_args.mask.has_value()),
+        "Mask tensor provided but mask_type is not Arbitrary. "
+        "Use AttentionMaskType::Arbitrary to apply a custom mask, "
+        "or remove the mask tensor for None/Causal modes.");
+
     if (preallocated_output.has_value()) {
         check_tensor(
             preallocated_output.value(),
@@ -140,7 +141,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             tt::tt_metal::Layout::TILE,
             tt::tt_metal::DataType::BFLOAT16);
 
-        auto output_shape = preallocated_output->padded_shape();
+        const auto output_shape = preallocated_output->padded_shape();
         // Output shape (B, H, S, D) - heads NOT fused
         TT_FATAL(
             output_shape[0] == query_shape[0] &&      // B
@@ -252,9 +253,8 @@ ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
     const auto& query_logical_shape = query_tensor.logical_shape();
     const auto& key_tensor = tensor_args.key;
     const auto& key_logical_shape = key_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, program_factory.index(), query_tensor.dtype(), query_logical_shape, key_logical_shape);
+        args, query_tensor.dtype(), query_logical_shape, key_logical_shape);
 
     return hash;
 }
@@ -267,6 +267,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
+    ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
     const float dropout_probability,
     const bool return_intermediates,
@@ -275,7 +276,9 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
+        .return_intermediates = return_intermediates,
+        .mask_type = mask_type,
+        .dropout_probability = dropout_probability};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,

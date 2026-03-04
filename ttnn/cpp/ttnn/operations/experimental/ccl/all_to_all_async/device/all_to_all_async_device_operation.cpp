@@ -6,12 +6,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl {
-
-AllToAllAsyncDeviceOperation::program_factory_t AllToAllAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AllToAllAsyncProgram{};
-}
+namespace ttnn::experimental::prim {
 
 void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -186,9 +181,6 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
@@ -197,15 +189,10 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation::tensor_return_value_t all_to_all_async(
+Tensor all_to_all_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
@@ -216,7 +203,7 @@ ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation::tensor_return
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    using OperationType = ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation;
+    using OperationType = AllToAllAsyncDeviceOperation;
 
     // Normalize dimensions
     int32_t rank = input_tensor.logical_shape().rank();
@@ -257,4 +244,4 @@ ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation::tensor_return
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::experimental::prim

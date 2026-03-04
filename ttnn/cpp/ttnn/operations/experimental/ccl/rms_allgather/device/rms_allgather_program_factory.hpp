@@ -9,7 +9,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::fused::normalization::program {
+namespace ttnn::experimental::prim {
 
 struct RMSAllGatherSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
@@ -31,25 +31,25 @@ struct RMSAllGatherMeshWorkloadFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const RMSAllGatherParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
+        const RMSAllGatherInputs& tensor_args,
         Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const RMSAllGatherParams& operation_attributes,
+        const RMSAllGatherInputs& tensor_args,
         Tensor& tensor_return_value);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const operation_attributes_t& operation_attributes,
+        const RMSAllGatherParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
+        const RMSAllGatherInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::fused::normalization::program
+}  // namespace ttnn::experimental::prim

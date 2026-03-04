@@ -21,9 +21,12 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include <distributed/mesh_device_impl.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -45,7 +48,7 @@ using MeshDevice2x4Test = MeshDevice2x4Fixture;
 using MeshDeviceTest = GenericMeshDeviceFixture;
 
 TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
-    auto& sys = SystemMesh::instance();
+    auto& sys = MetalContext::instance().get_system_mesh();
 
     const auto system_shape = sys.shape();
     ASSERT_EQ(system_shape.dims(), 2);
@@ -65,7 +68,7 @@ TEST_F(MeshDevice2x4Test, ViewIs2D) {
     std::vector<IDevice*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        devices.push_back(mesh_device_->get_view().get_device(coord));
+        devices.push_back(mesh_device_->get_view().impl().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
@@ -102,9 +105,13 @@ TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
     // Verify coordinates are correct.
-    EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
-    EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 2})->id(), submesh->get_device(MeshCoordinate{0, 1})->id());
-    EXPECT_EQ(submesh->get_device(MeshCoordinate{1, 1}), nullptr);
+    EXPECT_EQ(
+        mesh_device_->impl().get_device(MeshCoordinate{1, 1})->id(),
+        submesh->impl().get_device(MeshCoordinate{0, 0})->id());
+    EXPECT_EQ(
+        mesh_device_->impl().get_device(MeshCoordinate{1, 2})->id(),
+        submesh->impl().get_device(MeshCoordinate{0, 1})->id());
+    EXPECT_EQ(submesh->impl().get_device(MeshCoordinate{1, 1}), nullptr);
 }
 
 TEST_F(MeshDevice2x4Test, CreateSubmeshesNonDivisibleSubshape) {
@@ -196,7 +203,7 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
         EXPECT_EQ(
-            control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->get_device(coord)->id()),
+            control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->impl().get_device(coord)->id()),
             fabric_node_id);
     }
 }

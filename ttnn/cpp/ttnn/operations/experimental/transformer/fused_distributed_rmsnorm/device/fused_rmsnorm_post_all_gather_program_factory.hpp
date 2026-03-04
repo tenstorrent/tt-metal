@@ -7,7 +7,7 @@
 #include "fused_rmsnorm_post_all_gather_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::program {
+namespace ttnn::experimental::prim {
 
 struct FusedRMSNormPostAllGatherSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -22,13 +22,13 @@ struct FusedRMSNormPostAllGatherProgramFactory {
     static cached_program_t create(
         const FusedRmsnormPostAllGatherParams& operation_attributes,
         const FusedRmsnormPostAllGatherInputs& tensor_args,
-        tensor_return_value_t& output_tensor);
+        Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const FusedRmsnormPostAllGatherParams& operation_attributes,
         const FusedRmsnormPostAllGatherInputs& tensor_args,
-        tensor_return_value_t& output_tensor);
+        Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::program
+}  // namespace ttnn::experimental::prim

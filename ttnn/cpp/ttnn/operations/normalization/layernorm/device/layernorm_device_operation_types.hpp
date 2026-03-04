@@ -9,9 +9,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "layernorm_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 struct LayerNormParams {
     LayerNormType norm_type = LayerNormType::LAYERNORM;
@@ -21,6 +22,7 @@ struct LayerNormParams {
     LayerNormProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
+    std::optional<operations::unary::UnaryWithParam> fused_activation;
 };
 
 struct LayerNormInputs {
@@ -29,6 +31,7 @@ struct LayerNormInputs {
     std::optional<Tensor> weight;                 // gamma
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
+    std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
 };
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim

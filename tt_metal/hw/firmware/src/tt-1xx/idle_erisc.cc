@@ -22,6 +22,7 @@
 #include "internal/circular_buffer_interface.h"
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "internal/debug/stack_usage.h"
 
@@ -36,6 +37,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -165,7 +171,7 @@ int main() {
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, PROCESSOR_INDEX);
+                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, internal_::get_hw_thread_idx());
 
             // Run the ERISC kernel
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);

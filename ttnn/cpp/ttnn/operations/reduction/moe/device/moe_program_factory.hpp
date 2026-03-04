@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
 
-namespace ttnn::operations::reduction::moe::program {
+namespace ttnn::prim {
 
 struct MoeSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -28,4 +28,4 @@ struct MoeProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::reduction::moe::program
+}  // namespace ttnn::prim

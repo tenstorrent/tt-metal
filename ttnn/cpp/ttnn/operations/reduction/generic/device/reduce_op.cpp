@@ -53,17 +53,16 @@ Tensor reduce_min(
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
     }
-    Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
-    Tensor max_reduce = detail::reduce(
-        n_input_tensor,
+    return detail::reduce(
+        input,
         tt::tt_metal::ReduceOpMath::MAX,
         reduce_dim,
         scaler,
         output_mem_config,
         std::nullopt,
-        compute_kernel_config);
-    Tensor min_tensor = ttnn::neg(max_reduce, output_mem_config);
-    return min_tensor;
+        compute_kernel_config,
+        std::nullopt,
+        true);
 }
 
 Tensor reduce(
@@ -74,12 +73,13 @@ Tensor reduce(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    bool negate) {
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
 
-    auto parallelization_strategy = detail::get_parallelization_strategy(input_tensor, reduce_dim);
+    auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
@@ -109,7 +109,8 @@ Tensor reduce(
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
-            sub_core_grids);
+            sub_core_grids,
+            negate);
 
         return ttnn::prim::reduce(
             output_tensor,
@@ -119,7 +120,8 @@ Tensor reduce(
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
-            sub_core_grids);
+            sub_core_grids,
+            negate);
     }
     return ttnn::prim::reduce(
         tilized_input,
@@ -129,7 +131,8 @@ Tensor reduce(
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
         config,
-        sub_core_grids);
+        sub_core_grids,
+        negate);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

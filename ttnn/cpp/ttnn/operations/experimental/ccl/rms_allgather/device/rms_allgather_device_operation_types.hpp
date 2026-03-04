@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <optional>
 
@@ -13,9 +14,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct RMSAllGatherParams {
     const float eps;
     const MemoryConfig output_mem_config;
     uint32_t subblock_wt;
@@ -33,7 +34,7 @@ struct operation_attributes_t {
     const bool use_noc1_only;
 
     // Constructor required because GlobalSemaphore is not default constructible
-    operation_attributes_t(
+    RMSAllGatherParams(
         float eps,
         MemoryConfig output_mem_config,
         uint32_t subblock_wt,
@@ -82,7 +83,7 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct RMSAllGatherInputs {
     Tensor input;
     std::optional<const Tensor> residual_input_tensor;
     std::optional<const Tensor> weight;
@@ -90,4 +91,4 @@ struct tensor_args_t {
     std::optional<Tensor> preallocated_output;
 };
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace ttnn::experimental::prim

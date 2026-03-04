@@ -38,8 +38,12 @@ Owner:
 """
 
 # Check if tt-exalens is installed
+from collections import defaultdict
+from enum import Enum
+import heapq
 import inspect
 import os
+import shutil
 import threading
 from time import time
 import traceback
@@ -74,7 +78,8 @@ except ImportError as e:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     requirements_path = os.path.join(script_dir, "requirements.txt")
     print(f"Module '{e}' not found. Please install requirements.txt:")
-    print(f"  {GREEN}pip install -r {requirements_path}{RST}")
+    pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -90,8 +95,15 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
+
+
+class ScriptPriority(Enum):
+    LOW = 0
+    MEDIUM = 1
+    HIGH = 2
 
 
 @dataclass
@@ -99,6 +111,7 @@ class ScriptConfig:
     data_provider: bool = False
     disabled: bool = False
     depends: list[str] = field(default_factory=list)
+    priority: ScriptPriority = ScriptPriority.MEDIUM
 
 
 class ScriptArguments:
@@ -143,7 +156,7 @@ def default_serializer(value) -> str:
     if value is None:
         return "N/A"
     if isinstance(value, Device):
-        return str(value._id)
+        return str(value.id)
     elif isinstance(value, OnChipCoordinate):
         return value.to_user_str()
     elif isinstance(value, ElfVariable):
@@ -223,6 +236,15 @@ class TriageScript:
                 else:
                     raise TTTriageError("Data provider script did not return any data.")
             return result
+        except TimeoutDeviceRegisterError:
+            raise
+        except ValueError as e:
+            if log_error:
+                self.failed = True
+                self.failure_message = f"{e}"
+                return None
+            else:
+                raise
         except Exception as e:
             if log_error:
                 self.failed = True
@@ -322,31 +344,48 @@ class TriageScript:
 
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
-    used_scripts: set[str] = set()
-    script_queue: list[TriageScript] = []
-    while len(scripts) > len(script_queue):
-        deployed_scripts: int = 0
-        for script_path, script in scripts.items():
-            if script_path in used_scripts:
-                continue
+    # Build script dependents graph and script missing dependencies map
+    script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
+    script_missing_dependencies = defaultdict(int)  # script_path -> number of unmet dependencies
 
-            # Check if all dependencies are met
-            if all(dep in used_scripts for dep in script.config.depends):
-                # Add script to the queue
-                script_queue.append(script)
-                used_scripts.add(script_path)
-                deployed_scripts += 1
+    for path, script in scripts.items():
+        script_missing_dependencies[path] = len(script.config.depends)
+        for dep in script.config.depends:
+            script_dependents[dep].append(path)
 
-        # Check circular dependency
-        if deployed_scripts == 0:
-            # If no scripts were deployed, it means there is a circular dependency or disabled script dependency
-            remaining_scripts = set(scripts.keys()) - used_scripts
-            raise ValueError(
-                f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
-                f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
-                f"  Please check if all dependencies are met and scripts are enabled."
-            )
-    return script_queue
+    # Min-heap for runnable scripts: (-priority, script name, script object)
+    # Negative priority because heapq is a min-heap
+    heap = []
+
+    # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
+    for path, script in scripts.items():
+        if script_missing_dependencies[path] == 0:
+            heapq.heappush(heap, (-script.config.priority.value, path, script))
+
+    result = []
+
+    while heap:
+        # Pop the highest priority ready script
+        _, path, script = heapq.heappop(heap)
+        result.append(script)
+
+        # Decrease in-degree of dependent scripts
+        for dep_path in script_dependents[path]:
+            script_missing_dependencies[dep_path] -= 1
+            if script_missing_dependencies[dep_path] == 0:
+                dep_script = scripts[dep_path]
+                heapq.heappush(heap, (-dep_script.config.priority.value, dep_path, dep_script))
+
+    # If some scripts remain with non-zero in-degree, we have a cycle
+    if len(result) != len(scripts):
+        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        raise ValueError(
+            f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
+            f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
+            f"  Please check if all dependencies are met and scripts are enabled."
+        )
+
+    return result
 
 
 # Purposely uninitialized global console object to ensure proper initialization only once later
@@ -364,7 +403,7 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
+    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
     progress_disabled = bool(args["--disable-progress"])
 
@@ -443,12 +482,21 @@ def parse_arguments(
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
+    # Deduplicate options if some scripts define the same option
+    seen_options: set[str | None] = set()
+    unique_options: list[Option] = []
+    for opt in combined_options:
+        key = opt.long or opt.short
+        if key not in seen_options:
+            seen_options.add(key)
+            unique_options.append(opt)
+
     if argv is None:
         argv = sys.argv[1:]
-    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(unique_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
-        ao.children = list(set(combined_options) - pattern_options)
+        ao.children = list(set(unique_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if only_triage_script_args or (matched and left == []):
         arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
@@ -495,13 +543,13 @@ def log_check(success: bool, message: str) -> None:
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device._id}: {message}"
+    formatted_message = f"Device {device.id}: {message}"
     log_check(success, formatted_message)
 
 
 def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
     device = location.device
-    block_type = device.get_block_type(location)
+    block_type = location.noc_block.block_type
     location_str = location.to_user_str()
     formatted_message = f"{block_type} [{location_str}]: {message}"
     log_check_device(device, success, formatted_message)
@@ -512,6 +560,16 @@ def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, me
     log_check_location(location, success, formatted_message)
 
 
+WARNING_CHECKS_LOCK = threading.Lock()
+WARNING_CHECKS: list[str] = []
+
+
+def log_warning(message: str) -> None:
+    global WARNING_CHECKS, WARNING_CHECKS_LOCK
+    with WARNING_CHECKS_LOCK:
+        WARNING_CHECKS.append(message)
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
@@ -519,10 +577,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         print()
         utils.INFO(f"{script.name}{execution_time}:")
 
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
+    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
         FAILURE_CHECKS = []
+    with WARNING_CHECKS_LOCK:
+        warnings = WARNING_CHECKS
+        WARNING_CHECKS = []
     if result is None:
         if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
@@ -537,10 +598,15 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"  Script help:\n{docstring_indented}")
         else:
             utils.INFO("  pass")
+            for warning in warnings:
+                utils.WARN(f"    {warning}")
         return
 
     for failure in failures:
         utils.ERROR(f"  {failure}")
+
+    for warning in warnings:
+        utils.WARN(f"  {warning}")
 
     if isinstance(result, list) and len(result) == 0:
         utils.ERROR("  No results found.")

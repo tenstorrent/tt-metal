@@ -8,13 +8,9 @@
 #include "ttnn/tensor/types.hpp"
 #include "moe_expert_token_remap_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
-
-MoeExpertTokenRemapDeviceOperation::program_factory_t MoeExpertTokenRemapDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Multicore{};
-}
 
 void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {

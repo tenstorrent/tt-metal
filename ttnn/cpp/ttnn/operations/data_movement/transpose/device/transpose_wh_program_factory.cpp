@@ -12,7 +12,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -187,11 +187,8 @@ void set_runtime_args_wh_rm(
 }  // namespace
 
 TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
@@ -249,7 +246,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
             CircularBufferConfig(num_im_tiles * src0_single_tile_size, {{im_cb_index, src0_cb_data_format}})
                 .set_page_size(im_cb_index, src0_single_tile_size);
         CreateCircularBuffer(program, total_cores, cb_im_config);
-
+        // TODO REMOVE
         uint32_t im2_cb_index = 25;
         uint32_t num_im2_tiles = ht;
         CircularBufferConfig cb_im2_config =
@@ -268,7 +265,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         reader_compile_time_args.push_back(ht * wt);
         reader_compile_time_args.push_back(W * input_tensor.element_size());
         reader_compile_time_args.push_back(wt * input_tensor.element_size() * TILE_WIDTH);
-        reader_compile_time_args.push_back(W * input_tensor.element_size());
+        reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     }
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
@@ -282,7 +279,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         writer_compile_time_args.push_back(ht * wt);
         writer_compile_time_args.push_back(H * output_tensor.element_size());
         writer_compile_time_args.push_back(ht * output_tensor.element_size() * TILE_HEIGHT);
-        writer_compile_time_args.push_back(H * output_tensor.element_size());
+        writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     }
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
@@ -310,12 +307,18 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         compute_kernel_args.push_back(wt);
         compute_kernel_args.push_back(ht * wt);
     }
+
+    std::map<std::string, std::string> compute_defines;
+    if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
+        compute_defines["DST_ACCUM_MODE"] = "1";
+    }
     auto compute_kernel_id = CreateKernel(
         program,
         row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp"
                   : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
         total_cores,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_defines});
 
     if (row_major) {
         set_runtime_args_wh_rm(
@@ -365,9 +368,9 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
 
 void TransposeWHProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::TransposeParams& /*operation_attributes*/,
-    const transpose::TransposeInputs& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
@@ -378,7 +381,7 @@ void TransposeWHProgramFactory::override_runtime_arguments(
             shared_variables.compute_kernel_id,
             shared_variables.writer_kernel_id,
             tensor_args.input,
-            tensor_return_value,
+            output_tensor,
             shared_variables.num_cores_total,
             shared_variables.num_cores_y,
             shared_variables.core_group_1,
@@ -393,7 +396,7 @@ void TransposeWHProgramFactory::override_runtime_arguments(
             shared_variables.compute_kernel_id,
             shared_variables.writer_kernel_id,
             tensor_args.input,
-            tensor_return_value,
+            output_tensor,
             shared_variables.num_cores_total,
             shared_variables.num_cores_y,
             shared_variables.core_group_1,
@@ -404,4 +407,4 @@ void TransposeWHProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

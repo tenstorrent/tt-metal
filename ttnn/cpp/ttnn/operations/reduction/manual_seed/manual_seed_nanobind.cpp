@@ -14,10 +14,22 @@
 #include <nanobind/stl/variant.h>
 
 #include "manual_seed.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 
 namespace ttnn::operations::reduction::detail {
+
+namespace {
+
+Tensor manual_seed_wrapper(
+    const std::variant<uint32_t, ttnn::Tensor>& seeds,
+    const std::optional<MeshDevice*>& device,
+    const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::manual_seed(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
+}
+
+}  // namespace
 
 void bind_manual_seed_operation(nb::module_& mod) {
     const auto* doc = R"doc(
@@ -26,7 +38,7 @@ void bind_manual_seed_operation(nb::module_& mod) {
             This operation allows users to either set a single seed value to all PRNGs in the device, or to specify potentially different seed values to PRNGs at the cores assigned to the provided user IDs.
 
             Args:
-                seeds (uint32_t or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator.
+                seeds (uint32_t or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator. Pass UINT32_MAX (4294967295) to skip random number generator initialization (rand_tile_init is not called).
 
             Keyword Args:
                 device (ttnn.MeshDevice, optional): The device on which to set the manual seed. Provided only if user_ids is uint32_t or None.
@@ -57,24 +69,17 @@ void bind_manual_seed_operation(nb::module_& mod) {
                     * - UINT32
                       - ROW_MAJOR_LAYOUT
         )doc";
-    using OperationType = decltype(ttnn::manual_seed);
-    bind_registered_operation(
+
+    ttnn::bind_function<"manual_seed">(
         mod,
-        ttnn::manual_seed,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const std::variant<uint32_t, ttnn::Tensor>& seeds,
-               const std::optional<MeshDevice*> device,
-               const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
-                return self(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
-            },
+        ttnn::overload_t(
+            &manual_seed_wrapper,
             nb::arg("seeds") = 0,
             nb::kw_only(),
             nb::arg("device") = nb::none(),
             nb::arg("user_ids") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

@@ -17,7 +17,6 @@ struct HaloOperation {
         uint32_t pad_val = 0x0,
         bool remote_read = false,
         bool transpose_mcast = true,
-        const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         bool is_out_tiled = true,
         bool config_tensors_in_dram = false);
 
