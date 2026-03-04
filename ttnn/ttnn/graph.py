@@ -4,6 +4,7 @@
 
 import contextlib
 import json
+import traceback
 from typing import Callable, Union
 from loguru import logger
 import pathlib
@@ -51,6 +52,44 @@ from ttnn.graph_report import (
 # to set correct input_tensors / output_tensors associations.
 
 _python_io_data: list = []
+_python_stack_traces_enabled: bool = True
+
+# Frames originating from these files are decorator/infrastructure noise
+# and are stripped from Python stack traces to keep them concise.
+_STACK_TRACE_INTERNAL_FILES = frozenset({"decorators.py", "graph.py"})
+
+
+def enable_python_stack_traces():
+    """Enable capturing Python call stacks in graph trace records."""
+    global _python_stack_traces_enabled
+    _python_stack_traces_enabled = True
+
+
+def disable_python_stack_traces():
+    """Disable capturing Python call stacks in graph trace records."""
+    global _python_stack_traces_enabled
+    _python_stack_traces_enabled = False
+
+
+def is_python_stack_trace_enabled() -> bool:
+    """Return whether Python stack trace capture is currently enabled."""
+    return _python_stack_traces_enabled
+
+
+def _capture_python_stack_trace() -> list[str]:
+    """Capture the current Python call stack, filtering out ttnn internals.
+
+    Returns a list of formatted frame strings (file:line in function) with
+    infrastructure frames from decorators.py and graph.py removed.
+    """
+    frames = traceback.extract_stack()
+    result = []
+    for frame in frames:
+        basename = frame.filename.rsplit("/", 1)[-1] if "/" in frame.filename else frame.filename
+        if basename in _STACK_TRACE_INTERNAL_FILES:
+            continue
+        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}')
+    return result
 
 
 def _collect_tensor_ids(value) -> list:
@@ -175,13 +214,16 @@ def record_python_operation(name, function_args, function_kwargs):
 
     input_tensor_ids = _collect_tensor_ids((*function_args, *function_kwargs.values()))
 
-    _python_io_data.append(
-        {
-            "name": name,
-            "arguments": args_dict,
-            "input_tensor_ids": input_tensor_ids,
-        }
-    )
+    record = {
+        "name": name,
+        "arguments": args_dict,
+        "input_tensor_ids": input_tensor_ids,
+    }
+
+    if _python_stack_traces_enabled:
+        record["python_stack_trace"] = _capture_python_stack_trace()
+
+    _python_io_data.append(record)
 
 
 def store_output_tensor_ids(output_tensor_ids):

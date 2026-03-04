@@ -681,6 +681,16 @@ def import_graph(
                 for idx, arg in enumerate(start_node.get("arguments", [])):
                     operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg)))
 
+            # Python stack trace replaces C++ trace for Python-level ops.
+            # C++ internal ops (no python_io) keep their C++ trace untouched.
+            if py_io and py_io.get("python_stack_trace"):
+                py_trace = "\n".join(py_io["python_stack_trace"])
+                existing = next((i for i, s in enumerate(stack_traces_batch) if s[0] == operation_id), None)
+                if existing is not None:
+                    stack_traces_batch[existing] = (operation_id, py_trace)
+                else:
+                    stack_traces_batch.append((operation_id, py_trace))
+
             if py_io and py_io.get("input_tensor_ids"):
                 for idx, tid in enumerate(py_io["input_tensor_ids"]):
                     input_tensors_batch.append((operation_id, idx, int(tid)))
