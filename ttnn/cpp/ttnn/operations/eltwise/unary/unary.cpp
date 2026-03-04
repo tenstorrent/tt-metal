@@ -173,4 +173,21 @@ Tensor where_tss(
     return operations::unary::detail::unary_impl(input, {param}, memory_config, optional_output_tensor);
 }
 
+// xIELU (Expanded Integral of the Exponential Linear Unit)
+// With beta = 0.5 and eps = -1e-6:
+//     x > 0 :  alpha_p * x^2 + beta * x
+//     x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+Tensor invoke(
+    const Tensor& input,
+    const float alpha_p,
+    const float alpha_n,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return operations::unary::detail::unary_impl(
+        input,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::XIELU, {alpha_p, alpha_n}}},
+        memory_config,
+        optional_output_tensor);
+}
+
 }  // namespace ttnn

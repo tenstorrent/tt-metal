@@ -951,6 +951,54 @@ void bind_softplus(nb::module_& mod) {
         nb::arg("output_tensor") = nb::none());
 }
 
+void bind_xielu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies xIELU (Expanded Integral of the Exponential Linear Unit) to :attr:`input_tensor` element-wise.
+        This is a custom piecewise trainable activation function derived from "Deriving Activation Functions Using Integration" paper:
+        https://arxiv.org/abs/2411.13010
+
+        With beta = 0.5 and eps = -1e-6:
+            x > 0 :  alpha_p * x^2 + beta * x
+            x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
+            alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+        )doc");
+
+    ttnn::bind_function<"xielu">(
+        mod,
+        doc.c_str(),
+        ttnn::overload_t(
+            &ttnn::xielu,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("alpha_p") = 0.8f,
+            nb::arg("alpha_n") = 0.8f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
+}
+
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_rdiv(
     nb::module_& mod,

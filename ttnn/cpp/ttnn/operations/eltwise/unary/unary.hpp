@@ -31,6 +31,13 @@ Tensor unary_impl(
 
 }  // namespace operations::unary
 
+Tensor xielu(
+    const Tensor& input,
+    float alpha_p = 0.8f,
+    float alpha_n = 0.8f,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 inline Tensor acos(
     const Tensor& t,
     const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
