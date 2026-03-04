@@ -457,6 +457,11 @@ public:
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
         feature_targets[feature].chip_ids = std::move(chip_ids);
     }
+    // Directly set mesh coordinates for a feature; resolved to chip IDs by resolve_mesh_coords_to_chip_ids().
+    void set_feature_mesh_coords(
+        RunTimeDebugFeatures feature, std::vector<std::pair<uint32_t, uint32_t>> coords) {
+        feature_targets[feature].mesh_coords = std::move(coords);
+    }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
         feature_targets[feature].all_chips = all_chips;
