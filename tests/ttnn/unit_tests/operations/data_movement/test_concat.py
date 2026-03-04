@@ -535,6 +535,7 @@ def test_concat_nd_sharded_input_to_interleaved_output(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "tensor_shapes, output_shard_shape, shard_grid, dim",
     [
@@ -553,13 +554,15 @@ def test_concat_nd_sharded_input_to_interleaved_output(
     ],
 )
 def test_concat_interleaved_input_to_nd_sharded_output(
-    device, tensor_shapes, output_shard_shape, shard_grid, dim, dtype
+    device, tensor_shapes, output_shard_shape, shard_grid, dim, dtype, layout
 ):
     """3. Interleaved input -> ND-sharded output."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
     torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
     expected = torch.concat(torch_inputs, dim=dim)
 
-    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=layout, device=device) for t in torch_inputs]
     output_nd_spec = ttnn.NdShardSpec(
         shard_shape=output_shard_shape, grid=shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
     )
@@ -571,6 +574,7 @@ def test_concat_interleaved_input_to_nd_sharded_output(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "tensor_shapes, input_shard_shape, output_shard_shape_2d, shard_grid, dim",
     [
@@ -585,14 +589,18 @@ def test_concat_interleaved_input_to_nd_sharded_output(
     ],
 )
 def test_concat_nd_sharded_input_to_legacy_2d_sharded_output(
-    device, tensor_shapes, input_shard_shape, output_shard_shape_2d, shard_grid, dim, dtype
+    device, tensor_shapes, input_shard_shape, output_shard_shape_2d, shard_grid, dim, dtype, layout
 ):
     """4. ND-sharded input -> legacy 2D sharded output (HEIGHT_SHARDED for width concat)."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
     torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
     expected = torch.concat(torch_inputs, dim=dim)
 
     input_tensors = [
-        _make_nd_sharded_tensor(t, s, input_shard_shape, shard_grid, device, dtype, ttnn.ShardOrientation.ROW_MAJOR)
+        _make_nd_sharded_tensor(
+            t, s, input_shard_shape, shard_grid, device, dtype, ttnn.ShardOrientation.ROW_MAJOR, layout
+        )
         for t, s in zip(torch_inputs, tensor_shapes)
     ]
     output_legacy_mem_config = ttnn.create_sharded_memory_config(
@@ -608,6 +616,7 @@ def test_concat_nd_sharded_input_to_legacy_2d_sharded_output(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "tensor_shapes, input_shard_shape_2d, output_shard_shape, shard_grid, dim",
     [
@@ -622,9 +631,11 @@ def test_concat_nd_sharded_input_to_legacy_2d_sharded_output(
     ],
 )
 def test_concat_legacy_2d_sharded_input_to_nd_sharded_output(
-    device, tensor_shapes, input_shard_shape_2d, output_shard_shape, shard_grid, dim, dtype
+    device, tensor_shapes, input_shard_shape_2d, output_shard_shape, shard_grid, dim, dtype, layout
 ):
     """5. Legacy 2D sharded input -> ND-sharded output."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
     torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
     expected = torch.concat(torch_inputs, dim=dim)
 
@@ -635,7 +646,7 @@ def test_concat_legacy_2d_sharded_input_to_nd_sharded_output(
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
-    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=layout, device=device) for t in torch_inputs]
     input_tensors = [ttnn.to_memory_config(t, legacy_mem_config) for t in input_tensors]
 
     output_nd_spec = ttnn.NdShardSpec(
@@ -649,6 +660,7 @@ def test_concat_legacy_2d_sharded_input_to_nd_sharded_output(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "tensor_shapes, input_shard_shape_2d, shard_grid, dim",
     [
@@ -661,9 +673,11 @@ def test_concat_legacy_2d_sharded_input_to_nd_sharded_output(
     ],
 )
 def test_concat_legacy_2d_sharded_input_to_interleaved_output(
-    device, tensor_shapes, input_shard_shape_2d, shard_grid, dim, dtype
+    device, tensor_shapes, input_shard_shape_2d, shard_grid, dim, dtype, layout
 ):
     """6. Legacy 2D sharded input -> interleaved output."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
     torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
     expected = torch.concat(torch_inputs, dim=dim)
 
@@ -673,7 +687,7 @@ def test_concat_legacy_2d_sharded_input_to_interleaved_output(
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
-    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=layout, device=device) for t in torch_inputs]
     input_tensors = [ttnn.to_memory_config(t, legacy_mem_config) for t in input_tensors]
 
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -684,6 +698,7 @@ def test_concat_legacy_2d_sharded_input_to_interleaved_output(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "tensor_shapes, output_shard_shape_2d, shard_grid, dim",
     [
@@ -697,13 +712,15 @@ def test_concat_legacy_2d_sharded_input_to_interleaved_output(
     ],
 )
 def test_concat_interleaved_input_to_legacy_2d_sharded_output(
-    device, tensor_shapes, output_shard_shape_2d, shard_grid, dim, dtype
+    device, tensor_shapes, output_shard_shape_2d, shard_grid, dim, dtype, layout
 ):
     """7. Interleaved input -> legacy 2D sharded output."""
+    if layout == ttnn.TILE_LAYOUT and (tensor_shapes[0][-2] % 32 != 0 or tensor_shapes[0][-1] % 32 != 0):
+        pytest.skip("TILE_LAYOUT requires height and width multiple of 32")
     torch_inputs = [random_torch_tensor(dtype, s) for s in tensor_shapes]
     expected = torch.concat(torch_inputs, dim=dim)
 
-    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for t in torch_inputs]
+    input_tensors = [ttnn.from_torch(t, dtype=dtype, layout=layout, device=device) for t in torch_inputs]
 
     output_legacy_mem_config = ttnn.create_sharded_memory_config(
         output_shard_shape_2d,
