@@ -483,6 +483,7 @@ void kernel_main() {
                 noc_async_write_page(base_tile_id + t, dram_output_addr_gen, l1_read_addr);
                 l1_read_addr += tilize_output_page_size;
             }
+
             noc_async_write_barrier(noc_index);
 
             cb_pop_front(tilize_output_cb_id, shared_cb_num_pages);
