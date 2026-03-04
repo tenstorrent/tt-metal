@@ -4,7 +4,6 @@
 
 import argparse
 import os
-import sys
 
 import soundfile as sf
 
@@ -25,15 +24,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def main() -> None:
     args = parse_args()
 
     if not os.getenv("RVC_CONFIGS_DIR"):
-        print("Error: RVC_CONFIGS_DIR is not set.", file=sys.stderr)
-        return 2
+        raise RuntimeError("RVC_CONFIGS_DIR is not set.")
     if not os.getenv("RVC_ASSETS_DIR"):
-        print("Error: RVC_ASSETS_DIR is not set.", file=sys.stderr)
-        return 2
+        raise RuntimeError("RVC_ASSETS_DIR is not set.")
 
     pipe = Pipeline(if_f0=True, version="v1", num="48k")
     audio = pipe.infer(
@@ -47,8 +44,7 @@ def main() -> int:
         protect=args.protect,
     )
     sf.write(args.output, audio, pipe.tgt_sr, subtype="PCM_16")
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
