@@ -115,6 +115,65 @@ bool check_uniform_dataformat(
     return (q_df == k_df && q_df == v_df && q_df == out_df && q_df == mask_df && q_df == im_df);
 }
 
+// Compute the largest granularity that evenly divides both DHt and vDHt (up to dst_size).
+uint32_t compute_dht_granularity(uint32_t DHt, uint32_t vDHt, uint32_t dst_size) {
+    uint32_t g = std::min({DHt, vDHt, dst_size});
+    while (g > 1 && (DHt % g != 0 || vDHt % g != 0)) {
+        g--;
+    }
+    return g;
+}
+
+// Resolve exp_approx_mode from program config, defaulting to true.
+bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
+    if (program_config.has_value() && program_config->exp_approx_mode.has_value()) {
+        return program_config->exp_approx_mode.value();
+    }
+    return true;
+}
+
+// Chunked prefill parameters collected from page table layout.
+struct ChunkedParams {
+    uint32_t chunked_q_chunk_offset = 0;
+    uint32_t block_size = 0;
+    uint32_t block_size_t = 0;
+    uint32_t max_blocks_per_seq = 0;
+    uint32_t page_table_stick_size = 0;
+};
+
+// Compute chunked prefill parameters from the page table tensor.
+ChunkedParams compute_chunked_params(
+    bool is_chunked,
+    bool is_chunked_legacy,
+    bool flexible_chunked,
+    const std::optional<uint32_t>& chunk_start_idx,
+    const std::optional<Tensor>& page_table,
+    uint32_t k_seq_dim,
+    std::size_t q_chunk_size) {
+    ChunkedParams p;
+    if (!is_chunked) {
+        return p;
+    }
+    if (is_chunked_legacy) {
+        p.chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
+    }
+    const auto& page_table_tensor = page_table.value();
+    p.block_size = k_seq_dim;
+    p.block_size_t = p.block_size / TILE_HEIGHT;
+    if (flexible_chunked) {
+        p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+        p.page_table_stick_size = p.max_blocks_per_seq * sizeof(int32_t);
+        TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
+    } else {
+        p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        TT_FATAL(
+            p.page_table_stick_size % 32 == 0,
+            "page table page size in bytes must be a multiple of 32 due to address alignment");
+    }
+    return p;
+}
+
 }  // namespace
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
@@ -240,35 +299,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "NKH: {}", NKH);
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
-    // In chunked prefill mode, the offset of Q in terms of Q chunks
-    uint32_t chunked_q_chunk_offset = 0;
-    uint32_t block_size = 0;
-    uint32_t block_size_t = 0;
-    [[maybe_unused]] uint32_t max_blocks_per_seq = 0;
-    uint32_t page_table_stick_size = 0;
+    const auto chunked = compute_chunked_params(
+        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
+    uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
+    const uint32_t block_size = chunked.block_size;
+    const uint32_t block_size_t = chunked.block_size_t;
+    [[maybe_unused]] const uint32_t max_blocks_per_seq = chunked.max_blocks_per_seq;
+    const uint32_t page_table_stick_size = chunked.page_table_stick_size;
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
-
-    if (is_chunked) {
-        if (is_chunked_legacy) {
-            // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
-            chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
-        }
-        // else: flexible_chunked - chunked_q_chunk_offset set inside of the op
-        const auto& page_table_tensor = page_table.value();
-        block_size = k_shape[2];  // K's sequence dimension represents block size
-        block_size_t = block_size / TILE_HEIGHT;
-        if (flexible_chunked) {
-            max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-            page_table_stick_size = max_blocks_per_seq * sizeof(int32_t);
-            TT_FATAL(page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
-        } else {
-            max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-            page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
-            TT_FATAL(
-                page_table_stick_size % 32 == 0,
-                "page table page size in bytes must be a multiple of 32 due to address alignment");
-        }
-    }
     // Log page table info
     log_debug(tt::LogOp, "is_chunked: {}", is_chunked);
     if (is_chunked) {
@@ -298,10 +336,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
-    bool exp_approx_mode =
-        program_config.has_value()
-            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
-            : true;
+    const bool exp_approx_mode = get_exp_approx_mode(program_config);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -419,10 +454,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
     // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
     // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
+    const uint32_t dht_granularity = compute_dht_granularity(DHt, vDHt, dst_size);
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
