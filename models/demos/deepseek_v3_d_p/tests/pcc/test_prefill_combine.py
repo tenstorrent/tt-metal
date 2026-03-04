@@ -153,6 +153,7 @@ def test_ttnn_combine(
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Step 1: Generate initial inputs using torch
+    # For 2D mesh, generate different weights per EP rank
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
             num_chips_sp,
@@ -161,6 +162,7 @@ def test_ttnn_combine(
             n_routed_experts,
             num_experts_per_tok,
             max_dispatched_tokens_per_expert,
+            num_ep_ranks=num_chips_rep,
         )
         logger.info("Using PREDICTABLE test data for debugging")
     else:
@@ -172,59 +174,71 @@ def test_ttnn_combine(
             num_experts_per_tok,
             max_dispatched_tokens_per_expert,
             seed=42,
+            num_ep_ranks=num_chips_rep,
         )
         logger.info("Using RANDOM test data")
 
-    # Step 2: Run torch dispatch to generate combine inputs
-    torch_dispatch = TorchDispatchModule(
-        num_chips=num_chips_sp,
-        experts_per_chip=experts_per_chip,
-        n_routed_experts=n_routed_experts,
-        num_experts_per_tok=num_experts_per_tok,
-        metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        seq_len_per_chip=seq_len_per_chip,
-        hidden_dim=hidden_dim,
-    )
+    # Step 2: Run torch dispatch to generate combine inputs (once per EP rank)
+    def create_torch_dispatch():
+        return TorchDispatchModule(
+            num_chips=num_chips_sp,
+            experts_per_chip=experts_per_chip,
+            n_routed_experts=n_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            metadata_len=metadata_len,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            seq_len_per_chip=seq_len_per_chip,
+            hidden_dim=hidden_dim,
+        )
 
-    dispatched_buffer, dispatched_metadata, experts_tok_counter = torch_dispatch(x, weights, indices)
+    # Run dispatch for each EP rank with rank-specific weights
+    dispatched_buffer_per_rank = []
+    dispatched_metadata_per_rank = []
+    experts_tok_counter_per_rank = []
+    for r in range(num_chips_rep):
+        torch_dispatch = create_torch_dispatch()
+        dispatched_buffer, dispatched_metadata, experts_tok_counter = torch_dispatch(x, weights[r], indices)
+        dispatched_buffer_per_rank.append(dispatched_buffer)
+        dispatched_metadata_per_rank.append(dispatched_metadata)
+        experts_tok_counter_per_rank.append(experts_tok_counter)
+        logger.info(f"Torch dispatch rank {r}: {dispatched_buffer.shape=}, {dispatched_metadata.shape=}")
 
     logger.info("Torch dispatch outputs (4D):")
-    logger.info(f"  {dispatched_buffer.shape=}")
-    logger.info(f"  {dispatched_metadata.shape=}")
-    logger.info(f"  {experts_tok_counter.shape=}")
+    logger.info(f"  {dispatched_buffer_per_rank[0].shape=}")
+    logger.info(f"  {dispatched_metadata_per_rank[0].shape=}")
+    logger.info(f"  {experts_tok_counter_per_rank[0].shape=}")
 
     # Keep original 4D tensors for torch reference
-    dispatched_buffer_4d = dispatched_buffer
-    dispatched_metadata_4d = dispatched_metadata
+    dispatched_buffer_4d_per_rank = dispatched_buffer_per_rank
+    dispatched_metadata_4d_per_rank = dispatched_metadata_per_rank
 
     # Reshape to 5D format to match actual dispatch device operation output
     # From: (num_chips, experts_per_chip, max_tok, dim) -> (num_chips, 1, experts_per_chip, max_tok, dim)
-    dispatched_buffer = dispatched_buffer.unsqueeze(1)
-    dispatched_metadata = dispatched_metadata.unsqueeze(1)
+    dispatched_buffer_per_rank = [buf.unsqueeze(1) for buf in dispatched_buffer_per_rank]
+    dispatched_metadata_per_rank = [meta.unsqueeze(1) for meta in dispatched_metadata_per_rank]
 
     logger.info("Reshaped to 5D format for TTNN:")
-    logger.info(f"  {dispatched_buffer.shape=}")
-    logger.info(f"  {dispatched_metadata.shape=}")
+    logger.info(f"  {dispatched_buffer_per_rank[0].shape=}")
+    logger.info(f"  {dispatched_metadata_per_rank[0].shape=}")
 
     # Step 3: Convert torch tensors to ttnn tensors
     # For 2D mesh, we need to transform metadata to use linearized coords instead of logical chip IDs
     # Each replica needs different metadata: dest_linearized = dest_logical * num_chips_rep + replica_index
     if num_chips_rep > 1:
-        # Expand metadata to have per-replica values
-        # Current shape after unsqueeze: (num_chips_sp, 1, experts_per_chip, max_tok, metadata_len)
-        # New shape: (num_chips_rep, num_chips_sp, 1, experts_per_chip, max_tok, metadata_len)
-        dispatched_metadata_expanded = dispatched_metadata.unsqueeze(0).repeat(num_chips_rep, 1, 1, 1, 1, 1)
+        # Stack per-rank data into a single tensor
+        # Current shape per rank after unsqueeze: (num_chips_sp, 1, experts_per_chip, max_tok, dim)
+        # New shape: (num_chips_rep, num_chips_sp, 1, experts_per_chip, max_tok, dim)
+        dispatched_buffer_expanded = torch.stack(dispatched_buffer_per_rank, dim=0)
+        dispatched_metadata_expanded = torch.stack(dispatched_metadata_per_rank, dim=0)
+        experts_tok_counter_expanded = torch.stack(experts_tok_counter_per_rank, dim=0)
 
         # Transform logical chip IDs to linearized coords
         # metadata[..., 0] contains the destination logical chip ID
         for r in range(num_chips_rep):
             # dest_linearized = dest_logical * num_chips_rep + replica_index
-            dispatched_metadata_expanded[r, :, :, :, :, 0] = dispatched_metadata[:, :, :, :, 0] * num_chips_rep + r
-
-        # Also expand buffer and counter for consistency
-        dispatched_buffer_expanded = dispatched_buffer.unsqueeze(0).repeat(num_chips_rep, 1, 1, 1, 1, 1)
-        experts_tok_counter_expanded = experts_tok_counter.unsqueeze(0).repeat(num_chips_rep, 1, 1)
+            dispatched_metadata_expanded[r, :, :, :, :, 0] = (
+                dispatched_metadata_per_rank[r][:, :, :, :, 0] * num_chips_rep + r
+            )
 
         logger.info(f"  Expanded for 2D mesh: {dispatched_buffer_expanded.shape=}")
         logger.info(f"  Expanded for 2D mesh: {dispatched_metadata_expanded.shape=}")
@@ -268,7 +282,7 @@ def test_ttnn_combine(
         )
 
         tt_dispatched_buffer = ttnn.from_torch(
-            dispatched_buffer,
+            dispatched_buffer_per_rank[0],
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -276,7 +290,7 @@ def test_ttnn_combine(
         )
 
         tt_dispatched_metadata = ttnn.from_torch(
-            dispatched_metadata,
+            dispatched_metadata_per_rank[0],
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -284,28 +298,30 @@ def test_ttnn_combine(
         )
 
         tt_experts_tok_counter = ttnn.from_torch(
-            experts_tok_counter,
+            experts_tok_counter_per_rank[0],
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             dtype=ttnn.int32,
         )
 
-    # Step 4: Run torch combine for reference output
-    torch_combine = TorchCombineModule(
-        num_chips=num_chips_sp,
-        experts_per_chip=experts_per_chip,
-        num_experts_per_tok=num_experts_per_tok,
-        seq_len_per_chip=seq_len_per_chip,
-    )
+    # Step 4: Run torch combine for reference output (once per EP rank)
+    torch_output_per_rank = []
+    for r in range(num_chips_rep):
+        torch_combine = TorchCombineModule(
+            num_chips=num_chips_sp,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+        )
 
-    torch_output = torch_combine(
-        dispatched_buffer_4d,
-        dispatched_metadata_4d,
-        experts_tok_counter,
-    )
-
-    logger.info(f"Torch combine output shape: {torch_output.shape}")
+        torch_output = torch_combine(
+            dispatched_buffer_4d_per_rank[r],
+            dispatched_metadata_4d_per_rank[r],
+            experts_tok_counter_per_rank[r],
+        )
+        torch_output_per_rank.append(torch_output)
+        logger.info(f"Torch combine rank {r} output shape: {torch_output.shape}")
 
     # Step 5: Run ttnn combine
     tt_combine = TtCombineModule(
@@ -355,10 +371,10 @@ def test_ttnn_combine(
     ), f"Mismatch in sharded dimension: expected {num_chips_sp}, got {tt_output_torch.shape[1]}"
 
     # Quick sanity check of first elements
-    logger.info(f"Sample torch output [0, 0, 0, :5]: {torch_output[0, 0, 0, :5]}")
+    logger.info(f"Sample torch output [0][0, 0, 0, :5]: {torch_output_per_rank[0][0, 0, 0, :5]}")
     logger.info(f"Sample ttnn output [0, 0, 0, 0, :5]:  {tt_output_torch[0, 0, 0, 0, :5]}")
     if num_chips_sp > 1:
-        logger.info(f"Sample torch output [1, 0, 0, :5]: {torch_output[1, 0, 0, :5]}")
+        logger.info(f"Sample torch output [0][1, 0, 0, :5]: {torch_output_per_rank[0][1, 0, 0, :5]}")
         logger.info(f"Sample ttnn output [0, 1, 0, 0, :5]:  {tt_output_torch[0, 1, 0, 0, :5]}")
 
     # Detailed per-chip, per-token, per-expert comparison
@@ -369,11 +385,12 @@ def test_ttnn_combine(
 
     logger.info("Comparing ALL combine output slots...")
     for r in range(num_chips_rep):
+        torch_output = torch_output_per_rank[r]
         for chip_id in range(num_chips_sp):
             for token_id in range(seq_len_per_chip):
                 for topk_idx in range(num_experts_per_tok):
                     total_slots += 1
-                    # torch uses logical chip ID
+                    # torch uses logical chip ID (per-rank reference)
                     torch_data = torch_output[chip_id, token_id, topk_idx]
                     # ttnn has extra replicated dim at front
                     ttnn_data = tt_output_torch[r, chip_id, token_id, topk_idx]
@@ -392,7 +409,7 @@ def test_ttnn_combine(
         # Show first 10 mismatches in detail
         logger.warning(f"Found {len(mismatches)} mismatches. Showing first 10:")
         for i, (r, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:10]):
-            torch_sample = torch_output[chip_id, token_id, topk_idx, :5]
+            torch_sample = torch_output_per_rank[r][chip_id, token_id, topk_idx, :5]
             ttnn_sample = tt_output_torch[r, chip_id, token_id, topk_idx, :5]
             logger.error(
                 f"  [{i}] Mismatch at r={r}, chip={chip_id}, token={token_id}, topk={topk_idx}: "

@@ -45,6 +45,7 @@ def initialize_test_inputs(
     max_dispatched_tokens_per_expert: int,
     seed: int = 42,
     validate: bool = True,
+    num_ep_ranks: int = 1,
 ):
     """
     Initialize test inputs (x, weights, indices) with random data.
@@ -58,10 +59,11 @@ def initialize_test_inputs(
         max_dispatched_tokens_per_expert: Maximum number of tokens per expert
         seed: Random seed for reproducibility
         validate: Whether to validate expert activations
+        num_ep_ranks: Number of Expert Parallelism ranks (for different weights per rank)
 
     Returns:
         x: Input tensor (num_chips, seq_len_per_chip, hidden_dim)
-        weights: Router weights (num_chips, seq_len_per_chip, num_experts_per_tok)
+        weights: Router weights (num_ep_ranks, num_chips, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (num_chips, seq_len_per_chip, num_experts_per_tok)
     """
     torch.manual_seed(seed)
@@ -69,7 +71,7 @@ def initialize_test_inputs(
     input_shape = (num_chips, seq_len_per_chip, hidden_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    weights_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
+    weights_shape = (num_ep_ranks, num_chips, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
 
     weights = torch.randn(weights_shape, dtype=torch.bfloat16)
@@ -101,13 +103,15 @@ def initialize_predictable_test_inputs(
     n_routed_experts: int,
     num_experts_per_tok: int,
     max_dispatched_tokens_per_expert: int,
+    num_ep_ranks: int = 1,
 ):
     """
     Initialize test inputs with predictable patterns for debugging.
 
     Pattern:
     - x: Simple sequential values starting from 0.0
-    - weights: Sequential values 1.0, 2.0, 3.0, 4.0 (for num_experts_per_tok=4)
+    - weights: Sequential values per EP rank
+      - Rank 0: [1, 2, 3, 4], Rank 1: [5, 6, 7, 8], etc. (for num_experts_per_tok=4)
     - indices: Round-robin pattern cycling through experts
 
     This makes it easy to verify writes:
@@ -123,10 +127,11 @@ def initialize_predictable_test_inputs(
         n_routed_experts: Total number of routed experts across all chips
         num_experts_per_tok: Number of experts each token is routed to
         max_dispatched_tokens_per_expert: Maximum number of tokens per expert (unused but kept for signature consistency)
+        num_ep_ranks: Number of Expert Parallelism ranks (for different weights per rank)
 
     Returns:
         x: Input tensor (num_chips, seq_len_per_chip, hidden_dim)
-        weights: Router weights (num_chips, seq_len_per_chip, num_experts_per_tok)
+        weights: Router weights (num_ep_ranks, num_chips, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (num_chips, seq_len_per_chip, num_experts_per_tok)
     """
     input_shape = (num_chips, seq_len_per_chip, hidden_dim)
@@ -134,13 +139,14 @@ def initialize_predictable_test_inputs(
     x = torch.arange(num_chips * seq_len_per_chip * hidden_dim, dtype=torch.float32).reshape(input_shape)
     x = x.to(torch.bfloat16)
 
-    weights_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
+    weights_shape = (num_ep_ranks, num_chips, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (num_chips, seq_len_per_chip, num_experts_per_tok)
 
-    # Simple sequential weights: 1.0, 2.0, 3.0, 4.0 for each token
+    # Predictable weights: rank 0 = [1,2,3,4], rank 1 = [5,6,7,8], etc.
     weights = torch.zeros(weights_shape, dtype=torch.bfloat16)
-    for k in range(num_experts_per_tok):
-        weights[:, :, k] = float(k + 1)  # 1.0, 2.0, 3.0, 4.0
+    for r in range(num_ep_ranks):
+        for k in range(num_experts_per_tok):
+            weights[r, :, :, k] = float(r * num_experts_per_tok + k + 1)
 
     # Round-robin indices pattern
     indices = torch.zeros(indices_shape, dtype=torch.int32)

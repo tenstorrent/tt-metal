@@ -161,7 +161,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-@pytest.mark.parametrize("verbose", [False])
+@pytest.mark.parametrize("verbose", [True])
 def test_ttnn_dispatch(
     mesh_device,
     seq_len_per_chip,
@@ -200,6 +200,7 @@ def test_ttnn_dispatch(
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Initialize inputs using helper function
+    # For 2D mesh, generate different weights per EP rank
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
             num_chips=num_chips_sp,
@@ -208,6 +209,7 @@ def test_ttnn_dispatch(
             n_routed_experts=n_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            num_ep_ranks=num_chips_rep,
         )
         logger.info("Using PREDICTABLE test data for debugging")
     else:
@@ -219,23 +221,53 @@ def test_ttnn_dispatch(
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seed=42,
+            num_ep_ranks=num_chips_rep,
         )
         logger.info("Using RANDOM test data")
 
-    mesh_mapper = ttnn.ShardTensor2dMesh(
+    # x and indices: replicated across EP ranks
+    mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
         dims=(sp_axis, None),
     )
 
+    # weights: sharded across BOTH axes (different per EP rank) for 2D mesh
+    # weights shape: (num_ep_ranks, num_chips_sp, seq_len, num_experts_per_tok)
+    # For 1D mesh (num_chips_rep=1): squeeze the EP rank dimension and use replicated mapper
+    # For 2D mesh: shard both axes
+    if num_chips_rep > 1:
+        # For sp_axis=0: mesh axis 0 (rows) = num_chips_sp, mesh axis 1 (cols) = num_ep_ranks
+        #   dims = (1, 0): shard tensor dim 1 (num_chips_sp) on mesh axis 0, tensor dim 0 (num_ep_ranks) on mesh axis 1
+        # For sp_axis=1: mesh axis 0 (rows) = num_ep_ranks, mesh axis 1 (cols) = num_chips_sp
+        #   dims = (0, 1): shard tensor dim 0 (num_ep_ranks) on mesh axis 0, tensor dim 1 (num_chips_sp) on mesh axis 1
+        if sp_axis == 0:
+            weights_dims = (1, 0)
+        else:
+            weights_dims = (0, 1)
+        mesh_mapper_weights = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=weights_dims,
+        )
+        weights_for_ttnn = weights
+    else:
+        # For 1D mesh, squeeze the num_ep_ranks dimension since it's 1
+        mesh_mapper_weights = mesh_mapper_replicated
+        weights_for_ttnn = weights.squeeze(0)  # Remove the num_ep_ranks=1 dimension
+
     tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
     tt_weights = ttnn.from_torch(
-        weights, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        weights_for_ttnn,
+        mesh_mapper=mesh_mapper_weights,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
     )
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+        indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
     )
 
     logger.warning(f"{x.shape=}, {weights.shape=}, {indices.shape=}")
@@ -244,8 +276,8 @@ def test_ttnn_dispatch(
     # ttnn.visualize_tensor(tt_weights)
     # ttnn.visualize_tensor(tt_indices)
 
-    # Initialize dispatch modules
-    dispatch_module = TorchDispatchModule(
+    # Initialize torch dispatch module with num_ep_ranks support
+    torch_dispatch_module = TorchDispatchModule(
         num_chips=num_chips_sp,
         experts_per_chip=experts_per_chip,
         n_routed_experts=n_routed_experts,
@@ -254,6 +286,7 @@ def test_ttnn_dispatch(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
+        num_ep_ranks=num_chips_rep,
     )
 
     tt_dispatch_module = TtDispatchModule(
@@ -271,13 +304,16 @@ def test_ttnn_dispatch(
         topology=topology,
     )
 
-    # Forward pass through dispatch modules
+    # Forward pass through TTNN dispatch
     logger.info(f"{x.shape=}")
     logger.info(f"{weights.shape=}")
     logger.info(f"{indices.shape=}")
-    dispatched, metadata, experts_counter = dispatch_module(x, weights, indices)
 
     tt_dispatched, tt_metadata, counter, offsets, cum_sum = tt_dispatch_module(tt_x, tt_weights, tt_indices)
+
+    # Run torch reference for all EP ranks at once
+    torch_dispatched, torch_metadata, torch_counter = torch_dispatch_module(x, weights, indices)
+    logger.info(f"Torch dispatch: {torch_dispatched.shape=}, {torch_metadata.shape=}")
 
     # Convert TTNN outputs to torch for comparison
     mesh_composer = ttnn.create_mesh_composer(
@@ -286,7 +322,7 @@ def test_ttnn_dispatch(
             dims=[1, 0],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
         ),
     )
-    logger.warning(f"{dispatched.shape=} {metadata.shape=}")
+    logger.warning(f"{torch_dispatched[0].shape=} {torch_metadata[0].shape=}")
     logger.warning(f"{tt_dispatched.shape=} {tt_metadata.shape=}")
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
@@ -301,18 +337,20 @@ def test_ttnn_dispatch(
 
     # Quick sanity check of first elements
     logger.info(f"{tt_out_dispatched[0][0][0][0][0]=} | {tt_out_dispatched[0][1][0][0][0]=}")
-    logger.info(f"{dispatched[0][0][0][0]=} | {dispatched[1][0][0][0]=}")
+    logger.info(f"{torch_dispatched[0][0][0][0][0]=} | {torch_dispatched[0][1][0][0][0]=}")
     logger.info(f"{tt_out_metadata[0][0][0][0][0:4]=} | {tt_out_metadata[0][1][0][0][0:4]=}")
-    logger.info(f"{metadata[0][0][0][0:4]=} | {metadata[1][0][0][0:4]=}")
+    logger.info(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
     logger.info(f"{counter.shape=}, {counter=}")
     logger.info(f"{offsets.shape=}, {offsets=}")
     logger.info(f"{cum_sum.shape=}, {cum_sum=}")
 
-    # Verify dispatched data matches reference
+    # Verify dispatched data matches reference (each EP rank against its torch reference)
     data_ok = True
     metadata_ok = True
     logger.warning("Comparing ALL dispatched buffer slots (including remote dispatch)...")
     for r in range(num_chips_rep):
+        dispatched = torch_dispatched[r]
+        metadata = torch_metadata[r]
         for dst_chip_id in range(num_chips_sp):
             for expert_id in range(experts_per_chip):
                 count = counter[dst_chip_id, expert_id].item()
@@ -336,6 +374,8 @@ def test_ttnn_dispatch(
 
     logger.info("Comparing ALL dispatched metadata slots (including remote dispatch)...")
     for r in range(num_chips_rep):
+        dispatched = torch_dispatched[r]
+        metadata = torch_metadata[r]
         for dst_chip_id in range(num_chips_sp):
             for expert_id in range(experts_per_chip):
                 count = counter[dst_chip_id, expert_id].item()
@@ -347,12 +387,24 @@ def test_ttnn_dispatch(
                 out_linearized_mesh_coord = tt_out_metadata[r, dst_chip_id, expert_id, :count, 0]
                 ref_linearized_mesh_coord = r + metadata[dst_chip_id, expert_id, :count, 0] * num_chips_rep
 
-                if torch.allclose(out, ref, atol=1e-6) and torch.allclose(
-                    out_linearized_mesh_coord, ref_linearized_mesh_coord, atol=1e-6
-                ):
+                # Compare weights (metadata[4]):
+                # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
+                out_weight_bf16 = (
+                    tt_out_metadata[r, dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
+                )
+                # Torch stores bfloat16 value directly
+                ref_weight_bf16 = metadata[dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
+
+                metadata_match = torch.allclose(out, ref, atol=1e-6)
+                coord_match = torch.allclose(out_linearized_mesh_coord, ref_linearized_mesh_coord, atol=1e-6)
+                weight_match = torch.allclose(out_weight_bf16, ref_weight_bf16, atol=1e-3)
+
+                if metadata_match and coord_match and weight_match:
                     logger.info(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
                 else:
-                    logger.error(f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
+                    logger.error(
+                        f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({metadata_match=}, {coord_match=}, {weight_match=})"
+                    )
                     metadata_ok = False
                     if verbose:
                         for slot in range(count):
@@ -364,6 +416,10 @@ def test_ttnn_dispatch(
                                     f"    Slot {slot}: Metadata mismatch at chip={dst_chip_id}, expert={expert_id}, slot={slot}: "
                                     f"{ref_linearized_mesh_coord[slot].item()}, {out_linearized_mesh_coord[slot].item()}, "
                                     f"{torch_data=}, {kernel_data=}"
+                                )
+                            if not weight_match:
+                                logger.error(
+                                    f"    Slot {slot}: Weight mismatch: ref={ref_weight_bf16[slot].item()}, out={out_weight_bf16[slot].item()}"
                                 )
     assert data_ok and metadata_ok, f"Some slots did not match! {data_ok=} {metadata_ok=} Check logs for details."
     logger.info("✅ TTNN dispatch operation matches torch reference!")
