@@ -22,11 +22,11 @@ on:
       run-wormhole-tests:
         default: true
         type: boolean
-        description: "Run Wormhole (N300) tests"
+        description: "Run Wormhole tests"
       run-blackhole-tests:
         default: true
         type: boolean
-        description: "Run Blackhole (P100/P150) tests"
+        description: "Run Blackhole tests"
 
 permissions:
   actions: read
