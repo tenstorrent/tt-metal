@@ -293,7 +293,7 @@ def run_test_forward_pass_mla2d(
         if mode == "prefill":
             tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
         else:
-            for _ in range(10):
+            for _ in range(20):
                 tt_output = MLA2D.forward_decode(
                     tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
                 )
@@ -368,6 +368,7 @@ optimal_topology = (
     [
         [
             True,
+            False,
         ]
     ],
 )
