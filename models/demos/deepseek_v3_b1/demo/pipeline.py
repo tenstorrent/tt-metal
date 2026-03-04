@@ -75,8 +75,8 @@ def create_single_galaxy_pipeline_configuration(
         {
             0: stage_0,
             1: stage_1,
-            2: lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=0, device=d)),
-            3: lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=3, device=d)),
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
         }
     )
 
