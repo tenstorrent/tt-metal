@@ -104,7 +104,6 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    ASSERT(false, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),

@@ -54,6 +54,12 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             assert_and_hang(__LINE__, debug_file_hash(__FILE__), 0, ##__VA_ARGS__); \
     } while (0)
 
+#define ASSERT_MSG(condition, message)                                                     \
+    do {                                                                                   \
+        if (not(condition))                                                                \
+            assert_and_hang(__LINE__, debug_file_hash(__FILE__), debug_msg_hash(message)); \
+    } while (0)
+
 #define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
@@ -68,6 +74,8 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             asm volatile("ebreak"); \
     } while (0)
 
+#define ASSERT_MSG(condition, message) ASSERT(condition)
+
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 0
@@ -75,6 +83,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 #else  // !LIGHTWEIGHT_KERNEL_ASSERTS
 
 #define ASSERT(condition, ...)
+#define ASSERT_MSG(condition, message)
 
 #define ASSERT_ENABLED 0
 #define WATCHER_ASSERT_ENABLED 0

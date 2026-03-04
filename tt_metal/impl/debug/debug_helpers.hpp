@@ -7,6 +7,7 @@
 #include <set>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <string>
 
 #include <fmt/format.h>
@@ -103,6 +104,66 @@ inline uint16_t host_debug_file_hash(const char* str) {
     return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
 }
 
+// Host-side copy of debug_msg_hash for resolving message hashes.
+// Must match the device-side constexpr version in dev_msgs.h.
+inline uint8_t host_debug_msg_hash(const char* str) {
+    uint32_t hash = 2166136261u;
+    while (*str) {
+        hash ^= static_cast<uint32_t>(*str++);
+        hash *= 16777619u;
+    }
+    return static_cast<uint8_t>(hash ^ (hash >> 8) ^ (hash >> 16) ^ (hash >> 24));
+}
+
+// Resolve a message hash back to the original string by scanning source files for ASSERT_MSG calls.
+inline std::string resolve_msg_from_hash(uint8_t msg_hash) {
+    static const std::vector<std::string> search_dirs = {
+        "tt_metal/hw/inc/",
+        "tt_metal/hw/inc/api/debug/",
+        "tt_metal/hw/inc/internal/debug/",
+        "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/",
+        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/",
+        "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/",
+        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/",
+        "tt_metal/hw/inc/hostdev/",
+        "tt_metal/hw/ckernels/",
+    };
+
+    // Match ASSERT_MSG(..., "message") or LLK_ASSERT(..., "message") patterns.
+    std::regex pattern(R"RE((?:ASSERT_MSG|LLK_ASSERT)\s*\([^,]+,\s*"([^"]*)")RE");
+    for (const auto& dir : search_dirs) {
+        if (!std::filesystem::exists(dir)) {
+            continue;
+        }
+        try {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                     dir, std::filesystem::directory_options::skip_permission_denied)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                auto ext = entry.path().extension().string();
+                if (ext != ".h" && ext != ".hpp" && ext != ".cpp") {
+                    continue;
+                }
+                std::ifstream file(entry.path());
+                std::string line;
+                while (std::getline(file, line)) {
+                    std::smatch match;
+                    if (std::regex_search(line, match, pattern)) {
+                        std::string msg = match[1].str();
+                        if (host_debug_msg_hash(msg.c_str()) == msg_hash) {
+                            return msg;
+                        }
+                    }
+                }
+            }
+        } catch (const std::filesystem::filesystem_error&) {
+            continue;
+        }
+    }
+    return fmt::format("unknown message (hash=0x{:02x})", msg_hash);
+}
+
 // Resolve a file_id hash back to a filename by scanning known source directories.
 // Searches kernel source files and well-known LLK include paths for a matching hash.
 inline std::string resolve_file_from_hash(uint16_t file_id) {
@@ -150,13 +211,14 @@ inline std::string resolve_file_from_hash(uint16_t file_id) {
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num and file_id are used in the message
 inline std::string get_debug_assert_message(
-    dev_msgs::debug_assert_type_t type,
-    uint16_t line_num = 0,
-    uint16_t file_id = 0,
-    [[maybe_unused]] uint8_t extra_info = 0) {
+    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint16_t file_id = 0, uint8_t extra_info = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped: {
             std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id) : "unknown file";
+            if (extra_info != 0) {
+                std::string msg_str = resolve_msg_from_hash(extra_info);
+                return fmt::format("tripped an assert in {} on line {}: \"{}\".", file_str, line_num, msg_str);
+            }
             return fmt::format("tripped an assert in {} on line {}.", file_str, line_num);
         }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
