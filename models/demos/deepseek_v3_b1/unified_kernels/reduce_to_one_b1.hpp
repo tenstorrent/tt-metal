@@ -391,6 +391,7 @@ struct ReduceToOneB1 {
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
                         noc_async_write_barrier();
+                        update_socket_config(sender_socket);
                         DPRINT << "root1 before sending semaphore\n";
                         send_persistent_next_iter_inc_via_fabric(args);
                         DPRINT << "root1 after sending semaphore\n";
