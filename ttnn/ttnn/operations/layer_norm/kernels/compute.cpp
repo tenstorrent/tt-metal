@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// LayerNorm - Compute Kernel (Stage 1 Stub: data_pipeline)
+// LayerNorm - Compute Kernel (Stage 2: subtract_mean)
 //
-// Stage 1 implements a passthrough:
-//   cb_in (RM) -> tilize -> cb_tilize_out -> copy -> cb_out -> untilize -> cb_untilize_out
-//
-// Full layer_norm compute (stages 2-4) will be added incrementally.
+// Per tile-row:
+//   Phase 0: Tilize cb_in (RM) -> cb_tilize_out (tiled)
+//   Phase 1: Reduce SUM (with scaler=1/W) -> cb_mean (row mean)
+//   Phase 2: Sub broadcast COL (x - mean) -> cb_out
+//   Phase 8: Untilize cb_out -> cb_untilize_out (RM sticks for writer)
 //
 // Compile-time args:
 //   [0]  Ht         -- tile-rows to process (N / 32)
@@ -18,11 +19,13 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 // CB indices matching op_design.md
 constexpr uint32_t cb_in = 0;             // RM input pages (reader -> compute)
 constexpr uint32_t cb_eps = 1;            // epsilon tile
-constexpr uint32_t cb_scaler = 2;         // reduce scaler
+constexpr uint32_t cb_scaler = 2;         // reduce scaler (1/W)
 constexpr uint32_t cb_weight = 3;         // gamma tiles
 constexpr uint32_t cb_bias = 4;           // beta tiles
 constexpr uint32_t cb_tilize_out = 16;    // tilize output
@@ -43,40 +46,30 @@ void kernel_main() {
     constexpr uint32_t has_bias = get_compile_time_arg_val(3);
 
     // Hardware startup: initialize unpack/math/pack pipelines.
-    // Args: input_a=cb_in, input_b=cb_scaler, output=cb_out
-    // The CB IDs must match those used by the first operation after startup.
-    // tilize helper will reconfigure internally as needed.
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
-
-    // ---- Stage 1: data_pipeline passthrough ----
-    // For each tile-row:
-    //   Phase 0: Tilize cb_in (RM) -> cb_tilize_out (tiled)
-    //   Phase T: Copy   cb_tilize_out -> cb_out    (tile-by-tile passthrough)
-    //   Phase 8: Untilize cb_out -> cb_untilize_out (RM sticks for writer)
 
     for (uint32_t tile_row = 0; tile_row < Ht; ++tile_row) {
         // Phase 0: Tilize — convert Wt RM pages from cb_in into Wt tiles in cb_tilize_out.
-        // tilize<input_cb, output_cb>(num_tiles_per_block, num_blocks)
         compute_kernel_lib::tilize<cb_in, cb_tilize_out>(Wt, 1);
 
-        // Phase T: Copy tiles from cb_tilize_out to cb_out (passthrough for Stage 1).
-        // In later stages this will be replaced by the full normalization pipeline.
-        cb_wait_front(cb_tilize_out, Wt);
-        cb_reserve_back(cb_out, Wt);
+        // Phase 1: Compute mean — reduce SUM with scaler=1/W.
+        // WaitUpfrontNoPop: tiles persist in cb_tilize_out for Phase 2.
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                cb_tilize_out, cb_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-        copy_tile_to_dst_init_short(cb_tilize_out);
-        for (uint32_t t = 0; t < Wt; ++t) {
-            acquire_dst();
-            copy_tile(cb_tilize_out, t, 0);
-            pack_tile(0, cb_out);
-            release_dst();
-        }
-
-        cb_push_back(cb_out, Wt);
-        cb_pop_front(cb_tilize_out, Wt);
+        // Phase 2: x - mean (broadcast COL subtract).
+        // cb_tilize_out: already waited from Phase 1 (NoPop), consumed and popped at end.
+        // cb_mean: waited and popped at end.
+        // Output: cb_out (for stages 1-2, route directly to cb_out for untilize).
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::WaitUpfrontPopAtEnd,
+            compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+            cb_tilize_out, cb_mean, cb_out, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
         // Phase 8: Untilize cb_out -> cb_untilize_out.
-        // WaitUpfront: all Wt tiles have already been pushed to cb_out above.
         compute_kernel_lib::untilize<
             Wt,
             cb_out,
