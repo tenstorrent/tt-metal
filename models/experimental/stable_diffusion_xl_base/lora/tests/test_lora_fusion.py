@@ -18,7 +18,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import (
     TtSDXLPipeline,
     TtSDXLPipelineConfig,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 
 
 def _get_lora_impacted_weights(sd):
@@ -123,7 +123,7 @@ def test_lora_fusion_pcc(mesh_device, lora_path):
     lora_manager = tt_pipeline._lora_weights_manager
 
     lora_manager.load_lora_weights(lora_path)
-    assert lora_manager.has_lora_adapter()
+    assert lora_manager.has_lora_adapter(), "No LoRA adapter found"
 
     lora_manager.fuse_lora(lora_scale=1.0)
 
@@ -149,18 +149,7 @@ def test_lora_fusion_pcc(mesh_device, lora_path):
             continue
 
         assert_with_pcc(ref_tensor, tt_torch_tensor, pcc=0.999)
-
-        try:
-            torch.testing.assert_close(ref_tensor, tt_torch_tensor, atol=1e-2, rtol=1e-2)
-        except AssertionError as _:
-            diff = torch.abs(ref_tensor - tt_torch_tensor).mean()
-            logger.warning(f"{weights_name}: Mean Diff = {diff:.6f}")
-
-        # ref_tensor_flattened = ref_tensor.flatten()
-        # tt_torch_flattened = tt_torch.flatten()
-        # sim = F.cosine_similarity(ref_tensor_flattened.unsqueeze(0), tt_torch_flattened.unsqueeze(0))
-
-        # assert sim >= 0.999, f"{ref_key}: Low cosine similarity! {sim.item():.6f}"
+        assert_allclose(ref_tensor, tt_torch_tensor, atol=1e-2, rtol=1e-2)
 
     assert (
         not skipped_keys

@@ -11,6 +11,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
+    determinate_min_batch_size,
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
@@ -24,8 +25,10 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def _run_forward(tt_sdxl, pipeline, prompt, negative_prompt):
-    all_prompt_embeds_torch, torch_add_text_embeds = tt_sdxl.encode_prompts([prompt], [negative_prompt])
+def _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size):
+    prompts = [prompt] + [""] * (batch_size - 1)
+    negative_prompts = [negative_prompt] + [""] * (batch_size - 1)
+    all_prompt_embeds_torch, torch_add_text_embeds = tt_sdxl.encode_prompts(prompts, negative_prompts)
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch, torch_add_text_embeds, start_latent_seed=0
     )
@@ -54,6 +57,7 @@ def _run_forward(tt_sdxl, pipeline, prompt, negative_prompt):
 @torch.no_grad()
 def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_prompt, lora_prompt):
     prepare_device(mesh_device, use_cfg_parallel=False)
+    batch_size = determinate_min_batch_size(mesh_device, use_cfg_parallel=False)
 
     pipeline = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -82,21 +86,21 @@ def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_promp
 
     tt_sdxl.compile_text_encoding()
     tt_sdxl.generate_input_tensors(
-        all_prompt_embeds_torch=torch.randn(1, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
-        torch_add_text_embeds=torch.randn(1, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
         timesteps=None,
         sigmas=None,
     )
     tt_sdxl.compile_image_processing()
 
-    img_base = _run_forward(tt_sdxl, pipeline, prompt, negative_prompt)
+    img_base = _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size)
 
     tt_sdxl.load_lora_weights(lora_path)
     tt_sdxl.fuse_lora()
-    _run_forward(tt_sdxl, pipeline, lora_prompt, negative_prompt)
+    _run_forward_pass(tt_sdxl, pipeline, lora_prompt, negative_prompt, batch_size)
 
     tt_sdxl.unload_lora_weights()
-    img_rollback = _run_forward(tt_sdxl, pipeline, prompt, negative_prompt)
+    img_rollback = _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size)
 
     ttnn.synchronize_device(mesh_device)
 

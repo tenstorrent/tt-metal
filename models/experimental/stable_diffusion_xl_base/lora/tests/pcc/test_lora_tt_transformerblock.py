@@ -10,7 +10,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
@@ -62,7 +62,7 @@ def test_lora_fusion_pcc_transformerblock(
         device,
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.{block_id}",
-        ModelOptimisations(),
+        ModelOptimisations1024x1024(),
         query_dim,
         num_attn_heads,
         out_dim,

@@ -12,7 +12,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
@@ -45,7 +45,7 @@ def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env,
     state_dict = pipeline_for_tt.unet.state_dict()
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
-    tt_geglu = TtGEGLU(device, state_dict, module_path, ModelOptimisations(), lora_weights_manager=lora_mgr)
+    tt_geglu = TtGEGLU(device, state_dict, module_path, ModelOptimisations1024x1024(), lora_weights_manager=lora_mgr)
 
     lora_mgr.load_lora_weights(lora_path)
     lora_mgr.fuse_lora(lora_scale=1.0)
