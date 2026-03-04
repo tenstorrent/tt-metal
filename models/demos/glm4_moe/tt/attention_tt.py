@@ -72,7 +72,7 @@ def _simple_all_reduce_host(tensor, mesh_device, cluster_axis, memory_config=Non
     return result
 
 
-def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, ccl=None):
+def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, ccl=None, impl=None):
     """All-reduce with configurable implementation via GLM4_MOE_REDUCE_IMPL env var.
 
     Implementations:
@@ -90,7 +90,7 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
     # returning physical-padded dims instead of the true logical shape.
     input_logical_shape = [int(d) for d in tensor.shape]
 
-    impl = _REDUCE_IMPL
+    impl = impl or _REDUCE_IMPL
     mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
 
     # Log once per (impl, axis) combination
