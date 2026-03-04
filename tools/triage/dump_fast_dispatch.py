@@ -349,7 +349,7 @@ def run(args, context: Context):
 
     def get_dispatch_core_pair(
         location: OnChipCoordinate, locations_to_check: set[OnChipCoordinate]
-    ) -> tuple[OnChipCoordinate, str] | None:
+    ) -> list[tuple[OnChipCoordinate, str]] | None:
         # Check RISC core with risc_name at this location for dispatcher kernels
         if location not in locations_to_check:
             return None
@@ -368,11 +368,12 @@ def run(args, context: Context):
         lambda location: get_dispatch_core_pair(location, locations_to_check),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
+
     # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
     dispatch_core_pairs = []
     if results:
         for result in results:
-            dispatch_core_pairs.extend(result.result)
+            dispatch_core_pairs.append(result.result)
 
     # Convert to set for fast lookup
     dispatch_cores_set = set(dispatch_core_pairs)
