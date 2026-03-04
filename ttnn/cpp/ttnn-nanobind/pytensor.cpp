@@ -1320,19 +1320,9 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_page_size",
             [](const Tensor& self) -> uint32_t {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t {
-                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
-                            return s.mesh_buffer->page_size();
-                        },
-                        [&](auto&&) -> uint32_t {
-                            TT_THROW(
-                                "{} doesn't support buffer_page_size method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return s.mesh_buffer->page_size();
             },
             R"doc(
             Get the page size of the underlying buffer in bytes.
@@ -1345,19 +1335,9 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_num_pages",
             [](const Tensor& self) -> uint32_t {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t {
-                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
-                            return s.mesh_buffer->num_pages();
-                        },
-                        [&](auto&&) -> uint32_t {
-                            TT_THROW(
-                                "{} doesn't support buffer_num_pages method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return s.mesh_buffer->num_pages();
             },
             R"doc(
             Get the number of pages in the underlying buffer.
@@ -1370,21 +1350,11 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_aligned_page_size",
             [](const Tensor& self) -> uint32_t {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t {
-                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
-                            auto* ref_buffer = s.mesh_buffer->get_reference_buffer();
-                            TT_FATAL(ref_buffer != nullptr, "Could not get reference buffer.");
-                            return ref_buffer->aligned_page_size();
-                        },
-                        [&](auto&&) -> uint32_t {
-                            TT_THROW(
-                                "{} doesn't support buffer_aligned_page_size method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                auto* ref_buffer = s.mesh_buffer->get_reference_buffer();
+                TT_FATAL(ref_buffer != nullptr, "Could not get reference buffer.");
+                return ref_buffer->aligned_page_size();
             },
             R"doc(
             Get the aligned page size of the underlying buffer in bytes.

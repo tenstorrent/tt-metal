@@ -509,6 +509,16 @@ void device_module(nb::module_& m_device) {
         "Return the maximum size of the worker L1 unreserved memory.");
 
     m_device.def(
+        "get_dram_alignment",
+        &tt::tt_metal::hal::get_dram_alignment,
+        "Return the DRAM alignment requirement in bytes for the current architecture.");
+
+    m_device.def(
+        "get_l1_alignment",
+        &tt::tt_metal::hal::get_l1_alignment,
+        "Return the L1 alignment requirement in bytes for the current architecture.");
+
+    m_device.def(
         "get_optimal_dram_bank_to_logical_worker_assignment",
         [](MeshDevice* device, tt::tt_metal::NOC noc) {
             return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
