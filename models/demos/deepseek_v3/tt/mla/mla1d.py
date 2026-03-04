@@ -879,7 +879,7 @@ class MLA1D(AbstractModule):
 
         # =====================================================================
         # wo: m=32, k=16384, n=896 (pads to 1152)
-        # in0_core_grid=(8,1), out_core_grid=(6,1), WIDTH sharding
+        # in0_core_grid=(8,2), out_core_grid=(6,2), WIDTH sharding
         # =====================================================================
         wo_k = num_heads * v_head_dim  # 16384
         wo_n = dim // mesh_device.shape[1]  # 896
@@ -1745,7 +1745,7 @@ class MLA1D(AbstractModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
-        # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
+        # 1,1,32,2112 WIDTH sharded 1x8 [32,288]
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
         tt_q_kv = ttnn.experimental.all_gather_async(
@@ -1793,7 +1793,7 @@ class MLA1D(AbstractModule):
         tt_q = results[0][0]
         tt_kv_nope = results[1][0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
-        # KV: 1,1,32,512 L1 interleaved]
+        # KV: 1,1,32,512 L1 interleaved
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
@@ -1861,7 +1861,7 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
         # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
-        # 1,1,32,3072, L1 interleaved
+        # 1,1,32,3072, WIDTH sharded 8x2 [32,192]
         # Reshape
         tt_q = ttnn.untilize(
             tt_q,
@@ -1886,7 +1886,7 @@ class MLA1D(AbstractModule):
             tt_q, [0, 0, 0, qk_nope_head_dim], [1, bsz, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
 
-        # Q Rope: wkv_b1
+        # Q Nope: wkv_b1
         # 1,32,16,192 L1 interleaved
         tt_q_nope = ttnn.transpose(
             tt_q_nope, 1, 2, memory_config=cfg["wkv_b1_in0_memory_config"]
@@ -1955,7 +1955,7 @@ class MLA1D(AbstractModule):
 
         # Slice off padding from wkv_b2 output
 
-        # 1,128,4,128 L1 interleaved = [1, num_heads, bsz, v_head_dim]
+        # 1,128,4,128 HEIGHT sharded 12 cores [352,128] = [1, num_heads (padded to 132), bsz_local, v_head_dim]
         v_out = ttnn.transpose(
             v_out,
             1,
@@ -1983,7 +1983,7 @@ class MLA1D(AbstractModule):
         v_head_dim: int,
     ) -> ttnn.Tensor:
         mesh_shape = cfg["mesh_shape"]
-        # 1,4,128,128 L1 interleaved
+        # 1,4,128,128 HEIGHT sharded 2x2 [128,128] (batch padded to 132)
         # Reshape
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
@@ -1995,16 +1995,14 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
         v_out = ttnn.tilize(v_out)
         v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+        # 1,1,32,16384 WIDTH sharded 2x8 [32,1024]
 
-        # 1,1,32,16384 L1 interleaved
         return v_out
 
     @classmethod
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        # 1,1,32,16384 L1 interleaved
-        # Shard in0 to L1 WIDTH sharded for wo matmul
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
-        # 1,1,32,896 width sharded 7x4 [32,32]
+        # 1,1,32,896 WIDTH sharded 2x6 [32,96]
         return out
 
     @classmethod
