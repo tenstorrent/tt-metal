@@ -287,114 +287,6 @@ class HubertConfig:
     )
 
 
-class RotaryPositionalEmbedding(nn.Module):
-    def __init__(self, dim, base=10000):
-        """Rotary positional embedding
-        Reference : https://blog.eleuther.ai/rotary-embeddings/
-        Paper: https://arxiv.org/pdf/2104.09864.pdf
-        Args:
-            dim: Dimension of embedding
-            base: Base value for exponential
-        """
-        super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
-        self.seq_len_cached = 0
-        self.cos_cached = torch.empty(self.seq_len_cached, 1, 1, dim)
-        self.sin_cached = torch.empty(self.seq_len_cached, 1, 1, dim)
-
-    def forward(self, x, seq_len: int = 0):
-        """
-        Args:
-            x: Input x with T X B X C
-            seq_len: Sequence length of input x
-        """
-        if seq_len > self.seq_len_cached:
-            self.seq_len_cached = seq_len
-            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
-            freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-            self.cos_cached = emb.cos().view(emb.size(0), 1, 1, emb.size(1))
-            self.sin_cached = emb.sin().view(emb.size(0), 1, 1, emb.size(1))
-        return self.cos_cached, self.sin_cached
-
-
-class ESPNETMultiHeadedAttention(nn.Module):
-    """Multi-Head Attention layer.
-    Args:
-        n_head: The number of heads.
-        n_feat: The number of features.
-    """
-
-    def __init__(self, n_feat, n_head):
-        """Construct an MultiHeadedAttention object."""
-        super().__init__()
-        assert n_feat % n_head == 0
-        # We assume d_v always equals d_k
-        self.d_k = n_feat // n_head
-        self.h = n_head
-        self.linear_q = nn.Linear(n_feat, n_feat)
-        self.linear_k = nn.Linear(n_feat, n_feat)
-        self.linear_v = nn.Linear(n_feat, n_feat)
-        self.linear_out = nn.Linear(n_feat, n_feat)
-
-    def forward_qkv(self, query, key, value, **kwargs):
-        """Transform query, key and value.
-        Args:
-            query: Query tensor  B X T1 X C
-            key: Key tensor B X T2 X C
-            value: Value tensor  B X T2 X C
-        Returns:
-            torch.Tensor: Transformed query tensor  B X n_head X T1 X d_k
-            torch.Tensor: Transformed key tensor B X n_head X T2 X d_k
-            torch.Tensor: Transformed value tensor  B X n_head X T2 X d_k
-        """
-        n_batch = query.size(0)
-        q = self.linear_q(query).view(n_batch, -1, self.h, self.d_k)
-        k = self.linear_k(key).view(n_batch, -1, self.h, self.d_k)
-        v = self.linear_v(value).view(n_batch, -1, self.h, self.d_k)
-        q = q.transpose(1, 2)  # (batch, head, time1, d_k)
-        k = k.transpose(1, 2)  # (batch, head, time2, d_k)
-        v = v.transpose(1, 2)  # (batch, head, time2, d_k)
-        return q, k, v
-
-    def forward_attention(self, value, scores):
-        """Compute attention context vector.
-        Args:
-            value: Transformed value B X n_head X T2 X d_k.
-            scores: Attention score  B X n_head X T1 X T2
-        Returns:
-            torch.Tensor: Transformed value  B X T1 X d_model
-                weighted by the attention score  B X T1 X T2
-        """
-        n_batch = value.size(0)
-
-        p_attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
-        x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
-        x = x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)  # (batch, time1, d_model)
-
-        return self.linear_out(x)  # (batch, time1, d_model)
-
-    def forward(self, query, key, value, **kwargs):
-        """Compute scaled dot product attention.
-        Args:
-            query (torch.Tensor): Query tensor T X B X C
-            key (torch.Tensor): Key tensor T X B X C
-            value (torch.Tensor): Value tensor T X B X C
-        Returns:
-            torch.Tensor: Output tensor T X B X D.
-        """
-        query = query.transpose(0, 1)
-        key = key.transpose(0, 1)
-        value = value.transpose(0, 1)
-
-        q, k, v = self.forward_qkv(query, key, value)
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
-        scores = self.forward_attention(v, scores)
-        scores = scores.transpose(0, 1)
-        return scores
-
-
 class TransformerSentenceEncoderLayer(nn.Module):
     """
     Implements a Transformer Encoder Layer used in BERT/XLM style pre-trained
@@ -806,25 +698,13 @@ def make_conv_pos(e, k, g, is_batch_norm=False):
 
 class TransformerEncoder(nn.Module):
     def build_encoder_layer(self, args: dict[str, Any]):
-        if args.get("layer_type", "transformer") == "transformer":
-            layer = TransformerSentenceEncoderLayer(
-                embed_dim=self.embedding_dim,
-                ffn_embed_dim=args["encoder_ffn_embed_dim"],
-                attention_heads=args["encoder_attention_heads"],
-                activation_fn=args["activation_fn"],
-                layer_norm_first=args["layer_norm_first"],
-            )
-        elif args.get("layer_type", "transformer") == "conformer":
-            layer = ConformerWav2Vec2EncoderLayer(
-                embed_dim=self.embedding_dim,
-                ffn_embed_dim=args["encoder_ffn_embed_dim"],
-                attention_heads=args["encoder_attention_heads"],
-                depthwise_conv_kernel_size=args["depthwise_conv_kernel_size"],
-                activation_fn="swish",
-                attn_type=args["attn_type"],
-                pos_enc_type="abs",
-            )
-        return layer
+        return TransformerSentenceEncoderLayer(
+            embed_dim=self.embedding_dim,
+            ffn_embed_dim=args["encoder_ffn_embed_dim"],
+            attention_heads=args["encoder_attention_heads"],
+            activation_fn=args["activation_fn"],
+            layer_norm_first=args["layer_norm_first"],
+        )
 
     def __init__(
         self,
