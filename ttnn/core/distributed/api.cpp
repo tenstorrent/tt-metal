@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/api.hpp"
 
@@ -87,6 +88,20 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         return {tensor};
     }
     return {tensor};
+}
+
+Tensor get_single_device_tensor_at_coord(
+    const Tensor& tensor, const MeshCoordinate& coord, tt::tt_metal::TensorTopology tensor_topology) {
+    TT_FATAL(is_device_tensor(tensor), "Expected device tensor, got {}", tensor.storage_type());
+
+    const auto& device_storage = tensor.device_storage();
+    TT_FATAL(
+        std::ranges::find(device_storage.coords, coord) == device_storage.coords.end(),
+        "Tensor is not allocated at coordinate {}",
+        coord);
+
+    DeviceStorage shard_storage(device_storage.mesh_buffer, {coord});
+    return Tensor(std::move(shard_storage), tensor.tensor_spec(), std::move(tensor_topology));
 }
 
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {
