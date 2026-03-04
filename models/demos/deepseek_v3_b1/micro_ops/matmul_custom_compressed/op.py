@@ -115,7 +115,7 @@ class MatmulCustomCompressed:
         all_cores = ttnn.corerange_to_cores(core_grid)
         core_values = []
         for core_coord in all_cores:
-            shard_assignment = ct.get_assignment_numpy_per_shard(core_coord)
+            shard_assignment = ct.get_assignment_per_shard(core_coord)
             ctas = pack_formats_as_ctas(shard_assignment)
             core_values.append((core_coord, ctas))
         per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
