@@ -67,7 +67,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
 
     const uint32_t in0_t{2};        // input
     const uint32_t in1_t{1};        // mask
-    const uint32_t intermed0_t{1};  // accumalated sum
+    const uint32_t intermed0_t{1};  // accumulated sum
     const uint32_t out0_t{2};       // output
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
@@ -91,7 +91,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         {
             {tt::CBIndex::c_0, in0_t},         // input
             {tt::CBIndex::c_1, in1_t},         // mask
-            {tt::CBIndex::c_24, intermed0_t},  // accumalated sum
+            {tt::CBIndex::c_24, intermed0_t},  // accumulated sum
             {tt::CBIndex::c_16, out0_t},       // output
         });
     ////////////////////////////////////////////////////////////////////////////

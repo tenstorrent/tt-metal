@@ -70,8 +70,8 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
         noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
     }
 
-    // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a
-    // tile respectively)
+    // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of
+    // a tile respectively)
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
