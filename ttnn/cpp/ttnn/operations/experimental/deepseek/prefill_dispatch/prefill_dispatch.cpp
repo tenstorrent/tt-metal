@@ -45,7 +45,7 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
         num_links.value_or(1));
 
     std::optional<uint32_t> axis = cluster_axis;
-    uint32_t num_links_ = num_links.value_or(1);
+    uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
     auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
 

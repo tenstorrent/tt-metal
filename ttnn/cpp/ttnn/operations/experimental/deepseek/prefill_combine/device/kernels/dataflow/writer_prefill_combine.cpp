@@ -105,10 +105,35 @@ void kernel_main() {
     // Fabric is enabled - set up connections
     using namespace ttnn::operations::ccl::common;
 
+#ifdef AXIS
+    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
+    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+
+    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
+    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
+    constexpr uint32_t device_end_idx =
+        (axis == ReplicateGroup::COLS) ? (col + mesh_rows * mesh_cols) : (row * mesh_cols + mesh_cols);
+    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
+#else
+    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
+    constexpr uint32_t dispatch_devices = num_chips;
+    constexpr uint32_t dispatch_index = linearized_mesh_coord;
+    constexpr uint32_t device_begin_idx = 0;
+    constexpr uint32_t device_end_idx = num_chips;
+    constexpr uint32_t device_stride = 1;
+#endif
+
+    DPRINT_COMBINE << "dispatch_devices=" << dispatch_devices << " axis=" << (int)axis
+                   << " device_begin_idx=" << device_begin_idx << " device_end_idx=" << device_end_idx
+                   << " device_stride=" << device_stride << ENDL();
+
     DPRINT_COMBINE << "Fabric enabled: num_links=" << num_links << " topology=" << (uint32_t)topology << ENDL();
 
-    constexpr uint8_t dest_chip_ids[num_chips] = DEST_CHIP_ID;
-    constexpr uint8_t dest_mesh_ids[num_chips] = DEST_MESH_ID;
+    constexpr uint32_t num_devices = mesh_rows * mesh_cols;
+    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
+    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
     DPRINT_COMBINE << "Opening fabric connections async..." << ENDL();
@@ -118,8 +143,7 @@ void kernel_main() {
     // Set up packet header from CB (cb_id 4)
     constexpr uint32_t cb_packet_header_id = 4;
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
-    auto* unicast_packet_header =
-        reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
+    auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
 
     DPRINT_COMBINE << "Waiting for fabric connections barrier..." << ENDL();
     open_direction_connections_barrier(directions, fabric_connections);
@@ -133,12 +157,12 @@ void kernel_main() {
         src_chip_id,
         mesh_rows,
         mesh_cols,
-        ReplicateGroup::NONE,
-        num_chips>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        axis,
+        num_devices>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     // Wait for all devices to complete initialization
     DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, num_chips - 1);
+    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();

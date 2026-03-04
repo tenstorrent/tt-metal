@@ -86,6 +86,28 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="ring-8",
         ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+            id="mesh-2x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -103,27 +125,38 @@ def test_ttnn_dispatch_combine(
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
 
-    num_devices = num_chips = mesh_device.get_num_devices()
-    logger.info(f"Testing with mesh_shape={mesh_device.shape}, num_devices={num_devices}")
+    num_devices = mesh_device.get_num_devices()
+
+    # Compute sp_axis and chip counts for 2D mesh handling
+    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+        sp_axis = 0
+        num_chips_sp = mesh_device.shape[sp_axis]
+        num_chips_rep = mesh_device.shape[1]
+    else:
+        num_chips_sp = num_devices
+        num_chips_rep = 1
+        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
+
+    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {num_chips_sp=} {num_chips_rep=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"TTNN Dispatch+Combine {mesh_device=} {seq_len_per_chip=} {hidden_dim=} "
-        f"{n_routed_experts=} {num_experts_per_tok=} {num_chips=} "
+        f"TTNN Dispatch+Combine {mesh_device=} {num_devices=} {num_chips_sp=} {num_chips_rep=} "
+        f"{seq_len_per_chip=} {hidden_dim=} {n_routed_experts=} {num_experts_per_tok=} "
         f"{capacity_factor=} {use_predictable_data=}"
     )
     print("\n")
 
-    # Compute configuration constants
+    # Compute configuration constants (use num_chips_sp for dispatch/combine parallelism)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
+        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips_sp, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Generate test inputs
     if use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
-            num_chips=num_chips,
+            num_chips=num_chips_sp,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
             n_routed_experts=n_routed_experts,
@@ -133,7 +166,7 @@ def test_ttnn_dispatch_combine(
         logger.info("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
-            num_chips=num_chips,
+            num_chips=num_chips_sp,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
             n_routed_experts=n_routed_experts,
@@ -149,7 +182,7 @@ def test_ttnn_dispatch_combine(
     mesh_mapper = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(0, None),  # Shard on dim 0, replicate on dim 1
+        dims=(sp_axis, None),  # Shard on sp_axis, replicate on other axis
     )
 
     tt_x = ttnn.from_torch(
@@ -165,7 +198,7 @@ def test_ttnn_dispatch_combine(
     # Initialize TTNN dispatch module
     tt_dispatch_module = TtDispatchModule(
         mesh_device=mesh_device,
-        num_chips=num_chips,
+        num_chips=num_chips_sp,
         experts_per_chip=experts_per_chip,
         n_routed_experts=n_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
@@ -173,7 +206,7 @@ def test_ttnn_dispatch_combine(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
-        cluster_axis=0,
+        cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
     )
@@ -207,11 +240,11 @@ def test_ttnn_dispatch_combine(
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
         mesh_device=mesh_device,
-        num_chips=num_chips,
+        num_chips=num_chips_sp,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
-        cluster_axis=0,
+        cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
     )
@@ -227,29 +260,43 @@ def test_ttnn_dispatch_combine(
     mesh_composer = ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
-            dims=[0, 1],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
+            dims=[1, 0],  # Axis 0: replicated; Axis 1: shard on tensor dim 0
         ),
     )
 
     y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
 
     # Host-side reduction
+    # Output shape after mesh composition with dims=[1, 0]:
+    # (num_chips_rep, num_chips_sp, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    # Note: Even for 1D mesh with num_chips_rep=1, the first dimension is still there
     logger.info(f"Before reduction: {y.shape=}")
     y = y / num_experts_per_tok  # Average contributions from multiple experts
-    y = y.sum(dim=2)  # Sum across expert dimension
+    y = y.sum(dim=-2)  # Sum across expert dimension (num_experts_per_tok)
+    y = y.squeeze(-3)  # Remove extra dimension (the "1") added for 2D mesh composition
     logger.info(f"After reduction: {y.shape=}")
+
+    # y shape is now: (num_chips_rep, num_chips_sp, seq_len_per_chip, hidden_dim)
+    # x shape is: (num_chips_sp, seq_len_per_chip, hidden_dim)
 
     # Verify round-trip correctness
     logger.info("Verifying round-trip correctness...")
     logger.info(f"Sample input x[0, 0, :5]: {x[0, 0, :5]}")
-    logger.info(f"Sample output y[0, 0, :5]: {y[0, 0, :5]}")
-    if num_chips > 1:
+    logger.info(f"Sample output y[0, 0, 0, :5]: {y[0, 0, 0, :5]}")
+
+    if num_chips_sp > 1:
         logger.info(f"Sample input x[1, 0, :5]: {x[1, 0, :5]}")
-        logger.info(f"Sample output y[1, 0, :5]: {y[1, 0, :5]}")
+        logger.info(f"Sample output y[0, 1, 0, :5]: {y[0, 1, 0, :5]}")
 
-    max_diff = torch.max(torch.abs(x - y)).item()
-    logger.info(f"Maximum absolute difference: {max_diff}")
+    # Check each replica matches the input
+    all_match = True
+    for r in range(num_chips_rep):
+        y_slice = y[r]  # Shape: (num_chips_sp, seq_len_per_chip, hidden_dim)
+        max_diff = torch.max(torch.abs(x - y_slice)).item()
+        logger.info(f"Replica {r}: Maximum absolute difference: {max_diff}")
+        if not torch.allclose(x, y_slice, atol=1e-6):
+            all_match = False
 
-    assert torch.allclose(x, y, atol=1e-6), f"Expected output to match input, but got max diff {max_diff}"
+    assert all_match, f"Expected output to match input. Check logs for details."
 
     logger.info("✅ TTNN dispatch→combine round-trip matches input!")
