@@ -159,7 +159,7 @@ jobs:
         timeout-minutes: 15
         env:
           TT_METAL_HOME: /home/user/tt-metal
-          PYTHONPATH: /home/user/tt-metal
+          PYTHONPATH: /home/user/tt-metal/ttnn:/home/user/tt-metal
         run: |
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
           PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
@@ -173,7 +173,7 @@ jobs:
           tt-run --skip-executable-check \
             --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
             --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
-            pytest -svv /home/user/tt-metal/models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py
+            /opt/venv/bin/pytest -svv /home/user/tt-metal/models/demos/deepseek_v3_b1/tests/unit_tests/test_multi_host_pipeline.py
   cleanup:
     name: Cleanup
     needs: [run, create-allocation]
