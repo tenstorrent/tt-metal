@@ -489,3 +489,36 @@ def test_xielu(alpha_p, alpha_n, dtype, device):
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
         assert_with_ulp(torch_output, ttnn_output, 1)
+
+
+def test_lgamma_bfloat16(device):
+    high = 1000
+    low = -1000
+    min_abs = torch.finfo(torch.bfloat16).tiny
+
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor_f32 = input_tensor.to(torch.float32)
+
+    in_range = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    not_tiny = torch.abs(input_tensor_f32) >= min_abs  # exclude subnormals
+    is_non_positive_int = (input_tensor_f32 <= 0) & (input_tensor_f32 == torch.floor(input_tensor_f32))
+    mask = in_range & not_tiny & ~is_non_positive_int  # exclude lgamma poles at 0,-1,-2,...
+
+    input_tensor = input_tensor[mask]
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.lgamma)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.lgamma(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert torch.allclose(golden, result, rtol=1e-1, atol=1e-1)

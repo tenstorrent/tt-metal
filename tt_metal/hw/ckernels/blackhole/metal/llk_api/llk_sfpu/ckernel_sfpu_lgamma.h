@@ -54,16 +54,10 @@ inline void calculate_lgamma_stirling() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-void lgamma_stirling_init() {
-    // log_init<false, false, is_fp32_dest_acc_en>();
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_lgamma_adjusted(
     const uint dst_index_in0,  // lgamma_stirling result
-    const uint dst_index_in1,  // sin (x * M_PI) with integer adjustments
+    const uint dst_index_in1,  // log|sin(pi * frac(x))| with integer adjustments
     const uint dst_index_in2,  // input x
     const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -75,10 +69,8 @@ inline void calculate_lgamma_adjusted(
         sfpi::vFloat log_sin_pi_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat in = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
 
-        sfpi::vFloat z = 1.1447298858f;
-
-        // ln(pi) - log|sin(pi*x)|
-        sfpi::vFloat reflection_adj = z - log_sin_pi_x;
+        // ln(pi) - log|sin(pi * frac(x))|
+        sfpi::vFloat reflection_adj = ln_pi - log_sin_pi_x;
 
         sfpi::vFloat result = res_stirling;
 
@@ -93,6 +85,11 @@ inline void calculate_lgamma_adjusted(
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+void lgamma_stirling_init() {
+    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
