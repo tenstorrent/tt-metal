@@ -127,7 +127,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (args.dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.padded_shape().rank();
+        const uint32_t input_rank = input_tensor_a.logical_shape().rank();
         const uint32_t normalized_dim = args.dim.value() < 0 ? args.dim.value() + input_rank : args.dim.value();
 
         // TODO: Add support for normalized_dim = 0, 1, 2
