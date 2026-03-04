@@ -143,7 +143,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
 
         Returns
         -------
-        ttnn.Tensor
+        std::vector<ttnn.Tensor>
             Output tensor with shape [..., M, N], TILE layout, and dtype specified by `dtype` parameter
             (or same dtype as `input_tensor` if `dtype` is not provided).
 
@@ -223,7 +223,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("force_transpose") = true,
             nb::arg("num_workers_per_link") = 1,
-            nb::arg("num_buffers_per_channel") = 1});
+            nb::arg("num_buffers_per_channel") = 1,
+            nb::arg("chunks") = 1,
+            nb::arg("dim") = -1});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

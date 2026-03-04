@@ -39,15 +39,17 @@ constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(19);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(20);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(21);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(22));
+constexpr uint32_t N_chunks = get_compile_time_arg_val(23);
+constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(24);
 
 #ifdef USE_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(29);
 
-constexpr uint32_t mux_arg_count = 28;
+constexpr uint32_t mux_arg_count = 30;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_forward =
     ccl_routing_utils::get_line_unicast_route_info_from_args<mux_arg_count>();
@@ -58,7 +60,7 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backwa
 
 constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
 #else
-constexpr uint32_t ct_arg_count = 23;
+constexpr uint32_t ct_arg_count = 25;
 #endif
 
 namespace detail {
@@ -92,7 +94,6 @@ void kernel_main() {
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
@@ -141,15 +142,22 @@ void kernel_main() {
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
-    constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
+
+    // Always create tuple of output accessors (size = N_chunks)
+    constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, argidx, out_tile_size);
+
 #ifdef FUSE_BIAS
-    constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in2_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+    const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -167,7 +175,9 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
 #else
-    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in3_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
 #endif
@@ -179,7 +189,9 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr auto ternary_a_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
 #else
-    constexpr auto ternary_a_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
 #endif
 #endif
     constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
@@ -267,15 +279,30 @@ void kernel_main() {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            out_reader,
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
+
+                        // write_block_sync_split is more generic (support multiple output tensors)
+                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                        if constexpr (N_chunks == 1) {
+                            write_block_sync<M_block_tiles, N_block_tiles>(
+                                std::get<0>(outputs_tuple),
+                                out_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        } else {
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                outputs_tuple,
+                                out0_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        }
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
@@ -461,8 +488,29 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                        out_reader, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
+                    // write_block_sync_granular_split is more generic (support multiple output tensors)
+                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
+                    if constexpr (N_chunks == 1) {
+                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                            std::get<0>(outputs_tuple),
+                            out_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    } else {
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            outputs_tuple,
+                            out0_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    }
                 }
             }
         }

@@ -23,7 +23,6 @@ struct AllGatherMinimalMatmulAsyncProgramFactory {
         tt::tt_metal::KernelHandle compute_kernels_id{};
         bool transpose_core_grid;
         uint32_t in1_size;
-        ;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
