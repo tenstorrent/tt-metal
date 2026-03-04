@@ -42,6 +42,30 @@ Tensor unary_composite_2param_wrapper(const Tensor& t, const std::optional<Memor
     return Func(t, m, std::nullopt, std::nullopt);
 }
 
+template <auto Func>
+Tensor unary_4param_to_5param_wrapper(
+    const Tensor& input_tensor,
+    float parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor) {
+    return Func(input_tensor, parameter, memory_config, output_tensor, std::nullopt);
+}
+
+template <auto Func>
+Tensor unary_3param_to_4param_wrapper(
+    const Tensor& input_tensor, float parameter, const std::optional<MemoryConfig>& memory_config) {
+    return Func(input_tensor, parameter, memory_config, std::nullopt);
+}
+
+template <auto Func>
+Tensor unary_composite_3param_to_4param_wrapper(
+    const Tensor& input_tensor,
+    float parameter_a,
+    float parameter_b,
+    const std::optional<MemoryConfig>& memory_config) {
+    return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
+}
+
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -76,13 +100,12 @@ void bind_unary_clamp(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                const std::optional<Tensor>& parameter_a,
-                const std::optional<Tensor>& parameter_b,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return ttnn::clamp(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<Tensor>,
+                std::optional<Tensor>,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::clamp),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
             nb::arg("max") = nb::none(),
@@ -90,13 +113,12 @@ void bind_unary_clamp(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                std::optional<std::variant<float, int32_t>> parameter_a,
-                std::optional<std::variant<float, int32_t>> parameter_b,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return ttnn::clamp(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<std::variant<float, int32_t>>,
+                std::optional<std::variant<float, int32_t>>,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::clamp),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
             nb::arg("max") = nb::none(),
@@ -137,24 +159,22 @@ void bind_unary_clip(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                const std::optional<Tensor>& min,
-                const std::optional<Tensor>& max,
-                const std::optional<MemoryConfig>& memory_config) {
-                return ttnn::clip(input_tensor, min, max, memory_config);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<Tensor>,
+                std::optional<Tensor>,
+                const std::optional<MemoryConfig>&>(&ttnn::clip),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
             nb::arg("max") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()},
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                std::optional<float> min,
-                std::optional<float> max,
-                const std::optional<MemoryConfig>& memory_config) {
-                return ttnn::clip(input_tensor, min, max, memory_config);
-            },
+            nb::overload_cast<
+                const Tensor&,
+                std::optional<float>,
+                std::optional<float>,
+                const std::optional<MemoryConfig>&>(&ttnn::clip),
             nb::arg("input_tensor"),
             nb::arg("min") = nb::none(),
             nb::arg("max") = nb::none(),
@@ -437,19 +457,13 @@ void bind_unary_operation_overload_complex_return_complex(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return ttnn::reciprocal(input_tensor, memory_config, output_tensor);
-            },
+            &unary_3param_wrapper<ttnn::reciprocal>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()},
         ttnn::overload_t{
-            +[](const ComplexTensor& input_tensor, const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
-                return ttnn::reciprocal(input_tensor, memory_config);
-            },
+            nb::overload_cast<const ComplexTensor&, const ttnn::MemoryConfig&>(&ttnn::reciprocal),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config")});
@@ -503,13 +517,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor,
-                const bool parameter,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor,
-                const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return Func(input_tensor, parameter, memory_config, output_tensor, sub_core_grids);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
@@ -571,12 +579,7 @@ void bind_unary_operation_with_float_parameter(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor,
-                const float parameter,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return Func(input_tensor, parameter, memory_config, output_tensor, std::nullopt);
-            },
+            &unary_4param_to_5param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
@@ -637,12 +640,7 @@ void bind_unary_operation_with_scalar_parameter(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor,
-                ScalarVariant parameter,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return Func(input_tensor, parameter, memory_config, output_tensor);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
@@ -705,12 +703,7 @@ void bind_unary_operation_with_float_parameter_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor,
-                const float parameter,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return Func(input_tensor, parameter, memory_config, output_tensor, std::nullopt);
-            },
+            &unary_4param_to_5param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name.data()) = parameter_default,
@@ -765,12 +758,7 @@ void bind_unary_composite_with_default_float(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                float parameter_a,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return Func(input_tensor, parameter_a, memory_config, output_tensor);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::kw_only(),
@@ -831,12 +819,7 @@ void bind_unary_operation_with_int_parameter(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor,
-                const std::optional<int>& parameter,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return Func(input_tensor, parameter, memory_config, output_tensor);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name.c_str()) = 0,
@@ -896,13 +879,7 @@ void bind_unary_operation_with_dim_parameter(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input_tensor, int dim, const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, dim, memory_config);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("dim") = -1,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            Func, nb::arg("input_tensor"), nb::arg("dim") = -1, nb::kw_only(), nb::arg("memory_config") = nb::none()});
 }
 
 void bind_softplus(nb::module_& mod) {
@@ -1054,13 +1031,7 @@ void bind_unary_rdiv(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                float parameter_a,
-                const std::optional<std::string>& parameter_b,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor) {
-                return Func(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
@@ -1109,10 +1080,7 @@ void bind_tanh_like(nb::module_& mod) {
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const Tensor& input,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<Tensor>& output_tensor,
-                bool approx) { return Func(input, memory_config, output_tensor, approx); },
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
@@ -1469,11 +1437,7 @@ void bind_unary_composite_int_with_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                int32_t parameter_a,
-                const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, parameter_a, memory_config);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1535,12 +1499,7 @@ void bind_unary_composite_floats_with_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                float parameter_a,
-                float parameter_b,
-                const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
-            },
+            &unary_composite_3param_to_4param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1590,11 +1549,7 @@ void bind_unary_composite_int(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                int32_t parameter_a,
-                const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, parameter_a, memory_config);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
@@ -1651,12 +1606,7 @@ void bind_unary_threshold(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor,
-                float parameter_a,
-                float parameter_b,
-                const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
-            },
+            &unary_composite_3param_to_4param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::arg(parameter_name_b.c_str()),
@@ -1715,9 +1665,7 @@ void bind_unary_composite_float_with_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor, float parameter_a, const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, parameter_a, memory_config, std::nullopt);
-            },
+            &unary_3param_to_4param_wrapper<Func>,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
@@ -1762,9 +1710,9 @@ void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     ttnn::bind_function<"logit">(
         mod,
         doc.c_str(),
-        +[](const Tensor& t, std::optional<float> e, const std::optional<MemoryConfig>& m) {
-            return ttnn::logit(t, e, m, std::nullopt);
-        },
+        &unary_3param_to_4param_wrapper<static_cast<Tensor (*)(
+            const Tensor&, std::optional<float>, const std::optional<MemoryConfig>&, const std::optional<Tensor>&)>(
+            &ttnn::logit)>,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("eps") = nb::none(),
@@ -1819,9 +1767,7 @@ void bind_unary_composite_rpow(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            +[](const ttnn::Tensor& input_tensor, float parameter_a, const std::optional<MemoryConfig>& memory_config) {
-                return Func(input_tensor, parameter_a, memory_config);
-            },
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::kw_only(),
@@ -1832,10 +1778,8 @@ void bind_unary_composite_rpow(
 void py_module(nb::module_& mod) {
     bind_unary_operation_overload_complex<"abs">(
         mod,
-        +[](const Tensor& t, const std::optional<MemoryConfig>& m, const std::optional<Tensor>& o) {
-            return ttnn::abs(t, m, o);
-        },
-        +[](const ttnn::operations::complex::ComplexTensor& t, const MemoryConfig& m) { return ttnn::abs(t, m); },
+        nb::overload_cast<const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&>(&ttnn::abs),
+        nb::overload_cast<const ttnn::operations::complex::ComplexTensor&, const MemoryConfig&>(&ttnn::abs),
         R"doc(\mathrm{{output\_tensor}}_i = \verb|abs|(\mathrm{{input\_tensor}}_i))doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation<"acos", &ttnn::acos>(
