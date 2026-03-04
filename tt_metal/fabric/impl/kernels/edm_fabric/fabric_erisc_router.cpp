@@ -2533,11 +2533,7 @@ FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
 
-    using MemoryType = typename std::conditional<
-        I == 0,
-        volatile tt_reg_ptr uint32_t*,
-        volatile tt_l1_ptr uint32_t*
-    >::type;
+    using MemoryType = ChannelMemoryType<I>;
 
     auto connection_live_semaphore_ptr =
         reinterpret_cast<MemoryType>(local_sender_connection_live_semaphore_addresses[I]);
@@ -2965,11 +2961,7 @@ void kernel_main() {
     [&]<size_t... Is>(std::index_sequence<Is...>) {
         (([&]<size_t I>() {
              if constexpr (is_sender_channel_serviced[I]) {
-                using MemoryType = typename std::conditional<
-                    I == 0,
-                    volatile tt_reg_ptr uint32_t*,
-                    volatile tt_l1_ptr uint32_t*
-                >::type;
+                using MemoryType = ChannelMemoryType<I>;
                 *reinterpret_cast<MemoryType>(local_sender_channel_connection_semaphore_addrs[I]) = 0;
                 *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]) = 0;
              }

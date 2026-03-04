@@ -43,6 +43,16 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
+// type wrapper that returns reg_ptr when the channel type is 0;
+// this support overlay scratch registers being used on worker
+// or router channel 0
+template<size_t ChannelIndex>
+using ChannelMemoryType = typename std::conditional<
+    ChannelIndex == 0,
+    volatile tt_reg_ptr uint32_t*,
+    volatile tt_l1_ptr uint32_t*
+>::type;
+
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
