@@ -452,9 +452,9 @@ class CompressedTensor:
         """Compute tensor shape and shard shape for a given sharding layout.
 
         Returns (tensor_shape, shard_shape) where:
-          HEIGHT_SHARDED: (num_cores * shard_bytes, 1), shard = [shard_bytes, 1]
+          HEIGHT_SHARDED: (num_cores, shard_bytes), shard = [1, shard_bytes]
           WIDTH_SHARDED:  (1, num_cores * shard_bytes), shard = [1, shard_bytes]
-          BLOCK_SHARDED:  (h_shards * shard_bytes, w_shards), shard = [shard_bytes, 1]
+          BLOCK_SHARDED:  (h_shards, w_shards * shard_bytes), shard = [1, shard_bytes]
         """
         if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
             return (num_cores, shard_bytes), [1, shard_bytes]
