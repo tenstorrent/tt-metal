@@ -136,11 +136,8 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::sum, ttnn::mean) was removed from decorators.hpp
-    // Now only device operations are captured. The graph structure is more complex.
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // The graph will have more vertices since device operations are captured directly
     EXPECT_GE(levelized_graph.size(), 3);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
@@ -173,9 +170,6 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
         return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
     }));
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so the internals structure is different
 }
 
 TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
@@ -201,18 +195,11 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::sum, ttnn::softmax) was removed from decorators.hpp
-    // Now only device operations are captured. The graph structure is more complex.
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // The graph will have more vertices since device operations are captured directly
     EXPECT_GE(levelized_graph.size(), 3);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
-    // With high-level tracing removed, internals may exist even at level 1
-    // EXPECT_TRUE(
-    //     std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty();
-    //     }));
 
     // Find the input tensor vertex
     auto input_tensor_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
@@ -229,8 +216,6 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     EXPECT_GE(vertex_0.out_edges.size(), 1);
     EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array3D{16, 32, 64}));
 
-    // With high-level tracing removed, we can't verify the exact structure
-    // but we can verify that the graph has the expected operations
     auto has_reduction = std::ranges::any_of(
         levelized_graph.vertices(), [](const auto& v) { return v.name.find("Reduce") != std::string::npos; });
     auto has_softmax = std::ranges::any_of(
@@ -251,9 +236,6 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
         return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
     }));
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
@@ -279,18 +261,11 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::matmul, ttnn::add) was removed from decorators.hpp
-    // Now only device operations are captured. The graph structure is more complex.
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // The graph will have more vertices since device operations are captured directly
     EXPECT_GE(levelized_graph.size(), 3);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
-    // With high-level tracing removed, internals may exist even at level 1
-    // EXPECT_TRUE(
-    //     std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty();
-    //     }));
 
     // Find the input tensor vertex
     auto input_tensor_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
@@ -313,8 +288,6 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     EXPECT_GE(vertex_0.out_edges.size(), 1);  // feeds operations
     EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{32, 32}));
 
-    // With high-level tracing removed, we can't verify the exact structure
-    // but we can verify that the graph has the expected operations
     EXPECT_TRUE(matmul_op_it != levelized_graph.vertices().end() || add_op_it != levelized_graph.vertices().end());
 
     // Test level 2
@@ -331,9 +304,6 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
         return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
     }));
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
@@ -356,18 +326,11 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::digamma) was removed from decorators.hpp
-    // Now only device operations are captured. The graph structure is more complex.
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // The graph will have more vertices since device operations are captured directly
     EXPECT_GE(levelized_graph.size(), 2);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
-    // With high-level tracing removed, internals may exist even at level 1
-    // EXPECT_TRUE(
-    //     std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty();
-    //     }));
 
     // Find the input tensor vertex
     auto input_tensor_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
@@ -388,8 +351,6 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
     EXPECT_GE(vertex_0.out_edges.size(), 1);
     EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{12, 19}));
 
-    // With high-level tracing removed, we can't verify the exact structure
-    // but we can verify that the graph has the expected operation
     EXPECT_TRUE(digamma_op_it != levelized_graph.vertices().end());
 
     // Test level 2
@@ -406,9 +367,6 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
     EXPECT_TRUE(std::ranges::none_of(levelized_graph_2.vertices(), [&](const auto& vertex) {
         return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
     }));
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
@@ -433,17 +391,11 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::multiply) was removed from decorators.hpp
-    // Now only device operations are captured: BinaryNgDeviceOperation
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
     EXPECT_GE(levelized_graph.size(), 2);  // tensor, device operation
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
-    // With high-level tracing removed, internals may exist even at level 1
-    // EXPECT_TRUE(
-    //     std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty();
-    //     }));
 
     // Find the input tensor vertex
     auto input_tensor_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
@@ -503,7 +455,6 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     vertex_1 = *vertex_1_it;
 
     EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - now we get BinaryNgDeviceOperation directly
     EXPECT_TRUE(
         vertex_1.name.find("BinaryNg") != std::string::npos || vertex_1.name.find("Binary") != std::string::npos);
 
@@ -544,11 +495,8 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::add, ttnn::subtract) was removed from decorators.hpp
-    // Now only device operations are captured. The graph structure is more complex.
     // Test level 1 - fork: one input tensor feeds multiple operations
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // The graph will have more vertices since device operations are captured directly
     EXPECT_GE(levelized_graph.size(), 3);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
@@ -616,9 +564,6 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, JoinTest) {
@@ -650,11 +595,8 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::add) was removed from decorators.hpp
-    // Now only device operations are captured. The graph structure is more complex.
     // Test level 1 - join: one operation uses multiple different input tensors
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    // The graph will have more vertices since device operations are captured directly
     EXPECT_GE(levelized_graph.size(), 3);
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
@@ -704,9 +646,6 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
@@ -733,8 +672,6 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::subtract) was removed from decorators.hpp
-    // Now only device operations are captured, but argument order is still preserved in in_edges
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
     EXPECT_GE(levelized_graph.size(), 4);
@@ -765,7 +702,6 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
 
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(tensor_b_vertex.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - now we get BinaryNgDeviceOperation
     EXPECT_TRUE(
         subtract_ab.name.find("BinaryNg") != std::string::npos || subtract_ab.name.find("Binary") != std::string::npos);
     EXPECT_TRUE(
@@ -807,9 +743,6 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
@@ -838,8 +771,6 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::add, ttnn::subtract) was removed from decorators.hpp
-    // Now only device operations are captured, but argument order is still preserved in in_edges
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
 
@@ -910,9 +841,6 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
@@ -935,8 +863,6 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::add) was removed from decorators.hpp
-    // Now only device operations are captured: BinaryNgDeviceOperation
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
     EXPECT_GE(levelized_graph.size(), 2);
@@ -958,7 +884,6 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
     const auto& add_aa = *add_op_it;
 
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - now we get BinaryNgDeviceOperation
     EXPECT_TRUE(add_aa.name.find("BinaryNg") != std::string::npos || add_aa.name.find("Binary") != std::string::npos);
 
     EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
@@ -984,9 +909,6 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
@@ -1014,8 +936,6 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::addcmul) was removed from decorators.hpp
-    // Now only device operations are captured, but argument order is still preserved in in_edges
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
     EXPECT_GE(levelized_graph.size(), 5);
@@ -1049,9 +969,6 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(tensor_b_vertex.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(tensor_c_vertex.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - operation names are device operations now
-    // EXPECT_EQ(addcmul_abc.name, "ttnn::addcmul");
-    // EXPECT_EQ(addcmul_cba.name, "ttnn::addcmul");
 
     EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
     EXPECT_TRUE(tensor_b_vertex.in_edges.empty());
@@ -1093,9 +1010,6 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
@@ -1122,8 +1036,6 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::addcmul) was removed from decorators.hpp
-    // Now only device operations are captured, but argument order is still preserved in in_edges
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
     EXPECT_GE(levelized_graph.size(), 4);
@@ -1155,9 +1067,6 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
 
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(tensor_b_vertex.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - operation names are device operations now
-    // EXPECT_EQ(addcmul_aba.name, "ttnn::addcmul");
-    // EXPECT_EQ(addcmul_baa.name, "ttnn::addcmul");
 
     EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
     EXPECT_TRUE(tensor_b_vertex.in_edges.empty());
@@ -1202,9 +1111,6 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
@@ -1232,8 +1138,6 @@ TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
         ref_json_trace = capture.end_graph_capture();
     }
 
-    // Note: High-level function tracing (ttnn::matmul) was removed from decorators.hpp
-    // Now only device operations are captured, but argument order is still preserved in in_edges
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
     EXPECT_GE(levelized_graph.size(), 5);
@@ -1288,10 +1192,6 @@ for (auto t : tensor_vertices) {
 
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(tensor_b_vertex.name.find("tensor") != std::string::npos);
-    // High-level function tracing removed - operation names are device operations now
-    // EXPECT_EQ(matmul_ab.name, "ttnn::matmul");
-    // EXPECT_EQ(matmul_ba.name, "ttnn::matmul");
-    // EXPECT_EQ(matmul_aa.name, "ttnn::matmul");
 
     EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
     EXPECT_TRUE(tensor_b_vertex.in_edges.empty());
@@ -1340,9 +1240,6 @@ for (auto t : tensor_vertices) {
                 std::ranges::all_of(level_2_vertices, [&](const auto& vertex) { return vertex.internals.empty(); }));
         }
     }
-
-    // Note: High-level function tracing removed - structure is different now
-    // Device operations are captured directly, so we can't verify specific internals structure
 }
 
 TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
@@ -1424,7 +1321,6 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_GE(levelized_graph_json_2.size(), 3);  // At least 3 vertices at level 2
 
     // Verify that BinaryNgDeviceOperation vertex has internals at level 2
-    // Note: High-level function tracing (ttnn::add) was removed, now we get BinaryNgDeviceOperation
     auto add_vertex_it = std::ranges::find_if(
         levelized_graph_json_2, [](const auto& v) { return v[ttnn::graph::kName] == "BinaryNgDeviceOperation"; });
     EXPECT_NE(add_vertex_it, levelized_graph_json_2.end());
@@ -1605,7 +1501,6 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
         } else if (v.name == "BinaryNgDeviceOperation") {
-            // Note: High-level function tracing (ttnn::multiply, ttnn::add) was removed, now we get
             // BinaryNgDeviceOperation
             binary_op_ids.push_back(i);
         }
@@ -1701,7 +1596,6 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
         } else if (v.name == "BinaryNgDeviceOperation") {
-            // Note: High-level function tracing (ttnn::subtract) was removed, now we get BinaryNgDeviceOperation
             subtract_ids.push_back(i);
         }
     }
