@@ -62,14 +62,14 @@ TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         CoreCoord(0, 0),
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + 2 * sizeof(int)}});
+            .num_threads_per_cluster = 3, .compile_args = {MEM_L1_UNCACHED_BASE + (2 * sizeof(int))}});
 
     KernelHandle kernel_3 = experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
         CoreCoord(1, 0),
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 2, .compile_args = {MEM_L1_UNCACHED_BASE + 2 * sizeof(int)}});
+            .num_threads_per_cluster = 2, .compile_args = {MEM_L1_UNCACHED_BASE + (2 * sizeof(int))}});
 
     SetRuntimeArgs(program, kernel_0, core_range, {1, 2});
     SetRuntimeArgs(program, kernel_1, core_range, {3, 4});
