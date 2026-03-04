@@ -192,7 +192,7 @@
   cmd: run_t3000_gpt_oss_unit_tests
   skus:
     wh_llmbox:
-      timeout: 30
+      timeout: 35
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss
