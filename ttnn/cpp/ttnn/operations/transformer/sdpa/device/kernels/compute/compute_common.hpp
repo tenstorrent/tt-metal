@@ -18,12 +18,9 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/tile_move_copy_custom.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
-#include "api/compute/experimental/matmul_custom.h"
-#include "api/compute/experimental/sdpa_sub_custom.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -620,7 +617,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
-#if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifdef TRISC_MATH
 
 constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
@@ -858,7 +855,7 @@ void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
-#endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
+#endif
 
 /**
  * out_cb = exp((in0_cb - in1_cb) * scale_fp32)

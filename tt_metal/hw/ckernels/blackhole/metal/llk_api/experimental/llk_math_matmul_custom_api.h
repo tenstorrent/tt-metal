@@ -46,6 +46,6 @@ inline void llk_math_matmul_reinit_no_mop(
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_reinit_no_mop_after_sub() {
-    matmul_configure_addrmod_reinit_after_sub<math_fidelity>();
+    matmul_configure_addrmod_reinit_after_sub<math_fidelity, THROTTLE_LEVEL>();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
