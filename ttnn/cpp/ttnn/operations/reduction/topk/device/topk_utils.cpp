@@ -64,6 +64,7 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     // Calculate the maximum number of cores available in the core grid
     const auto max_cores =
         (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
+    TT_FATAL(max_cores > 0, "Core grid must contain at least one core. Got core range: {}", core_range.str());
 
     // Calculate conservative starting split size:
     // 1. Divide width by tile width to get number of tiles
