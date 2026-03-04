@@ -26,13 +26,14 @@ void kernel_main() {
     constexpr uint32_t in0_block_h = get_compile_time_arg_val(4);
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t last_ktile_w = get_compile_time_arg_val(6);
+    constexpr uint32_t last_ktile_h = get_compile_time_arg_val(7);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
     // batch args
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(8);
-    constexpr uint32_t MtKt = get_compile_time_arg_val(9);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(9);
+    constexpr uint32_t MtKt = get_compile_time_arg_val(10);
 
-    constexpr auto in0_args = TensorAccessorArgs<10>();
+    constexpr auto in0_args = TensorAccessorArgs<11>();
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t one_tile = 1;
@@ -83,6 +84,13 @@ void kernel_main() {
                             noc_async_read_barrier();
                             constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
                             pad_last_ktile<in0_data_format, last_ktile_w>(l1_write_addr_in0);
+                        }
+                    }
+                    if constexpr (last_ktile_h > 0) {
+                        if ((block == num_blocks - 1) && (w == in0_block_w - 1)) {
+                            noc_async_read_barrier();
+                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                            pad_last_transposed_ktile<in0_data_format, last_ktile_h>(l1_write_addr_in0);
                         }
                     }
 
