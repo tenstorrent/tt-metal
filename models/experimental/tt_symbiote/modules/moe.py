@@ -51,23 +51,25 @@ def _make_sparse_matmul_program_config(
     out_features: int,
     in0_block_w: int,
     out_subblock_h: int = 1,
-    out_subblock_w: int = 1,
+    out_subblock_w: int = None,
     per_core_M: int = 1,
 ):
     grid = device.compute_with_storage_grid_size()
     core_x = int(getattr(grid, "x"))
     core_y = int(getattr(grid, "y"))
     n_tiles = (int(out_features) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    # Keep num_blocks_x <= num_cores using conservative per_core_N.
     num_cores = max(1, core_x * core_y)
     per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
+    out_block_w = per_core_N
+    if out_subblock_w is None:
+        out_subblock_w = min(per_core_N, 4)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
         in0_block_w=int(in0_block_w),
         out_subblock_h=int(out_subblock_h),
         out_subblock_w=int(out_subblock_w),
         out_block_h=1,
-        out_block_w=1,
+        out_block_w=int(out_block_w),
         per_core_M=int(per_core_M),
         per_core_N=int(per_core_N),
         fuse_batch=False,
@@ -856,42 +858,43 @@ class TTNNMoERouterDecode(TTNNModule):
         self._scale_torch = torch.full((1, 1, 1, r.top_k), r.routed_scaling_factor, dtype=torch.bfloat16)
 
     def move_weights_to_device_impl(self):
-        pass
+        self._bias_dev = ttnn.to_device(
+            ttnn.from_torch(self._bias_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+            self.device,
+        )
+        self._scatter_input_dev = ttnn.to_device(
+            ttnn.from_torch(self._scatter_input_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+            self.device,
+        )
+        self._scatter_src_dev = ttnn.to_device(
+            ttnn.from_torch(self._scatter_src_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+            self.device,
+        )
+        self._scale_dev = ttnn.to_device(
+            ttnn.from_torch(self._scale_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+            self.device,
+        )
 
     def forward(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         r = self._fallback_torch_layer
 
-        # Ensure TILE_LAYOUT for sigmoid / topk
         if logits.layout != ttnn.TILE_LAYOUT:
             logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Work in 4D: (1, 1, T, n_experts)
         logits = ttnn.reshape(logits, ttnn.Shape((1, 1, logits.shape[0], logits.shape[1])))
-        # Compute sigmoid in float32 for numerical stability, then use a bfloat16 copy
-        # only for topk which requires BF16.
         if logits.dtype != ttnn.float32:
             logits_f32 = ttnn.typecast(logits, ttnn.float32)
-            # original logits not needed after conversion
             ttnn.deallocate(logits)
         else:
             logits_f32 = logits
 
         scores_f32 = ttnn.sigmoid(logits_f32)
 
-        # keep scores_f32 around for gathering/normalization
         T = scores_f32.shape[2]
         n_experts = scores_f32.shape[3]
         n_group = r.n_group
         experts_per_group = n_experts // n_group
 
-        # Create fresh device tensors from cached torch data each call.
-        def _to_device_rm(torch_tensor):
-            return ttnn.to_device(
-                ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
-                self.device,
-            )
-
-        # Add correction bias
-        bias_rm = _to_device_rm(self._bias_torch)
+        bias_rm = self._bias_dev
         bias_rep_rm = ttnn.repeat(bias_rm, ttnn.Shape((1, 1, T, 1)))
         bias = ttnn.to_layout(bias_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Convert bias to float32 for stable addition
@@ -956,10 +959,8 @@ class TTNNMoERouterDecode(TTNNModule):
             ttnn.deallocate(group_scores)
 
             # group mask via scatter
-            scatter_input_rm = _to_device_rm(self._scatter_input_torch)
-            input_mask_rm = ttnn.repeat(scatter_input_rm, ttnn.Shape((1, 1, T, 1)))
-            scatter_src_rm = _to_device_rm(self._scatter_src_torch)
-            src_rm = ttnn.repeat(scatter_src_rm, ttnn.Shape((1, 1, T, 1)))
+            input_mask_rm = ttnn.repeat(self._scatter_input_dev, ttnn.Shape((1, 1, T, 1)))
+            src_rm = ttnn.repeat(self._scatter_src_dev, ttnn.Shape((1, 1, T, 1)))
             idx_rm = ttnn.to_layout(topk_group_idx, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(topk_group_idx)
             idx_4d = ttnn.unsqueeze(idx_rm, dim=1)
@@ -994,8 +995,7 @@ class TTNNMoERouterDecode(TTNNModule):
         ttnn.deallocate(denom)
 
         # apply routing scale
-        scale_rm = _to_device_rm(self._scale_torch)
-        scale_rep_rm = ttnn.repeat(scale_rm, ttnn.Shape((1, 1, T, 1)))
+        scale_rep_rm = ttnn.repeat(self._scale_dev, ttnn.Shape((1, 1, T, 1)))
         scale_bf16 = ttnn.to_layout(scale_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if scale_bf16.dtype != ttnn.float32:
             scale_f32 = ttnn.typecast(scale_bf16, ttnn.float32)
@@ -1027,20 +1027,11 @@ class TTNNExperts(TTNNModule):
         self.num_experts = config.n_routed_experts
         self.num_experts_per_tok = config.num_experts_per_tok
 
-        # Will be set in preprocess_weights_impl
-        # Separate weights for sparse matmul: w1 (gate), w3 (up), w2 (down)
         self.tt_w1_proj = None
         self.tt_w3_proj = None
         self.tt_w2_proj = None
-        # Keep fused version for dense fallback
-        self.tt_gate_up_proj = None
-
-        # Will be set in move_weights_to_device_impl
         self.expert_mapping_tensors = None
         self.remap_topk_mask = None
-
-        # Control flags
-        self.use_sparsity = True
 
     @staticmethod
     def _get_num_experts_per_device(config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -1063,60 +1054,39 @@ class TTNNExperts(TTNNModule):
         # Shape: (num_experts, 2*intermediate_size, hidden_size) for gate_up
         # Shape: (num_experts, hidden_size, intermediate_size) for down
 
-        module.torch_gate_up_proj = torch_experts.gate_up_proj
-        # Split into w1 (gate) and w3 (up) for sparse matmul
-        module.torch_w1_proj = module.torch_gate_up_proj[:, : torch_experts.config.moe_intermediate_size, :].permute(
+        module.torch_w1_proj = torch_experts.gate_up_proj[:, : torch_experts.config.moe_intermediate_size, :].permute(
             [0, 2, 1]
         )
-        module.torch_w3_proj = module.torch_gate_up_proj[:, torch_experts.config.moe_intermediate_size :, :].permute(
+        module.torch_w3_proj = torch_experts.gate_up_proj[:, torch_experts.config.moe_intermediate_size :, :].permute(
             [0, 2, 1]
         )
-
         module.torch_w2_proj = torch_experts.down_proj.permute([0, 2, 1])
 
         return module
 
     def preprocess_weights_impl(self):
         """Preprocess expert weights: convert to bfloat16 and TILE_LAYOUT."""
-        # w1 (gate): (num_experts, intermediate_size, hidden_size)
         self.tt_w1_proj = ttnn.from_torch(
             self.torch_w1_proj.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
-
-        # w3 (up): (num_experts, intermediate_size, hidden_size)
         self.tt_w3_proj = ttnn.from_torch(
             self.torch_w3_proj.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
-
-        # w2 (down): (num_experts, hidden_size, intermediate_size)
         self.tt_w2_proj = ttnn.from_torch(
             self.torch_w2_proj.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
-
-        if not self.use_sparsity:
-            self.tt_gate_up_proj = ttnn.from_torch(
-                self.torch_gate_up_proj.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
-            )
-        else:
-            self.tt_gate_up_proj = None
-
-        # Clean up torch weights
         del self.torch_w1_proj
         del self.torch_w3_proj
         del self.torch_w2_proj
-        del self.torch_gate_up_proj
 
     def move_weights_to_device_impl(self):
         """Move preprocessed weights to device and create mapping tensors."""
@@ -1128,8 +1098,6 @@ class TTNNExperts(TTNNModule):
         self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
         self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
         self.tt_w2_proj = ttnn.to_device(self.tt_w2_proj, self.device)
-        if self.tt_gate_up_proj is not None:
-            self.tt_gate_up_proj = ttnn.to_device(self.tt_gate_up_proj, self.device)
 
         # Create expert mapping tensors for all-to-all ops
         self.expert_mapping_tensors = ttnn.from_torch(
@@ -1152,6 +1120,27 @@ class TTNNExperts(TTNNModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        hidden_tiles = self.hidden_size // ttnn.TILE_SIZE
+        intermediate_tiles = self.intermediate_size // ttnn.TILE_SIZE
+        self._gate_up_program_config = _make_sparse_matmul_program_config(
+            device=self.device,
+            out_features=int(self.intermediate_size),
+            in0_block_w=min(4, hidden_tiles),
+            per_core_M=1,
+        )
+        self._down_program_config = _make_sparse_matmul_program_config(
+            device=self.device,
+            out_features=int(self.hidden_size),
+            in0_block_w=min(4, intermediate_tiles),
+            per_core_M=1,
+        )
+        self._expert_compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     @run_on_devices(DeviceArch.T3K)
@@ -1233,7 +1222,7 @@ class TTNNExperts(TTNNModule):
 
         num_tokens = batch_size * seq_len
 
-        # 4. Generate sparsity tensor if using sparse matmul
+        # 4. Generate sparsity tensor
         remap_topk_mask_expanded = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
         _, sparsity_t = ttnn.moe_expert_token_remap(
             remap_topk_mask_expanded,
@@ -1242,37 +1231,16 @@ class TTNNExperts(TTNNModule):
             reduction_size=SPARSITY_BLOCK_SIZE,
         )
 
-        # Sparse path
         num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
         x_sparse = ttnn.reshape(post_dispatch, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, self.hidden_size))
 
-        gate_up_program_config = _make_sparse_matmul_program_config(
-            device=self.device,
-            out_features=int(self.intermediate_size),
-            in0_block_w=1,
-            per_core_M=1,
-        )
-        down_program_config = _make_sparse_matmul_program_config(
-            device=self.device,
-            out_features=int(self.hidden_size),
-            in0_block_w=1,
-            per_core_M=1,
-        )
-        expert_compute_cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
-        # w1 and w3 projections
         w1_out = ttnn.sparse_matmul(
             x_sparse,
             self.tt_w1_proj,
             sparsity=sparsity_t,
             output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
-            program_config=gate_up_program_config,
-            compute_kernel_config=expert_compute_cfg,
+            program_config=self._gate_up_program_config,
+            compute_kernel_config=self._expert_compute_cfg,
             is_input_a_sparse=False,
             is_input_b_sparse=True,
         )
@@ -1281,31 +1249,28 @@ class TTNNExperts(TTNNModule):
             self.tt_w3_proj,
             sparsity=sparsity_t,
             output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
-            program_config=gate_up_program_config,
-            compute_kernel_config=expert_compute_cfg,
+            program_config=self._gate_up_program_config,
+            compute_kernel_config=self._expert_compute_cfg,
             is_input_a_sparse=False,
             is_input_b_sparse=True,
         )
 
-        # Activation and element-wise multiply
         w1_activated = ttnn.silu(w1_out)
         ttnn.deallocate(w1_out)
         intermediate = ttnn.mul(w1_activated, w3_out)
         ttnn.deallocate(w1_activated)
         ttnn.deallocate(w3_out)
 
-        # Reshape for w2
         intermediate = ttnn.squeeze(intermediate, 0)
         intermediate = ttnn.squeeze(intermediate, 1)
 
-        # w2 projection
         expert_output = ttnn.sparse_matmul(
             intermediate,
             self.tt_w2_proj,
             sparsity=sparsity_t,
             output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
-            program_config=down_program_config,
-            compute_kernel_config=expert_compute_cfg,
+            program_config=self._down_program_config,
+            compute_kernel_config=self._expert_compute_cfg,
             is_input_a_sparse=True,
             is_input_b_sparse=False,
         )
