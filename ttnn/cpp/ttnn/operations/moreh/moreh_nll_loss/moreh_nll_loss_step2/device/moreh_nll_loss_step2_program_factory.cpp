@@ -30,7 +30,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     auto N = input_shape[0];
 
-    // copy 32 Bytes per core
+    // copy 32 Btyes per core
     uint32_t units_to_divide = N / tt::constants::TILE_HEIGHT;
     const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_N = input_shape_without_padding[0];

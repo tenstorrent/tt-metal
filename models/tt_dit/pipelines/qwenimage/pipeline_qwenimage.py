@@ -78,7 +78,7 @@ class QwenImagePipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
-        is_fsdp: bool = False,  # This only applies to the transformer model.
+        is_fsdp: bool = False,  # This only appies to the transformer model.
         dynamic_load_encoder: bool = True,  # Set to true if it wouldn't fit with the transformer given the configuration
         dynamic_load_vae: bool = False,  # Set to true if it wouldn't fit with the transformer given the configuration
     ) -> None:
@@ -366,7 +366,7 @@ class QwenImagePipeline:
         dynamic_load_vae: bool | None = None,
     ) -> QwenImagePipeline:
         default_config = {
-            # The default configurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
+            # The default cofigurations are the best found from sweeping the following: is_fsdp, dynamic_load_encoder, and dynamic_load_vae.
             # The encoder is currently hardcoded to always be FSDP as it is the most memory efficient configuration with little to no performance penalty.
             (2, 4): {
                 "cfg_config": (2, 0),

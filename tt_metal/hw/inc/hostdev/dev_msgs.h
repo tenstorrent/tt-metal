@@ -192,7 +192,7 @@ struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
 
-// save space for the structure, device side will cast to the correct structure
+// save space for the structure, device side will cast to the corrrect structure
 struct subordinate_sync_msg_t {
     volatile uint8_t map[subordinate_map_size];
 };
@@ -321,7 +321,7 @@ struct dprint_buf_msg_t {
 };
 #endif
 
-// NOC alignment max from BH
+// NOC aligment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 enum class AddressableCoreType : uint8_t {

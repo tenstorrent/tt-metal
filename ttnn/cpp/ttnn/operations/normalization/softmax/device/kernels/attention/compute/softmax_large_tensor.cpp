@@ -39,7 +39,7 @@
 //      3: (func: exp_cb) calculate cb e^x
 //
 //      4: (func: reduce_cb) Sums across the width dimension to
-//      calculate ∑e^x
+//      calcualte ∑e^x
 // 2: Loop till we have parsed all of WT
 // 3: Calculate Final value
 //      1: (func: apply_fused_scale_mask) Apply optional fused scale mask followed by apply (func:
@@ -48,7 +48,7 @@
 //      2: (func: pad_input) Pad tile if step 1 is not done, otherwise -inf
 //      padding is done by apply attention mask
 //
-//      3: (func: exp_cb) calculate cb e^x
+//      3: (func: exp_cb) calcualte cb e^x
 //
 //      4: (func: apply_recip) Apply_recip
 //      e^x * 1/∑e^x
@@ -157,7 +157,7 @@ void apply_fused_attn_mask(
     }
 }
 
-// applies pad to the last pass cb if needed
+// applys pad to the last pass cb if needed
 void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     auto cb_mask_padded = tt::CBIndex::c_5;
     reconfig_data_format(cb_in, cb_mask_padded);
@@ -270,7 +270,7 @@ void reduce_cb(
         if (reduce_type == PoolType::MAX) {
             // path if we are doing a max redudce
             binary_max_tile_init();
-            // garbage data will be in data outside the first column, but since we broadcast this column it shouldn't
+            // garbage data will be in data outside the first collumn, but since we broadcast this column it shouldnt
             // matter
             binary_max_tile(0, 1, 0);
         } else {

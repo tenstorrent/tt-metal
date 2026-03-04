@@ -78,7 +78,7 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
-    // Determine runtime arguments
+    // Determine runtime argumens
     bool divide_on_higher = number_of_higher_pages > number_of_lower_pages;
 
     uint32_t responsibility_chunk =

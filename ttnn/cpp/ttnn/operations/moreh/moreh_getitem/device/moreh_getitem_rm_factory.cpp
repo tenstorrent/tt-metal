@@ -119,7 +119,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
                               .set_page_size(out_cb_index, rounded_input_page_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    // create read/write kernel
+    // create read/wrtie kernel
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 

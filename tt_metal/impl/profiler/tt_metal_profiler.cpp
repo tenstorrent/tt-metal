@@ -497,7 +497,7 @@ void setSyncInfo(
 }
 
 void syncAllDevices(ChipId host_connected_device) {
-    // Check if profiler on host connected device is initialized
+    // Check if profiler on host connected device is initilized
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
     if (!profiler_state_manager->device_profiler_map.contains(host_connected_device)) {
@@ -529,7 +529,7 @@ void syncAllDevices(ChipId host_connected_device) {
             double receiverSquareSum = 0;
             double senderReceiverProductSum = 0;
 
-            // Direct computation causes large error because square of clock is very big
+            // Direct computation causes large error because sqaure of clock is very big
             // So apply linear regression on shifted values
             uint64_t senderBase = 0;
             uint64_t receiverBase = 0;

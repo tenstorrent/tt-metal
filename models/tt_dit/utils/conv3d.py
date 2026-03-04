@@ -34,10 +34,10 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
             (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
             (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
             (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
-            (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
-            (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+            (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
+            (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+            (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
+            (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
         }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
@@ -78,7 +78,7 @@ def count_convs(module: Module) -> int:
 
 def conv_pad_height(tensor_BTHWC, h_factor):
     """
-    For Wan2.2, in some parallelism schemes height can't be fractured by the factor.
+    For Wan2.2, in some parallism schemes height can't be fractured by the factor.
     This function pads the height to the next multiple of the factor.
     """
     B, T, H, W, C = tensor_BTHWC.shape
