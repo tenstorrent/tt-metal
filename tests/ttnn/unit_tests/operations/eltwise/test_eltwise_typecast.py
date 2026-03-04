@@ -284,3 +284,287 @@ def test_typecast_bfp8_b_to_fp32(device):
     # print(cpu_version[0, 0:16])
     # print(npu_version[0, 0:16])
     assert passed
+
+
+@pytest.mark.parametrize(
+    "shard_layout, core_grid, shard_shape",
+    [
+        (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [32, 128],
+        ),
+        (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [128, 32],
+        ),
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [64, 64],
+        ),
+    ],
+)
+def test_typecast_legacy_sharded(device, shard_layout, core_grid, shard_shape):
+    torch.manual_seed(0)
+    shape = [1, 1, 128, 128]
+
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
+    assert output_tensor.dtype == ttnn.int32
+
+    result = ttnn.to_torch(output_tensor)
+    expected = torch_input.int()
+    assert torch.equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, nd_shard_shape, shard_grid",
+    [
+        (
+            [1, 1, 128, 128],
+            [1, 1, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        ([4, 128, 128], [2, 64, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})),
+        (
+            [2, 2, 128, 128],
+            [1, 1, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        (
+            [3, 128, 128],
+            [2, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),  # uneven: 3 % 2 != 0
+        (
+            [5, 4, 160, 160],
+            [2, 3, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+        ),  # uneven sharding in all dims
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
+def test_typecast_nd_sharded_int(device, tensor_shape, nd_shard_shape, shard_grid, shard_orientation, layout):
+    torch.manual_seed(0)
+
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape=nd_shard_shape, grid=shard_grid, orientation=shard_orientation)
+    mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    torch_input = torch.randint(0, 100, tensor_shape, dtype=torch.int32).float()
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.float32, layout=layout, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
+    assert output_tensor.dtype == ttnn.int32
+
+    result = ttnn.to_torch(output_tensor)
+    expected = torch_input.int()
+    assert torch.equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype, tt_output_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_shape, nd_shard_shape, shard_grid",
+    [
+        (
+            [1, 1, 128, 128],
+            [1, 1, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        (
+            [4, 128, 128],
+            [2, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        (
+            [3, 128, 128],
+            [2, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),  # uneven in dim 0
+        (
+            [5, 3, 96, 160],
+            [3, 2, 64, 96],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),  # uneven in all dims: 5%3, 3%2, 96%64, 160%96
+    ],
+)
+def test_typecast_nd_sharded_float(
+    device, pt_input_dtype, tt_input_dtype, tt_output_dtype, tensor_shape, nd_shard_shape, shard_grid
+):
+    torch.manual_seed(0)
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=nd_shard_shape, grid=shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    torch_input = torch.randn(tensor_shape, dtype=pt_input_dtype)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+
+    # Build CPU-side reference: run the same input -> tt_input_dtype -> tt_output_dtype
+    cpu_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
+    cpu_reference = ttnn.to_torch(cpu_tensor)
+
+    output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
+    assert output_tensor.dtype == tt_output_dtype
+
+    npu_result = ttnn.to_torch(output_tensor)
+
+    # Compare in a common dtype so shapes/dtypes align
+    common_dtype = torch.float32
+    assert torch.equal(cpu_reference.to(common_dtype), npu_result.to(common_dtype))
+
+
+# Tests that legacy-sharded inputs violating TypecastShardedProgramFactory preconditions
+# fall back to TypecastProgramFactory correctly.
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype, tt_output_dtype",
+    [
+        # Violates legacy sharded program factory condition: tile_size(input) != tile_size(output)
+        # bfloat16 tile = 2048 bytes, float32 tile = 4096 bytes
+        (torch.bfloat16, ttnn.bfloat16, ttnn.float32),
+        # bfloat16 tile = 2048 bytes, bfp8_b tile = 1088 bytes
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_layout, core_grid, shard_shape",
+    [
+        (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [32, 128],
+        ),
+        (
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [128, 32],
+        ),
+        (
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [64, 64],
+        ),
+    ],
+)
+def test_typecast_legacy_sharded_tile_size_mismatch(
+    device, pt_input_dtype, tt_input_dtype, tt_output_dtype, shard_layout, core_grid, shard_shape
+):
+    """Violates is_valid_for_sharded_optimized_typecast condition 2: tile_size(input) != tile_size(output)."""
+    torch.manual_seed(0)
+    shape = [1, 1, 128, 128]
+
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+
+    torch_input = torch.randn(shape, dtype=pt_input_dtype)
+
+    cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
+    cpu_output = ttnn.typecast(cpu_input, dtype=tt_output_dtype)
+    cpu_reference = ttnn.to_torch(cpu_output)
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
+    assert output_tensor.dtype == tt_output_dtype
+
+    npu_result = ttnn.to_torch(output_tensor)
+    common_dtype = torch.float32
+    assert torch.equal(cpu_reference.to(common_dtype), npu_result.to(common_dtype))
+
+
+@pytest.mark.parametrize(
+    "shard_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ],
+)
+def test_typecast_legacy_sharded_dram_buffer(device, shard_layout):
+    """Violates is_valid_for_sharded_optimized_typecast condition 3: input buffer is in DRAM, not L1."""
+    torch.manual_seed(0)
+    shape = [1, 1, 128, 128]
+
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        shard_shape = [32, 128]
+    else:
+        core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        shard_shape = [128, 32]
+
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.DRAM, shard_spec)
+
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
+    assert output_tensor.dtype == ttnn.int32
+
+    npu_result = ttnn.to_torch(output_tensor)
+    expected = torch_input.int()
+    assert torch.equal(npu_result, expected)
+
+
+def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
+    """Violates is_valid_for_sharded_optimized_typecast condition 5: shard_size_in_bytes % tile_size != 0.
+
+    Uses ROW_MAJOR WIDTH_SHARDED with shard = [64, 8] and float32 (4 bytes).
+    8 * 4 = 32 bytes, which IS a multiple of L1 alignment (16 bytes) — condition 4 satisfied.
+    64 * 8 * 4 = 2048 bytes, tile_size(Float32) = 4096 — 2048 % 4096 != 0 — condition 5 violated.
+    Uses float32 -> int32 (same tile size) so only condition 5 is violated.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 32]
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_shape = [64, 8]  # 4 cores, width 32 / 4 = 8
+
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+    output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
+    assert output_tensor.dtype == ttnn.int32
+
+    npu_result = ttnn.to_torch(output_tensor)
+    expected = torch_input.int()
+    assert torch.equal(npu_result, expected)
