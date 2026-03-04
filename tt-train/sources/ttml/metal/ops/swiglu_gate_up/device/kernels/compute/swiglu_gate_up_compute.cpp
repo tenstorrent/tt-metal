@@ -205,9 +205,10 @@ void kernel_main() {
         for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
             const uint32_t row_offset = m_sub * per_core_N_rounded;
 
-            for (uint32_t col = 0U; col < per_core_N_rounded; col += block_size) {
-                const uint32_t current_block_size = std::min(block_size, per_core_N - col);
-                const uint32_t tile_offset = row_offset + col;
+            for (uint32_t n_block = 0U; n_block < num_n_blocks; ++n_block) {
+                const uint32_t n_block_offset = n_block * block_size;
+                const uint32_t current_block_size = std::min(block_size, per_core_N - n_block_offset);
+                const uint32_t tile_offset = row_offset + n_block_offset;
 
                 compute_sigmoid(tile_offset, current_block_size);
                 compute_silu(tile_offset, current_block_size);
