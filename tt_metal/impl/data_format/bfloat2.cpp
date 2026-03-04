@@ -6,8 +6,6 @@
 #include <tt-metalium/bfloat2.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
-#include <functional>
-#include <random>
 #include <vector>
 #include <simde/x86/avx2.h>
 
@@ -105,14 +103,14 @@ std::vector<float> unpack_bfp2_tiles_into_float_vec(
     int subtile_c;
 
     // Masks for extracting 2-bit values from a uint32_t (16 elements per dword)
-    const std::vector<uint32_t> mask_vec0 = {0x3, 0xc, 0x30, 0xc0};
-    const std::vector<uint32_t> shift_vec0 = {0, 2, 4, 6};
-    const std::vector<uint32_t> mask_vec1 = {0x300, 0xc00, 0x3000, 0xc000};
-    const std::vector<uint32_t> shift_vec1 = {8, 10, 12, 14};
-    const std::vector<uint32_t> mask_vec2 = {0x30000, 0xc0000, 0x300000, 0xc00000};
-    const std::vector<uint32_t> shift_vec2 = {16, 18, 20, 22};
-    const std::vector<uint32_t> mask_vec3 = {0x3000000, 0xc000000, 0x30000000, 0xc0000000};
-    const std::vector<uint32_t> shift_vec3 = {24, 26, 28, 30};
+    static constexpr std::array<uint32_t, 4> mask_vec0 = {0x3, 0xc, 0x30, 0xc0};
+    static constexpr std::array<uint32_t, 4> shift_vec0 = {0, 2, 4, 6};
+    static constexpr std::array<uint32_t, 4> mask_vec1 = {0x300, 0xc00, 0x3000, 0xc000};
+    static constexpr std::array<uint32_t, 4> shift_vec1 = {8, 10, 12, 14};
+    static constexpr std::array<uint32_t, 4> mask_vec2 = {0x30000, 0xc0000, 0x300000, 0xc00000};
+    static constexpr std::array<uint32_t, 4> shift_vec2 = {16, 18, 20, 22};
+    static constexpr std::array<uint32_t, 4> mask_vec3 = {0x3000000, 0xc000000, 0x30000000, 0xc0000000};
+    static constexpr std::array<uint32_t, 4> shift_vec3 = {24, 26, 28, 30};
 
     const simde__m128i mask0 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec0.data()));
     const simde__m128i mask1 = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec1.data()));
