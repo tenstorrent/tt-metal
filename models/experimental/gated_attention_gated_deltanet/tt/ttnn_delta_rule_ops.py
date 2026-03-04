@@ -65,19 +65,19 @@ def recurrent_delta_rule_step_ttnn(
     h = ttnn.multiply(h, decay)
 
     # 2. Read from state via matmul: v_read = k^T @ h
-    k_row = ttnn.reshape(k_t, [B, H, 1, K])  # [B, H, 1, K]
-    v_read = ttnn.matmul(k_row, h)  # [B, H, 1, V]
-    v_read = ttnn.reshape(v_read, [B, H, V])  # [B, H, V]
+    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, K]
+    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, V]
 
     # 3. Compute delta: delta = (v_t - v_read) * beta_t
-    delta = ttnn.subtract(v_t, v_read)
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1])  # [B, H, 1]
-    delta = ttnn.multiply(delta, beta_expanded)
+    delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1]
+    delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 4. Write to state via matmul outer product: h += k @ delta^T
-    k_col = ttnn.reshape(k_t, [B, H, K, 1])  # [B, H, K, 1]
-    d_row = ttnn.reshape(delta, [B, H, 1, V])  # [B, H, 1, V]
-    outer = ttnn.matmul(k_col, d_row)  # [B, H, K, V]
+    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, 1]
+    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
+    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, V]
     h = ttnn.add(h, outer)
 
     # 5. Query state via matmul: o_t = q^T @ h
