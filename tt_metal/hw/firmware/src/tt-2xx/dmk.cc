@@ -42,7 +42,7 @@ uint32_t _start() {
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
     uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
-    uint32_t thread_0_hartid = MaxDMProcessorsPerCoreType;
+    uint32_t thread_0_hartid = hartid;
     for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
         if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
             thread_0_hartid = j;
@@ -79,7 +79,7 @@ uint32_t _start() {
         EARLY_RETURN_FOR_DEBUG
 
         // Setup after the go signal so the previous kernel has completed.
-        num_kernel_threads = launch_msg->kernel_config.num_kernel_threads[hartid];
+        num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
         my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
 
         WAYPOINT("K");

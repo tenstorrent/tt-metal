@@ -96,13 +96,13 @@ inline uint8_t get_relative_logical_y() {
  * Return value: Number of kernel threads (num_processors_per_cluster for this kernel).
  */
 // clang-format on
-inline uint32_t get_num_kernel_threads() {
-    return num_kernel_threads;
+inline uint32_t get_num_threads() {
+    return num_sw_threads;
 }
 
 // clang-format off
 /**
- * Returns this processor's thread ID within its kernel (0 to get_num_kernel_threads() - 1).
+ * Returns this processor's thread ID within its kernel (0 to get_num_threads() - 1).
  * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
  *
  * Return value: Thread ID for this processor.

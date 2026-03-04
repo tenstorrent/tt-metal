@@ -468,7 +468,7 @@ KernelGroup::KernelGroup(
                 kernel->config());
         }
 
-        // Quasar: set per-processor num_kernel_threads and kernel_thread_id for dmk/runtime access
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for dmk/runtime access
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get())) {
             auto config = std::get<experimental::quasar::QuasarDataMovementConfig>(qk->config());
             const auto& dm_cores = qk->get_dm_processors();
@@ -477,7 +477,7 @@ KernelGroup::KernelGroup(
                     hal.get_programmable_core_type(programmable_core_type_index),
                     HalProcessorClassType::DM,
                     qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
-                kernel_config.num_kernel_threads()[processor_index] = config.num_threads_per_cluster;
+                kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
         }
