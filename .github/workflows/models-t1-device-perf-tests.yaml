@@ -20,6 +20,7 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
+          - "bh_p150 (P150)"
       platform:
         required: false
         type: choice
@@ -58,7 +59,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150"
+          ALL_SKUS="wh_n150,bh_p150"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
