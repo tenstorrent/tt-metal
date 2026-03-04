@@ -1,0 +1,23 @@
+# --- Meshes ---------------------------------------------------------------
+# Two independent 1x8 meshes, one per host (host 0 gets mesh_id 0, host 1 gets mesh_id 1)
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+# --- Graph (groups the two meshes) ----------------------------------------
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+}
+
+# --- Instantiation -------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

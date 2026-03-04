@@ -1,0 +1,15 @@
+# --- Meshes ---------------------------------------------------------------
+# Two independent 1x8 meshes, one per host (host 0 gets mesh_id 0, host 1 gets mesh_id 1)
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 16 ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
