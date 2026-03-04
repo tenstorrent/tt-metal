@@ -67,18 +67,51 @@ The trace records:
 - **Call hierarchy**: Nested operations (e.g., `ttnn::add` → `ttnn::prim::binary`)
 - **Stack traces**: C++ call stacks for each operation (enabled by default)
 - **Deallocations**: `Tensor::deallocate` is tracked at the C++ level when a device buffer is actually freed (both explicit via `ttnn.deallocate()` and implicit via destructor)
+- **Python I/O**: Function arguments, input tensor IDs, and output tensor IDs recorded by the Python decorators
+
+### Two-Phase Architecture
+
+Graph capture is split into two phases:
+
+1. **C++ runtime capture** — During model execution, the C++ `GraphProcessor` records an in-memory graph of operations, tensors, buffers, and timing. The Python decorators (`FastOperation`, `Operation`) additionally record Python-level arguments and tensor IDs into a `python_io` list. At the end, both are serialized to a JSON report file.
+
+2. **Offline Python import** — A separate step reads the JSON report and imports it into a SQLite database that the ttnn-visualizer can consume. No database operations happen during model execution.
 
 ### How Operations Are Tracked
 
 Operations are captured at two levels:
 
-1. **Python-level**: The `ttnn` decorators (`FastOperation`, `Operation`) automatically inject `function_start`/`function_end` graph nodes when capture is active. This produces high-level operation names like `ttnn.conv2d`, `ttnn.linear`, `ttnn.deallocate`.
+1. **Python-level**: The `ttnn` decorators (`FastOperation`, `Operation`) automatically inject `function_start`/`function_end` graph nodes when capture is active. This produces high-level operation names like `ttnn.conv2d`, `ttnn.linear`, `ttnn.deallocate`. Both decorators also record Python-visible arguments and tensor IDs into `python_io` records that are embedded in the JSON report.
 
 2. **C++ level**: Internal C++ operations emit their own `function_start`/`function_end` nodes (e.g., `ttnn::matmul`, `Tensor::to_device`). These appear nested inside the Python-level operation.
 
 The result is a hierarchical graph: `ttnn.conv2d` (Python) → `ttnn::conv2d` (C++) → `Device Operation` → `create_device_tensor`, etc.
 
 **Deallocate tracking**: `Tensor::deallocate` emits tracking only when a device buffer is actually freed (not for host tensors or shared-reference tensors that skip deallocation). When called via Python `ttnn.deallocate()`, it appears nested: `ttnn.deallocate` → `Tensor::deallocate` → `buffer_deallocate`.
+
+### FastOperation vs Operation
+
+Both decorator classes participate in graph capture, but they differ in scope:
+
+| Feature | `FastOperation` | `Operation` (slow dispatch) |
+|---|---|---|
+| `function_start`/`function_end` nodes | Yes | Yes |
+| Python-level arguments in `python_io` | Yes | Yes |
+| Input tensor ID tracking | Yes | Yes |
+| Output tensor IDs (versioned, `force=True`) | Yes | Yes |
+| Per-operation C++ captured sub-graph | No | Yes |
+
+`FastOperation` is the default when `enable_fast_runtime_mode=True`. It records arguments and tensor IDs but does not wrap each operation in a nested `begin_graph_capture`/`end_graph_capture` call, so the per-operation captured sub-graph is synthetically reconstructed by the importer from the flat graph.
+
+### Tensor Connectivity
+
+The visualizer relies on tensor IDs to show data flow between operations:
+
+```
+op A  →  output tensor (id=42)  →  op B (consumes tensor id=42 as input)
+```
+
+Each `ttnn.Tensor` gets a unique `tensor_id` attribute assigned by `set_tensor_id()` in the decorators. Output tensors always get a fresh ID (`force=True`) so that in-place operations produce a distinct ID. The importer uses `python_io.input_tensor_ids` and `python_io.output_tensor_ids` to establish these connections in the `input_tensors` and `output_tensors` database tables.
 
 ### Run Modes
 
@@ -165,11 +198,14 @@ ttnn.graph.end_graph_capture_to_file("my_report.json")
 
 The report file contains:
 - `version`: Report format version
-- `graph`: Full graph trace
+- `graph`: Full graph trace (list of nodes)
 - `devices`: Device information (architecture, grid size, memory)
 - `metadata`: Capture timestamp
-- `cluster_descriptor`: Cluster configuration (if available)
-- `buffer_pages`: Detailed page info (when enabled)
+- `python_io`: Python-level I/O records (arguments, input/output tensor IDs per operation)
+- `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`)
+- `buffer_pages_by_address`: Compact per-address page data (when buffer pages are enabled)
+- `cluster_descriptor`: Cluster configuration YAML (if available)
+- `mesh_coordinate_mapping`: Mesh coordinate mapping YAML (if available)
 
 ### Import into Visualizer Database
 
@@ -186,13 +222,15 @@ python -m ttnn.graph_report --svg my_report.json ./visualizer_db/
 
 The importer creates these database tables:
 - `operations`: Operations with names and durations (IDs start at 1)
-- `operation_arguments`: Arguments as `arg_0`, `arg_1`, etc.
-- `tensors`: Shape, dtype, layout, memory_config, device_id, address
+- `operation_arguments`: Python-level arguments (from `python_io`), falling back to C++ arguments
+- `tensors`: Shape, dtype, layout, memory_config, device_id, address, buffer_type
 - `device_tensors`: Per-device addresses for multi-device tensors
-- `input_tensors`, `output_tensors`: Tensor-to-operation relationships
-- `buffers`, `buffer_pages`: Cumulative memory allocation snapshots per operation
+- `input_tensors`, `output_tensors`: Tensor-to-operation relationships (from `python_io` tensor IDs)
+- `buffers`: Cumulative memory allocation snapshots per operation (prefers `per_operation_buffers`)
+- `buffer_pages`: Per-page buffer detail (when enabled)
 - `captured_graph`: Per-operation subgraph JSON for the visualizer
 - `stack_traces`: C++ call stacks (captured by default)
+- `edges`: Graph edges extracted from captured subgraphs
 - `errors`: Error information
 
 #### Import Behavior
@@ -200,18 +238,46 @@ The importer creates these database tables:
 The importer produces output compatible with the ttnn-visualizer:
 
 **Operation filtering**: The raw C++ graph contains many nested internal operations (`create_device_tensor`, `Device Operation`, etc.). The importer keeps only top-level operations that are meaningful to the user:
-- Nested operations (those inside another `function_start`/`function_end` pair) are automatically filtered
-- Certain operations are always treated as filtered even at the top level:
-  - `ttnn.from_torch` / `ttnn::convert_python_tensor_to_tt_tensor` (weight loading)
+- Nested operations (those inside another `function_start`/`function_end` pair) are automatically filtered, with their inputs and outputs lifted to the parent
+- Certain C++ wrapper operations are always treated as transparent (their children are still visible but they themselves don't become top-level operations):
+  - `ttnn::convert_python_tensor_to_tt_tensor`
   - `tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor`
+  - `Tensor::deallocate`
+  - `Tensor::to_device`
+  - `Tensor::reshape`
+  - `tt::tt_metal::to_dtype`
+- Leading `ttnn.from_torch` operations (weight loading before any compute) are filtered; subsequent `from_torch` calls after the first real compute operation are kept
 
-**Tensor lifting**: When nested operations are filtered, their input/output tensor associations are "lifted" to the parent operation. For example, `ttnn.conv2d` might internally call `ttnn::matmul` which produces an output tensor -- that tensor is attributed to `ttnn.conv2d` in the database. Internal tensors (produced and consumed within the same parent) are excluded.
+**Python I/O resolution**: When `python_io` records are present in the report, the importer uses them as the primary source for:
+- Operation arguments (instead of C++ serialized arguments)
+- Input tensor IDs (instead of heuristic extraction from C++ graph connections)
+- Output tensor IDs (instead of C++ function_end connections)
 
-**Deallocate synthesis**: If a `buffer_deallocate` event occurs outside any `function_start`/`function_end` pair (which can happen in edge cases), the importer synthesizes a `ttnn::deallocate` operation for it. Normally, all deallocations are wrapped by either Python `ttnn.deallocate` or C++ `Tensor::deallocate` tracking.
+The importer matches `python_io` records to graph nodes by operation name, consuming them in order.
+
+**Tensor lifting**: When nested operations are filtered, their input/output tensor associations are "lifted" to the parent operation. For example, `ttnn.conv2d` might internally call `ttnn::matmul` which produces an output tensor — that tensor is attributed to `ttnn.conv2d` in the database. Internal tensors (produced and consumed within the same parent scope) are excluded.
+
+**Tensor reconciliation**: Python decorators may assign fresh tensor IDs (via `set_tensor_id(force=True)`) that don't correspond to any C++ graph tensor node. The importer reconciles these by:
+1. Looking up the memory address of the C++ tensor and cloning its properties
+2. Falling back to the `pyid_to_cpp_tensor` mapping (built during import) to associate Python output IDs with their C++ counterpart nodes
+
+**Deallocate synthesis**: If a `buffer_deallocate` event occurs outside any `function_start`/`function_end` pair, the importer synthesizes a `ttnn::deallocate` operation for it.
 
 **Tensor deduplication**:
 - Device tensors are deduplicated by address
-- Host tensors are kept only when referenced as operation inputs or outputs (e.g., weight tensors passed to `conv2d`)
+- Host tensors are kept only when referenced as operation inputs or outputs
+
+**Buffer type mapping**:
+
+| String | Integer |
+|---|---|
+| `DRAM` | 0 |
+| `L1` | 1 |
+| `SYSTEM_MEMORY` | 2 |
+| `L1_SMALL` | 3 |
+| `TRACE` | 4 |
+
+The importer prioritizes the `exact_buffer_type` field from `buffer_allocate` nodes (which uses the precise C++ enum) over the generic `type` field.
 
 ```bash
 python -m ttnn.graph_report my_report.json ./visualizer_db/
@@ -275,7 +341,7 @@ ttnn.graph.end_graph_capture_to_file("report.json")
 ttnn.graph.disable_buffer_pages()
 ```
 
-The report includes a `buffer_pages` array with:
+The report includes `buffer_pages_by_address` (compact, per-address snapshots with versioned timelines for re-allocations) combined with `per_operation_buffers` to reconstruct per-operation page data. Fields per page:
 - `device_id`, `address`: Buffer location
 - `core_x`, `core_y`, `bank_id`: Core and bank placement
 - `page_index`, `page_address`, `page_size`: Page details
@@ -283,11 +349,11 @@ The report includes a `buffer_pages` array with:
 
 ### Operation Arguments
 
-Capture full argument data for each operation:
+Python-level arguments are automatically captured by both `FastOperation` and `Operation` decorators when graph capture is active. They are embedded in the `python_io` section of the JSON report and imported into the `operation_arguments` table.
+
+For C++ level arguments:
 
 ```python
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-# ... your operations ...
 graph = ttnn.graph.end_graph_capture()
 
 for node in graph:
@@ -377,54 +443,53 @@ tensor[a] → ttnn::multiply ──────────→ ttnn::add
 
 Graph tracing tests are in `tests/ttnn/unit_tests/base_functionality/test_graph_report.py` and are organized into:
 
-| Test Class | Hardware Required | Description |
+#### Unit Tests (no hardware required)
+
+| Test Class | Description |
+|---|---|
+| `TestImportGraphUnit` | Core import logic: JSON graph → SQLite (operations, tensors, buffers, edges) |
+| `TestInputTensorResolution` | Input tensor deduplication and resolution by address |
+| `TestImportValidation` | Referential integrity validation of imported data |
+| `TestBufferMaxSizePerBank` | Buffer size computation with various layouts and bank counts |
+| `TestLinearModelImport` | Mock linear model import with detailed structural assertions |
+| `TestDurationExtraction` | Extracting operation durations from graph nodes |
+| `TestGraphReportImport` | End-to-end JSON file → SQLite import via `import_report()` |
+| `TestReportVersion` | Version mismatch handling |
+| `TestResNet50Patterns` | Mock ResNet50 patterns (deallocate synthesis, conv2d lifting, buffer snapshots) |
+| `TestResNet50ReferenceDB` | Structural validation of the golden reference DB |
+| `TestSafeArgStr` | Safe argument stringification (avoids triggering graph-tracked ops) |
+| `TestRecordPythonOperation` | Python I/O recording (arguments, tensor IDs) |
+| `TestStoreCapturedGraph` | Attaching captured sub-graphs to `_python_io_data` |
+| `TestBeginGraphCaptureClearing` | Python I/O state clearing on capture start |
+| `TestPythonIOArgumentImport` | Python I/O arguments used during import (with C++ fallback) |
+| `TestPerOpCapturedGraphImport` | Per-operation captured graph import (with fallback extraction) |
+| `TestFromTorchFiltering` | Leading `from_torch` ops filtered, post-compute ones kept |
+| `TestFilteredOpPrefixes` | All filtered C++ wrapper operation prefixes excluded |
+| `TestPythonIONameMatching` | Multi-op same-name matching and unmatched record handling |
+| `TestCapturedGraphFallbackExtraction` | Synthetic sub-graph extraction with counter remapping |
+| `TestVersionedBufferPages` | Buffer page timeline with re-allocation snapshots |
+| `TestPyIdToCppTensorReconciliation` | Python-assigned tensor IDs reconciled with C++ tensor nodes |
+
+#### Device Tests (require hardware)
+
+| Test Class / Function | Hardware | Description |
 |---|---|---|
-| `TestImportReport` | No | Mock-based import logic (JSON → SQLite) |
-| `TestLinearModelImport` | No | Mock linear model import with detailed assertions |
-| `TestResNet50Patterns` | No | Mock ResNet50 patterns (deallocate, conv2d, buffers) |
 | `TestGraphCaptureToFile` | Any device | Real capture API (file output, device info, stack traces) |
-| `TestResNet50ReferenceDB` | No | Structural validation of the golden reference DB |
-| `TestLinearModelE2E` | **Wormhole B0 only** | Golden comparison: linear model |
-| `TestResNet50ModelE2E` | **Wormhole B0 only** | Golden comparison: ResNet50 |
+| `TestStackTraces` | Any device | Stack trace enable/disable and capture verification |
+| `TestFastOperationGraphTracking` | Any device | FastOperation records function names, tensor IDs, and connectivity |
+| `TestLinearModelE2E` | Wormhole B0 | Structural validation: linear model (ones + linear) |
+| `test_resnet50_e2e_graph_capture` | Wormhole B0 | Full ResNet50 golden DB comparison |
+| `test_generate_resnet50_db` | Wormhole B0 | Utility to regenerate golden reference DB |
 
-### Golden Reference Databases
+### Golden Reference Database
 
-The E2E tests compare generated databases against golden references stored in `tests/ttnn/unit_tests/base_functionality/fixtures/`:
-- `linear_reference.sqlite` -- 4 operations (3x `ttnn.ones`, 1x `ttnn.linear`)
-- `resnet50_reference.sqlite` -- 305 operations with full buffer_pages data
+The ResNet50 E2E test compares generated databases against a golden reference stored at `test_data/db.sqlite`. This reference was generated on Wormhole B0 (N150) hardware with `enable_fast_runtime_mode=False` (slow dispatch). The E2E test is gated with `@pytest.mark.skipif(not is_wormhole_b0())`.
 
-**These references were generated on Wormhole B0 (N150) hardware.** The E2E tests are gated with `@pytest.mark.skipif(not is_wormhole_b0())` and will be skipped on other architectures.
+The comparison checks structural properties across tables: operation counts, tensor counts, buffer counts, input/output tensor relationships, and connectivity (shared tensor IDs between `output_tensors` and `input_tensors`). `device_id` and `tensor_id` values are excluded from comparisons because they vary per machine / per run.
 
-The comparison is **1:1 row-by-row** across every table: operations, tensors, input_tensors, output_tensors, device_tensors, buffers, captured_graph, stack_traces, and buffer_pages. It also checks structural integrity (no dangling references, no backwards edges). `device_id` and `tensor_id` are excluded from comparisons because they vary per machine / per run.
+### Regenerating the Golden Reference
 
-### Regenerating Golden References
-
-If you change the graph capture, import logic, model, or operation tracking, the E2E tests will fail. **You must regenerate the golden references on a Wormhole B0 (N150) machine.** The test assertion message includes the exact script to run.
-
-**Linear reference** (takes ~5 seconds):
-
-```bash
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml python3 -c "
-import ttnn, shutil
-from ttnn import graph_report
-
-device = ttnn.open_device(device_id=0, l1_small_size=24576)
-ttnn.graph.enable_buffer_pages()
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-a = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
-b = ttnn.ones([1024, 1024], layout=ttnn.TILE_LAYOUT, device=device)
-c = ttnn.ones([1, 1024], layout=ttnn.TILE_LAYOUT, device=device)
-ttnn.linear(a, b, bias=c)
-ttnn.graph.end_graph_capture_to_file('/tmp/linear_report.json')
-ttnn.graph.disable_buffer_pages()
-db = graph_report.import_report('/tmp/linear_report.json', '/tmp/linear_ref')
-shutil.copy(db, 'tests/ttnn/unit_tests/base_functionality/fixtures/linear_reference.sqlite')
-ttnn.close_device(device)
-print('Done: linear_reference.sqlite regenerated')
-"
-```
-
-**ResNet50 reference** (takes ~100 seconds, requires model weights and test images):
+If you change the graph capture, import logic, model, or operation tracking, the E2E test may fail. Regenerate on a Wormhole B0 (N150) machine using the `test_generate_resnet50_db` test function, or manually:
 
 ```bash
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml python3 -c "
@@ -445,13 +510,13 @@ run_resnet_inference(16, 'models/demos/vision/classification/resnet50/ttnn_resne
 ttnn.graph.end_graph_capture_to_file('/tmp/resnet50_report.json')
 ttnn.graph.disable_buffer_pages()
 db = graph_report.import_report('/tmp/resnet50_report.json', '/tmp/resnet50_ref')
-shutil.copy(db, 'tests/ttnn/unit_tests/base_functionality/fixtures/resnet50_reference.sqlite')
+shutil.copy(db, 'test_data/db.sqlite')
 ttnn.close_mesh_device(mesh_device)
-print('Done: resnet50_reference.sqlite regenerated')
+print('Done: db.sqlite regenerated')
 "
 ```
 
-After regenerating, commit the new `.sqlite` files and verify:
+After regenerating, commit the new `db.sqlite` and verify:
 
 ```bash
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py -x -q
@@ -481,9 +546,9 @@ ttnn.close_device(device)
 
 ### What the E2E Tests Validate
 
-The golden comparison tests perform a **1:1 row-by-row check** across every table:
+The golden comparison test performs structural checks across every table:
 
-| Table | Compared Columns |
+| Table | Compared Properties |
 |---|---|
 | `operations` | `operation_id`, `name` |
 | `tensors` | `shape`, `dtype`, `layout`, `memory_config`, `address`, `buffer_type` |
@@ -544,7 +609,7 @@ Tensor metadata.
 - `memory_config`: Memory configuration string
 - `device_id`: Device ID
 - `address`: Memory address
-- `buffer_type`: Buffer type (`"DRAM"`, `"L1"`)
+- `buffer_type`: Buffer type (`"DRAM"`, `"L1"`, `"L1_SMALL"`)
 - `device_tensors`: Array of per-device addresses (multi-device)
 
 ### buffer
@@ -563,6 +628,8 @@ Memory allocation/deallocation events.
 
 **buffer_allocate params:**
 - `size`, `address`, `type`, `layout`, `device_id`
+- `exact_buffer_type`: Precise C++ buffer type enum (`"DRAM"`, `"L1"`, `"L1_SMALL"`, `"TRACE"`)
+- `max_size_per_bank`: Pre-computed per-bank buffer size (from C++ allocator)
 
 ### circular_buffer_allocate / circular_buffer_deallocate_all
 
