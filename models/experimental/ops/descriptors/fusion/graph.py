@@ -100,6 +100,7 @@ class CoreGroup:
     barrier_scopes: List[Any]
     barrier_arrive_scopes: List[Any] = field(default_factory=list)
     phase_op_indices: List[int] = field(default_factory=list)
+    has_trailing_barrier: bool = False
 
 
 # =============================================================================
@@ -474,6 +475,12 @@ class OpGraphBuilder:
         # arrive_scope = node_coords (cores that did real work in this phase)
         per_core: Dict[Tuple[int, int], List[Tuple[OpDescriptor, Any, Any]]] = defaultdict(list)
 
+        # Cores that need a trailing barrier after their last real phase.
+        # These cores finish real work but have no subsequent phase — the
+        # trailing barrier lets them arrive ("I'm done") so other cores
+        # waiting on the barrier can proceed.
+        trailing_barrier_coords: Dict[Tuple[int, int], Tuple[Any, Any]] = {}
+
         # Track unique ops in first-encounter order
         unique_ops: List[OpDescriptor] = []
         op_id_to_index: Dict[int, int] = {}
@@ -484,7 +491,6 @@ class OpGraphBuilder:
 
             # Barrier scope = everyone who participates: node cores + descendant cores.
             # Arrive scope = cores that did real work (node cores).
-            # Early-exit cores (in node but not descendants) arrive and exit.
             # No-op cores (in descendants but not node) wait only.
             barrier_coords = desc_coords | node_coords
             release_scope = _coords_to_core_range_set(barrier_coords) if barrier_coords else None
@@ -504,34 +510,46 @@ class OpGraphBuilder:
                 op_id_to_index[op_id] = len(unique_ops)
                 unique_ops.append(node.op)
 
-            # Exit phase for early-exit cores (in node but not in any descendant).
-            # These cores did real work and need to arrive at the barrier, but have
-            # no subsequent phase.  A _NOOP_OP exit phase gives them a barrier
-            # transition to arrive at.
+            # Early-exit cores (in node but not in any descendant) need a
+            # trailing barrier after their last phase so they can arrive
+            # at the cross-core barrier before exiting.
             exit_coords = node_coords - desc_coords
             if exit_coords and desc_coords:
                 for coord in exit_coords:
-                    per_core[coord].append((_NOOP_OP, None, None))
+                    trailing_barrier_coords[coord] = (release_scope, arrive_scope)
 
             for child in node.children:
                 _walk(child)
 
         _walk(self._root)
 
-        # Group cores by identical phase sequence (by op identity + kernel variant)
+        # Group cores by identical phase sequence (by op identity + kernel variant).
+        # The grouping key also distinguishes trailing-barrier vs non-trailing
+        # cores so they land in separate groups.
         groups_by_key: Dict[tuple, Set[Tuple[int, int]]] = defaultdict(set)
         for coord, entries in per_core.items():
-            key = tuple((id(op), self._kernel_variant_key(op, coord)) for op, _, _ in entries)
+            has_trailing = coord in trailing_barrier_coords
+            key = (tuple((id(op), self._kernel_variant_key(op, coord)) for op, _, _ in entries), has_trailing)
             groups_by_key[key].add(coord)
 
         # Build CoreGroups
         result = []
         for key, coords in groups_by_key.items():
-            representative = per_core[next(iter(coords))]
+            rep_coord = next(iter(coords))
+            representative = per_core[rep_coord]
             core_range = _coords_to_core_range_set(coords)
             phases = [op for op, _, _ in representative]
             barrier_scopes = [release for _, release, _ in representative[:-1]]
             barrier_arrive_scopes = [arrive for _, _, arrive in representative[:-1]]
+
+            # Early-exit cores: append trailing barrier scope so they can
+            # arrive after their last real phase and exit cleanly.
+            has_trailing = rep_coord in trailing_barrier_coords
+            if has_trailing:
+                trailing_release, trailing_arrive = trailing_barrier_coords[rep_coord]
+                barrier_scopes.append(trailing_release)
+                barrier_arrive_scopes.append(trailing_arrive)
+
             phase_op_indices = [op_id_to_index[id(op)] if op is not _NOOP_OP else NOOP_PHASE_INDEX for op in phases]
             result.append(
                 CoreGroup(
@@ -540,6 +558,7 @@ class OpGraphBuilder:
                     barrier_scopes=barrier_scopes,
                     barrier_arrive_scopes=barrier_arrive_scopes,
                     phase_op_indices=phase_op_indices,
+                    has_trailing_barrier=has_trailing,
                 )
             )
 
@@ -680,8 +699,8 @@ class OpGraphBuilder:
         Checks sibling disjointness: siblings' actual core ranges must be
         pairwise disjoint.  Child ranges may be wider or narrower than their
         parent, and may be fully disjoint from the parent (narrow→wide and
-        disjoint topologies are supported via no-op phase entries and exit
-        phases).
+        disjoint topologies are supported via no-op phase entries and
+        trailing barriers).
 
         Raises:
             ValueError: On any topology violation.

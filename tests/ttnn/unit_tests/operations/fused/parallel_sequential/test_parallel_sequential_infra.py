@@ -815,11 +815,11 @@ class TestNarrowWideTopology:
         groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
         assert len({len(g.phases) for g in groups}) == 1
 
-    def test_disjoint_parent_child_exit_phases(self):
+    def test_disjoint_parent_child_trailing_barrier(self):
         """Parent {0,1} → children {2,3}, {4,5}: completely disjoint.
 
-        Cores 0,1 should get an exit _NOOP_OP phase so they have a barrier
-        transition to arrive at.  All groups should have 2 phases.
+        Parent cores have 1 phase with a trailing barrier (no fake exit
+        phase).  Child cores have 2 phases [_NOOP_OP, real_op].
         """
         parent = _make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))]))
         child_a = _make_op_with_cores(_make_core_ranges([((2, 0), (3, 0))]))
@@ -827,11 +827,7 @@ class TestNarrowWideTopology:
         root = _graph.OpNode(parent, children=[_graph.OpNode(child_a), _graph.OpNode(child_b)])
         groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
 
-        # All groups must have aligned phase counts (2 phases each)
-        assert len({len(g.phases) for g in groups}) == 1
-        assert all(len(g.phases) == 2 for g in groups)
-
-        # Parent cores (0,1) should have [real_op, _NOOP_OP]
+        # Parent cores (0,1): 1 real phase + trailing barrier
         parent_group = None
         for g in groups:
             coords = _common._core_range_set_to_coords(g.core_range)
@@ -839,15 +835,19 @@ class TestNarrowWideTopology:
                 parent_group = g
                 break
         assert parent_group is not None
-        assert parent_group.phases[0] is not _common._NOOP_OP  # real work
-        assert parent_group.phases[1] is _common._NOOP_OP  # exit noop
+        assert len(parent_group.phases) == 1
+        assert parent_group.phases[0] is not _common._NOOP_OP
+        assert parent_group.has_trailing_barrier
+        assert len(parent_group.barrier_scopes) == 1  # trailing barrier scope
 
-        # Child cores should have [_NOOP_OP, real_op]
+        # Child cores: 2 phases [_NOOP_OP, real_op], no trailing barrier
         for g in groups:
             coords = _common._core_range_set_to_coords(g.core_range)
             if (2, 0) in coords or (4, 0) in coords:
-                assert g.phases[0] is _common._NOOP_OP  # noop while parent runs
-                assert g.phases[1] is not _common._NOOP_OP  # real child work
+                assert len(g.phases) == 2
+                assert g.phases[0] is _common._NOOP_OP
+                assert g.phases[1] is not _common._NOOP_OP
+                assert not g.has_trailing_barrier
 
     def test_disjoint_barrier_scope_includes_parent(self):
         """Disjoint parent-child: barrier scope must include parent cores."""
@@ -886,23 +886,28 @@ class TestNarrowWideTopology:
     def test_partial_disjoint_no_exit_for_overlapping(self):
         """Parent {0,1} → child {1,2,3}: core 0 exits, core 1 continues.
 
-        Core 0 gets an exit _NOOP_OP.  Core 1 does NOT get an exit phase
-        because it's in the descendant set.
+        Core 0 has 1 phase with a trailing barrier.  Core 1 continues
+        (2 phases, no trailing barrier).
         """
         parent = _make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))]))
         child = _make_op_with_cores(_make_core_ranges([((1, 0), (3, 0))]))
         root = _graph.OpNode(parent, children=[_graph.OpNode(child)])
         groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
 
-        # All groups should have 2 phases
-        assert all(len(g.phases) == 2 for g in groups)
-
-        # Core 0 should be in its own group with [real, exit_noop]
+        # Core 0: 1 phase with trailing barrier (not 2 phases with exit noop)
         for g in groups:
             coords = _common._core_range_set_to_coords(g.core_range)
             if (0, 0) in coords and (1, 0) not in coords:
+                assert len(g.phases) == 1
                 assert g.phases[0] is not _common._NOOP_OP
-                assert g.phases[1] is _common._NOOP_OP
+                assert g.has_trailing_barrier
+
+        # Core 1: 2 phases, no trailing barrier (it continues to child)
+        for g in groups:
+            coords = _common._core_range_set_to_coords(g.core_range)
+            if (1, 0) in coords and (0, 0) not in coords:
+                assert len(g.phases) == 2
+                assert not g.has_trailing_barrier
 
 
 class TestEffectiveLeafRange:
