@@ -32,7 +32,7 @@ from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
 
 from .attention_wan import WanAttention
-from .wan_RoPE import WanRotaryPosEmbed
+from models.experimental.lingbot_va.reference.model import WanRotaryPosEmbed
 
 
 # Lingbot-VA config (from reference model.py)
@@ -295,8 +295,8 @@ class WanTransformer3DModel(Module):
         self.action_dim = action_dim
 
         head_dim = dim // num_heads
+        self.num_heads = num_heads
         self.rope = WanRotaryPosEmbed(
-            mesh_device=self.mesh_device,
             attention_head_dim=head_dim,
             patch_size=patch_size,
             max_seq_len=rope_max_seq_len,
@@ -420,35 +420,41 @@ class WanTransformer3DModel(Module):
         if patch_bias is not None:
             state["patch_embedding.bias"] = patch_bias.reshape(1, -1)
 
-    def get_rope_features(self, hidden_states: torch.Tensor):
-        """Build RoPE cos/sin and transformation matrix from spatial tensor shape."""
-        if tuple(hidden_states.shape) not in self.cached_rope_features:
-            rope_features = self.prepare_rope_features(hidden_states)
-            self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
-        return self.cached_rope_features[tuple(hidden_states.shape)]
+    def get_rope_features(self, grid_id: torch.Tensor):
+        """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L)."""
+        if tuple(grid_id.shape) not in self.cached_rope_features:
+            rope_features = self.prepare_rope_features(grid_id)
+            self.cached_rope_features[tuple(grid_id.shape)] = rope_features
+        return self.cached_rope_features[tuple(grid_id.shape)]
 
-    def prepare_rope_features(self, hidden_states: torch.Tensor):
-        """Given video/action input (B, C, F, H, W), compute RoPE features. Returns tensors on device."""
-        logger.info("Preparing rope features for shape %s", hidden_states.shape)
-        rope_cos, rope_sin = self.rope(hidden_states)
-        rope_cos_1HND = rope_cos.permute(0, 2, 1, 3)
-        rope_sin_1HND = rope_sin.permute(0, 2, 1, 3)
-        rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
+    def prepare_rope_features(self, grid_id: torch.Tensor):
+        """Compute RoPE from grid_id (B, 3, L). Reference WanRotaryPosEmbed returns freqs_cis (complex).
+        Convert to rope_cos/rope_sin with shape [1, 1, L, head_dim] required by wan_fused_rmsnorm_post_allgather
+        (head_dim=128; reference gives head_dim/2=64, so we repeat each value for the two dims per pair)."""
+        logger.info("Preparing rope features for shape %s", grid_id.shape)
+        rotary_emb = self.rope(grid_id)  # (B, L, head_dim/2) complex
+        rope_cos = rotary_emb.real  # (B, L, head_dim/2) = (1, L, 64)
+        rope_sin = rotary_emb.imag  # (B, L, head_dim/2)
+        # wan_fused_rmsnorm_post_allgather expects [1, 1, seq_len, head_dim] with head_dim=128
+        # Reference has 64 cos/sin (one per pair); repeat to get 128 for kernel
+        rope_cos_11LD = rope_cos.unsqueeze(1).repeat(1, 1, 1, 2)  # (1, 1, L, 128)
+        rope_sin_11LD = rope_sin.unsqueeze(1).repeat(1, 1, 1, 2)  # (1, 1, L, 128)
+        rope_cos_11LD = pad_vision_seq_parallel(
+            rope_cos_11LD, num_devices=self.parallel_config.sequence_parallel.factor
         )
-        rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
+        rope_sin_11LD = pad_vision_seq_parallel(
+            rope_sin_11LD, num_devices=self.parallel_config.sequence_parallel.factor
         )
         trans_mat = get_rot_transformation_mat()
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         tt_rope_cos_1HND = from_torch(
-            rope_cos_1HND,
+            rope_cos_11LD,
             device=self.mesh_device,
             dtype=ttnn.float32,
             mesh_axes=[..., sp_axis, None],
         )
         tt_rope_sin_1HND = from_torch(
-            rope_sin_1HND,
+            rope_sin_11LD,
             device=self.mesh_device,
             dtype=ttnn.float32,
             mesh_axes=[..., sp_axis, None],
@@ -581,7 +587,7 @@ class WanTransformer3DModel(Module):
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
 
-        rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(spatial)
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(grid_id)
         temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(
             timestep, prompt, action_mode=action_mode
         )
