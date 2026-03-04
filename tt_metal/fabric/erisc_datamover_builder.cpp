@@ -1269,10 +1269,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // Credit amortization named compile-time args
-    // Only enabled when there is a single sender channel (common 1D case)
+    // Only enabled when there is a single sender channel on VC0 (common 1D case)
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (num_sender_channels == 1) {
+    if (actual_sender_channels_vc0 == 1) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
