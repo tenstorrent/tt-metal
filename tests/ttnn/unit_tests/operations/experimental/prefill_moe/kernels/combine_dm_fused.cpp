@@ -1,23 +1,24 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused combine kernel: waits for SEM_EXPERT_DONE, then performs weighted
-// accumulation of expert output into final output.
+// Fused combine kernel: waits for ALL experts to finish compute, then performs
+// weighted accumulation of expert output into final output.
 //
-// For each expert e (processed one at a time in fused mode):
-//   Wait for SEM_EXPERT_DONE signal from compute leader.
+// Strategy: Wait for all SEM_EXPERT_DONE signals upfront (no per-expert
+// pipelining). This ensures the combine's scalar BF16 processing does not
+// run concurrently with the compute pipeline, avoiding a deadlock that
+// occurs when RISC-V scalar L1 access on dm0 overlaps with active matmul
+// barrier signaling on 15+ compute cores.
+//
+// For each expert e:
 //   For each assigned token t with weight w:
 //     output[t, :] += w * out_buf[e][t, :]
 //
-// Operates at the sub-tile level: reads tiles from out_buf and output,
-// locates specific rows within tile face layout, performs scalar BF16
-// multiply-accumulate, writes modified output tile back to DRAM.
-//
 // Runs on 1 core as dm0 (RISCV_0 / reader).
-// CB0: output tile (read-modify-write), CB1: expert out_buf tile.
+// CB4: output tile (read-modify-write), CB5: expert out_buf tile.
 //
 // Semaphores:
-//   SEM_EXPERT_DONE (id=3): Waited on before processing each expert.
+//   SEM_EXPERT_DONE (id=3): Waited on (cumulative) before processing.
 //
 // BF16 tile face layout (32x32 tile = 2048 bytes):
 //   Face 0: rows 0-15, cols 0-15  (bytes 0-511)
@@ -46,38 +47,42 @@ void kernel_main() {
     const uint32_t page_bytes = get_local_cb_interface(cb_out).fifo_page_size;
     const auto out_accessor = TensorAccessor(tensor_args, output_addr, page_bytes);
 
+    // Reserve CB buffers ONCE and get fixed L1 addresses.
+    cb_reserve_back(cb_out, 1);
+    const uint32_t out_l1 = get_write_ptr(cb_out);
+    cb_reserve_back(cb_exp, 1);
+    const uint32_t exp_l1 = get_write_ptr(cb_exp);
+
+    // Wait for ALL experts to finish compute before starting any combine work.
+    // This ensures no concurrent scalar L1 access while compute barriers are active.
+    if (num_experts > 0) {
+        volatile tt_l1_ptr uint32_t* done_sem =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_EXPERT_DONE));
+        noc_semaphore_wait(done_sem, num_experts);
+    }
+
     uint32_t arg_idx = 3;
 
     for (uint32_t e = 0; e < num_experts; ++e) {
-        // Wait for compute to finish this expert's output
-        volatile tt_l1_ptr uint32_t* done_sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_EXPERT_DONE));
-        noc_semaphore_wait(done_sem, 1);
-        noc_semaphore_set(done_sem, 0);  // Reset for next expert
-
         uint32_t out_buf_addr = get_arg_val<uint32_t>(arg_idx);
         uint32_t M_e = get_arg_val<uint32_t>(arg_idx + 1);
+
+        uint32_t tokens_base = arg_idx + 2;
+        uint32_t weights_base = arg_idx + 2 + M_e;
 
         if (M_e == 0) {
             arg_idx += 2;
             continue;
         }
 
-        uint32_t tokens_base = arg_idx + 2;
-        uint32_t weights_base = arg_idx + 2 + M_e;
-
         const auto exp_accessor = TensorAccessor(tensor_args, out_buf_addr, page_bytes);
 
         for (uint32_t d = 0; d < D_tiles; ++d) {
             // Read output tile into L1
-            cb_reserve_back(cb_out, 1);
-            uint32_t out_l1 = get_write_ptr(cb_out);
             noc_async_read_page(d, out_accessor, out_l1);
             noc_async_read_barrier();
 
             // Read expert out_buf tile into L1
-            cb_reserve_back(cb_exp, 1);
-            uint32_t exp_l1 = get_write_ptr(cb_exp);
             noc_async_read_page(d, exp_accessor, exp_l1);
             noc_async_read_barrier();
 
@@ -121,13 +126,14 @@ void kernel_main() {
             // Write modified output tile back to DRAM
             noc_async_write_page(d, out_accessor, out_l1);
             noc_async_write_barrier();
-
-            cb_push_back(cb_out, 1);
-            cb_pop_front(cb_out, 1);
-            cb_push_back(cb_exp, 1);
-            cb_pop_front(cb_exp, 1);
         }
 
         arg_idx += 2 + 2 * M_e;
     }
+
+    // Release CB buffers at the end
+    cb_push_back(cb_out, 1);
+    cb_pop_front(cb_out, 1);
+    cb_push_back(cb_exp, 1);
+    cb_pop_front(cb_exp, 1);
 }
