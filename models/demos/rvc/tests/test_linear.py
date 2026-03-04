@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.linear import TTLinear
+from models.demos.rvc.tt_impl.linear import Linear
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -24,7 +24,7 @@ def test_linear(device):
     torch_input = torch.randn(batch_size, input_length, in_features, dtype=torch.float32)
     torch_output = torch_linear(torch_input)
 
-    tt_linear = TTLinear(
+    tt_linear = Linear(
         device=device,
         in_features=in_features,
         out_features=out_features,

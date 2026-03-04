@@ -114,7 +114,7 @@ def pad_nhw_to_multiple_of_32(x: ttnn.Tensor) -> tuple[ttnn.Tensor, int]:
     return ttnn.reshape(x_padded, (N, padded_length, C)), L
 
 
-class TTGroupNorm1D:
+class GroupNorm1D:
     def __init__(self, device, num_channels: int, num_groups: int):
         self.num_channels = num_channels
         self.channels_padding = (32 - (num_channels % 32)) % 32

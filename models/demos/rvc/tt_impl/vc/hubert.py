@@ -9,10 +9,10 @@ import math
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.conv1d import TTConv1d
-from models.demos.rvc.tt_impl.groupnorm import TTGroupNorm1D
-from models.demos.rvc.tt_impl.layernorm import TTLayerNorm
-from models.demos.rvc.tt_impl.linear import TTLinear
+from models.demos.rvc.tt_impl.conv1d import Conv1d
+from models.demos.rvc.tt_impl.groupnorm import GroupNorm1D
+from models.demos.rvc.tt_impl.layernorm import LayerNorm
+from models.demos.rvc.tt_impl.linear import Linear
 
 
 class MultiheadAttention:
@@ -30,10 +30,10 @@ class MultiheadAttention:
         self.scaling = self.head_dim**-0.5
         self.self_attention = self_attention
 
-        self.k_proj = TTLinear(device=device, in_features=self.kdim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.v_proj = TTLinear(device=device, in_features=self.vdim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.q_proj = TTLinear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.out_proj = TTLinear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.k_proj = Linear(device=device, in_features=self.kdim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.v_proj = Linear(device=device, in_features=self.vdim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.q_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.out_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.k_proj.load_parameters(parameters=parameters, key="k_proj", prefix=prefix)
@@ -109,8 +109,8 @@ class TransformerSentenceEncoderLayer:
             device=device, embed_dim=embed_dim, num_heads=attention_heads, self_attention=True
         )
         self.layer_norm_first = layer_norm_first
-        self.fc1 = TTLinear(device=device, in_features=embed_dim, out_features=ffn_embed_dim, dtype=ttnn.bfloat16)
-        self.fc2 = TTLinear(device=device, in_features=ffn_embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.fc1 = Linear(device=device, in_features=embed_dim, out_features=ffn_embed_dim, dtype=ttnn.bfloat16)
+        self.fc2 = Linear(device=device, in_features=ffn_embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
 
         self.self_attn_layer_norm_weight: ttnn.Tensor | None = None
         self.self_attn_layer_norm_bias: ttnn.Tensor | None = None
@@ -219,7 +219,7 @@ class ConvFeatureExtractionModel:
         self.device = device
         self.mode = mode
         self.conv_layers_cfg = conv_layers
-        self.conv_layers: list[TTConv1d] = []
+        self.conv_layers: list[Conv1d] = []
 
         in_d = 1
         for i, cl in enumerate(conv_layers):
@@ -227,7 +227,7 @@ class ConvFeatureExtractionModel:
                 raise ValueError(f"invalid conv definition: {cl}")
             dim, k, stride = cl
             self.conv_layers.append(
-                TTConv1d(
+                Conv1d(
                     device=device,
                     in_channels=in_d,
                     out_channels=dim,
@@ -241,9 +241,9 @@ class ConvFeatureExtractionModel:
 
         self.ln_weights: list[ttnn.Tensor | None] = [None for _ in conv_layers]
         self.ln_biases: list[ttnn.Tensor | None] = [None for _ in conv_layers]
-        self.group_norms: list[TTGroupNorm1D | None] = [None for _ in conv_layers]
+        self.group_norms: list[GroupNorm1D | None] = [None for _ in conv_layers]
         if self.mode == "default" and conv_layers:
-            self.group_norms[0] = TTGroupNorm1D(
+            self.group_norms[0] = GroupNorm1D(
                 device=device, num_channels=conv_layers[0][0], num_groups=conv_layers[0][0]
             )
 
@@ -324,12 +324,12 @@ class ConvFeatureExtractionModel:
                 group_norm.deallocate()
 
 
-class TTPositionalConvEmbedding:
+class PositionalConvEmbedding:
     def __init__(self, device: ttnn.MeshDevice, embed_dim: int, kernel_size: int, groups: int) -> None:
         self.device = device
         self.embed_dim = embed_dim
         self.kernel_size = kernel_size
-        self.conv = TTConv1d(
+        self.conv = Conv1d(
             device=device,
             in_channels=embed_dim,
             out_channels=embed_dim,
@@ -376,9 +376,9 @@ class FeedForwardModule:
         self.activation_fn = activation_fn
         self.use_bias = bias
 
-        self.layer_norm = TTLayerNorm(device=device, normalized_shape=input_feat, eps=1e-5, dtype=ttnn.bfloat16)
-        self.w_1 = TTLinear(device=device, in_features=input_feat, out_features=hidden_units, dtype=ttnn.bfloat16)
-        self.w_2 = TTLinear(device=device, in_features=hidden_units, out_features=input_feat, dtype=ttnn.bfloat16)
+        self.layer_norm = LayerNorm(device=device, normalized_shape=input_feat, eps=1e-5, dtype=ttnn.bfloat16)
+        self.w_1 = Linear(device=device, in_features=input_feat, out_features=hidden_units, dtype=ttnn.bfloat16)
+        self.w_2 = Linear(device=device, in_features=hidden_units, out_features=input_feat, dtype=ttnn.bfloat16)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.layer_norm.load_parameters(parameters=parameters, key="layer_norm", prefix=prefix)
@@ -435,8 +435,8 @@ class ConvolutionModule:
         self.use_bias = bias
         self.batch_norm_eps = 1e-5
 
-        self.layer_norm = TTLayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5, dtype=ttnn.bfloat16)
-        self.pointwise_conv1 = TTConv1d(
+        self.layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5, dtype=ttnn.bfloat16)
+        self.pointwise_conv1 = Conv1d(
             device=device,
             in_channels=embed_dim,
             out_channels=2 * channels,
@@ -445,7 +445,7 @@ class ConvolutionModule:
             padding=0,
             dtype=ttnn.bfloat16,
         )
-        self.depthwise_conv = TTConv1d(
+        self.depthwise_conv = Conv1d(
             device=device,
             in_channels=channels,
             out_channels=channels,
@@ -455,7 +455,7 @@ class ConvolutionModule:
             groups=channels,
             dtype=ttnn.bfloat16,
         )
-        self.pointwise_conv2 = TTConv1d(
+        self.pointwise_conv2 = Conv1d(
             device=device,
             in_channels=channels,
             out_channels=embed_dim,
@@ -607,7 +607,7 @@ class TransformerEncoder:
         self.device = device
         self.embedding_dim = args["encoder_embed_dim"]
         self.required_seq_len_multiple = args.get("required_seq_len_multiple", 2)
-        self.pos_conv = TTPositionalConvEmbedding(
+        self.pos_conv = PositionalConvEmbedding(
             device=device,
             embed_dim=self.embedding_dim,
             kernel_size=args["conv_pos"],
@@ -615,7 +615,7 @@ class TransformerEncoder:
         )
         self.layers = [self.build_encoder_layer(args) for _ in range(args["encoder_layers"])]
         self.layer_norm_first = args["layer_norm_first"]
-        self.layer_norm = TTLayerNorm(device=device, normalized_shape=self.embedding_dim, eps=1e-5, dtype=ttnn.bfloat16)
+        self.layer_norm = LayerNorm(device=device, normalized_shape=self.embedding_dim, eps=1e-5, dtype=ttnn.bfloat16)
 
     def build_encoder_layer(self, args: dict):
         return TransformerSentenceEncoderLayer(
@@ -691,7 +691,7 @@ class HubertModel:
 
         self.post_extract_proj = None
         if self.embed != cfg["encoder_embed_dim"]:
-            self.post_extract_proj = TTLinear(
+            self.post_extract_proj = Linear(
                 device=device,
                 in_features=self.embed,
                 out_features=cfg["encoder_embed_dim"],
@@ -703,9 +703,9 @@ class HubertModel:
 
         final_dim = cfg["final_dim"] if cfg["final_dim"] > 0 else cfg["encoder_embed_dim"]
         self.encoder = TransformerEncoder(device=device, args=cfg)
-        self.layer_norm = TTLayerNorm(device=device, normalized_shape=self.embed, eps=1e-5, dtype=ttnn.bfloat16)
+        self.layer_norm = LayerNorm(device=device, normalized_shape=self.embed, eps=1e-5, dtype=ttnn.bfloat16)
         self.untie_final_proj = cfg["untie_final_proj"]
-        self.final_proj_linear = TTLinear(
+        self.final_proj_linear = Linear(
             device=device,
             in_features=cfg["encoder_embed_dim"],
             out_features=final_dim,

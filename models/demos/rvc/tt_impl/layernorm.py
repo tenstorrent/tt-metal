@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 
-class TTLayerNorm:
+class LayerNorm:
     """Stateful LayerNorm wrapper around `ttnn.layer_norm` for last-dim normalization."""
 
     def __init__(

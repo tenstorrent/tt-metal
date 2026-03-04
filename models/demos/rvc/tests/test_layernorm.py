@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.layernorm import TTLayerNorm
+from models.demos.rvc.tt_impl.layernorm import LayerNorm
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -23,7 +23,7 @@ def test_layernorm(device):
     torch_input = torch.randn(batch_size, input_length, channels, dtype=torch.float32)
     torch_output = torch_layernorm(torch_input)
 
-    tt_layernorm = TTLayerNorm(
+    tt_layernorm = LayerNorm(
         device=device,
         normalized_shape=channels,
         eps=1e-5,
