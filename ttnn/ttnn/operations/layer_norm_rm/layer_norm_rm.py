@@ -33,6 +33,7 @@ def layer_norm_rm(
     *,
     memory_config: ttnn.MemoryConfig = None,
     bisect_phase: int = 99,
+    fp32_dest_acc_en: bool = True,
 ) -> ttnn.Tensor:
     """
     Layer normalization on row-major interleaved tensors.
@@ -66,7 +67,13 @@ def layer_norm_rm(
     )
 
     program_descriptor = create_program_descriptor(
-        input_tensor, gamma, beta, output_tensor, epsilon, bisect_phase=bisect_phase
+        input_tensor,
+        gamma,
+        beta,
+        output_tensor,
+        epsilon,
+        bisect_phase=bisect_phase,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
     # Output MUST be last in the list

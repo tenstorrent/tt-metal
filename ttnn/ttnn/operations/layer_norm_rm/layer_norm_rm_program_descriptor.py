@@ -68,6 +68,7 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     epsilon: float = 1e-5,
     bisect_phase: int = 99,
+    fp32_dest_acc_en: bool = True,
 ) -> ttnn.ProgramDescriptor:
     """
     Build the ProgramDescriptor for layer_norm_rm.
@@ -393,7 +394,7 @@ def create_program_descriptor(
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             math_approx_mode=False,
         ),
     )
