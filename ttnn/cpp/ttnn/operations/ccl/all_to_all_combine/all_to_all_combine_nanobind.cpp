@@ -16,6 +16,35 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
+namespace {
+
+ttnn::Tensor all_to_all_combine_impl(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_metadata_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    const bool local_reduce,
+    const std::optional<uint32_t> output_shard_dim,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<uint32_t> num_links,
+    const std::optional<tt::tt_fabric::Topology> topology) {
+    return ttnn::ccl::all_to_all_combine(
+        input_tensor,
+        expert_mapping_tensor,
+        expert_metadata_tensor,
+        local_reduce,
+        num_links,
+        topology,
+        memory_config,
+        cluster_axis,
+        output_shard_dim,
+        subdevice_id,
+        output_tensor);
+}
+
+}  // namespace
 
 void bind_all_to_all_combine(nb::module_& mod) {
     const auto* doc =
@@ -66,30 +95,7 @@ void bind_all_to_all_combine(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& expert_metadata_tensor,
-                const ttnn::Tensor& expert_mapping_tensor,
-                const bool local_reduce,
-                const std::optional<uint32_t> output_shard_dim,
-                const std::optional<uint32_t> cluster_axis,
-                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<ttnn::Tensor>& output_tensor,
-                const std::optional<uint32_t> num_links,
-                const std::optional<tt::tt_fabric::Topology> topology) {
-                return ttnn::ccl::all_to_all_combine(
-                    input_tensor,
-                    expert_mapping_tensor,
-                    expert_metadata_tensor,
-                    local_reduce,
-                    num_links,
-                    topology,
-                    memory_config,
-                    cluster_axis,
-                    output_shard_dim,
-                    subdevice_id,
-                    output_tensor);
-            },
+            all_to_all_combine_impl,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_metadata_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
