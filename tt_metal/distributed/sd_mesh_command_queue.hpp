@@ -76,6 +76,8 @@ private:
     bool asynchronous_slow_dispatch_enabled_ = false;
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
+    void launch_program_for_range(const MeshCoordinateRange& coord_range, Program& program, bool blocking);
+    std::mutex logical_cores_mutex_;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -47,12 +47,7 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     std::function<std::lock_guard<std::mutex>()> lock_api_function,
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)),
-    active_distributed_context_(std::move(distributed_context)) {
-    auto local_devices = mesh_device->get_devices();
-    if (local_devices.size() > 1) {
-        launch_thread_pool_ = create_device_bound_thread_pool(local_devices);
-    }
-}
+    active_distributed_context_(std::move(distributed_context)) {}
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     TT_THROW("Trace not supported for slow dispatch");
@@ -127,87 +122,75 @@ void SDMeshCommandQueue::wait_for_cores_idle() {
     }
 }
 
-void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;  // Skip workload execution for mock devices
-    }
+void SDMeshCommandQueue::launch_program_for_range(
+    const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
+    const auto& program_cores = program.impl().logical_cores();
 
-    auto lock = lock_api_function_();
+    bool need_wait = false;
+    std::vector<std::vector<CoreCoord>> cores_to_wait;
+    ChipId device_id = 0;
 
-    if (!asynchronous_slow_dispatch_enabled_) {
-        wait_for_cores_idle();
-    }
-
-    for (auto& [coord_range, program] : mesh_workload.get_programs()) {
-        const auto& program_cores = program.impl().logical_cores();
-
-        // Collect local devices for this program, handling async idle checks
-        std::vector<IDevice*> local_devices;
-        for (const auto& coord : coord_range) {
-            if (!mesh_device_->impl().is_local(coord)) {
-                continue;
-            }
-            auto* device = mesh_device_->impl().get_device(coord);
+    // Collect local devices for this program, handling async idle checks
+    std::vector<IDevice*> local_devices;
+    for (const auto& coord : coord_range) {
+        if (!mesh_device_->impl().is_local(coord)) {
+            continue;
+        }
+        auto* device = mesh_device_->impl().get_device(coord);
+        need_wait = false;
+        {
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
             if (asynchronous_slow_dispatch_enabled_) {
                 auto it = logical_cores_for_previous_workload_.find(device->id());
                 if (it != logical_cores_for_previous_workload_.end()) {
                     const auto& previous_cores = it->second;
                     if (logical_cores_intersect(previous_cores, program_cores)) {
-                        tt::llrt::internal_::wait_for_idle(device->id(), previous_cores);
-                        logical_cores_for_previous_workload_.erase(device->id());
+                        // Store the data so the thread does waiting after exiting
+                        // the critical section
+                        need_wait = true;
+                        cores_to_wait = previous_cores;
+                        device_id = device->id();
+                        logical_cores_for_previous_workload_.erase(device_id);
                     }
                 }
             }
-            local_devices.push_back(device);
         }
 
-        if (local_devices.empty()) {
-            continue;
+        if (need_wait) {
+            tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
         }
 
-        // Serial: full LaunchProgram on the first device (compiles, finalizes, allocates CBs, etc.)
-        tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+        local_devices.push_back(device);
+    }
 
-        // Parallel: dispatch already-compiled program to remaining devices
-        if (local_devices.size() > 1 && launch_thread_pool_) {
-            for (size_t i = 1; i < local_devices.size(); i++) {
-                auto* device = local_devices[i];
-                launch_thread_pool_->enqueue(
-                    [device, &program]() { tt_metal::detail::DispatchCompiledProgramToDevice(device, program); },
-                    device->id());
-            }
-            launch_thread_pool_->wait();
-        } else {
-            for (size_t i = 1; i < local_devices.size(); i++) {
-                tt_metal::detail::DispatchCompiledProgramToDevice(local_devices[i], program);
-            }
+    if (local_devices.empty()) {
+        return;
+    }
+
+    // 1st launch program, needs to be serial:
+    // full LaunchProgram on the first device (compiles, finalizes, allocates CBs, etc.)
+    tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+
+    // Remaining device launches can be parallelized: dispatch already-compiled program to remaining devices
+    for (size_t i = 1; i < local_devices.size(); i++) {
+        tt_metal::detail::DispatchCompiledProgramToDevice(local_devices[i], program);
+    }
+
+    std::vector<IDevice*> local_devices_for_wait;
+    for (const auto& coord : coord_range) {
+        if (mesh_device_->impl().is_local(coord)) {
+            local_devices_for_wait.push_back(mesh_device_->impl().get_device(coord));
         }
     }
 
-    for (auto& [coord_range, program] : mesh_workload.get_programs()) {
-        const auto& program_cores = program.impl().logical_cores();
-
-        std::vector<IDevice*> local_devices_for_wait;
-        for (const auto& coord : coord_range) {
-            if (mesh_device_->impl().is_local(coord)) {
-                local_devices_for_wait.push_back(mesh_device_->impl().get_device(coord));
-            }
+    if (blocking) {
+        // Can be parallelized: wait across all devices
+        for (auto* device : local_devices_for_wait) {
+            tt_metal::detail::WaitProgramDone(device, program);
         }
-
-        if (blocking) {
-            // Parallel wait across all devices
-            if (local_devices_for_wait.size() > 1 && launch_thread_pool_) {
-                for (auto* device : local_devices_for_wait) {
-                    launch_thread_pool_->enqueue(
-                        [device, &program]() { tt_metal::detail::WaitProgramDone(device, program); }, device->id());
-                }
-                launch_thread_pool_->wait();
-            } else {
-                for (auto* device : local_devices_for_wait) {
-                    tt_metal::detail::WaitProgramDone(device, program);
-                }
-            }
-        } else {
+    } else {
+        {
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
             for (auto* device : local_devices_for_wait) {
                 if (!asynchronous_slow_dispatch_enabled_ ||
                     !logical_cores_for_previous_workload_.contains(device->id())) {
@@ -222,6 +205,38 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                     }
                 }
             }
+        }
+    }
+}
+
+void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;  // Skip workload execution for mock devices
+    }
+
+    auto lock = lock_api_function_();
+
+    if (!asynchronous_slow_dispatch_enabled_) {
+        wait_for_cores_idle();
+    }
+
+    auto& range_program_map = mesh_workload.get_programs();
+    const auto num_threads = range_program_map.size();
+    launch_thread_pool_ = create_device_bound_thread_pool(num_threads);
+    if (num_threads > 1) {
+        uint32_t thread_idx = 0;
+        for (auto& [coord_range, program] : range_program_map) {
+            launch_thread_pool_->enqueue(
+                [this, &coord_range, &program, blocking]() {
+                    launch_program_for_range(coord_range, program, blocking);
+                },
+                thread_idx++);
+        }
+
+        launch_thread_pool_->wait();
+    } else {
+        for (auto& [coord_range, program] : range_program_map) {
+            launch_program_for_range(coord_range, program, blocking);
         }
     }
 }
