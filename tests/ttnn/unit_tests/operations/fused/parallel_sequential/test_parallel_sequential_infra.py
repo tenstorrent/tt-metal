@@ -98,7 +98,7 @@ def _make_barrier_spec(num_segments=1, has_reset_done=True):
     """Create a minimal MultiBarrierSpec for source generation tests."""
     segs = [
         _common.BarrierSegment(
-            config=_common.BarrierConfig(num_cores=1, core0_phys_x=1, core0_phys_y=1),
+            config=_common.BarrierConfig(num_release_cores=1, num_arrive_cores=1, core0_phys_x=1, core0_phys_y=1),
             arrive_addr=3000 + i * 1000,
             release_addr=4000 + i * 1000,
         )

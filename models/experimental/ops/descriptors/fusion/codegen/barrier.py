@@ -51,7 +51,21 @@ _REBIND_RT_OFFSET_CT_ARG = "rebind_rt_offset"
 # Short suffix per RISC type for unique Tracy zone names.  Each RISC compiles
 # its own kernel_includes.hpp at different line offsets.  Without distinct zone
 # names the profiler's 16-bit FNV hash can collide (only 65536 buckets).
-_RISC_SUFFIX = {"riscv_0": "br", "riscv_1": "nc", "compute": "tr"}
+# Tracy profiler hashes "name,__FILE__,__LINE__" into 16-bit keys (65536
+# buckets).  Each fused kernel variant has DeviceZoneScopedN at different line
+# numbers, and with 300+ total zones the birthday paradox guarantees collisions.
+# Fix: emit ``#line N "fused_zones"`` before each DeviceZoneScopedN to pin
+# __FILE__/__LINE__ to stable values so hashes are deterministic.
+_ZONE_LINE = {"local-sync": 100, "group-sync": 200}
+
+
+def _pinned_zone(zone_name: str, indent: str = "        ") -> list:
+    """Emit DeviceZoneScopedN with stable __FILE__/__LINE__ via #line."""
+    return [
+        f'#line {_ZONE_LINE[zone_name]} "fused_zones"',
+        f'{indent}DeviceZoneScopedN("{zone_name}");',
+    ]
+
 
 # =============================================================================
 # Per-Role CB Reset/Resync C++ Templates
@@ -162,6 +176,11 @@ def _generate_unicast_segment(
     writes to each non-coordinator core individually via ``noc_async_write``.
     This removes the requirement for a rectangular core grid (~300 ns for
     16 cores vs ~30 ns for multicast — negligible).
+
+    ``sync()`` is templated on ``SyncMode``:
+    - ``SyncMode::Full``: arrive + wait + release (normal barrier).
+    - ``SyncMode::WaitOnly``: skip arrive, only spinwait on release.
+      Used by no-op cores that have no real work to signal.
     """
     n_other = len(other_phys_coords)
 
@@ -192,7 +211,8 @@ def _generate_unicast_segment(
 
     return (
         f"namespace seg_{seg_idx} {{\n"
-        f'    constexpr uint32_t num_cores = get_named_compile_time_arg_val("{s}_num_cores");\n'
+        f'    constexpr uint32_t num_release_cores = get_named_compile_time_arg_val("{s}_num_release_cores");\n'
+        f'    constexpr uint32_t num_arrive_cores = get_named_compile_time_arg_val("{s}_num_arrive_cores");\n'
         f'    constexpr uint32_t core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");\n'
         f'    constexpr uint32_t core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");\n'
         f"{array_decl}\n"
@@ -211,18 +231,21 @@ def _generate_unicast_segment(
         f"        *release = 0;\n"
         f"    }}\n"
         f"\n"
+        f"    template <SyncMode mode>\n"
         f"    __attribute__((noinline)) void sync() {{\n"
-        f"        if constexpr (num_cores > 1) {{\n"
-        f"            uint64_t core0_arrive_noc_addr = get_noc_addr(core0_phys_x, core0_phys_y, (uint32_t)arrive);\n"
-        f"            noc_semaphore_inc(core0_arrive_noc_addr, 1);\n"
+        f"        if constexpr (num_release_cores > 1) {{\n"
+        f"            if constexpr (mode != SyncMode::WaitOnly) {{\n"
+        f"                uint64_t core0_arrive_noc_addr = get_noc_addr(core0_phys_x, core0_phys_y, (uint32_t)arrive);\n"
+        f"                noc_semaphore_inc(core0_arrive_noc_addr, 1);\n"
+        f"            }}\n"
         f"            bool is_core_0 = (my_x[0] == core0_phys_x && my_y[0] == core0_phys_y);\n"
-        f"            if (is_core_0) {{\n"
-        f"                noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));\n"
+        f"            if (is_core_0 && mode != SyncMode::WaitOnly) {{\n"
+        f"                noc_semaphore_wait_min(arrive, num_arrive_cores * (call_count + 1));\n"
         f"{release_loop}\n"
         f"            }} else {{\n"
         f"                noc_semaphore_wait_min(release, call_count + 1);\n"
         f"            }}\n"
-        f"        }} else {{\n"
+        f"        }} else if constexpr (mode != SyncMode::WaitOnly) {{\n"
         f"            *release = call_count + 1;\n"
         f"        }}\n"
         f"        call_count++;\n"
@@ -231,7 +254,9 @@ def _generate_unicast_segment(
     )
 
 
-# Spinwait segment template (NCRISC/compute): spin on release semaphore.
+# Spinwait segment template (BRISC/compute): spin on release semaphore.
+# Templated on SyncMode for uniform codegen — followers always spinwait,
+# so ``WaitOnly`` and ``Full`` behave identically for them.
 _SPINWAIT_SEGMENT_TEMPLATE = """\
 namespace seg_{seg_idx} {{
     uint32_t call_count;
@@ -245,6 +270,7 @@ namespace seg_{seg_idx} {{
         *release = 0;
     }}
 
+    template <SyncMode mode>
     __attribute__((noinline)) void sync() {{
         while (*release < call_count + 1) {{ }}
         call_count++;
@@ -261,11 +287,17 @@ def _build_barrier_dispatch(
     multi_barrier: MultiBarrierSpec,
     rebind_info: Dict[int, List[Tuple[int, int, int]]],
     sources: List[Tuple[int, str]],
+    noop_phase_indices: frozenset = frozenset(),
 ) -> List[Dict[str, Any]]:
     """Build dispatch table for barrier transitions.
 
     Each entry maps a ``done`` counter value to the segment and rebinds
     needed for that transition.
+
+    ``is_arrive`` is True when the completed phase had real work (not a
+    no-op), meaning the core should participate in the arrive step.
+    When the completed phase is a no-op, ``is_arrive`` is False and the
+    barrier uses ``SyncMode::WaitOnly`` (skip arrive, only spinwait).
     """
     dispatch: List[Dict[str, Any]] = []
     cumulative_rebind_offset = 0
@@ -283,6 +315,7 @@ def _build_barrier_dispatch(
                     "next_phase_idx": next_phase_idx,
                     "rebinds": rebinds,
                     "rebind_entry_offset": cumulative_rebind_offset,
+                    "is_arrive": phase_idx not in noop_phase_indices,
                 }
             )
             cumulative_rebind_offset += len(rebinds) * 2
@@ -297,6 +330,7 @@ def _build_barrier_dispatch(
                 "next_phase_idx": None,
                 "rebinds": [],
                 "rebind_entry_offset": cumulative_rebind_offset,
+                "is_arrive": last_phase_idx not in noop_phase_indices,
             }
         )
     return dispatch
@@ -380,22 +414,15 @@ def _emit_local_sync_coordinator(
     Order: done++ -> drain NOC -> wait followers -> reset op sems ->
     per-done CB reset + rebind -> signal *reset_done = done.
     """
-    s = _RISC_SUFFIX["riscv_1"]
     lines = ["namespace local {"]
     lines.append("    __attribute__((noinline)) void sync() {")
-    lines.append(f'        DeviceZoneScopedN("local-sync-{s}");')
+    lines.extend(_pinned_zone("local-sync"))
     lines.append("        done++;")
-    lines.append("        {")
-    lines.append(f'            DeviceZoneScopedN("noc-drain-{s}");')
-    lines.append("            noc_async_full_barrier();")
-    lines.append("        }")
-    lines.append("        {")
-    lines.append(f'            DeviceZoneScopedN("sem-wait-{s}");')
+    lines.append("        noc_async_full_barrier();")
     if has_compute:
-        lines.append("            noc_semaphore_wait_min(compute_done, done);")
+        lines.append("        noc_semaphore_wait_min(compute_done, done);")
     if has_writer:
-        lines.append("            noc_semaphore_wait_min(writer_done, done);")
-    lines.append("        }")
+        lines.append("        noc_semaphore_wait_min(writer_done, done);")
     if op_semaphore_info:
         lines.append("        // Reset op semaphores")
         for sem_id, initial_value in op_semaphore_info:
@@ -408,10 +435,7 @@ def _emit_local_sync_coordinator(
         next_phase_idx = entry["next_phase_idx"]
         completed_phase_idx = done_val - 1
         lines.append(f"        if (done == {done_val}) {{")
-        lines.append("            {")
-        lines.append(f'                DeviceZoneScopedN("cb-reset-transition-{done_val}-{s}");')
-        lines.append(f"                reset_cbs(phase_{completed_phase_idx}_cbs);")
-        lines.append("            }")
+        lines.append(f"            reset_cbs(phase_{completed_phase_idx}_cbs);")
         if rebinds and next_phase_idx is not None:
             lines.append(_generate_rebind_call(done_val, entry["rebind_entry_offset"], "            "))
         lines.append("        }")
@@ -427,19 +451,15 @@ def _emit_local_sync_follower(risc_type: str) -> List[str]:
 
     Order: done++ -> drain NOC (DM only) -> signal done -> wait reset_done.
     """
-    s = _RISC_SUFFIX[risc_type]
     lines = ["namespace local {"]
     lines.append("    __attribute__((noinline)) void sync() {")
-    lines.append(f'        DeviceZoneScopedN("local-sync-{s}");')
+    lines.extend(_pinned_zone("local-sync"))
     lines.append("        done++;")
     if risc_type != "compute":
         # DM follower: drain outstanding NOC writes before signaling done.
         # For a writer this flushes real writes; for a reader with no
         # pending writes this is a harmless no-op.
-        lines.append("        {")
-        lines.append(f'            DeviceZoneScopedN("noc-drain-{s}");')
-        lines.append("            noc_async_write_barrier();")
-        lines.append("        }")
+        lines.append("        noc_async_write_barrier();")
         lines.append("        *writer_done = done;")
     else:  # compute
         lines.append("        *compute_done = done;")
@@ -461,15 +481,16 @@ def _emit_local_sync_follower(risc_type: str) -> List[str]:
 
 def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
     """Emit ``group::sync()`` function for the coordinator (NCRISC)."""
-    s = _RISC_SUFFIX["riscv_1"]
     lines = []
     lines.append("    __attribute__((noinline)) void sync() {")
-    lines.append(f'        DeviceZoneScopedN("group-sync-{s}");')
+    lines.extend(_pinned_zone("group-sync"))
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
+        is_arrive = entry.get("is_arrive", True)
+        mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
-        lines.append(f"            seg_{seg_idx}::sync();")
+        lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
         lines.append("        }")
     lines.append("    }")
     return lines
@@ -480,29 +501,25 @@ def _emit_group_sync_follower(
     for_compute: bool,
     risc_type: str,
 ) -> List[str]:
-    """Emit ``group::sync()`` function for NCRISC or compute.
+    """Emit ``group::sync()`` function for BRISC or compute.
 
     Per-transition: segment spinwait -> resync_cbs -> rebind.
+    Uses ``SyncMode`` template for uniform codegen with coordinator.
     """
-    s = _RISC_SUFFIX[risc_type]
     lines = []
     lines.append("    __attribute__((noinline)) void sync() {")
-    lines.append(f'        DeviceZoneScopedN("group-sync-{s}");')
+    lines.extend(_pinned_zone("group-sync"))
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
         rebinds = entry["rebinds"]
         next_phase_idx = entry["next_phase_idx"]
         completed_phase_idx = done_val - 1
+        is_arrive = entry.get("is_arrive", True)
+        mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
-        lines.append("            {")
-        lines.append(f'                DeviceZoneScopedN("segment-transition-{done_val}-{s}");')
-        lines.append(f"                seg_{seg_idx}::sync();")
-        lines.append("            }")
-        lines.append("            {")
-        lines.append(f'                DeviceZoneScopedN("cb-resync-transition-{done_val}-{s}");')
-        lines.append(f"                resync_cbs(phase_{completed_phase_idx}_cbs);")
-        lines.append("            }")
+        lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
+        lines.append(f"            resync_cbs(phase_{completed_phase_idx}_cbs);")
         if rebinds and next_phase_idx is not None:
             if for_compute:
                 lines.append("#ifndef TRISC_MATH")
@@ -599,22 +616,27 @@ def _generate_barrier_namespace(
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     has_compute: bool = True,
     has_writer: bool = True,
+    noop_phase_indices: frozenset = frozenset(),
 ) -> List[str]:
     """Generate ``namespace barrier { }`` for any RISC type.
 
-    Structure: preamble -> CB reset/resync function -> phase CB arrays ->
-    state variables -> local::sync() -> group { segments + sync() } ->
-    top-level sync() -> init() -> close.
+    Structure: preamble -> SyncMode enum -> CB reset/resync function ->
+    phase CB arrays -> state variables -> local::sync() ->
+    group { segments + sync() } -> top-level sync() -> init() -> close.
 
     The coordinator is ``riscv_1`` (NCRISC / reader).  When
     ``has_compute`` is False, the coordinator barrier skips the
     ``compute_done`` semaphore wait (no compute kernel to signal it).
     When ``has_writer`` is False, the coordinator skips the
     ``writer_done`` semaphore wait (no writer kernel to signal it).
+
+    ``noop_phase_indices`` identifies phases that are no-ops for this
+    group.  Transitions after a no-op phase use ``SyncMode::WaitOnly``
+    (skip arrive, only spinwait on release).
     """
     is_coordinator = risc_type == "riscv_1"
     num_segments = len(multi_barrier.segments)
-    dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources)
+    dispatch = _build_barrier_dispatch(multi_barrier, rebind_info, sources, noop_phase_indices)
 
     has_rebinds = any(rebind_info.get(k) for k in rebind_info)
 
@@ -629,6 +651,10 @@ def _generate_barrier_namespace(
         lines.append(
             f'constexpr uint32_t rebind_rt_offset = get_named_compile_time_arg_val("{_REBIND_RT_OFFSET_CT_ARG}");'
         )
+    lines.append("")
+
+    # SyncMode enum — used by segment sync() templates
+    lines.append("enum class SyncMode { Full, WaitOnly };")
     lines.append("")
 
     # CB reset/resync function + per-phase CB index arrays.

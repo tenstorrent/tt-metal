@@ -357,8 +357,6 @@ def _generate_phase_namespace(
     dedented = _dedent_ignoring_column_zero(transformed)
 
     lines.append("__attribute__((noinline)) void run() {")
-    if phase_name:
-        lines.append(f'    DeviceZoneScopedN("{phase_name}");')
     for line in dedented.split("\n"):
         if line.strip():
             lines.append(f"    {line}")
@@ -545,6 +543,7 @@ def _generate_fused_source(
     all_phase_indices: Optional[List[int]] = None,
     has_compute: bool = True,
     has_writer: bool = True,
+    noop_phase_indices: frozenset = frozenset(),
 ) -> Optional[str]:
     """Generate fused kernel source for any RISC type.
 
@@ -710,6 +709,7 @@ def _generate_fused_source(
                 op_semaphore_info=op_semaphore_info,
                 has_compute=has_compute,
                 has_writer=has_writer,
+                noop_phase_indices=noop_phase_indices,
             )
         )
 
@@ -733,6 +733,7 @@ def _generate_fused_source(
             lines.append(f"    // {label}")
             if pname:
                 lines.append("    {")
+                lines.append(f'#line {300 + phase_idx} "fused_zones"')
                 lines.append(f'        DeviceZoneScopedN("{pname}");')
                 lines.append(f"        phase_{phase_idx}::run();")
                 lines.append("    }")
@@ -763,6 +764,7 @@ def _generate_coordinator_only_source(
     has_compute: bool,
     has_writer: bool,
     phase_names: Dict[int, str],
+    noop_phase_indices: frozenset = frozenset(),
 ) -> str:
     """Generate a barrier-only coordinator source (no phase work).
 
@@ -792,6 +794,7 @@ def _generate_coordinator_only_source(
             op_semaphore_info=op_semaphore_info,
             has_compute=has_compute,
             has_writer=has_writer,
+            noop_phase_indices=noop_phase_indices,
         )
     )
 

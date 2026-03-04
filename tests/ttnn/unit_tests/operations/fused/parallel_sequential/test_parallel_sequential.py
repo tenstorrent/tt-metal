@@ -23,6 +23,8 @@ import pytest
 import torch
 import ttnn
 
+_PROFILER_ON = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+
 from models.common.utility_functions import comp_pcc
 
 
@@ -200,7 +202,20 @@ class TestInfrastructure:
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
-    @pytest.mark.parametrize("num_phases", [2, 3, 4])
+    @pytest.mark.parametrize(
+        "num_phases",
+        [
+            2,
+            3,
+            pytest.param(
+                4,
+                marks=pytest.mark.skipif(
+                    _PROFILER_ON,
+                    reason="4-phase fused kernel exceeds TENSIX config buffer with profiler instrumentation",
+                ),
+            ),
+        ],
+    )
     def test_norm_chain(self, device, test_tensors, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -1450,13 +1465,14 @@ class TestDocExample:
     def test_matmul_slice_ln_rms_tree(self, device):
         """Doc-example: matmul -> Parallel(slice->Parallel(matmul, LN), slice->RMS).
 
-        Tree (8 cores, single row):
-            op1: matmul [1,1,256,256]x[1,1,256,256]    on (0,0)-(7,0)
-            +- op2: slice left half -> [1,1,256,128]    on (0,0)-(3,0)
-            |  +- op4: matmul [1,1,256,128]x[1,1,128,128]  on (0,0)-(1,0)
-            |  +- op5: layer_norm [1,1,256,128]             on (2,0)-(3,0)
-            +- op3: slice right half -> [1,1,256,128]   on (4,0)-(7,0)
-               +- op6: rms_norm [1,1,256,128]               on (4,0)-(7,0)
+        Matches the tree topology from the overview image in op_fusion.md,
+        using the full 8x8 grid (64 cores) split left/right then top/bottom:
+            op1: matmul [1,1,256,256]x[1,1,256,256]        on (0,0)-(7,7)  64 cores
+            +- op2: slice left half -> [1,1,256,128]        on (0,0)-(3,7)  32 cores
+            |  +- op4: matmul [1,1,256,128]x[1,1,128,128]  on (0,0)-(1,7)  16 cores
+            |  +- op5: layer_norm [1,1,256,128]             on (2,0)-(3,7)  16 cores
+            +- op3: slice right half -> [1,1,256,128]       on (4,0)-(7,7)  32 cores
+               +- op6: rms_norm [1,1,256,128]               on (4,0)-(7,7)  32 cores
         """
         import models.experimental.ops.descriptors as descriptors
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -1469,11 +1485,11 @@ class TestDocExample:
             fp32_dest_acc_en=True,
         )
 
-        full = cores(0, 0, 7, 0)
-        left = cores(0, 0, 3, 0)
-        right = cores(4, 0, 7, 0)
-        left_top = cores(0, 0, 1, 0)
-        left_bot = cores(2, 0, 3, 0)
+        full = cores(0, 0, 7, 7)  # 8x8 = 64 cores
+        left = cores(0, 0, 3, 7)  # 4x8 = 32 cores
+        right = cores(4, 0, 7, 7)  # 4x8 = 32 cores
+        left_top = cores(0, 0, 1, 7)  # 2x8 = 16 cores
+        left_bot = cores(2, 0, 3, 7)  # 2x8 = 16 cores
 
         torch_a = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
         torch_b1 = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
@@ -1490,6 +1506,7 @@ class TestDocExample:
         op4 = descriptors.matmul(
             op2.output_tensors[0], tt(torch_b4, device), core_range_set=left_top, compute_kernel_config=compute_cfg
         )
+
         op5 = descriptors.layer_norm(
             op2.output_tensors[0],
             core_range_set=left_bot,
@@ -1498,6 +1515,7 @@ class TestDocExample:
             epsilon=1e-5,
             compute_kernel_config=compute_cfg,
         )
+
         op6 = descriptors.rms_norm(
             op3.output_tensors[0],
             core_range_set=right,
@@ -1636,3 +1654,246 @@ class TestDeepSeekV3:
             pcc=0.98,
             label="KV norm",
         )
+
+
+# ===========================================================================
+# TestAsymmetricBarrier
+# ===========================================================================
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestAsymmetricBarrier:
+    """Tests for asymmetric barrier (narrow→wide) topologies.
+
+    In narrow→wide topologies, extra cores in the wide phase get _NOOP_OP
+    placeholder phases and must use SyncMode::WaitOnly (skip arrive, only
+    wait on release).  These tests exercise edge cases that could cause hangs
+    if the arrive threshold or sync mode dispatch is wrong.
+    """
+
+    def test_narrow_stem_wide_branches(self, device, multi_tensors):
+        """Narrow stem (2 cores) → wide branches (4+4 cores).
+
+        6 cores get _NOOP_OP for the stem phase.  arrive_threshold=2 at
+        the stem→branch barrier.  If all 8 cores arrive, threshold would
+        be wrong → hang or early release.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        # Stem: only 2 cores
+        stem = rms_norm.rms_norm(
+            t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
+        )
+        # Branches: 4 cores each — wider than stem
+        a = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(0, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(a, b)).build(device)
+        fused.launch()
+
+        g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
+
+    def test_single_core_stem_wide_branches(self, device, multi_tensors):
+        """Extreme asymmetry: 1-core stem → 4+4 core branches.
+
+        7 cores get _NOOP_OP.  arrive_threshold=1, release_cores=8.
+        Tests the most extreme arrive/release ratio.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        stem = rms_norm.rms_norm(t["tt_input"], core_range_set=cores(0, 0), weight=t["tt_weights"][0], epsilon=1e-5)
+        a = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(0, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(a, b)).build(device)
+        fused.launch()
+
+        g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
+
+    def test_narrow_wide_repeated_execution(self, device, multi_tensors):
+        """Narrow→wide with repeated execution to catch stale semaphores.
+
+        Re-execution is the most common source of barrier bugs: stale
+        arrive/release semaphore values from run N can deadlock run N+1
+        if the threshold or reset is wrong.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        stem = rms_norm.rms_norm(
+            t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
+        )
+        a = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(0, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(a, b)).build(device)
+
+        g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
+
+        for run in range(5):
+            fused.launch()
+            check_pcc(
+                torch_rms_norm(g_stem, t["torch_weights"][1].float()),
+                fused.output_tensors[0],
+                label=f"branch A run {run}",
+            )
+            check_pcc(
+                torch_rms_norm(g_stem, t["torch_weights"][2].float()),
+                fused.output_tensors[1],
+                label=f"branch B run {run}",
+            )
+
+    def test_multi_level_narrow_wide(self, device, multi_tensors):
+        """Narrow stem → mid-width → wide leaves.  Different arrive counts at each transition.
+
+        Tree:
+            RMS [0-1]  (2 cores, stem)
+            → RMS [0-3] (4 cores, mid) — 2 extra noop cores at stem barrier
+              → RMS [0-1] (leaf)
+              → RMS [2-3] (leaf)
+            → RMS [4-7] (4 cores, mid) — 4 extra noop cores at stem barrier
+              → RMS [4-5] (leaf)
+              → RMS [6-7] (leaf)
+
+        Transition 0 (stem→mid): arrive=2, release=8
+        Transition 1 (mid→leaf): arrive=4, release=4 (symmetric per group)
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        wt = t["tt_weights"]
+
+        def rms(inp, cr, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cr, weight=wt[wi], epsilon=1e-5)
+
+        stem = rms(t["tt_input"], cores(0, 0, 1, 0), 0)
+        left = rms(stem.output_tensors[0], cores(0, 0, 3, 0), 1)
+        right = rms(stem.output_tensors[0], cores(4, 0, 7, 0), 2)
+        ll = rms(left.output_tensors[0], cores(0, 0, 1, 0), 3)
+        lr = rms(left.output_tensors[0], cores(2, 0, 3, 0), 4)
+        rl = rms(right.output_tensors[0], cores(4, 0, 5, 0), 5)
+        rr = rms(right.output_tensors[0], cores(6, 0, 7, 0), 6)
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(left, Parallel(ll, lr)),
+                Sequential(right, Parallel(rl, rr)),
+            ),
+        ).build(device)
+        fused.launch()
+
+        ws = t["torch_weights"]
+        g_stem = torch_rms_norm(t["torch_input"].float(), ws[0].float())
+        g_left = torch_rms_norm(g_stem, ws[1].float())
+        g_right = torch_rms_norm(g_stem, ws[2].float())
+        goldens = [
+            torch_rms_norm(g_left, ws[3].float()),
+            torch_rms_norm(g_left, ws[4].float()),
+            torch_rms_norm(g_right, ws[5].float()),
+            torch_rms_norm(g_right, ws[6].float()),
+        ]
+        for i, label in enumerate(["LL", "LR", "RL", "RR"]):
+            check_pcc(goldens[i], fused.output_tensors[i], label=label)
+
+    def test_narrow_deep_left_wide_right(self, device, multi_tensors):
+        """Narrow stem with asymmetric depth AND width.
+
+        Tree:
+            RMS [0-1]  (2 cores, stem)
+            → RMS [0-1] → RMS [0-1]   (deep left, same 2 cores)
+            → RMS [2-7]               (wide right, 6 cores)
+
+        Tests: stem barrier has arrive=2, release=8.  Right branch has
+        6 noop-padded cores.  Left branch goes 2 levels deeper.
+        Core groups will have very different phase counts AND noop patterns.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        wt = t["tt_weights"]
+
+        def rms(inp, cr, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cr, weight=wt[wi], epsilon=1e-5)
+
+        stem = rms(t["tt_input"], cores(0, 0, 1, 0), 0)
+        left1 = rms(stem.output_tensors[0], cores(0, 0, 1, 0), 1)
+        left2 = rms(left1.output_tensors[0], cores(0, 0, 1, 0), 2)
+        right = rms(stem.output_tensors[0], cores(2, 0, 7, 0), 3)
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(left1, left2),
+                right,
+            ),
+        ).build(device)
+        fused.launch()
+
+        ws = t["torch_weights"]
+        g_stem = torch_rms_norm(t["torch_input"].float(), ws[0].float())
+        check_pcc(
+            torch_rms_norm(torch_rms_norm(g_stem, ws[1].float()), ws[2].float()),
+            fused.output_tensors[0],
+            label="deep left",
+        )
+        check_pcc(torch_rms_norm(g_stem, ws[3].float()), fused.output_tensors[1], label="wide right")
+
+    def test_narrow_wide_with_slice(self, device):
+        """Narrow stem → wide branches with slice op in one branch.
+
+        Tree:
+            RMS [0-1]  (2 cores)
+            → slice [0-3]  (4 cores, narrow→wide with data movement)
+            → RMS [4-7]   (4 cores)
+
+        Slice is a data movement op (no compute kernel), so this tests
+        the noop+SyncMode interaction with non-compute phases.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.data_movement.slice import slice as slice_desc
+
+        torch.manual_seed(42)
+        hidden = 128
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        torch_w0 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w1 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        stem = rms_norm.rms_norm(
+            tt(torch_input, device), core_range_set=cores(0, 0, 1, 0), weight=tt(torch_w0, device), epsilon=1e-5
+        )
+        branch_a = slice_desc(stem.output_tensors[0], [0, 0, 0, 0], [1, 1, 256, 64], core_range_set=cores(0, 0, 3, 0))
+        branch_b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=tt(torch_w1, device), epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
+        fused.launch()
+
+        g_stem = torch_rms_norm(torch_input.float(), torch_w0.float())
+        check_pcc(g_stem[:, :, :, :64], branch_a.output_tensors[0], pcc=0.97, label="A (slice)")
+        check_pcc(torch_rms_norm(g_stem, torch_w1.float()), branch_b.output_tensors[0], label="B (RMS)")

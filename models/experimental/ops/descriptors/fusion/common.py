@@ -37,7 +37,8 @@ class BarrierConfig:
     global_release_addr: int = 0
 
     # Physical core coordinates for global barrier
-    num_cores: int = 1
+    num_release_cores: int = 1  # Total cores that receive release (for unicast)
+    num_arrive_cores: int = 1  # Cores that arrive (for threshold)
     core0_phys_x: int = 0
     core0_phys_y: int = 0
     # Physical (x, y) of every core EXCEPT core 0, for unicast release
