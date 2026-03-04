@@ -3,13 +3,15 @@
 
 // LayerNorm - Reader Kernel
 //
-// Reads row-major input sticks from DRAM and batches them as tile-sized RM pages
-// into cb_in for the tilize compute helper. At program start, generates the
-// reduce scaler (1/W) and epsilon scalar tiles.
+// Reads row-major input sticks from DRAM, generates scaler/eps tiles,
+// and optionally reads tiled weight/bias at program start.
 //
 // Compile-time args:
 //   [0]  stick_size         -- bytes per input row (W * elem_size)
-//   [1+] TensorAccessorArgs -- interleaved DRAM bank mapping for input
+//   [1]  tile_size          -- bytes per tile (for weight/bias reads)
+//   [2]  TensorAccessorArgs -- input buffer accessor
+//   [3]  TensorAccessorArgs -- weight buffer accessor (or dummy)
+//   [4]  TensorAccessorArgs -- bias buffer accessor (or dummy)
 //
 // Runtime args:
 //   [0]  src_addr          -- input buffer DRAM base address
@@ -28,7 +30,6 @@
 // Generate a scaler tile: fills row 0 of each face with the bfloat16 scaler value.
 // The rest of the tile is zeroed using hardware zeros region.
 inline void generate_bfloat16_scaler_tile(uint32_t cb_id, float scaler_val) {
-    // Convert float to bfloat16 packed pair
     union {
         float f;
         uint32_t u;
@@ -41,8 +42,6 @@ inline void generate_bfloat16_scaler_tile(uint32_t cb_id, float scaler_val) {
     uint32_t write_addr = get_write_ptr(cb_id);
 
     // Zero the entire tile using hardware zeros
-    // A bfloat16 tile is 4 faces * 16*16 * 2 bytes = 2048 bytes
-    // MEM_ZEROS_SIZE is typically 256 bytes, so we need 2048/256 = 8 reads
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     constexpr uint32_t tile_bytes = 4 * 16 * 16 * 2;  // 2048 for bf16
     constexpr uint32_t num_zeros_reads = tile_bytes / MEM_ZEROS_SIZE;
@@ -56,8 +55,6 @@ inline void generate_bfloat16_scaler_tile(uint32_t cb_id, float scaler_val) {
     noc_async_read_barrier();
 
     // Fill row 0 of each face with the scaler value
-    // Each face is 16x16 bf16 = 16*16*2 bytes = 512 bytes = 128 uint32_t
-    // Row 0 is the first 16 bf16 = 8 uint32_t
     constexpr uint32_t face_size_u32 = 128;
     constexpr uint32_t row_size_u32 = 8;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
@@ -71,6 +68,13 @@ inline void generate_bfloat16_scaler_tile(uint32_t cb_id, float scaler_val) {
 
     cb_push_back(cb_id, 1);
 }
+
+// TensorAccessor compile-time arg offsets (fixed layout)
+constexpr uint32_t CTA_SRC_OFFSET = 2;
+// For interleaved tensors, each TensorAccessorArgs takes exactly 1 compile-time arg
+// Use next_compile_time_args_offset() to chain them
+constexpr uint32_t CTA_WEIGHT_OFFSET = TensorAccessorArgs<CTA_SRC_OFFSET>::next_compile_time_args_offset();
+constexpr uint32_t CTA_BIAS_OFFSET = TensorAccessorArgs<CTA_WEIGHT_OFFSET>::next_compile_time_args_offset();
 
 void kernel_main() {
     // ---- Runtime args ----
@@ -86,15 +90,18 @@ void kernel_main() {
 
     // ---- Compile-time args ----
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+    constexpr uint32_t tile_size = get_compile_time_arg_val(1);
 
-    // TensorAccessor for the input tensor (args start at index 1)
-    constexpr auto src_args = TensorAccessorArgs<1>();
+    // TensorAccessors
+    constexpr auto src_args = TensorAccessorArgs<CTA_SRC_OFFSET>();
     const auto src = TensorAccessor(src_args, src_addr, stick_size);
 
     // CB indices
-    constexpr uint32_t cb_in = 0;      // RM input pages
-    constexpr uint32_t cb_eps = 1;     // epsilon scalar tile
-    constexpr uint32_t cb_scaler = 2;  // reduce scaler (1/W)
+    constexpr uint32_t cb_in = 0;
+    constexpr uint32_t cb_eps = 1;
+    constexpr uint32_t cb_scaler = 2;
+    constexpr uint32_t cb_weight = 3;
+    constexpr uint32_t cb_bias = 4;
 
     // ---- Generate reduce scaler (1/W) ----
     const uint32_t W = Wt * 32;
@@ -109,23 +116,52 @@ void kernel_main() {
     eps_union.u = eps_bits;
     generate_bfloat16_scaler_tile(cb_eps, eps_union.f);
 
+    // ---- Read weight tiles (if provided) ----
+    if (has_weight) {
+        constexpr auto weight_args = TensorAccessorArgs<CTA_WEIGHT_OFFSET>();
+        const auto weight_accessor = TensorAccessor(weight_args, weight_addr, tile_size);
+
+        cb_reserve_back(cb_weight, Wt);
+        uint32_t l1_write_ptr = get_write_ptr(cb_weight);
+        for (uint32_t t = 0; t < Wt; ++t) {
+            uint64_t noc_addr = get_noc_addr(t, weight_accessor);
+            noc_async_read(noc_addr, l1_write_ptr, tile_size);
+            l1_write_ptr += tile_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_weight, Wt);
+    }
+
+    // ---- Read bias tiles (if provided) ----
+    if (has_bias) {
+        constexpr auto bias_args = TensorAccessorArgs<CTA_BIAS_OFFSET>();
+        const auto bias_accessor = TensorAccessor(bias_args, bias_addr, tile_size);
+
+        cb_reserve_back(cb_bias, Wt);
+        uint32_t l1_write_ptr = get_write_ptr(cb_bias);
+        for (uint32_t t = 0; t < Wt; ++t) {
+            uint64_t noc_addr = get_noc_addr(t, bias_accessor);
+            noc_async_read(noc_addr, l1_write_ptr, tile_size);
+            l1_write_ptr += tile_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_bias, Wt);
+    }
+
     // ---- Per tile-row: read 32 sticks and batch them as Wt tile-sized pages ----
     const uint32_t num_tile_rows = num_rows / 32;
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; ++tile_row) {
-        // Reserve space for Wt tile-sized pages in cb_in
         cb_reserve_back(cb_in, Wt);
 
         uint32_t l1_write_ptr = get_write_ptr(cb_in);
 
-        // Pre-compute NoC addresses for the 32 sticks in this tile-row
         uint64_t base_src_noc_addr[32];
         for (uint32_t k = 0; k < 32; ++k) {
             uint32_t stick_id = tile_row * 32 + k;
             base_src_noc_addr[k] = get_noc_addr(stick_id, src);
         }
 
-        // Issue async reads: for each of the 32 sticks, read block_width_size bytes
         for (uint32_t k = 0; k < 32; ++k) {
             noc_async_read(base_src_noc_addr[k], l1_write_ptr, block_width_size);
             l1_write_ptr += block_width_size;

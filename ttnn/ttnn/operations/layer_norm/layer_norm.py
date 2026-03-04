@@ -54,6 +54,19 @@ def layer_norm(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
+    # Convert weight/bias to TILE_LAYOUT for the compute kernel.
+    # Move to host, reshape to 2D, tilize, then move back to device.
+    # This avoids issues with on-device tilize for 1D tensors.
+    if weight is not None and weight.layout != ttnn.TILE_LAYOUT:
+        w_host = ttnn.to_torch(weight)
+        # Reshape to (1, W) and pad height to 32 for tilize
+        w_host = w_host.reshape(1, -1).expand(32, -1).contiguous()
+        weight = ttnn.from_torch(w_host, dtype=input_tensor.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if bias is not None and bias.layout != ttnn.TILE_LAYOUT:
+        b_host = ttnn.to_torch(bias)
+        b_host = b_host.reshape(1, -1).expand(32, -1).contiguous()
+        bias = ttnn.from_torch(b_host, dtype=input_tensor.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
     # Output shape is identical to input shape
     N = input_tensor.shape[0]
     W = input_tensor.shape[1]

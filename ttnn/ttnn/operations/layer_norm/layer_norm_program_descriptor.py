@@ -317,9 +317,18 @@ def create_program_descriptor(
     # ========== 4. READER KERNEL ==========
     # Compile-time args (reader):
     #   [0]  stick_size         (bytes per input row)
-    #   [1+] TensorAccessorArgs (src)
-    reader_ct_args = [stick_size]
+    #   [1]  tile_size          (bytes per tile, for reading weight/bias)
+    #   [2]  TensorAccessorArgs (src - input)
+    #   [3]  TensorAccessorArgs (weight - real or dummy)
+    #   [4]  TensorAccessorArgs (bias - real or dummy)
+    # Always pass all 3 TensorAccessorArgs to keep offsets fixed.
+    # When weight/bias is None, use input tensor's accessor as dummy (never read).
+    weight_for_accessor = weight if weight is not None else input_tensor
+    bias_for_accessor = bias if bias is not None else input_tensor
+    reader_ct_args = [stick_size, tile_size]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(weight_for_accessor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(bias_for_accessor).get_compile_time_args())
 
     # Runtime args (reader):
     #   [0]  src_addr          (input buffer DRAM address)
