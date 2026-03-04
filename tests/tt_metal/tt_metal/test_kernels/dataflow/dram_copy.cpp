@@ -15,13 +15,13 @@
 void kernel_main() {
     std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
 
-    std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
-    std::uint32_t dram_src_bank_id        = get_arg_val<uint32_t>(2);
+    std::uint32_t dram_buffer_src_addr = get_arg_val<uint32_t>(1);
+    std::uint32_t dram_src_bank_id = get_arg_val<uint32_t>(2);
 
-    std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
-    std::uint32_t dram_dst_bank_id        = get_arg_val<uint32_t>(4);
+    std::uint32_t dram_buffer_dst_addr = get_arg_val<uint32_t>(3);
+    std::uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(4);
 
-    std::uint32_t dram_buffer_size      = get_arg_val<uint32_t>(5);
+    std::uint32_t dram_buffer_size = get_arg_val<uint32_t>(5);
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
