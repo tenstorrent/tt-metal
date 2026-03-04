@@ -1141,12 +1141,8 @@ class MLA1D(AbstractModule):
                 ttnn.deallocate(attn_out_chunk)
 
                 # wkv_b2
-                try:
-                    v_out_chunk = ttnn.linear(
-                        v_out_chunk_ag, **cfg["wkv_b2"]
-                    )  # [1, num_heads, chunk_seq_len, v_head_dim]
-                finally:
-                    ttnn.deallocate(v_out_chunk_ag)
+                v_out_chunk = ttnn.linear(v_out_chunk_ag, **cfg["wkv_b2"])  # [1, num_heads, chunk_seq_len, v_head_dim]
+                ttnn.deallocate(v_out_chunk_ag)
                 v_out_chunks.append(v_out_chunk)
 
             ttnn.deallocate(attn_out)
@@ -1162,10 +1158,8 @@ class MLA1D(AbstractModule):
             )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
 
             # wkv_b2
-            try:
-                v_out = ttnn.linear(v_out_ag, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
-            finally:
-                ttnn.deallocate(v_out_ag)
+            v_out = ttnn.linear(v_out_ag, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
+            ttnn.deallocate(v_out_ag)
             ttnn.deallocate(attn_out)
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
