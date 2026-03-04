@@ -61,10 +61,10 @@ def mesh_device_fixture():
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
     output_memory_config=None,
     memory_config=None,
     dim=None,
@@ -75,22 +75,33 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # V2 vectors provide input_shape (not input_a_*) plus src_* and index_* named tensors
+    if input_a_shape is None:
+        input_a_shape = kwargs.get("input_shape", (1, 1, 32, 32))
+    if input_a_dtype is None:
+        input_a_dtype = kwargs.get("input_dtype", ttnn.bfloat16)
+    if input_a_layout is None:
+        input_a_layout = kwargs.get("input_layout", ttnn.TILE_LAYOUT)
+    if input_a_memory_config is None:
+        input_a_memory_config = kwargs.get("input_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", kwargs.get("input_tensor_placement", None))
     is_mesh_device = hasattr(device, "get_num_devices")
 
     dim = dim or kwargs.get("arg1", 0)
+    if isinstance(dim, float):
+        dim = int(dim)
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Handle scatter's special case with index/src shapes
     if isinstance(input_a_shape, dict):
         shape = input_a_shape.get("self", (1, 1, 32, 32))
         index_shape = input_a_shape.get("index", shape)
         src_shape = input_a_shape.get("src", shape)
     else:
         shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
-        index_shape = shape
-        src_shape = shape
+        index_shape = kwargs.get("index_shape", shape)
+        src_shape = kwargs.get("src_shape", shape)
 
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

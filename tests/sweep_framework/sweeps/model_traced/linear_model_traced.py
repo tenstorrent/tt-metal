@@ -91,10 +91,10 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    input_b_shape,  # Weight shape (k, n)
-    input_b_dtype,
-    input_b_layout,
-    input_b_memory_config,
+    input_b_shape=None,  # Weight shape (k, n)
+    input_b_dtype=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
     bias_shape=None,  # Optional bias shape (n,)
     bias_dtype=None,
     bias_layout=None,
@@ -114,6 +114,16 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # V2 vectors provide weight as input_tensor_b_* instead of input_b_*
+    if input_b_shape is None and "input_tensor_b_shape" in kwargs:
+        input_b_shape = kwargs["input_tensor_b_shape"]
+        input_b_dtype = kwargs.get("input_tensor_b_dtype", input_a_dtype)
+        input_b_layout = kwargs.get("input_tensor_b_layout", input_a_layout)
+        input_b_memory_config = kwargs.get("input_tensor_b_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
+    if input_b_shape is None:
+        raise ValueError("Weight shape (input_b_shape or input_tensor_b_shape) is required")
+
     # Convert traced dict params to proper ttnn objects
     memory_config = dict_to_memory_config(memory_config)
     core_grid = dict_to_core_grid(core_grid)
@@ -125,7 +135,9 @@ def run(
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get(
+        "input_b_tensor_placement", kwargs.get("input_tensor_b_tensor_placement", None)
+    )
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
 

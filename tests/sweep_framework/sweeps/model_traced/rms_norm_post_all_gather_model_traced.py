@@ -103,6 +103,10 @@ def run(
         compute_kernel_config = dict_to_compute_kernel_config(compute_kernel_config)
     hidden_dim = shape[-1]
 
+    # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
+    if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+        input_a_dtype = ttnn.bfloat16
+
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
     )
