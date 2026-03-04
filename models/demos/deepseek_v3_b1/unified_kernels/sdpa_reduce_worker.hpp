@@ -192,7 +192,9 @@ struct SdpaChunkSender {
     }
 
     FORCE_INLINE void send_all() const {
+        cb_wait_front(cfg.cb_ms, 1);
         send_ms();
+        cb_wait_front(cfg.cb_l, num_l_chunks * tiles_per_l_chunk);
         for (uint32_t i = 0; i < num_l_chunks; i++) {
             send_l_chunk(i);
         }
