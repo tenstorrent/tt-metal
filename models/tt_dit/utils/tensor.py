@@ -215,6 +215,27 @@ def _invert_placements(placements: Sequence[int | None], *, output_rank: int) ->
     return tuple(out)
 
 
+def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+    """Convert a ttnn device tensor to a torch tensor by reading from the local device.
+
+    In a distributed environment, iterates over the mesh coordinates to find the
+    tensor shard that belongs to the local device before calling ``ttnn.to_torch``.
+    """
+    mesh_device = tt_tensor.device()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    coords = list(tt_tensor.tensor_topology().mesh_coords())
+    device_tensors = ttnn.get_device_tensors(tt_tensor)
+
+    torch_tensor = None
+    for coord, device_tensor in zip(coords, device_tensors):
+        if view is None or view.is_local(coord):
+            torch_tensor = ttnn.to_torch(device_tensor)
+            break
+
+    assert torch_tensor is not None, "Failed to find local device tensor"
+    return torch_tensor
+
+
 def upsample(
     x: ttnn.Tensor,
     /,
