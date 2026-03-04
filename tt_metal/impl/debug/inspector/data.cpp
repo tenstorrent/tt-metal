@@ -19,7 +19,7 @@
 
 namespace tt::tt_metal::inspector {
 
-std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
+std::string stringify_tensor_specs(const std::vector<std::shared_ptr<const TensorSpec>>& tensor_specs) {
     constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
     fmt::memory_buffer buf;
     buf.reserve(TENSOR_ARGS_BUFFER_SIZE);
@@ -27,7 +27,7 @@ std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) 
         if (i > 0) {
             fmt::format_to(std::back_inserter(buf), ", ");
         }
-        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, tensor_specs[i]);
+        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, *tensor_specs[i]);
     }
     return std::string(buf.data(), buf.size());
 }
@@ -184,7 +184,7 @@ void Data::rpc_get_mesh_workload_runtime_entries(
         auto entry = all_runtime_entries[i];
         entry.setWorkloadId(runtime_entries[i].workload_id);
         entry.setRuntimeId(runtime_entries[i].runtime_id);
-        entry.setOperationName(runtime_entries[i].operation_name);
+        entry.setOperationName(std::string(runtime_entries[i].operation_name));
         entry.setOperationParameters(stringify_tensor_specs(runtime_entries[i].tensor_specs));
     }
 }

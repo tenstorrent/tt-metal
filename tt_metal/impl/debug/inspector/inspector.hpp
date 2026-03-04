@@ -63,7 +63,7 @@ public:
         const distributed::MeshWorkloadImpl* mesh_workload,
         uint64_t runtime_id,
         std::string_view operation_name,
-        std::vector<TensorSpec> tensor_specs) noexcept;
+        std::vector<std::shared_ptr<const TensorSpec>> tensor_specs) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(

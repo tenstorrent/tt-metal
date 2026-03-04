@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -21,6 +22,6 @@ void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs);
+    std::vector<std::shared_ptr<const TensorSpec>> tensor_specs);
 
 }  // namespace tt::tt_metal::experimental::inspector

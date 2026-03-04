@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -56,11 +57,11 @@ struct MeshDeviceData {
 struct MeshWorkloadRuntimeEntry {
     uint64_t workload_id = 0;
     uint64_t runtime_id = 0;
-    std::string operation_name;
-    std::vector<TensorSpec> tensor_specs;
+    std::string_view operation_name;
+    std::vector<std::shared_ptr<const TensorSpec>> tensor_specs;
 };
 
-std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
+std::string stringify_tensor_specs(const std::vector<std::shared_ptr<const TensorSpec>>& tensor_specs);
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;

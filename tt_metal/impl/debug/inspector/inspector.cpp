@@ -349,7 +349,7 @@ void Inspector::emit_debug_entry(
     const distributed::MeshWorkloadImpl* mesh_workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs) noexcept {
+    std::vector<std::shared_ptr<const TensorSpec>> tensor_specs) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -358,9 +358,8 @@ void Inspector::emit_debug_entry(
         const auto workload_id = mesh_workload->get_id();
 
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
-        data->runtime_entries.emplace_back(
-            workload_id, runtime_id, std::string(operation_name), std::move(tensor_specs));
-        const auto max_entries = MetalContext::instance().rtoptions().get_inspector_max_runtime_entries();
+        data->runtime_entries.push_back({workload_id, runtime_id, operation_name, std::move(tensor_specs)});
+        static constexpr auto max_entries = 10000;
         while (data->runtime_entries.size() > max_entries) {
             data->runtime_entries.pop_front();
         }
@@ -505,7 +504,7 @@ void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::vector<TensorSpec> tensor_specs) {
+    std::vector<std::shared_ptr<const TensorSpec>> tensor_specs) {
     tt::tt_metal::Inspector::emit_debug_entry(&workload.impl(), runtime_id, operation_name, std::move(tensor_specs));
 }
 

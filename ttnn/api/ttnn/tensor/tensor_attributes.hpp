@@ -24,13 +24,14 @@ public:
     const Storage& get_storage() const;
     Storage& get_storage();
     const TensorSpec& get_tensor_spec() const;
+    const std::shared_ptr<const TensorSpec>& get_tensor_spec_ptr() const;
     const TensorTopology& get_tensor_topology() const;
 
     TensorAttributes with_tensor_topology(TensorTopology tensor_topology) const;
 
 private:
     Storage storage_;
-    TensorSpec tensor_spec_;
+    std::shared_ptr<const TensorSpec> tensor_spec_;
     TensorTopology tensor_topology_;
 };
 
