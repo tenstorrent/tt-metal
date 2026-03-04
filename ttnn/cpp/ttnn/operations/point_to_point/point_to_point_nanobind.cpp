@@ -13,6 +13,21 @@
 
 namespace ttnn::operations::point_to_point {
 
+namespace {
+
+ttnn::Tensor point_to_point_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const MeshCoordinate& sender_coord,
+    const MeshCoordinate& receiver_coord,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<ttnn::Tensor>& intermediate_tensor,
+    const ccl::Topology topology) {
+    return ttnn::point_to_point(
+        input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
+}
+
+}  // namespace
+
 void bind_point_to_point(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -50,15 +65,7 @@ void bind_point_to_point(nb::module_& mod) {
     ttnn::bind_function<"point_to_point">(
         mod,
         doc,
-        +[](const ttnn::Tensor& input_tensor,
-            const MeshCoordinate& sender_coord,
-            const MeshCoordinate& receiver_coord,
-            const std::optional<ttnn::Tensor>& output_tensor,
-            const std::optional<ttnn::Tensor>& intermediate_tensor,
-            const ccl::Topology topology) {
-            return ttnn::point_to_point(
-                input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
-        },
+        &point_to_point_wrapper,
         nb::arg("input_tensor").noconvert(),
         nb::arg("sender_coord"),
         nb::arg("receiver_coord"),
