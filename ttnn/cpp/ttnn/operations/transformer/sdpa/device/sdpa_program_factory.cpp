@@ -329,6 +329,21 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                        Sk_chunk_t % (8 / qk_out_subblock_h) == 0;
     log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
+    // Log padding info for skip-padding optimization verification
+    if (use_streaming_compute && use_padded_mask) {
+        uint32_t pad_tiles = (Sk_chunk_t - (valid_Skt % Sk_chunk_t)) % Sk_chunk_t;
+        uint32_t eff_Sk = Sk_chunk_t - pad_tiles;
+        log_info(
+            tt::LogOp,
+            "SKIP_PAD: valid_Skt={}, Skt_padded={}, Sk_chunk_t={}, padded_k_tiles={}, effective_Sk={}, k_chunks={}",
+            valid_Skt,
+            Skt,
+            Sk_chunk_t,
+            pad_tiles,
+            eff_Sk,
+            k_num_chunks);
+    }
+
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
     log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
@@ -477,7 +492,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         B,
         NQH,
         NKH,
-        Skt,
+        valid_Skt,  // Unpadded K tile count — enables skip-padding optimization in v2
         DHt,
         vDHt,
         Sq_chunk_t,
