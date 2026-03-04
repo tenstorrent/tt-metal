@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn {
 
-ttnn::Tensor all_gather_minimal_matmul_async(
+std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
@@ -32,7 +32,9 @@ ttnn::Tensor all_gather_minimal_matmul_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const bool force_transpose,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    int32_t chunks,
+    int32_t dim) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -53,7 +55,9 @@ ttnn::Tensor all_gather_minimal_matmul_async(
         barrier_semaphore,
         force_transpose,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        chunks,
+        dim);
 }
 
 }  // namespace ttnn
