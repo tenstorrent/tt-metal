@@ -368,10 +368,8 @@ optimal_topology = (
 @pytest.mark.parametrize(
     "perf_mode",
     [
-        [
-            True,
-            False,
-        ]
+        True,
+        False,
     ],
 )
 @pytest.mark.parametrize(
