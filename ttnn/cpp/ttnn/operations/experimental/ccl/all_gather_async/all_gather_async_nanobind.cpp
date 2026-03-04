@@ -113,6 +113,7 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     use_optimal_ccl_for_llama,
                     use_broadcast,
                     barrier_semaphore,
+                    use_broadcast,
                     chunks_per_sync,
                     num_workers_per_link,
                     num_buffers_per_channel,
