@@ -22,6 +22,7 @@ struct OverlappedTensorView {
     DataType dtype;
     std::array<uint32_t, 2> tile_shape;
     uint64_t byte_offset = 0;
+    uint64_t total_size = 0;
 };
 
 void dump_overlapped_tensors(const std::string& file_name, const std::vector<OverlappedTensorView>& views);
