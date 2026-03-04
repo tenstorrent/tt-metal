@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
+#include <utility>
+
 // NOTE: This header is only for TRISC (compute) kernels.
 // It must be included AFTER the standard compute API headers
 // (eltwise_binary.h, tile_move_copy.h, etc.) to avoid symbol conflicts.
@@ -50,7 +53,8 @@ constexpr uint32_t DATA_FORMATS[] = {
 // Assignment packing constants
 constexpr uint32_t ASSIGN_BITS = 2;
 constexpr uint32_t ASSIGN_MASK = (1 << ASSIGN_BITS) - 1;
-constexpr uint32_t TILES_PER_BYTE = 8 / ASSIGN_BITS;  // 4
+constexpr uint32_t TILES_PER_BYTE = 8 / ASSIGN_BITS;     // 4
+constexpr uint32_t TILES_PER_UINT32 = 32 / ASSIGN_BITS;  // 16
 
 // Format index for bfp0 (zero tile)
 constexpr uint32_t FMT_BFP0 = 3;
@@ -281,6 +285,99 @@ FORCE_INLINE void reconfig_custom_mm_srca(
     // custom_mm uses explicit tile_size passed via _run_, not the GPR.
     // The GPR is only used by standard matmul's _llk_unpack_AB_matmul_.
 }
+
+// ---------------------------------------------------------------------------
+// Constexpr template-unrolled custom MM (zero runtime format lookup overhead)
+//
+// Format array is passed as positional CTAs. Template recursion unrolls
+// the MOP loop so each tile's format is a compile-time constant.
+// CTA_BASE is the positional CTA index where format values start.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Process one pair of K tiles (ctx0 + ctx1) with compile-time format.
+ */
+template <size_t PAIR_IDX, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+FORCE_INLINE void _custom_mm_compressed_pair_(
+    volatile uint* cfg, uint32_t& address_a, uint32_t reg0_base, uint32_t reg2_base) {
+    UNPACK(({
+        constexpr uint32_t K = PAIR_IDX * 2;
+        constexpr uint32_t fmt0 =
+            (FMT_PACKED[K / TILES_PER_UINT32] >> ((K % TILES_PER_UINT32) * ASSIGN_BITS)) & ASSIGN_MASK;
+        constexpr uint32_t sz0 = TILE_SIZES[fmt0] >> cb_addr_shift;
+        constexpr uint32_t fmt1 =
+            (FMT_PACKED[(K + 1) / TILES_PER_UINT32] >> (((K + 1) % TILES_PER_UINT32) * ASSIGN_BITS)) & ASSIGN_MASK;
+        constexpr uint32_t sz1 = TILE_SIZES[fmt1] >> cb_addr_shift;
+
+        wait_for_next_context(2);
+        reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+        address_a += sz0;
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        wait_for_next_context(2);
+        reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+        address_a += sz1;
+        semaphore_post(semaphore::UNPACK_SYNC);
+    }));
+}
+
+/**
+ * @brief Unroll all K pairs using fold expression (no recursion).
+ */
+template <size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED, size_t... PAIR_IDXS>
+FORCE_INLINE void _custom_mm_compressed_unroll_impl_(
+    volatile uint* cfg,
+    uint32_t& address_a,
+    uint32_t reg0_base,
+    uint32_t reg2_base,
+    std::index_sequence<PAIR_IDXS...>) {
+    (_custom_mm_compressed_pair_<PAIR_IDXS, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base), ...);
+}
+
+/**
+ * @brief Unroll all context pairs for KT_DIM × CT_DIM tiles.
+ *
+ * Total pairs = KT_DIM * CT_DIM / 2. Tiles are row-major in FMT_PACKED.
+ */
+template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+FORCE_INLINE void _custom_mm_compressed_unroll_(
+    volatile uint* cfg, uint32_t& address_a, uint32_t reg0_base, uint32_t reg2_base) {
+    _custom_mm_compressed_unroll_impl_<NUM_PACKED, FMT_PACKED>(
+        cfg, address_a, reg0_base, reg2_base, std::make_index_sequence<KT_DIM * CT_DIM / 2>{});
+}
+
+/**
+ * @brief Constexpr custom MM block. Zero runtime format lookup.
+ *
+ * FMT_PACKED is a constexpr array of packed format words (from fill_cta_array).
+ * Tiles packed row-major: (k=0,n=0), (k=0,n=1), ..., (k=1,n=0), ...
+ * Total tiles = KT_DIM * CT_DIM, must be even.
+ */
+template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+FORCE_INLINE void custom_mm_compressed_block_constexpr(
+    uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
+    UNPACK(({
+        volatile uint* cfg = get_cfg_pointer();
+        uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
+
+        wait_for_next_context(1);
+        reset_config_context();
+
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = addr_in0;
+        TT_MOP(0, (KT_DIM / 2) - 1, 0);
+
+        uint32_t address_a = addr_in1;
+        _custom_mm_compressed_unroll_<KT_DIM, CT_DIM, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+    }));
+    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+}
+
+// ---------------------------------------------------------------------------
+// Runtime version (original, for fallback / ct_dim>1)
+// ---------------------------------------------------------------------------
 
 /**
  * @brief Custom _run_ for compressed weights with per-tile format switching.
