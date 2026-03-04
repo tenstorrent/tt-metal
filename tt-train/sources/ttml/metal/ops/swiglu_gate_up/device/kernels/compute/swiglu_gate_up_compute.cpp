@@ -8,9 +8,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
@@ -18,18 +16,43 @@
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-// ============================================================================
-// SwiGLU Gate-Up Compute Kernel — M sub-blocking only.
-// One N-block of weights (W1/W3) per load; no N-block batching.
+// ----------------------------------------------------------------------
+// SwiGLU Gate-Up Compute Kernel (XW1, XW3, then M = SiLU(XW1) * XW3)
+//
+// Phase A: XW1[r,:], XW3[r,:] accumulated across K-blocks using L1 acc
+//          directly into cb_xw1_acc / cb_xw3_acc. One N-block of W1/W3
+//          at a time; block_h M-rows per sync (M sub-blocking only).
+// Phase B: M[r, :] = SiLU(XW1[r, :]) * XW3[r, :] for block_h rows, pack to cb_m_out.
+// ----------------------------------------------------------------------
+//
+// ========================= Compute kernel structure =========================
+// for m_block in m_blocks:
+//   reserve cb_xw1_acc, cb_xw3_acc  (block_h * per_core_N_rounded tiles each)
+//   for k_block in k_blocks:
+//     load X[m_block, k_block]  # block_h rows × block_size K tiles
+//     for n_block in n_blocks:
+//       load W1[k_block, n_block]
+//       for r in block_h:
+//         XW1[r, n_block] += X[r, k_block] @ W1[k_block, n_block]   # L1 acc
+//       load W3[k_block, n_block]
+//       for r in block_h:
+//         XW3[r, n_block] += X[r, k_block] @ W3[k_block, n_block]   # L1 acc
+//   push cb_xw1_acc, cb_xw3_acc
+//   for r in block_h:
+//     for n in per_core_N:
+//       M[r, n] = SiLU(XW1[r, n]) * XW3[r, n]
+//   pop cb_xw1_acc, cb_xw3_acc
 // ============================================================================
 
 constexpr uint32_t per_core_N = get_compile_time_arg_val(0);
-constexpr uint32_t per_core_N_rounded = get_compile_time_arg_val(1);
-constexpr uint32_t block_size = get_compile_time_arg_val(2);
-constexpr uint32_t Wt = get_compile_time_arg_val(3);
-constexpr uint32_t num_n_blocks = get_compile_time_arg_val(4);
-constexpr uint32_t block_h = get_compile_time_arg_val(5);
-constexpr uint32_t num_m_blocks = get_compile_time_arg_val(6);
+constexpr uint32_t block_size = get_compile_time_arg_val(1);
+constexpr uint32_t Wt = get_compile_time_arg_val(2);
+constexpr uint32_t block_h = get_compile_time_arg_val(3);
+constexpr uint32_t num_m_blocks = get_compile_time_arg_val(4);
+
+// Derived from per_core_N and block_size (single source of truth).
+constexpr uint32_t per_core_N_rounded = ((per_core_N + block_size - 1U) / block_size) * block_size;
+constexpr uint32_t num_n_blocks = per_core_N_rounded / block_size;
 
 constexpr uint32_t tiles_per_n_block = block_size * block_size;
 constexpr uint32_t x_tiles_per_block = block_h * block_size;
@@ -42,10 +65,12 @@ constexpr auto cb_w3_idx = tt::CBIndex::c_2;
 constexpr auto cb_xw1_acc_idx = tt::CBIndex::c_3;
 constexpr auto cb_xw3_acc_idx = tt::CBIndex::c_4;
 constexpr auto cb_m_out_idx = tt::CBIndex::c_5;
+constexpr auto cb_sigmoid_idx = tt::CBIndex::c_6;
+constexpr auto cb_silu_idx = tt::CBIndex::c_7;
 
 // Matmul one row: multiply X row by one N-block of weights in CB.
 // in1_stride: distance between consecutive K-rows in CB (= block_size).
-inline void matmul_one_row_fast(
+inline void matmul_one_row(
     const tt::CBIndex cb_x_idx,
     const tt::CBIndex cb_w_idx,
     const tt::CBIndex cb_acc_idx,
@@ -74,26 +99,44 @@ inline void matmul_one_row_fast(
     }
 
     tile_regs_commit();
-    tile_regs_wait();
-    for (uint32_t t = 0U; t < block_size; ++t) {
-        pack_tile</* out_of_order_output = */ true>(t, cb_acc_idx, acc_offset + t);
-    }
-    tile_regs_release();
+    pack_l1_acc_block(
+        static_cast<uint32_t>(cb_acc_idx), /*first_block=*/false, block_size, acc_offset, /*use_l1_acc=*/false);
 }
 
-inline void compute_silu_tile(uint32_t tile_offset, uint32_t base_reg) {
-    copy_tile_init(cb_xw1_acc_idx);
-    copy_tile(cb_xw1_acc_idx, tile_offset, base_reg);
-    copy_tile_init(cb_xw3_acc_idx);
-    copy_tile(cb_xw3_acc_idx, tile_offset, base_reg + 1U);
+inline void compute_sigmoid(uint32_t tile_offset, uint32_t current_block_size) {
+    tile_regs_acquire();
+    for (uint32_t block_idx = 0U; block_idx < current_block_size; ++block_idx) {
+        copy_tile_init(cb_xw1_acc_idx);
+        copy_tile(cb_xw1_acc_idx, tile_offset + block_idx, block_idx);
+        sigmoid_tile_init();
+        sigmoid_tile(block_idx);
+    }
+    tile_regs_commit();
+    pack_and_push_block(cb_sigmoid_idx, block_size);
+}
 
-    copy_dest_values_init();
-    copy_dest_values(base_reg, base_reg + 2U);
-    sigmoid_tile_init();
-    sigmoid_tile(base_reg + 2U);
-    mul_binary_tile_init();
-    mul_binary_tile(base_reg, base_reg + 2U, base_reg);
-    mul_binary_tile(base_reg, base_reg + 1U, base_reg);
+inline void compute_silu(uint32_t tile_offset, uint32_t current_block_size) {
+    cb_wait_front(cb_sigmoid_idx, block_size);
+    tile_regs_acquire();
+    for (uint32_t block_idx = 0U; block_idx < current_block_size; ++block_idx) {
+        mul_tiles_init(cb_xw1_acc_idx, cb_sigmoid_idx);
+        mul_tiles(cb_xw1_acc_idx, cb_sigmoid_idx, tile_offset + block_idx, block_idx, block_idx);
+    }
+    tile_regs_commit();
+    pack_and_push_block(cb_silu_idx, block_size);
+    cb_pop_front(cb_sigmoid_idx, block_size);
+}
+
+inline void compute_m(uint32_t tile_offset, uint32_t current_block_size) {
+    cb_wait_front(cb_silu_idx, block_size);
+    tile_regs_acquire();
+    for (uint32_t block_idx = 0U; block_idx < current_block_size; ++block_idx) {
+        mul_tiles_init(cb_silu_idx, cb_xw3_acc_idx);
+        mul_tiles(cb_silu_idx, cb_xw3_acc_idx, block_idx, tile_offset + block_idx, block_idx);
+    }
+    tile_regs_commit();
+    pack_and_push_block(cb_m_out_idx, block_size);
+    cb_pop_front(cb_silu_idx, block_size);
 }
 
 // Process one N-block of weights for one weight matrix (W1 or W3).
@@ -109,7 +152,7 @@ inline void matmul_rows_for_one_n_block(
     pack_reconfig_l1_acc(first_k_block ? 0 : 1U);
 
     for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
-        matmul_one_row_fast(
+        matmul_one_row(
             cb_in0_idx,
             cb_w_idx,
             cb_acc_idx,
@@ -162,28 +205,13 @@ void kernel_main() {
         for (uint32_t m_sub = 0U; m_sub < block_h; ++m_sub) {
             const uint32_t row_offset = m_sub * per_core_N_rounded;
 
-            for (uint32_t n_block_start = 0U; n_block_start < per_core_N; n_block_start += block_size) {
-                const uint32_t n_block_size = std::min(block_size, per_core_N - n_block_start);
+            for (uint32_t col = 0U; col < per_core_N_rounded; col += block_size) {
+                const uint32_t current_block_size = std::min(block_size, per_core_N - col);
+                const uint32_t tile_offset = row_offset + col;
 
-                uint32_t n = 0U;
-                for (; n + 1U < n_block_size; n += 2U) {
-                    tile_regs_acquire();
-                    compute_silu_tile(row_offset + n_block_start + n, 0U);
-                    compute_silu_tile(row_offset + n_block_start + n + 1U, 1U);
-                    tile_regs_commit();
-                    pack_and_push_block(cb_m_out_idx, 2U);
-                }
-                if (n < n_block_size) {
-                    tile_regs_acquire();
-                    compute_silu_tile(row_offset + n_block_start + n, 0U);
-                    tile_regs_commit();
-                    pack_and_push(0U, cb_m_out_idx);
-                }
-                if (n_block_size < block_size) {
-                    tile_regs_acquire();
-                    tile_regs_commit();
-                    pack_and_push_block(cb_m_out_idx, block_size - n_block_size);
-                }
+                compute_sigmoid(tile_offset, current_block_size);
+                compute_silu(tile_offset, current_block_size);
+                compute_m(tile_offset, current_block_size);
             }
         }
 

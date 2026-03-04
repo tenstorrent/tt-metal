@@ -45,26 +45,35 @@ inline void pack_and_push_block(const uint32_t cb_output, const uint32_t block_s
 }
 
 /**
- * Pack a block of tiles from consecutive DEST registers to a CB using L1 accumulation.
- * Does NOT reserve or push; caller must cb_reserve_back once before the first block and
- * cb_push_back once after all blocks are accumulated.
- * NOTE: Call after tile_regs_commit(). Waits for tile regs inside (same as other pack helpers).
- * Uses pack_tile with out_of_order_output so each tile writes to its CB index (dst_start_index + block_idx).
+ * Pack a block of tiles from consecutive DEST registers (0..num_tiles-1) to a CB at
+ * out-of-order indices (dst_start_index + 0, ..., dst_start_index + num_tiles - 1).
+ * Does NOT reserve or push; caller must cb_reserve_back / cb_push_back as needed.
+ * NOTE: Call after tile_regs_commit().
  *
- * @param cb_idx Output circular buffer (already reserved by caller for full accumulation)
- * @param first_block true for the first block (zero accumulator), false to accumulate into existing CB data
+ * @param cb_idx Output circular buffer (already reserved by caller when accumulating)
+ * @param first_block When use_l1_acc is true: true = zero accumulator, false = accumulate
  * @param num_tiles Number of tiles to pack (consecutive registers 0..num_tiles-1)
  * @param dst_start_index First output tile index in the reserved CB region
+ * @param use_l1_acc If true, set pack_reconfig_data_format and pack_reconfig_l1_acc.
+ *                  If false, do not touch reconfig (caller manages it).
  */
 inline void pack_l1_acc_block(
-    const uint32_t cb_idx, const bool first_block, const uint32_t num_tiles, const uint32_t dst_start_index) {
+    const uint32_t cb_idx,
+    const bool first_block,
+    const uint32_t num_tiles,
+    const uint32_t dst_start_index,
+    const bool use_l1_acc = true) {
     tile_regs_wait();
-    pack_reconfig_data_format(cb_idx);
-    pack_reconfig_l1_acc(first_block ? 0 : 1U);
+    if (use_l1_acc) {
+        pack_reconfig_data_format(cb_idx);
+        pack_reconfig_l1_acc(first_block ? 0 : 1U);
+    }
     for (uint32_t block_idx = 0; block_idx < num_tiles; ++block_idx) {
         pack_tile</* out_of_order_output = */ true>(block_idx, cb_idx, dst_start_index + block_idx);
     }
-    pack_reconfig_l1_acc(0);
+    if (use_l1_acc) {
+        pack_reconfig_l1_acc(0);
+    }
     tile_regs_release();
 }
 
