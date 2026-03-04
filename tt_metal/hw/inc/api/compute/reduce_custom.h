@@ -8,10 +8,12 @@
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
 #include "llk_math_reduce_custom_api.h"
+#include "experimental/llk_math_reduce_custom_runtime_api.h"
 #endif
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_reduce_custom_api.h"
+#include "experimental/llk_unpack_AB_reduce_custom_runtime_api.h"
 #endif
 
 #ifdef TRISC_PACK
@@ -37,14 +39,20 @@ namespace ckernel {
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  */
 // clang-format on
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_init() {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
@@ -67,29 +75,47 @@ ALWI void reduce_block_max_row_init() {
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
  * | Function   | row_start_index           | The starting tile index for the row being processed                                     | uint32_t  | Must be less than the size of the CB           | True     |
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim>(icb, icb_scaler, row_start_index)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
 
 #ifdef ARCH_BLACKHOLE
+// clang-format off
 /**
  * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
  * Reprograms reduce MOP and restores only the reduce addrmods.
+ *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  */
-template <uint32_t block_ct_dim>
+// clang-format on
+template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
     MATH((llk_math_reduce_block_max_row_reinit()));
 }
@@ -111,13 +137,19 @@ ALWI void reduce_block_max_row_reinit_short() {
  * This function should NOT be used as a substitute for the native reduce_uninit API.
  * Use the standard reduce_uninit() for general-purpose reduction cleanup.
  *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | clear_fp32_accumulation   | Whether to clear FP32 accumulation state                                                | bool      | {true, false}                                  | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A. Required when clear_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
  */
 // clang-format on
-template <bool clear_fp32_accumulation = false>
+template <bool clear_fp32_accumulation = false, bool respect_trigger = false>
 ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit<clear_fp32_accumulation>()));
@@ -128,7 +160,30 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
     MATH((llk_math_reduce_uninit<clear_fp32_accumulation>(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
-    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
+}
+
+// Runtime variants - block_ct_dim is a runtime parameter
+ALWI void reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+ALWI void reduce_block_max_row_runtime(
+    uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst, bool respect_trigger = false) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(icb, icb_scaler, row_start_index, respect_trigger)));
+    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst)));
+}
+
+ALWI void reduce_block_max_row_uninit_runtime(uint32_t icb, bool respect_trigger = false) {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_uninit<false>()));
+#else
+    MATH((llk_math_reduce_uninit<false>(icb)));
+#endif
+    PACK((llk_pack_reduce_mask_clear()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit_runtime(respect_trigger)));
 }
 
 }  // namespace ckernel
