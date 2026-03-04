@@ -20,6 +20,76 @@ import torch
 import ttnn
 
 
+def _get_core_grid(device):
+    """Get CoreGrid from device (y, x order for ttnn)."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=grid.y, x=grid.x)
+
+
+def create_state_shard_config(h_shape, device):
+    """
+    Create L1 width-sharded memory config for state tensor h [B, H, K, V].
+    Shards the V dimension across cores. Uses ttnn 2D view: (B*H*K, V).
+    """
+    B, H, K, V = h_shape
+    core_grid = _get_core_grid(device)
+    total_cores = core_grid.x * core_grid.y
+    if V % total_cores != 0:
+        return None
+    # shape as 2D for create_sharded_memory_config: (height, width)
+    height, width = B * H * K, V
+    return ttnn.create_sharded_memory_config(
+        (height, width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def create_output_shard_config(B, H, V, device):
+    """
+    Create L1 width-sharded memory config for matmul outputs [B, H, 1, V].
+    Same sharding as state but for height B*H.
+    """
+    core_grid = _get_core_grid(device)
+    total_cores = core_grid.x * core_grid.y
+    if V % total_cores != 0:
+        return None
+    height, width = B * H, V
+    return ttnn.create_sharded_memory_config(
+        (height, width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def create_matmul_1d_config(K, V, device):
+    """
+    Create 1D multicast matmul program config for (1, K) @ (K, V) per batch,
+    with mcast_in0=True (in0 height-sharded, in1 width-sharded).
+    """
+    grid = device.compute_with_storage_grid_size()
+    core_grid = _get_core_grid(device)
+    total_cores = core_grid.x * core_grid.y
+    if total_cores == 0:
+        return None
+    in0_block_w = max(1, K // 32 // total_cores)
+    per_core_N = max(1, V // 32 // total_cores)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=min(per_core_N, 8),
+        out_block_h=1,
+        out_block_w=per_core_N,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     """L2 normalization along a given dimension."""
     x_sq = ttnn.multiply(x, x)
@@ -35,12 +105,17 @@ def recurrent_delta_rule_step_ttnn(
     beta_t,
     g_t,
     h,
+    state_shard_config=None,
+    output_shard_config=None,
+    matmul_1d_config=None,
 ):
     """
     Single recurrent step of the gated delta rule using TTNN ops.
 
     Uses ttnn.matmul for K-dimension reductions to leverage hardware
     float32 accumulation, improving numerical precision.
+    When state_shard_config, output_shard_config, and matmul_1d_config are
+    provided, matmuls that read from h use L1 width-sharded 1D config (auto-sharded).
 
     Args:
         q_t: [B, H, K] query for this timestep
@@ -49,6 +124,9 @@ def recurrent_delta_rule_step_ttnn(
         beta_t: [B, H] write strength
         g_t: [B, H] log-space decay
         h: [B, H, K, V] recurrent state
+        state_shard_config: optional L1 width-sharded config for h
+        output_shard_config: optional L1 width-sharded config for v_read/o_t output
+        matmul_1d_config: optional MatmulMultiCoreReuseMultiCast1DProgramConfig
 
     Returns:
         o_t: [B, H, V] output
@@ -59,25 +137,41 @@ def recurrent_delta_rule_step_ttnn(
     K = q_t.shape[2]
     V = v_t.shape[2]
 
-    # 1. Decay the state: h = h * exp(g_t)
-    decay = ttnn.exp(g_t)  # [B, H]
-    decay = ttnn.reshape(decay, [B, H, 1, 1])  # [B, H, 1, 1]
+    use_sharded = state_shard_config is not None and output_shard_config is not None and matmul_1d_config is not None
+    if use_sharded and not h.memory_config().is_sharded():
+        h = ttnn.to_memory_config(h, state_shard_config)
+
+    # 1. Decay the state: h = h * exp(g_t) — always L1 (sharded when configs provided)
+    decay = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
+    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.multiply(h, decay)
 
-    # 2. Read from state via matmul: v_read = k^T @ h
-    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, K]
-    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
-    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, V]
+    # 2. Read from state via matmul: v_read = k^T @ h (L1, auto-sharded when configs provided)
+    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    if use_sharded:
+        v_read = ttnn.matmul(
+            k_row,
+            h,
+            program_config=matmul_1d_config,
+            memory_config=output_shard_config,
+        )
+    else:
+        v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 3. Compute delta: delta = (v_t - v_read) * beta_t
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1]
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # 4. Write to state via matmul outer product: h += k @ delta^T
-    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, 1]
-    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
-    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, V]
+    # 4. Write to state via matmul outer product: h += k @ delta^T — always L1 (sharded when configs provided)
+    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+    outer = ttnn.matmul(
+        k_col,
+        d_row,
+        memory_config=state_shard_config if use_sharded else ttnn.L1_MEMORY_CONFIG,
+    )
     h = ttnn.add(h, outer)
 
     # 5. Query state via matmul: o_t = q^T @ h
@@ -151,11 +245,27 @@ def recurrent_gated_delta_rule_ttnn(
     beta = ttnn.typecast(beta, ttnn.float32)
     g = ttnn.typecast(g, ttnn.float32)
 
-    # Initialize state in float32
+    # L1 width-sharded configs for matmuls (when V divisible by core count)
+    state_shard_config = create_state_shard_config([B, H, K, V], device)
+    output_shard_config = create_output_shard_config(B, H, V, device)
+    matmul_1d_config = create_matmul_1d_config(K, V, device)
+
+    # Initialize state in float32; use L1 sharded when config available
     if initial_state is not None:
         h = ttnn.typecast(initial_state, ttnn.float32)
+        if state_shard_config is not None:
+            h = ttnn.to_memory_config(h, state_shard_config)
     else:
-        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.float32)
+        if state_shard_config is not None:
+            h = ttnn.zeros(
+                [B, H, K, V],
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=state_shard_config,
+            )
+        else:
+            h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.float32)
 
     outputs = []
     for i in range(T):
@@ -165,7 +275,17 @@ def recurrent_gated_delta_rule_ttnn(
         beta_t = beta[:, :, i]  # [B, H]
         g_t = g[:, :, i]  # [B, H]
 
-        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h)
+        o_t, h = recurrent_delta_rule_step_ttnn(
+            q_t,
+            k_t,
+            v_t,
+            beta_t,
+            g_t,
+            h,
+            state_shard_config=state_shard_config,
+            output_shard_config=output_shard_config,
+            matmul_1d_config=matmul_1d_config,
+        )
         outputs.append(o_t)
 
     # Concat outputs: reshape each [B, H, V] -> [B, H, 1, V] then concat
