@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::ReaderArgs args{
         .k_addr = get_common_arg_val<uint32_t>(0),
-        .pos_addr = get_common_arg_val<uint32_t>(1),
+        .local_cur_pos = 0,
         .cur_batch = get_arg_val<uint32_t>(arg_idx++),
         .core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++),
         .is_mcast_sender = get_arg_val<uint32_t>(arg_idx++),
@@ -58,7 +58,7 @@ void kernel_main() {
     arg_idx += num_tree_reduction_steps * 4;
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs args{
-        .pos_addr = get_common_arg_val<uint32_t>(0),
+        .local_cur_pos = 0,
         .cur_batch = cur_batch,
         .core_num_in_reduce = core_num_in_reduce,
         .is_output_core = is_output_core,
@@ -114,7 +114,7 @@ void kernel_main() {
     arg_idx += num_tree_reduction_steps * 2;
 
     deepseek_b1_ops::FlashMLADecode::ComputeArgs args{
-        .pos_addr = get_common_arg_val<uint32_t>(0),
+        .local_cur_pos = 0,
         .do_reduce = do_reduce,
         .do_output = do_output,
         .cur_batch = cur_batch,
@@ -147,6 +147,14 @@ void kernel_main() {
     }
 #endif
 
+#if defined(COMPILE_FOR_NCRISC)
+    uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
+#elif defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+    uint32_t pos_addr = get_common_arg_val<uint32_t>(0);
+#endif
+
     deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, true, false> op;
+    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+    op.set_local_cur_pos(args, pos_ptr[0]);
     op(args);
 }
