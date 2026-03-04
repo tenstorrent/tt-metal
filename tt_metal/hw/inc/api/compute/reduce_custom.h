@@ -109,18 +109,14 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 #ifdef ARCH_BLACKHOLE
 // clang-format off
 /**
- * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
- * Reprograms reduce MOP and restores only the reduce addrmods.
+ * Blackhole-only reinit at K-chunk boundary: restores addrmods + SETC16 + counters +
+ * MOP registers (clobbered by SALAD eltwise-binary between K chunks) + PACK reduce mask.
+ * Skips replay buffer re-recording (positions 0-14 preserved since matmul/eltwise use offset 16+).
  *
  * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
  * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
  * with hardware semaphore synchronization, allowing better pipelining and avoiding a more costly circular buffer
  * synchronization. The same value has to be passed to init, execute and uninit functions for this to take effect.
- *
- * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
- * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
- * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -131,8 +127,26 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_reinit()));
+    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+// clang-format off
+/**
+ * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
+ * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
+ */
+// clang-format on
+template <uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_reinit_minimal() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
 #endif
 
