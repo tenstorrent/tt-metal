@@ -9,6 +9,7 @@ TT-NN provides a mechanism for tracing operations and memory activities during n
 - [Basic Usage](#basic-usage)
 - [Saving Reports](#saving-reports)
 - [Advanced Features](#advanced-features)
+  - [Reducing Capture Overhead](#reducing-capture-overhead)
 - [Levelized Graph](#levelized-graph)
 - [Testing & Validation](#testing--validation)
 - [Reference: Node Types](#reference-node-types)
@@ -41,10 +42,17 @@ auto graph = ttnn::graph::GraphProcessor::end_graph_capture();
 
 ### Save to File (for ttnn-visualizer)
 
+For a complete capture with all data (per-op sub-graphs, buffer pages, stack traces):
+
 ```python
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-# ... your operations ...
-ttnn.graph.end_graph_capture_to_file("my_report.json")
+import ttnn
+
+with ttnn.manage_config("enable_fast_runtime_mode", False):
+    ttnn.graph.enable_buffer_pages()
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    # ... your operations ...
+    ttnn.graph.end_graph_capture_to_file("my_report.json")
+    ttnn.graph.disable_buffer_pages()
 ```
 
 Then import into the visualizer database:
@@ -52,6 +60,8 @@ Then import into the visualizer database:
 ```bash
 python -m ttnn.graph_report my_report.json ./visualizer_db/
 ```
+
+> **Note**: `enable_fast_runtime_mode=False` uses `Operation` (slow dispatch) which produces per-operation captured sub-graphs. The default `FastOperation` (fast dispatch) records arguments and tensor IDs but reconstructs sub-graphs synthetically. See [FastOperation vs Operation](#fastoperation-vs-operation) for details. Stack traces are enabled by default. To reduce overhead, see [Reducing Capture Overhead](#reducing-capture-overhead).
 
 ---
 
@@ -205,7 +215,7 @@ The report file contains:
 - `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`)
 - `buffer_pages_by_address`: Compact per-address page data (when buffer pages are enabled)
 - `cluster_descriptor`: Cluster configuration YAML (if available)
-- `mesh_coordinate_mapping`: Mesh coordinate mapping YAML (if available)
+- `mesh_coordinate_mapping`: Physical chip mesh coordinate mapping YAML (if available, saved as `physical_chip_mesh_coordinate_mapping_1_of_1.yaml`)
 
 ### Import into Visualizer Database
 
@@ -347,6 +357,25 @@ The report includes `buffer_pages_by_address` (compact, per-address snapshots wi
 - `page_index`, `page_address`, `page_size`: Page details
 - `buffer_type`: 0=DRAM, 1=L1, 2=SYSTEM_MEMORY, 3=L1_SMALL, 4=TRACE
 
+### Reducing Capture Overhead
+
+By default, examples in this guide capture all available data (slow dispatch, buffer pages, stack traces). To reduce overhead or report size, disable individual features:
+
+| Feature | Disable With | Effect |
+|---|---|---|
+| Per-op captured sub-graphs | Keep `enable_fast_runtime_mode=True` (default) | Uses `FastOperation`; sub-graphs are reconstructed synthetically by the importer |
+| Buffer pages | Don't call `ttnn.graph.enable_buffer_pages()` | Skips per-page L1 detail (~5.8M rows for ResNet-50) |
+| Stack traces | `ttnn.graph.disable_stack_traces()` | Omits C++ call stacks from `function_start` nodes |
+
+```python
+# Minimal capture: fast dispatch, no buffer pages, no stack traces
+ttnn.graph.disable_stack_traces()
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+# ... your operations ...
+ttnn.graph.end_graph_capture_to_file("lightweight_report.json")
+ttnn.graph.enable_stack_traces()  # Restore default
+```
+
 ### Operation Arguments
 
 Python-level arguments are automatically captured by both `FastOperation` and `Operation` decorators when graph capture is active. They are embedded in the `python_io` section of the JSON report and imported into the `operation_arguments` table.
@@ -456,7 +485,6 @@ Graph tracing tests are in `tests/ttnn/unit_tests/base_functionality/test_graph_
 | `TestGraphReportImport` | End-to-end JSON file → SQLite import via `import_report()` |
 | `TestReportVersion` | Version mismatch handling |
 | `TestResNet50Patterns` | Mock ResNet50 patterns (deallocate synthesis, conv2d lifting, buffer snapshots) |
-| `TestResNet50ReferenceDB` | Structural validation of the golden reference DB |
 | `TestSafeArgStr` | Safe argument stringification (avoids triggering graph-tracked ops) |
 | `TestRecordPythonOperation` | Python I/O recording (arguments, tensor IDs) |
 | `TestStoreCapturedGraph` | Attaching captured sub-graphs to `_python_io_data` |
@@ -478,53 +506,11 @@ Graph tracing tests are in `tests/ttnn/unit_tests/base_functionality/test_graph_
 | `TestStackTraces` | Any device | Stack trace enable/disable and capture verification |
 | `TestFastOperationGraphTracking` | Any device | FastOperation records function names, tensor IDs, and connectivity |
 | `TestLinearModelE2E` | Wormhole B0 | Structural validation: linear model (ones + linear) |
-| `test_resnet50_e2e_graph_capture` | Wormhole B0 | Full ResNet50 golden DB comparison |
-| `test_generate_resnet50_db` | Wormhole B0 | Utility to regenerate golden reference DB |
-
-### Golden Reference Database
-
-The ResNet50 E2E test compares generated databases against a golden reference stored at `test_data/db.sqlite`. This reference was generated on Wormhole B0 (N150) hardware with `enable_fast_runtime_mode=False` (slow dispatch). The E2E test is gated with `@pytest.mark.skipif(not is_wormhole_b0())`.
-
-The comparison checks structural properties across tables: operation counts, tensor counts, buffer counts, input/output tensor relationships, and connectivity (shared tensor IDs between `output_tensors` and `input_tensors`). `device_id` and `tensor_id` values are excluded from comparisons because they vary per machine / per run.
-
-### Regenerating the Golden Reference
-
-If you change the graph capture, import logic, model, or operation tracking, the E2E test may fail. Regenerate on a Wormhole B0 (N150) machine using the `test_generate_resnet50_db` test function, or manually:
-
-```bash
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml python3 -c "
-import ttnn, ast, shutil, sys
-from ttnn import graph_report
-
-sys.path.insert(0, '.')
-from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
-
-mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), l1_small_size=24576)
-with open('models/sample_data/imagenet_class_labels.txt') as f:
-    labels = ast.literal_eval(f.read())
-
-ttnn.graph.enable_buffer_pages()
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-run_resnet_inference(16, 'models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/',
-                     labels, mesh_device, lambda rel, *a, **k: rel)
-ttnn.graph.end_graph_capture_to_file('/tmp/resnet50_report.json')
-ttnn.graph.disable_buffer_pages()
-db = graph_report.import_report('/tmp/resnet50_report.json', '/tmp/resnet50_ref')
-shutil.copy(db, 'test_data/db.sqlite')
-ttnn.close_mesh_device(mesh_device)
-print('Done: db.sqlite regenerated')
-"
-```
-
-After regenerating, commit the new `db.sqlite` and verify:
-
-```bash
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py -x -q
-```
+| `test_resnet50_e2e_graph_capture` | Wormhole B0 | Full ResNet50 E2E graph capture and structural validation |
 
 ### Generating a Database for ttnn-visualizer
 
-To generate a complete database for testing with the ttnn-visualizer:
+To generate a complete database with all data for the ttnn-visualizer:
 
 ```python
 import ttnn
@@ -532,17 +518,21 @@ from ttnn import graph_report
 
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
 
-ttnn.graph.enable_buffer_pages()  # Include L1 page-level detail
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-# ... run your model ...
-ttnn.graph.end_graph_capture_to_file("my_report.json")
-ttnn.graph.disable_buffer_pages()
+# Full capture: slow dispatch for per-op sub-graphs, buffer pages for L1 detail
+with ttnn.manage_config("enable_fast_runtime_mode", False):
+    ttnn.graph.enable_buffer_pages()
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    # ... run your model ...
+    ttnn.graph.end_graph_capture_to_file("my_report.json")
+    ttnn.graph.disable_buffer_pages()
 
 # Import to SQLite (creates db.sqlite, cluster_descriptor.yaml, etc.)
 graph_report.import_report("my_report.json", "./my_visualizer_db/")
 
 ttnn.close_device(device)
 ```
+
+For a lighter-weight capture (faster, smaller reports), see [Reducing Capture Overhead](#reducing-capture-overhead).
 
 ### What the E2E Tests Validate
 
