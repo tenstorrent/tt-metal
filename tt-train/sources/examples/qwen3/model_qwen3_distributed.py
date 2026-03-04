@@ -55,16 +55,8 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
-from model_qwen3 import (
-    Qwen3Config,
-    Qwen3RMSNorm,
-    ConcatLastDim,
-    linear,
-    create_qwen3_config_from_hf,
-)
-from utils.kv_cache import KVCache
-from utils.memory import MemoryUsageTracker, memory_snapshot
-from utils.context_managers import empty_init, is_empty_init
+from model_qwen3 import Qwen3Config, Qwen3RMSNorm, ConcatLastDim, linear
+from utils.memory import memory_snapshot
 from utils.checkpoint import (  # noqa: F401 — re-exported for callers
     CheckpointFunction,
     checkpoint,

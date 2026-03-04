@@ -106,9 +106,6 @@ def create_qwen3_config_from_hf(hf_config, max_sequence_length: int) -> Qwen3Con
     )
 
 
-from utils.context_managers import is_empty_init
-
-
 # =====================================================================
 # Custom autograd: ConcatLastDim
 # =====================================================================
@@ -197,7 +194,6 @@ class RMSNormFunction(ttml.autograd.Function):
 
 
 def linear(x, weight, bias=None):
-    # return LinearFunction.apply(x, weight, bias)
     return ttml.ops.linear.linear(x, weight, bias)
 
 
