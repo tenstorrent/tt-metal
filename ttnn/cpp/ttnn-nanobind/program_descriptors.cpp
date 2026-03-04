@@ -271,9 +271,20 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     tile: Tile object to create descriptor from
             )pbdoc")
+        .def(
+            nb::init<const tt::tt_metal::TileDescriptor&>(),
+            nb::arg("other"),
+            R"pbdoc(
+                Copy constructor for TileDescriptor.
+
+                Args:
+                    other: TileDescriptor to copy from
+            )pbdoc")
         .def_rw("height", &tt::tt_metal::TileDescriptor::height, "Height of the tile in elements")
         .def_rw("width", &tt::tt_metal::TileDescriptor::width, "Width of the tile in elements")
-        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed");
+        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     // Bind CBDescriptor and related types
     nb::class_<tt::tt_metal::CBFormatDescriptor>(mod, "CBFormatDescriptor", R"pbdoc(
@@ -410,6 +421,24 @@ void py_module_types(nb::module_& mod) {
 
             Note:
                 The tensor must be sharded (have a shard specification), otherwise this will raise an error.
+        )pbdoc");
+
+    // Helper function for getting the L1 byte address of a CB descriptor
+    mod.def(
+        "get_cb_address",
+        &tt::tt_metal::get_cb_address,
+        nb::arg("descriptor"),
+        R"pbdoc(
+            Get the L1 byte address of a CB descriptor.
+
+            Returns buffer base address + address_offset when a buffer is present,
+            or just address_offset when no buffer is set (manually placed CB).
+
+            Args:
+                descriptor: A CBDescriptor to get the address from
+
+            Returns:
+                The L1 byte address of the circular buffer
         )pbdoc");
 
     // Bind KernelDescriptor related types

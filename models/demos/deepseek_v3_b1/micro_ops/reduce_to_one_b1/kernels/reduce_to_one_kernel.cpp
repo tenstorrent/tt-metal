@@ -60,7 +60,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(0),  // fabric_core_noc_x
             get_arg_val<uint32_t>(1),  // fabric_core_noc_y
             get_arg_val<uint32_t>(2),  // my_slot_idx
-            get_arg_val<uint32_t>(3),  // worker_sem_id
+            get_arg_val<uint32_t>(3),  // worker_sem_addr
             get_arg_val<uint32_t>(4),  // dst_l1_addr
             get_arg_val<uint32_t>(5),  // dst_sem_addr
             get_arg_val<uint32_t>(6),  // output_base_addr

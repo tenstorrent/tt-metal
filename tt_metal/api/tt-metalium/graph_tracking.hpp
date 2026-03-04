@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <any>
 #include <array>
@@ -30,6 +30,17 @@ namespace tt::tt_metal {
 
 class Program;
 
+struct TrackedArgument {
+    std::any value;
+    std::string (*to_string_fn)(const std::any&);
+};
+
+// Forward declaration only – the definition lives in ttnn/graph/graph_serialization.hpp
+// which pulls in <reflect> and tt_stl/reflection.hpp.  This keeps the public API header
+// free of those heavyweight dependencies.
+template <typename T>
+std::string serialize_tracked_arg(const std::any& a);
+
 class IGraphProcessor {
 public:
     enum class RunMode {
@@ -54,14 +65,15 @@ public:
 
     virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
 
-    virtual void track_function_start(std::string_view /*function_name*/, std::span<std::any> /*input_parameters*/){};
+    virtual void track_function_start(
+        std::string_view /*function_name*/, std::span<TrackedArgument> /*input_parameters*/){};
 
     virtual void track_function_end() {};
     virtual void track_function_end(const std::any& /*output_tensors*/) {};
 
     virtual void begin_capture(RunMode /*mode*/){};
 
-    virtual nlohmann::json end_capture() { return nullptr; };
+    virtual nlohmann::json end_capture();
 
     virtual ~IGraphProcessor() = default;
 };
@@ -121,7 +133,8 @@ public:
         if (processors.empty()) {
             return;
         }
-        std::array<std::any, sizeof...(Args)> params{std::any(std::ref(args))...};
+        std::array<TrackedArgument, sizeof...(Args)> params{
+            TrackedArgument{std::any(std::ref(args)), &serialize_tracked_arg<std::remove_reference_t<Args>>}...};
         for (auto& it : processors) {
             it->track_function_start(function_name, params);
         }

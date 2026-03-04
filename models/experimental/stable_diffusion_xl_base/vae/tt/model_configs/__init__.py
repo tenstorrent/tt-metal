@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs.model_configs_1024x1024 import (
-    VAEModelOptimisations1024x1024,
+    VAEModelOptimisations,
 )
 
 
@@ -19,15 +19,14 @@ def load_vae_model_optimisations(
 
     Args:
         image_resolution (tuple): A tuple of (height, width) representing the image resolution.
-            Supported resolution is (1024, 1024).
+            Supported resolutions are (512, 512) and (1024, 1024).
         conv_act_dtype: Optional dtype for convolution activations. Defaults to ttnn.bfloat16.
         conv_w_dtype: Optional dtype for convolution weights. Defaults to ttnn.bfloat16.
         attention_weights_dtype: Optional dtype for attention weights. Defaults to ttnn.bfloat8_b.
         ff_weights_dtype: Optional dtype for feedforward weights. Defaults to ttnn.bfloat8_b.
 
     Returns:
-        VAEModelOptimisations1024x1024: The appropriate VAEModelOptimisation object based on the
-            image resolution.
+        The appropriate VAEModelOptimisation object based on the image resolution.
 
     Raises:
         ValueError: If the image_resolution is not supported.
@@ -51,7 +50,14 @@ def load_vae_model_optimisations(
     if ff_weights_dtype is not None:
         init_kwargs["ff_weights_dtype"] = ff_weights_dtype
 
-    if (height, width) == (1024, 1024):
-        return VAEModelOptimisations1024x1024(**init_kwargs)
+    # 512x512 and 1024x1024 share the same optimisations because they only differ in the number of DRAM
+    # slices which is determined by the tensor NHW dimension.
+    if (height, width) == (512, 512):
+        return VAEModelOptimisations(**init_kwargs)
+    elif (height, width) == (1024, 1024):
+        return VAEModelOptimisations(**init_kwargs)
     else:
-        raise ValueError(f"Unsupported image_resolution: {image_resolution}. " "Only (1024, 1024) is supported.")
+        raise ValueError(
+            f"Unsupported image_resolution: {image_resolution}. "
+            "Supported resolutions are (512, 512) and (1024, 1024)."
+        )

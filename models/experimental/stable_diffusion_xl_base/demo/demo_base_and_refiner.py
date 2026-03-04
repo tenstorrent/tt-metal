@@ -191,6 +191,14 @@ def run_demo_inference(
     return images
 
 
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
