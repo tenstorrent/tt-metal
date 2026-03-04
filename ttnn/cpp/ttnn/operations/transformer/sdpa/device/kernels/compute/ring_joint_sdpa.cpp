@@ -48,6 +48,23 @@ void kernel_main() {
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(32);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(33);
+    constexpr bool uniform_dataformat = get_compile_time_arg_val(34) == 1;
+
+    // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
+    // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
+    // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
+    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+
+    constexpr uint32_t neginf_tile_idx = 0;
+    constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
+    constexpr uint32_t joint_l_partial_tile_idx =
+        (joint_l_partial_col > 0) ? (1 + (global_n_partial_col > 0 ? 1 : 0)) : 0;
+    constexpr uint32_t total_mask_tiles = 1 + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -87,6 +104,17 @@ void kernel_main() {
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
+    // Wait for all lightweight mask tiles once before the ring loop.
+    // Writer generates them once and they stay permanently fronted.
+    if constexpr (needs_lightweight_mask) {
+        cb_wait_front(cb_mask_in, total_mask_tiles);
+    }
+
+    // Precompute padded tile counts that are constant across ring iterations
+    constexpr uint32_t local_n_padded_tiles =
+        (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
+    constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -120,6 +148,23 @@ void kernel_main() {
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
+        // Build lightweight mask context for this ring iteration
+        LightweightMaskContext lw_mask;
+        lw_mask.enabled = needs_lightweight_mask;
+        lw_mask.neginf_tile_idx = neginf_tile_idx;
+        lw_mask.local_n_padded_tiles = local_n_padded_tiles;
+        lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
+        lw_mask.global_n_partial_col = global_n_partial_col;
+        lw_mask.joint_l_partial_col = joint_l_partial_col;
+        lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
+        lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
+        if (ring_iter_needs_global_n_mask) {
+            const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+            const uint32_t valid_tiles =
+                (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
+        }
+
         if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
                 Sq_chunk_t,
@@ -142,7 +187,8 @@ void kernel_main() {
                 cb_lse_in,
                 cb_lse_out,
                 cb_prev_out,
-                cb_out>(
+                cb_out,
+                uniform_dataformat>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
@@ -162,7 +208,8 @@ void kernel_main() {
                 cb_max_A,
                 cb_max_B,
                 cb_sum_A,
-                cb_sum_B);
+                cb_sum_B,
+                lw_mask);
         } else {
             sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
                 qk_in0_block_w,
@@ -211,7 +258,8 @@ void kernel_main() {
                 cb_lse_in,
                 cb_lse_out,
                 cb_prev_out,
-                cb_out);
+                cb_out,
+                lw_mask);
         }
     }
 }

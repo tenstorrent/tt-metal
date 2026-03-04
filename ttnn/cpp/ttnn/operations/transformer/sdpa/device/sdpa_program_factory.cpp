@@ -332,7 +332,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    log_info(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -477,6 +477,19 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
+    // Early format check for uniform_dataformat compile-time arg.
+    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    const tt::DataFormat mask_df_early =
+        attn_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
+                              : (use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b);
+    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
+    const bool uniform_dataformat =
+        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
+         q_df_early == mask_df_early && q_df_early == im_df_early);
+
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
         B,
@@ -511,6 +524,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_attention_sink,
         (std::uint32_t)use_streaming_compute,  // arg 30
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
+        (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);

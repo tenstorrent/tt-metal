@@ -350,7 +350,7 @@ void mul_block_bcast_cols_acc(
         }
         tile_regs_release();
     }
-    PACK((llk_pack_reconfig_l1_acc(false)));
+    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 /**
@@ -365,7 +365,7 @@ void mul_block_bcast_cols_acc(
  * @tparam DST_BATCH   Max tiles per DST batch (8 for fp16b half-sync)
  */
 template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t SBH = 1, uint32_t DST_BATCH = 8>
-void apply_padded_mask_lightweight(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
+static void apply_padded_mask_lightweight(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
     static_assert(num_padded > 0, "num_padded must be > 0");
     static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
@@ -472,7 +472,7 @@ void normalize_row_streaming(
  * Copies mask tiles from cb_mask_in and adds them in-place to cb_qkt_im using L1 accumulation.
  */
 template <uint32_t Sk_chunk_t, uint32_t sbh, uint32_t cb_mask_in, uint32_t cb_qkt_im>
-void apply_ring_mask_to_qkt(uint32_t q_subblock) {
+static void apply_ring_mask_to_qkt(uint32_t q_subblock) {
     constexpr uint32_t DST_BATCH = 8;
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t out_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
@@ -497,6 +497,48 @@ void apply_ring_mask_to_qkt(uint32_t q_subblock) {
 }
 
 /**
+ * L1-accumulate a single mask tile onto one position in out_cb.
+ * Minimal primitive used by the lightweight ring mask path.
+ */
+static inline void l1_acc_single_tile(uint32_t mask_cb, uint32_t tile_idx, uint32_t out_cb, uint32_t out_pos) {
+    tile_regs_acquire();
+    copy_tile(mask_cb, tile_idx, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile<true>(0, out_cb, out_pos);
+    tile_regs_release();
+}
+
+/**
+ * Combined lightweight mask for streaming ring SDPA: applies partial + padded mask.
+ * Processes SBH rows per call (one q_subblock).
+ * Caller must set up copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1) before calling,
+ * and llk_pack_reconfig_l1_acc(0) after calling.
+ */
+template <uint32_t num_cols, uint32_t SBH>
+static __attribute__((noinline)) void apply_lightweight_mask_streaming(
+    uint32_t mask_cb,
+    uint32_t out_cb,
+    uint32_t q_subblock,
+    uint32_t num_padded,
+    bool has_partial,
+    uint32_t partial_tile_idx) {
+    uint32_t boundary_col = num_cols - num_padded - (has_partial ? 1 : 0);
+    for (uint32_t row = 0; row < SBH; row++) {
+        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
+
+        if (has_partial) {
+            l1_acc_single_tile(mask_cb, partial_tile_idx, out_cb, row_offset + boundary_col);
+        }
+
+        uint32_t start = num_cols - num_padded;
+        for (uint32_t col = start; col < num_cols; col++) {
+            l1_acc_single_tile(mask_cb, 0, out_cb, row_offset + col);  // neginf is always tile 0
+        }
+    }
+}
+
+/**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
@@ -513,6 +555,7 @@ template <
     bool use_padded_mask,
     bool ring_mode = false,
     bool use_ring_mask = false,
+    bool uniform_dataformat = false,
     uint32_t cb_q_in = 0,
     uint32_t cb_kt_in = 0,
     uint32_t cb_v_in = 0,
@@ -523,7 +566,7 @@ template <
     uint32_t cb_recip_scratch = 0,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0>
-void sdpa_inner_loop_step(
+static void sdpa_inner_loop_step(
     const uint32_t prev_max,
     const uint32_t cur_max,
     const uint32_t prev_sum,
@@ -532,7 +575,9 @@ void sdpa_inner_loop_step(
     const uint32_t cur_out,
     const bool is_last_iter,
     const bool is_first_iter,
-    [[maybe_unused]] const bool apply_mask = false) {
+    [[maybe_unused]] const bool apply_mask = false,
+    const uint32_t lw_num_padded = 0,
+    const uint32_t lw_partial_tile_idx = 0) {
     constexpr uint32_t sbh = subblock_h;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t qkt_subblock_w = 8 / sbh;
@@ -548,6 +593,12 @@ void sdpa_inner_loop_step(
     static_assert(Sq_chunk_t % sbh == 0, "Sq_chunk_t must be divisible by subblock_h");
     static_assert(!(use_padded_mask && use_ring_mask), "use_padded_mask and use_ring_mask are mutually exclusive");
 
+    // When all CBs share the same data format (e.g. all Float16_b for bf16 models),
+    // reconfig calls are no-ops — skip entirely to save code size.
+    // uniform_dataformat is passed as a template parameter from the program factory.
+    constexpr bool uniform_unpack_format = uniform_dataformat;
+    constexpr bool uniform_pack_format = uniform_dataformat;
+
     uint32_t pushed_rows = 0;
     uint32_t q_wait_tiles = q_subblock_num_tiles;
     uint32_t q_index_offset = 0;
@@ -555,8 +606,12 @@ void sdpa_inner_loop_step(
 
     exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
 
-    pack_reconfig_data_format(cb_qkt_im);
-    reconfig_data_format(cb_kt_in, cb_q_in);
+    if constexpr (!uniform_pack_format) {
+        pack_reconfig_data_format(cb_qkt_im);
+    }
+    if constexpr (!uniform_unpack_format) {
+        reconfig_data_format(cb_kt_in, cb_q_in);
+    }
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
 
     cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
@@ -574,7 +629,9 @@ void sdpa_inner_loop_step(
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 // Restore float16b UNPACK for sub_exp (early-exit if already float16b).
-                reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
+                if constexpr (!uniform_unpack_format) {
+                    reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
+                }
                 sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                     cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
             }
@@ -582,7 +639,9 @@ void sdpa_inner_loop_step(
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
                 // Setup matmul UNPACK (early-exit if already set, e.g., q_subblock==0 consecutive calls).
-                reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
+                if constexpr (!uniform_unpack_format) {
+                    reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
+                }
                 blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                     cb_q_in,
                     cb_kt_in,
@@ -595,25 +654,27 @@ void sdpa_inner_loop_step(
             kt_index_offset += qkt_subblock_w;
         }
         // Restore float16b for mask/reduce after Q@KT.
-        reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
+        if constexpr (!uniform_unpack_format) {
+            reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
+        }
 
         // Apply mask on last K chunk: L1-accumulate single -inf tile onto padded K positions.
-        if constexpr (padded_k_tiles > 0) {
+        // In ring_mode, is_last_iter is always false — skip entirely.
+        if constexpr (padded_k_tiles > 0 && !ring_mode) {
             if (is_last_iter) {
                 apply_padded_mask_lightweight<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh>(
                     cb_mask_in, cb_qkt_im, q_subblock);
             }
         }
 
-        // Ring mask: L1-accumulate full mask tiles onto cb_qkt_im for this row group.
-        // Wait deferred to here so reader can overlap mask fetch with Q@KT matmul.
+        // Ring mask: L1-accumulate lightweight mask tiles onto cb_qkt_im for this row group.
         if constexpr (use_ring_mask) {
-            if (apply_mask) {
-                if (q_subblock == 0) {
-                    cb_wait_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-                }
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "RING_MASK");
-                apply_ring_mask_to_qkt<Sk_chunk_t, sbh, cb_mask_in, cb_qkt_im>(q_subblock);
+            if (apply_mask && (lw_partial_tile_idx > 0 || lw_num_padded > 0)) {
+                copy_tile_to_dst_init_short(cb_mask_in);
+                PACK((llk_pack_reconfig_l1_acc(1)));
+                apply_lightweight_mask_streaming<Sk_chunk_t, sbh>(
+                    cb_mask_in, cb_qkt_im, q_subblock, lw_num_padded, lw_partial_tile_idx > 0, lw_partial_tile_idx);
+                PACK((llk_pack_reconfig_l1_acc(0)));
             }
         }
 
@@ -637,16 +698,14 @@ void sdpa_inner_loop_step(
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
     // reader can start fetching the next Q chunk during Phase 2.
-    if (is_last_iter) {
-        cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
-    }
-
-    // Pop ring mask after all row groups processed
-    if constexpr (use_ring_mask) {
-        if (apply_mask) {
-            cb_pop_front(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
+    // In ring_mode, is_last_iter is always false — skip entirely.
+    if constexpr (!ring_mode) {
+        if (is_last_iter) {
+            cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
         }
     }
+
+    // Lightweight ring mask tiles are permanently fronted — no pop needed.
 
     // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
@@ -691,7 +750,9 @@ void sdpa_inner_loop_step(
                     // Matmul — FPU overlaps with SFPU EXP
                     {
                         uint32_t v_index_offset = 0;
-                        reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                        if constexpr (!uniform_unpack_format) {
+                            reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                        }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
@@ -704,7 +765,9 @@ void sdpa_inner_loop_step(
                                 v_subblock * qktv_subblock_w);
                             v_index_offset += qktv_subblock_w;
                         }
-                        reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                        if constexpr (!uniform_unpack_format) {
+                            reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                        }
                     }
 
                     if (kt_sub > 0) {
@@ -722,7 +785,9 @@ void sdpa_inner_loop_step(
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
                     uint32_t v_index_offset = 0;
-                    reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                    if constexpr (!uniform_unpack_format) {
+                        reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                    }
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
@@ -735,25 +800,28 @@ void sdpa_inner_loop_step(
                             v_subblock * qktv_subblock_w);
                         v_index_offset += qktv_subblock_w;
                     }
-                    reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                    if constexpr (!uniform_unpack_format) {
+                        reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                    }
                 }
             }
             qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
             qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
         }
 
-        // Per-row normalization lambda
-        auto normalize_row = [&](uint32_t w_row, uint32_t& pushed) {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
-            cb_push_back(cur_sum, sbh);
-            cb_push_back(cur_out, sbh * vDHt);
-            normalize_row_streaming<PROFILING_ENABLED, sbh, vDHt>(
-                cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
-            pushed++;
+        // Per-row normalization lambda — only compiled for non-ring mode
+        [[maybe_unused]] auto normalize_row = [&](uint32_t w_salad, uint32_t& pushed) {
+            if constexpr (!ring_mode) {
+                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
+                cb_push_back(cur_sum, sbh);
+                cb_push_back(cur_out, sbh * vDHt);
+                normalize_row_streaming<PROFILING_ENABLED, sbh, vDHt>(
+                    cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
+                pushed++;
+            }
         };
 
         // SALAD correction + optional normalization lambda
-        // In ring_mode, skip per-row normalization on last iter — caller does bulk finalization.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
@@ -763,7 +831,7 @@ void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
                 mul_block_bcast_cols_acc<sbh, vDHt>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
-            if (last_iter && !ring_mode) {
+            if (last_iter) {
                 normalize_row(w_salad, pushed);
             }
         };
@@ -787,7 +855,9 @@ void sdpa_inner_loop_step(
             // Full matmul for current row
             {
                 uint32_t v_index_offset = 0;
-                reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                if constexpr (!uniform_unpack_format) {
+                    reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                }
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
@@ -800,13 +870,15 @@ void sdpa_inner_loop_step(
                         v_subblock * qktv_subblock_w);
                     v_index_offset += qktv_subblock_w;
                 }
-                reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                if constexpr (!uniform_unpack_format) {
+                    reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                }
             }
 
             // SALAD corrections + optional per-row normalization
             if (!is_first_iter) {
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
-            } else if (is_last_iter && !ring_mode) {
+            } else if (is_last_iter) {
                 normalize_row(w_salad, pushed_rows);
             }
 
@@ -826,14 +898,21 @@ void sdpa_inner_loop_step(
                 cb_push_back(cb_exp_max_diff, sbh);
 
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
-            } else if (is_last_iter && !ring_mode) {
-                normalize_row(w_salad, pushed_rows);
+            } else if constexpr (!ring_mode) {
+                if (is_last_iter) {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
+                    cb_push_back(cur_sum, sbh);
+                    cb_push_back(cur_out, sbh * vDHt);
+                    normalize_row_streaming<PROFILING_ENABLED, sbh, vDHt>(
+                        cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
+                    pushed_rows++;
+                }
             }
         }
 
         // Bulk push — skip on last iteration when rows are consumed by normalization.
-        // In ring_mode, always bulk push (even on last iter) — caller handles finalization.
-        if (!is_last_iter || ring_mode) {
+        // In ring_mode, always bulk push — caller handles finalization.
+        if (ring_mode || !is_last_iter) {
             cb_push_back(cur_sum, Sq_chunk_t);
             cb_push_back(cur_out, qktv_output_num_tiles);
         }
@@ -865,7 +944,8 @@ template <
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
-    uint32_t cb_mask_in>
+    uint32_t cb_mask_in,
+    bool uniform_dataformat = false>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -902,6 +982,7 @@ void sdpa_standard_v2(
                 use_padded_mask,
                 false,  // ring_mode
                 false,  // use_ring_mask
+                uniform_dataformat,
                 cb_q_in,
                 cb_kt_in,
                 cb_v_in,
@@ -983,7 +1064,8 @@ template <
     uint32_t cb_lse_in,
     uint32_t cb_lse_out,
     uint32_t cb_prev_out,
-    uint32_t cb_out>
+    uint32_t cb_out,
+    bool uniform_dataformat = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1004,8 +1086,10 @@ void sdpa_ring_v2(
     const uint32_t cb_max_A,
     const uint32_t cb_max_B,
     const uint32_t cb_sum_A,
-    const uint32_t cb_sum_B) {
+    const uint32_t cb_sum_B,
+    const LightweightMaskContext& lw_mask = {}) {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    constexpr bool uniform_format = uniform_dataformat;
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
@@ -1034,6 +1118,20 @@ void sdpa_ring_v2(
                               (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
                               (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
 
+            // Resolve lightweight mask params once per K chunk
+            uint32_t lw_num_padded = 0, lw_partial_tile_idx = 0;
+            if (apply_mask && lw_mask.enabled) {
+                if (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) {
+                    lw_num_padded = lw_mask.global_n_padded_tiles;
+                    lw_partial_tile_idx = lw_mask.global_n_partial_tile_idx;
+                } else if (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) {
+                    lw_num_padded = lw_mask.local_n_padded_tiles;
+                } else if (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) {
+                    lw_num_padded = lw_mask.joint_n_padded_tiles;
+                    lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
+                }
+            }
+
             // Call streaming step with ring_mode=true (skip normalization, always push)
             // is_last_iter=false: Q pop and finalization handled by this outer loop.
             sdpa_inner_loop_step<
@@ -1048,6 +1146,7 @@ void sdpa_ring_v2(
                 false,  // use_padded_mask — ring uses ring mask instead
                 true,   // ring_mode
                 true,   // use_ring_mask
+                uniform_dataformat,
                 cb_q_in,
                 cb_kt_in,
                 cb_v_in,
@@ -1066,7 +1165,9 @@ void sdpa_ring_v2(
                 alias_cur_out,
                 false,  // is_last_iter
                 is_first,
-                apply_mask);
+                apply_mask,
+                lw_num_padded,
+                lw_partial_tile_idx);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
@@ -1087,69 +1188,67 @@ void sdpa_ring_v2(
         // ========== Ring Finalization ==========
         // After all K chunks: alias_prev_sum = final sum, alias_prev_max = final max,
         // alias_prev_out = final unnormalized output. alias_cur_* are empty.
+        {
+            constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-        // Row-reduce the partial sum: partial_sum × col_identity → per-row sum.
-        // The K-chunk loop accumulated tile-level sums via L1 acc, but each tile still
-        // has per-column partial sums. matmul_reduce collapses them to a single per-row
-        // value, matching what sdpa_inner_loop does before its ring finalization.
-        matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+            matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+            log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+            mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(alias_prev_max);
+            add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
+            recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_prev_out, alias_prev_sum);
 
-        // 1. log(sum) → alias_cur_max (scratch)
-        log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+            if (ring_iter > 0) {
+                cb_wait_front(cb_lse_in, Sq_chunk_t);
+                cb_wait_front(cb_prev_out, out_chunk_tiles);
 
-        // 2. LSE = scale * max + log(sum)
-        mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(alias_prev_max);
-        add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
+                uint32_t alias_cur_lse = alias_prev_max;
+                uint32_t alias_sig = alias_cur_max;
+                uint32_t alias_cur_out_r = alias_prev_out;
+                uint32_t alias_sub = alias_cur_out;
 
-        // 3. Normalize output: out = out / sum
-        recip_block_inplace(alias_prev_sum, Sq_chunk_t);
-        mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_prev_out, alias_prev_sum);
+                sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
 
-        if (ring_iter > 0) {
-            // Sigmoid blend with previous ring iteration's output and LSE
-            //   sig = sigmoid(cur_lse - prev_lse)
-            //   out = prev_out - sig * (prev_out - cur_out)
-            //   lse = prev_lse - logsigmoid(prev_lse - cur_lse)
-            cb_wait_front(cb_lse_in, Sq_chunk_t);
-            cb_wait_front(cb_prev_out, out_chunk_tiles);
+                if constexpr (!uniform_format) {
+                    reconfig_data_format(cb_prev_out, alias_cur_out_r);
+                }
+                sub_block(cb_prev_out, alias_cur_out_r, alias_sub, out_chunk_tiles);
+                if constexpr (!uniform_format) {
+                    reconfig_data_format(alias_sub, alias_sig);
+                }
+                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
+                if constexpr (!uniform_format) {
+                    reconfig_data_format(cb_prev_out, alias_sub);
+                }
+                if constexpr (!uniform_format) {
+                    pack_reconfig_data_format(cb_out);
+                }
+                sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
+                cb_pop_front(cb_prev_out, out_chunk_tiles);
+                cb_pop_front(alias_cur_out_r, out_chunk_tiles);
+                cb_pop_front(alias_sub, out_chunk_tiles);
 
-            uint32_t alias_cur_lse = alias_prev_max;    // full (contains LSE)
-            uint32_t alias_sig = alias_cur_max;         // empty
-            uint32_t alias_cur_out_r = alias_prev_out;  // full (contains normalized output)
-            uint32_t alias_sub = alias_cur_out;         // empty
-
-            // sig = sigmoid(cur_lse - prev_lse)
-            sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
-
-            // sub = prev_out - cur_out
-            reconfig_data_format(cb_prev_out, alias_cur_out_r);
-            sub_block(cb_prev_out, alias_cur_out_r, alias_sub, out_chunk_tiles);
-            // sub *= sig
-            reconfig_data_format(alias_sub, alias_sig);
-            mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
-            // out = prev_out - sub
-            reconfig_data_format(cb_prev_out, alias_sub);
-            pack_reconfig_data_format(cb_out);
-            sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
-            cb_pop_front(cb_prev_out, out_chunk_tiles);
-            cb_pop_front(alias_cur_out_r, out_chunk_tiles);
-            cb_pop_front(alias_sub, out_chunk_tiles);
-
-            // lse = prev_lse - logsigmoid(prev_lse - cur_lse)
-            pack_reconfig_data_format(alias_sig);
-            reconfig_data_format(cb_lse_in, alias_cur_lse);
-            logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
-            sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
-            cb_pop_front(alias_sig, Sq_chunk_t);
-            cb_pop_front(alias_cur_lse, Sq_chunk_t);
-            cb_pop_front(cb_lse_in, Sq_chunk_t);
-        } else {
-            // First ring iteration: copy output and LSE directly
-            pack_reconfig_data_format(cb_out);
-            copy_block(alias_prev_out, cb_out, out_chunk_tiles);
-
-            pack_reconfig_data_format(cb_lse_out);
-            copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
+                if constexpr (!uniform_format) {
+                    pack_reconfig_data_format(alias_sig);
+                }
+                if constexpr (!uniform_format) {
+                    reconfig_data_format(cb_lse_in, alias_cur_lse);
+                }
+                logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
+                sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
+                cb_pop_front(alias_sig, Sq_chunk_t);
+                cb_pop_front(alias_cur_lse, Sq_chunk_t);
+                cb_pop_front(cb_lse_in, Sq_chunk_t);
+            } else {
+                if constexpr (!uniform_format) {
+                    pack_reconfig_data_format(cb_out);
+                }
+                copy_block(alias_prev_out, cb_out, out_chunk_tiles);
+                if constexpr (!uniform_format) {
+                    pack_reconfig_data_format(cb_lse_out);
+                }
+                copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
+            }
         }
     }
 

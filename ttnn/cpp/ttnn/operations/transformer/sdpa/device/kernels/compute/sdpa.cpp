@@ -47,6 +47,7 @@ void kernel_main() {
     constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
     constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
+    constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -133,7 +134,8 @@ void kernel_main() {
                         cb_col_identity,
                         cb_recip_scratch,
                         cb_out,  // normalized output goes directly to output CB
-                        cb_mask_in>(
+                        cb_mask_in,
+                        uniform_dataformat>(
                         q_chunks_per_core,
                         k_num_chunks,
                         cb_out_im_A,
