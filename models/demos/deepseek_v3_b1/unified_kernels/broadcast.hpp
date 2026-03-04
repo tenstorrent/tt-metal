@@ -85,6 +85,8 @@ struct Broadcast {
         uint32_t my_noc_x;
         uint32_t my_noc_y;
         std::array<uint32_t, MAX_NUM_LINKS> sem_bank_addrs;
+        uint32_t per_core_rta_arg_idx_offset = 0;
+        uint32_t per_core_rta_num_args = 0;
     };
 
     // TRISC args - not used for CCL broadcast op
@@ -141,7 +143,7 @@ struct Broadcast {
 
                 std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
                 std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
-                size_t arg_idx = 0;
+                size_t arg_idx = args.per_core_rta_arg_idx_offset;
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);

@@ -101,11 +101,11 @@ class BroadcastRMSNorm:
 
         # CB indices:
         #   0..2 are owned by RMSNorm in this fused op.
-        #   broadcast-private CB ids start at bcast_cb_start_offset.
+        #   broadcast-private CB id is explicit via bcast_cb_id.
         input_cb = 0
         gamma_cb = 1
         output_cb = 2
-        bcast_cb_start_offset = 3
+        bcast_cb_id = 3
 
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
@@ -115,7 +115,7 @@ class BroadcastRMSNorm:
             semaphores=semaphores,
             socket=socket,
             skip_ccl=skip_ccl,
-            cb_start_offset=bcast_cb_start_offset,
+            bcast_cb_id=bcast_cb_id,
             num_links=num_links,
         )
 
@@ -240,7 +240,7 @@ class BroadcastRMSNorm:
                 out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                bcast_cb_descriptors = bcast_config.get_cb_descriptors(coord)
+                bcast_cb_descriptor = bcast_config.get_cb_descriptor(coord)
 
                 kernel_defines = []
                 if skip_ccl:
@@ -273,10 +273,11 @@ class BroadcastRMSNorm:
 
                 # Program descriptor
                 # Keep descriptor order aligned with buffer indices: RMSNorm CBs first (0..2),
-                # followed by any broadcast-private descriptors (starting at cb_start_offset).
+                # followed by any broadcast-private descriptors (starting at bcast_cb_id).
                 program = ttnn.ProgramDescriptor(
                     kernels=unified_kernel.get_kernel_descriptors().kernels,
-                    cbs=[in_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor] + bcast_cb_descriptors,
+                    cbs=[in_cb_descriptor, gamma_cb_descriptor, out_cb_descriptor]
+                    + ([] if bcast_cb_descriptor is None else [bcast_cb_descriptor]),
                     semaphores=[],
                 )
                 bcast_config.append_writer_per_core_rt_args(coord, program, 0, bcast_worker_core)

@@ -14,6 +14,7 @@ void kernel_main() {
     using Broadcast = deepseek_b1_ops::Broadcast;
 
 #if defined(COMPILE_FOR_NCRISC)
+    uint32_t per_core_rta_arg_idx = 0;
     // Writer CTArgs
     using BcastCTArgs = Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
@@ -27,11 +28,16 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_num_chunks")>;
 
     // Writer runtime args
+    const uint32_t bcast_rta_num_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+    const uint32_t bcast_rta_offset = per_core_rta_arg_idx;
+    per_core_rta_arg_idx += bcast_rta_num_args;
     Broadcast::WriterArgs bcast_args{
         get_common_arg_val<uint32_t>(0),                                     // tensor_address0
         get_common_arg_val<uint32_t>(1),                                     // my_noc_x
         get_common_arg_val<uint32_t>(2),                                     // my_noc_y
         {get_common_arg_val<uint32_t>(3), get_common_arg_val<uint32_t>(4)},  // sem_bank_addrs[0..1]
+        bcast_rta_offset,                                                    // per_core_rta_arg_idx_offset
+        bcast_rta_num_args,                                                  // per_core_rta_num_args
     };
 
 #elif defined(COMPILE_FOR_BRISC)

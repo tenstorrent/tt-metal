@@ -20,12 +20,10 @@ from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 
 
 @pytest.mark.parametrize(
@@ -36,8 +34,6 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize(
@@ -64,8 +60,6 @@ def test_pre_sdpa(
     sender_col,
     epsilon,
     use_fp32,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
     position_id,
     noc_mode,
@@ -308,54 +302,30 @@ def test_pre_sdpa(
     # Create TTNN tensors
     # ========================================================================
 
-    # Shard spec: single core for input, gamma (on mcast/gather core)
-    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
-        shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    # Create mesh tensors for input and intermediate (CCL broadcast destination)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    device_tensors = []
-    intermediate_tensors = []
-    for row in range(mesh_rows):
-        for col in range(mesh_cols):
-            if skip_ccl:
-                # Single-device mode: all devices have the input
-                device_tensors.append(torch_input)  # (1, 7168)
-            elif row == sender_row and col == sender_col:
-                # Only sender device has actual input data
-                device_tensors.append(torch_input)  # (1, 7168)
-            else:
-                # All other devices start with zeros
-                device_tensors.append(torch.zeros_like(torch_input))  # (1, 7168)
-            intermediate_tensors.append(torch.zeros_like(torch_input))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
-
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        output_shape=shape,
+        input_shard_shape=shape,
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        num_links=1,
+        input_tensor_torch=torch_input,
+        create_output_tensor_mesh=True,
+        create_semaphores=False,
+        skip_ccl=skip_ccl,
         tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+        output_mesh_mapper="shard_dim0",
     )
-
-    intermediate_tensor_mesh = ttnn.from_torch(
-        intermediate_mesh_tensor_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
     # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
@@ -609,8 +579,6 @@ def test_pre_sdpa(
             sdpa_out_interm_buffer,
             sender_coord,
             semaphores=semaphores,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,

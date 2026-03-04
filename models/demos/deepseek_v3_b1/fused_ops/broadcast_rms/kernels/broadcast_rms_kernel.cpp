@@ -24,6 +24,7 @@ void kernel_main() {
 // NCRISC: Broadcast writer
 // -----------------------
 #if defined(COMPILE_FOR_NCRISC)
+    uint32_t per_core_rta_arg_idx = 0;
 #if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
@@ -36,12 +37,17 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
         get_named_compile_time_arg_val("bcast_num_chunks")>;
 
+    const uint32_t bcast_rta_num_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+    const uint32_t bcast_rta_offset = per_core_rta_arg_idx;
+    per_core_rta_arg_idx += bcast_rta_num_args;
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{
         get_common_arg_val<uint32_t>(0),    // tensor_address0
         get_common_arg_val<uint32_t>(1),    // my_noc_x
         get_common_arg_val<uint32_t>(2),    // my_noc_y
         {get_common_arg_val<uint32_t>(3),   // sem_bank_addrs[0]
          get_common_arg_val<uint32_t>(4)},  // sem_bank_addrs[1]
+        bcast_rta_offset,                   // per_core_rta_arg_idx_offset
+        bcast_rta_num_args,                 // per_core_rta_num_args
     };
 #endif
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;

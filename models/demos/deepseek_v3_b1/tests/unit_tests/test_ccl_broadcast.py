@@ -132,6 +132,7 @@ def test_ccl_broadcast(
         output_tensor=output_tensor,
         sender_coord=sender_coord,
         semaphores=semaphores,
+        bcast_cb_id=0,
     )
     assert (
         bcast_config.chunk_size_bytes,

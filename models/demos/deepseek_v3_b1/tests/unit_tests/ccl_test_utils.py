@@ -40,9 +40,12 @@ def build_broadcast_test_inputs(
     input_tensor_torch=None,
     create_output_tensor_mesh=True,
     create_semaphores=True,
+    skip_ccl=False,
+    tile=None,
+    output_mesh_mapper="replicate",
 ):
     """
-    Build common broadcast test inputs with root-only source placement.
+    Build common broadcast test inputs with configurable placement/mapping.
 
     Returns:
         BroadcastTestInputs with sender torch tensor, input/output mesh tensors, and semaphores.
@@ -53,6 +56,14 @@ def build_broadcast_test_inputs(
     if not isinstance(bcast_core, ttnn.CoreCoord):
         raise TypeError(f"bcast_core must be ttnn.CoreCoord, got {type(bcast_core)}")
 
+    if tile is None:
+        tile = ttnn.Tile((1, 32))
+    if not hasattr(tile, "tile_shape"):
+        raise TypeError(f"tile must be a ttnn.Tile, got {type(tile)}")
+
+    if output_mesh_mapper not in ("replicate", "shard_dim0"):
+        raise ValueError(f"Unsupported output_mesh_mapper: {output_mesh_mapper}")
+
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(bcast_core, bcast_core)})
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
@@ -60,7 +71,9 @@ def build_broadcast_test_inputs(
     device_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
-            if row == sender_row and col == sender_col:
+            if skip_ccl:
+                device_tensors.append(input_tensor_torch)
+            elif row == sender_row and col == sender_col:
                 device_tensors.append(input_tensor_torch)
             else:
                 device_tensors.append(torch.zeros_like(input_tensor_torch))
@@ -69,21 +82,29 @@ def build_broadcast_test_inputs(
         torch.cat(device_tensors, dim=0),
         device=mesh_device,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
+        tile=tile,
         dtype=input_dtype,
         memory_config=input_mem_config,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
     output_tensor_mesh = None
     if create_output_tensor_mesh:
+        if output_mesh_mapper == "replicate":
+            output_tensor_torch = torch.zeros(output_shape, dtype=torch.bfloat16)
+            output_mesh_mapper_obj = ttnn.ReplicateTensorToMesh(mesh_device)
+        else:
+            output_tensor_torch = torch.cat(
+                [torch.zeros_like(input_tensor_torch) for _ in range(mesh_rows * mesh_cols)], dim=0
+            )
+            output_mesh_mapper_obj = ttnn.ShardTensorToMesh(mesh_device, dim=0)
         output_tensor_mesh = ttnn.from_torch(
-            torch.zeros(output_shape, dtype=torch.bfloat16),
+            output_tensor_torch,
             device=mesh_device,
             layout=layout,
-            tile=ttnn.Tile((1, 32)),
+            tile=tile,
             dtype=input_dtype,
             memory_config=input_mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=output_mesh_mapper_obj,
         )
 
     semaphores = []
