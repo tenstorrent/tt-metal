@@ -85,6 +85,7 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--max_num_seqs 1",
               "structured-output": true,
+              "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
             },
@@ -101,6 +102,7 @@ jobs:
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\"}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
               "structured-output": true,
+              "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
             },
@@ -475,6 +477,12 @@ jobs:
             ADDITIONAL_BENCHMARK_ARGS=()
           fi
 
+          if [ -n "${{ matrix.test-group.additional-structured-output-args }}" ]; then
+            ADDITIONAL_STRUCTURED_OUTPUT_ARGS=(${{ matrix.test-group.additional-structured-output-args }})
+          else
+            ADDITIONAL_STRUCTURED_OUTPUT_ARGS=()
+          fi
+
           python3 vllm/benchmarks/benchmark_serving_structured_output.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
@@ -485,6 +493,7 @@ jobs:
             --save-result \
             --result-filename output/vllm_result_structured.json \
             "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
+            "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}" \
             2>&1 | tee ${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}
 
           # The benchmark returns zero even if responses are not correct.
