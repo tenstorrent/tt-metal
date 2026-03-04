@@ -21,8 +21,6 @@
 namespace tt::tt_metal::experimental::blitz {
 
 using ::tt::tt_metal::distributed::MeshCoordinate;
-using ::tt::tt_metal::distributed::MeshDevice;
-namespace multihost = ::tt::tt_metal::distributed::multihost;
 
 namespace {
 
