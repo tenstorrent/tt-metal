@@ -163,6 +163,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_MAX_RUNTIME_ENTRIES,            // Max runtime entries to keep in memory (default: 1000)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -1194,6 +1195,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (strcmp(value, "1") == 0) {
                 this->inspector_settings.log_runtime_entries = true;
             }
+            break;
+
+        // TT_METAL_INSPECTOR_MAX_RUNTIME_ENTRIES
+        // Maximum number of runtime entries to keep in the inspector deque.
+        // Higher values use more memory but retain more operation history.
+        // Default: 1000
+        // Usage: export TT_METAL_INSPECTOR_MAX_RUNTIME_ENTRIES=5000
+        case EnvVarID::TT_METAL_INSPECTOR_MAX_RUNTIME_ENTRIES:
+            this->inspector_settings.max_runtime_entries = std::stoul(value);
             break;
 
         // ========================================

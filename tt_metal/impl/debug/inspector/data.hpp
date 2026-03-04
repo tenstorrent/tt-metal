@@ -61,7 +61,6 @@ private:
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
     std::deque<inspector::MeshWorkloadRuntimeEntry> runtime_entries;
-    static constexpr size_t MAX_RUNTIME_ENTRIES = 10000;
     // store dispatch core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_core_info;
     // store dispatch_s core info by virtual core

@@ -5,7 +5,9 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 #include "impl/program/program_impl.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
@@ -61,7 +63,7 @@ public:
         const distributed::MeshWorkloadImpl* mesh_workload,
         uint64_t runtime_id,
         std::string_view operation_name,
-        std::string_view operation_parameters) noexcept;
+        std::vector<TensorSpec> tensor_specs) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(

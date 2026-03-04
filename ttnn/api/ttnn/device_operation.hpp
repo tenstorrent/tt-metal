@@ -193,30 +193,16 @@ void enqueue_mesh_workload(
     // Generate runtime_id (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
-    // Inspector: emit debug entry with stringified tensor params
+    // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
-        constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
-        fmt::memory_buffer tensor_args_buffer;
-        tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);
-
-        int index = 0;
+        std::vector<TensorSpec> spec_copies;
         tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& t) {
-                if (index > 0) {
-                    fmt::format_to(std::back_inserter(tensor_args_buffer), ", ");
-                }
-                fmt::format_to(std::back_inserter(tensor_args_buffer), "[{}]: {}", index, t);
-                index++;
-            },
-            tensor_args);
+            [&](const Tensor& t) { spec_copies.push_back(t.tensor_spec()); }, tensor_args);
 
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
-            workload,
-            runtime_id,
-            operation_name,
-            std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
+            workload, runtime_id, operation_name, std::move(spec_copies));
     }
 
     // Set runtime_id on all programs (for dispatcher, always)

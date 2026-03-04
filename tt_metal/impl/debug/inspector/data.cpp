@@ -15,8 +15,22 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include <fmt/format.h>
+
 namespace tt::tt_metal::inspector {
 
+std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
+    constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
+    fmt::memory_buffer buf;
+    buf.reserve(TENSOR_ARGS_BUFFER_SIZE);
+    for (size_t i = 0; i < tensor_specs.size(); ++i) {
+        if (i > 0) {
+            fmt::format_to(std::back_inserter(buf), ", ");
+        }
+        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, tensor_specs[i]);
+    }
+    return std::string(buf.data(), buf.size());
+}
 
 Data::Data()
     : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
@@ -171,7 +185,7 @@ void Data::rpc_get_mesh_workload_runtime_entries(
         entry.setWorkloadId(runtime_entries[i].workload_id);
         entry.setRuntimeId(runtime_entries[i].runtime_id);
         entry.setOperationName(runtime_entries[i].operation_name);
-        entry.setOperationParameters(runtime_entries[i].operation_parameters);
+        entry.setOperationParameters(stringify_tensor_specs(runtime_entries[i].tensor_specs));
     }
 }
 

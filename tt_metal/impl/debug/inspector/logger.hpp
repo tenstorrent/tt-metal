@@ -61,11 +61,7 @@ public:
     void log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
     void log_mesh_workload_set_program_binary_status(
         const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-    void log_runtime_entry(
-        uint64_t workload_id,
-        uint64_t runtime_id,
-        std::string_view operation_name,
-        std::string_view operation_parameters) noexcept;
+    void log_runtime_entry(const MeshWorkloadRuntimeEntry& entry) noexcept;
 };
 
 }  // namespace tt::tt_metal::inspector

@@ -349,7 +349,7 @@ void Inspector::emit_debug_entry(
     const distributed::MeshWorkloadImpl* mesh_workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::string_view operation_parameters) noexcept {
+    std::vector<TensorSpec> tensor_specs) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -358,14 +358,15 @@ void Inspector::emit_debug_entry(
         const auto workload_id = mesh_workload->get_id();
 
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
-        data->runtime_entries.push_back(
-            {workload_id, runtime_id, std::string(operation_name), std::string(operation_parameters)});
-        if (data->runtime_entries.size() > inspector::Data::MAX_RUNTIME_ENTRIES) {
+        data->runtime_entries.emplace_back(
+            workload_id, runtime_id, std::string(operation_name), std::move(tensor_specs));
+        const auto max_entries = MetalContext::instance().rtoptions().get_inspector_max_runtime_entries();
+        while (data->runtime_entries.size() > max_entries) {
             data->runtime_entries.pop_front();
         }
 
         if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
-            data->logger.log_runtime_entry(workload_id, runtime_id, operation_name, operation_parameters);
+            data->logger.log_runtime_entry(data->runtime_entries.back());
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to emit debug entry: {}", e.what());
@@ -504,8 +505,8 @@ void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
-    std::string_view operation_parameters) {
-    tt::tt_metal::Inspector::emit_debug_entry(&workload.impl(), runtime_id, operation_name, operation_parameters);
+    std::vector<TensorSpec> tensor_specs) {
+    tt::tt_metal::Inspector::emit_debug_entry(&workload.impl(), runtime_id, operation_name, std::move(tensor_specs));
 }
 
 }  // namespace experimental::inspector
