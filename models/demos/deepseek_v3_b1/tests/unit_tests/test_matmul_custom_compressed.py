@@ -48,6 +48,11 @@ def _run_matmul_custom_compressed(
     logger.info(f"Custom compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
 
+    # Verify all requested formats are used
+    counts = ct.tile_counts
+    for fmt in formats:
+        assert counts.get(fmt, 0) > 0, f"Expected tiles with format {fmt}, got counts: {counts}"
+
     # Golden: A @ B (original float)
     torch_expected = (torch_a.float() @ torch_b).bfloat16()
 
