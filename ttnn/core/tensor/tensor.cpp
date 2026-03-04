@@ -591,11 +591,7 @@ distributed::MeshDevice* Tensor::device() const {
     return nullptr;
 }
 
-const distributed::MeshBuffer& Tensor::mesh_buffer() const { return *mesh_buffer_leak_ownership(); }
-
-std::shared_ptr<distributed::MeshBuffer> Tensor::mesh_buffer_leak_ownership() const {
-    return device_storage().get_mesh_buffer();
-}
+const distributed::MeshBuffer& Tensor::mesh_buffer() const { return *device_storage().get_mesh_buffer(); }
 
 const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
 
