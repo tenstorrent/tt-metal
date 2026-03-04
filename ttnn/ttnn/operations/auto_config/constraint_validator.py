@@ -255,3 +255,17 @@ def validate_candidate(
         return False, reason
 
     return True, "valid"
+
+# Fix 3: DRAM-sharded configs require sharded input tensors
+def _check_dram_sharded_input(config, input_tensor_a=None):
+    """Reject DRAM-sharded configs when input is not sharded."""
+    config_name = type(config).__name__
+    if 'DRAMSharded' in config_name:
+        if input_tensor_a is not None and hasattr(input_tensor_a, 'is_sharded'):
+            if not input_tensor_a.is_sharded():
+                return False
+        else:
+            # Without tensor info, reject DRAM-sharded to be safe
+            return False
+    return True
+
