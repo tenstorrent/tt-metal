@@ -292,12 +292,13 @@ def run_test_forward_pass_mla2d(
     if perf_mode:
         if mode == "prefill":
             tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+            tt_output.deallocate()
         else:
             for _ in range(20):
                 tt_output = MLA2D.forward_decode(
                     tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
                 )
-        tt_output.deallocate()
+                tt_output.deallocate()
     else:
         if mode == "prefill":
             tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
