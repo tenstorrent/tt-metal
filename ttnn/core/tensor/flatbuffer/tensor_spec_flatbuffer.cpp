@@ -59,6 +59,9 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
 
 namespace {
 
+using ttnn::from_flatbuffer;
+using ttnn::to_flatbuffer;
+
 tt::tt_metal::BufferType from_flatbuffer(flatbuffer::BufferType type) {
     switch (type) {
         case flatbuffer::BufferType::DRAM: return tt::tt_metal::BufferType::DRAM;
