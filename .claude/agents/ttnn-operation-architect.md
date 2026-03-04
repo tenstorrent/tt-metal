@@ -160,7 +160,7 @@ Valid region rules:
 
 #### Step 2.5: Determine TDD Stages
 
-Apply two complementary heuristics:
+Apply three complementary heuristics:
 
 **Heuristic 1 (H1): Kernel Complexity Ordering** — which kernel to finalize first.
 - Rank kernels by complexity (operation count, dependencies, coordination)
@@ -169,6 +169,12 @@ Apply two complementary heuristics:
 **Heuristic 2 (H2): Semantic Goal Progression** — how to break a kernel into stages.
 - Identify testable intermediate results (functional milestones)
 - Each stage's output must be independently verifiable against PyTorch from the original input
+
+**Heuristic 3 (H3): Phase Count Cap** — when to split a stage.
+- If a stage would add **more than 3 new compute phases**, split it into sub-stages at the nearest testable boundary
+- A "testable boundary" is any intermediate result expressible as a PyTorch expression from the original input (e.g., variance alone: `x.var(dim=-1, keepdim=True)`)
+- Fewer phases per stage means faster debugging when a stage fails — the kernel writer has fewer places to look
+- Example: "variance_normalize" (5 phases) → "variance" (square + reduce + add_eps → verifiable as `x.var(…) + eps`) + "normalize" (rsqrt + multiply → verifiable as full `layer_norm`)
 
 **Common pattern**: Stage 1 establishes data pipeline (reader+writer at full, compute at minimum viable / identity). Subsequent stages incrementally build compute.
 
@@ -404,6 +410,7 @@ compute_kernel_lib::{helper_name}<{template_params}>(
 - Repeat same information in multiple sections
 - Show what helpers encapsulate (kernel-writer knows)
 - Include design exploration artifacts or internal reasoning
+- Include revision trails ("REVISED APPROACH", "Initially thought...", crossed-out alternatives) — present only the final correct design
 - Create tables where every row says the same thing
 - Mention agent names in the document
 
@@ -437,6 +444,8 @@ Before finishing, verify:
 - [ ] All TDD stages registered in `.tdd_state.json`
 - [ ] Helper headers glob-checked for existence
 - [ ] **Hybrid**: Component sources table complete, CB ID conflicts resolved
+- [ ] No revision trails remain — document reads as a clean final design, not a design journal
+
 
 ---
 

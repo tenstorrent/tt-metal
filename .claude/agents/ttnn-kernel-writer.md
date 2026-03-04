@@ -224,6 +224,8 @@ When implementing compute phases, read the relevant helper in `ttnn/cpp/ttnn/ker
 
 The code is self-documenting with Doxygen comments and @example blocks.
 
+**Include path works from ANY kernel location**: The full path `#include "ttnn/cpp/ttnn/kernel_lib/{helper}.hpp"` resolves from generic_op kernels at `ttnn/ttnn/operations/*/kernels/` — the same way it works for C++ factory kernels under `ttnn/cpp/`. This is verified (e.g., `reduce_helpers_dataflow.hpp` is already used this way). If the design document specifies helpers, USE THEM — do not fall back to raw APIs.
+
 **CRITICAL**: Helpers are self-contained. They handle internally:
 - CB operations: cb_wait_front, cb_pop_front, cb_reserve_back, cb_push_back
 - DST management: tile_regs_acquire, tile_regs_commit, tile_regs_wait, tile_regs_release
