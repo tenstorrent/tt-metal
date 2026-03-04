@@ -40,7 +40,6 @@ class EltwiseAddCompressed:
 
         # CB1: backed by compressed data tensor, override format to bfp8
         tile_32x32 = ttnn.Tile([32, 32])
-        bfp8_page_size = tile_32x32.get_tile_size(ttnn.bfloat8_b)  # 1088
 
         cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(
             cb_in1,

@@ -21,7 +21,10 @@ namespace nb = nanobind;
 // Pack float32 data into BFP tiles, return raw uint32 packed data as numpy array.
 template <typename PackFn>
 static nb::ndarray<nb::numpy, uint32_t, nb::ndim<1>> pack_impl(
-    PackFn pack_fn, nb::ndarray<nb::numpy, const float, nb::ndim<1>> input, bool row_major_input, bool is_exp_a) {
+    const PackFn& pack_fn,
+    nb::ndarray<nb::numpy, const float, nb::ndim<1>> input,
+    bool row_major_input,
+    bool is_exp_a) {
     tt::stl::Span<const float> data_span(input.data(), input.size());
     auto packed = pack_fn(data_span, row_major_input, is_exp_a, std::nullopt);
 
@@ -36,7 +39,7 @@ static nb::ndarray<nb::numpy, uint32_t, nb::ndim<1>> pack_impl(
 // Unpack raw uint32 BFP tile data back to float32 numpy array.
 template <typename UnpackFn>
 static nb::ndarray<nb::numpy, float, nb::ndim<1>> unpack_impl(
-    UnpackFn unpack_fn,
+    const UnpackFn& unpack_fn,
     nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input,
     bool row_major_output,
     bool is_exp_a) {
