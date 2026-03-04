@@ -72,10 +72,10 @@ inline void llk_math_reduce_block_max_row_reinit_minimal() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <uint32_t block_ct_dim>
 inline void llk_math_reduce_block_max_row_reinit_with_mop() {
-    reduce_max_row_configure_addrmod_reinit();
+    reduce_max_row_configure_addrmod();
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim, is_fp32_dest_acc_en>();
+    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>();
 }
