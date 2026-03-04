@@ -20,7 +20,7 @@ struct AdamWCompositeConfig {
     bool amsgrad{false};
 
     // flag to enable kahan summation to reduce floating point errors
-    bool use_kahan_summation{false};
+    bool kahan_summation{false};
 };
 
 class MorehAdamW : public OptimizerBase {

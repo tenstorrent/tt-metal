@@ -250,7 +250,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
 | `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
-| `use_kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
+| `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 
 ### SGD Parameters
 

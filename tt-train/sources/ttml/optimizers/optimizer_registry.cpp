@@ -46,7 +46,7 @@ OptimizerRegistry::OptimizerRegistry() {
                 .epsilon = config["epsilon"].as<float>(1e-8F),
                 .weight_decay = config["weight_decay"].as<float>(0.01F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
-                .use_kahan_summation = config["use_kahan_summation"].as<bool>(false)});
+                .kahan_summation = config["kahan_summation"].as<bool>(false)});
     });
 
     register_optimizer("AdamWComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
@@ -59,7 +59,7 @@ OptimizerRegistry::OptimizerRegistry() {
                 .epsilon = config["epsilon"].as<float>(1e-8F),
                 .weight_decay = config["weight_decay"].as<float>(0.01F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
-                .use_kahan_summation = config["use_kahan_summation"].as<bool>(false)});
+                .kahan_summation = config["kahan_summation"].as<bool>(false)});
     });
 
     register_optimizer("AdamWFullPrecision", [](const YAML::Node& config, serialization::NamedParameters params) {

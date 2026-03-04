@@ -26,7 +26,7 @@ namespace ttml::optimizers {
 
 MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWCompositeConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    if (m_config.use_kahan_summation) {
+    if (m_config.kahan_summation) {
         throw std::runtime_error("MorehAdamW: Kahan summation is not supported. Use default AdamWComposite instead.");
     }
 
@@ -149,7 +149,7 @@ AdamWComposite::AdamWComposite(serialization::NamedParameters parameters, const 
                         core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
                         /* requires_grad */ false));
             }
-            if (m_config.use_kahan_summation) {
+            if (m_config.kahan_summation) {
                 m_kahan_compensation.emplace(
                     key,
                     autograd::create_tensor(
@@ -227,7 +227,7 @@ void AdamWComposite::step() {
         // weights -= lr * first_moment_hat / (sqrt(denom) + epsilon)
         auto update_tensor = ttnn_fixed::divide(ttnn::multiply(first_moment_hat, -m_config.lr), denom_tensor);
 
-        if (!m_config.use_kahan_summation) {
+        if (!m_config.kahan_summation) {
             tensor_ptr->set_value(ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), update_tensor));
         } else {
             auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);

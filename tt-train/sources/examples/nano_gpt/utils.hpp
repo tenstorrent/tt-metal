@@ -151,7 +151,7 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
         ss << "_bs_" << batch_size;
         ss << "_lr_" << config.optimizer.lr;
         ss << "_wd_" << config.optimizer.weight_decay;
-        if (config.optimizer.use_kahan_summation) {
+        if (config.optimizer.kahan_summation) {
             ss << "_kahan";
         }
 

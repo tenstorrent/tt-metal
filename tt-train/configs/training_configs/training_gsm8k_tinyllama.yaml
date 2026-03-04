@@ -13,7 +13,7 @@ training_config:
     epsilon: 1.0e-8
     weight_decay: 0.01
     amsgrad: false
-    use_kahan_summation: false
+    kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   gradient_accumulation_steps: 1

@@ -13,7 +13,7 @@ training_config:
     epsilon: 1.0e-8
     weight_decay: 0.01
     amsgrad: false
-    use_kahan_summation: false
+    kahan_summation: false
   gradient_accumulation_steps: 1
   tokenizer_type: bpe
   tokenizer_path: "data/gpt2-tokenizer.json"
