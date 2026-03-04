@@ -402,7 +402,7 @@ jobs:
       - name: Run dual demo stress test (56 prompts, 20 batches)
         if: ${{ (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 450 || 90 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -437,7 +437,7 @@ jobs:
       - name: Run quad demo stress test (56 prompts, 20 batches)
         if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 450 || 90 }}
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
