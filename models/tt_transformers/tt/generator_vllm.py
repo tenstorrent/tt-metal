@@ -414,9 +414,7 @@ class Gemma3ForCausalLM(Generator):
         from models.demos.multimodal.gemma3.demo.text_demo import create_tt_model
 
         optimizations = (
-            DecodersPrecision.from_string(optimizations)
-            if optimizations is not None
-            else DecodersPrecision.performance
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
         )
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
@@ -435,6 +433,7 @@ class Gemma3ForCausalLM(Generator):
                 dtype=ttnn.bfloat8_b,
                 state_dict=state_dict,
                 num_layers=n_layers,
+                use_paged_kv_cache=True,
             )
             model_args.append(model_args_i)
             model.append(model_i)
