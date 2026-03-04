@@ -74,7 +74,7 @@ The rest of this document provides implementation details for the various compon
 - [Public API](#public-api)
   - [`Sequential`](#sequential) | [`Parallel`](#parallel)
 - [Glossary](#glossary)
-  - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment)
+  - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment) | [Barrier Scope vs. Core Group vs. Arrive/Release Sets](#barrier-scope-vs-core-group-vs-arriverelease-sets)
 - [Opt-In Requirements](#opt-in-requirements)
 - [Representing Fused Op Structure](#representing-fused-op-structure)
   - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Narrow→Wide Topology](#narrowwide-topology-and-no-op-phases) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
@@ -166,25 +166,7 @@ diverges and cannot rejoin. Place trailing items inside each branch instead.
 ### Node (`OpNode`)
 
 An `OpNode` holds a single `OpDescriptor` and an optional list of children.
-The node's core range is derived from its op's `ProgramDescriptor` kernels
-(no separate `core_range` field). Every node in the tree -- root, internal,
-and leaf -- has exactly one op.
-
-### Root
-
-The root is the topmost node of the tree. It is a regular `OpNode` like any
-other -- no special treatment. The root's op runs first, before any children.
-
-### Leaf
-
-A leaf is a terminal node with no children. Leaves are the endpoints of the
-tree. Each root-to-leaf path produces one fused kernel binary.
-
-### Internal Node
-
-An internal node has one or more children. Its op runs before its children's
-ops. When an internal node has multiple children, those children run in
-parallel on disjoint core subsets.
+The node's core range is derived from its op's `ProgramDescriptor` kernels. Every node in the tree -- root, internal, and leaf -- has exactly one op. `OpNode` encodes dependencies between ops. Parent nodes run to completion before child nodes. Sibling nodes (nodes at the same level) run in parallel on disjoint cores. Each root-to-leaf path through the tree produces one set of fused kernels (reader, writer, compute).
 
 ### Segment
 
@@ -197,6 +179,57 @@ For example, in a tree where the root and one intermediate node share the same
 core range (0-7), but the leaf uses cores 0-3, the path has two segments:
 segment 0 covers cores 0-7 (root + intermediate phases), segment 1 covers
 cores 0-3 (leaf phase).
+
+### Barrier Scope vs. Core Group vs. Arrive/Release Sets
+
+These three concepts are orthogonal but interact at barrier transitions.
+Understanding the distinction prevents confusion about what determines
+synchronization behavior.
+
+**Core Group** — a code generation concept.  Cores with identical phase
+sequences (same ops in the same order, including `_NOOP_OP` padding) are
+compiled into the same kernel binary.  A group answers: *"what code runs on
+these cores?"*  Groups exist because fused kernels are compiled once per
+unique phase sequence.
+
+**Barrier Scope** — a topology concept.  At each phase transition, the barrier
+scope is the set of *all* cores that participate in the synchronization: every
+core that either signals completion or waits for the signal.  It is computed
+from the tree structure as `node_coords ∪ desc_coords` — the current node's
+cores plus all descendant cores.  A single barrier scope often spans multiple
+groups.  The scope answers: *"who syncs here?"*
+
+**Arrive Set / Release Set** — per-transition subsets of the barrier scope.
+The *arrive set* is the cores that completed real work and signal "done"
+(`SyncMode::Full`).  The *release set* is all cores in the barrier scope that
+wait for the signal — including noop cores that had no real work
+(`SyncMode::WaitOnly`).  The arrive set is always a subset of the release set.
+These answer: *"who signals?"* and *"who waits?"*
+
+**How they interact:** At a given barrier transition, multiple groups may share
+the same barrier scope (same GlobalSemaphore).  Within each group, every core
+either arrives or waits, determined by whether its just-completed phase was
+real work or `_NOOP_OP`.  The arrive threshold equals `|arrive set|`, so only
+cores that did real work count toward the release trigger.
+
+**Example:**
+
+```
+Root [0-7] → Left [0-3] → LL [0-1] / LR [2-3]
+           → Right [4-7]
+```
+
+At the root→branches transition:
+
+| Concept | Value |
+|---------|-------|
+| Barrier scope | all 8 cores (root ∪ descendants) |
+| Arrive set | 8 cores (all did real work in root) |
+| Release set | 8 cores (all need to proceed) |
+| Core groups | 3 groups: {0-1}, {2-3}, {4-7} (different phase sequences) |
+
+All three groups share the same GlobalSemaphore at this transition, but each
+group's binary has its own dispatch table entry calling `sync()` on it.
 
 ## Opt-In Requirements
 
@@ -414,15 +447,17 @@ is recorded instead:
 
 ```python
 def _walk(node):
-    desc_coords = self._all_descendant_coords(node)  # ALL descendant cores (not just leaves)
-    scope = _coords_to_core_range_set(desc_coords)   # barrier scope for this transition
-    node_coords = _core_range_set_to_coords(...)      # this node's kernel cores
+    desc_coords = self._all_descendant_coords(node)       # ALL descendant cores
+    barrier_scope = desc_coords | node_coords              # everyone who syncs
+    release_scope = _coords_to_core_range_set(barrier_scope)
+    node_coords = _core_range_set_to_coords(...)           # this node's kernel cores
+    arrive_scope = _coords_to_core_range_set(node_coords)  # cores that did real work
 
     for coord in node_coords:
-        per_core[coord].append((node.op, scope))           # real phase
+        per_core[coord].append((node.op, release_scope, arrive_scope))      # real phase
 
     for coord in desc_coords - node_coords:
-        per_core[coord].append((_NOOP_OP, scope))          # no-op phase
+        per_core[coord].append((_NOOP_OP, release_scope, arrive_scope))     # no-op phase
 ```
 
 **Why all descendants, not just leaves?** The barrier scope after a node must
@@ -434,10 +469,12 @@ cores that aren't in slice's range). The barrier must cover all 10 so the
 coordinator waits for all of them before releasing.
 
 **Early-exit cores.** Cores in a node's range but not in any descendant's
-range have only one phase and no barrier. They run their op and exit. This is
-safe because: (a) the per-core dispatcher ensures local phase ordering, and
-(b) there is no cross-core data dependency from exiting cores to continuing
-cores in later phases.
+range run one real phase, then exit.  These cores are still part of the
+barrier scope (`node_coords ∪ desc_coords`) so they can arrive to signal
+"phase done" before exiting.  If the node has descendants on other cores,
+the early-exit cores get a `_NOOP_OP` exit phase so they have a barrier
+transition to arrive at — they arrive (`SyncMode::Full`), receive the
+release, run the noop (which compiles to nothing), and return.
 
 **Core ranges come from factories, not users.** `_get_node_core_range()`
 reads `kernel.core_ranges` from the `ProgramDescriptor` — these are the
@@ -457,6 +494,32 @@ is computed from these factory-chosen ranges.
 Cores 0-1 form one group (phase sequence = `[Parent, Child]`). Cores 2-3 form
 another group (phase sequence = `[_NOOP_OP, Child]`). Both groups have 2 phases
 and 1 barrier transition, so barrier counts align.
+
+**Example — disjoint**: Parent on cores 0-1, children on cores 2-3 and 4-5
+(no overlap):
+
+| Core | Phase 0 | Barrier | Phase 1 |
+|------|---------|---------|---------|
+| 0 | Parent (real) | arrive (`Full`) | `_NOOP_OP` (exit) |
+| 1 | Parent (real) | arrive (`Full`) | `_NOOP_OP` (exit) |
+| 2 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child A (real) |
+| 3 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child A (real) |
+| 4 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child B (real) |
+| 5 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child B (real) |
+
+Cores 0-1 arrive (threshold = 2), core 0 unicasts release to all 6 cores.
+Cores 0-1 run the exit noop and return.  Cores 2-5 proceed to their real
+child ops.  The barrier scope is all 6 cores (`node_coords ∪ desc_coords`).
+
+**Example — partial disjoint**: Parent on cores 0-1, child on cores 1-3.
+Core 0 is an early-exit core (in parent but not in any descendant):
+
+| Core | Phase 0 | Barrier | Phase 1 |
+|------|---------|---------|---------|
+| 0 | Parent (real) | arrive (`Full`) | `_NOOP_OP` (exit) |
+| 1 | Parent (real) | arrive (`Full`) | Child (real) |
+| 2 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child (real) |
+| 3 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child (real) |
 
 **How no-op phases propagate through the stack:**
 
