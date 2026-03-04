@@ -14,6 +14,7 @@ table OverlappedView {
     tile_h:         uint32;
     tile_w:         uint32;
     byte_offset:    uint64;
+    total_size:     uint64;
 }
 
 table OverlappedTensors {
