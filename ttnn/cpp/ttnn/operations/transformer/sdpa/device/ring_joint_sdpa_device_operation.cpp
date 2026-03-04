@@ -244,10 +244,10 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     lse_shape[3] = 1;
     lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
     auto out_shape = input.logical_shape();
-    // head dim as v
+
+    // head dim as v head dim
     out_shape[3] = tensor_args.input_v.logical_shape()[3];
 
-    // Needs fixing
     return {
         .output = TensorSpec(
             out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),

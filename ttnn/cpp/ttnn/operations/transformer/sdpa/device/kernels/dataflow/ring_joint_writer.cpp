@@ -7,7 +7,6 @@
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
-#include "api/debug/dprint.h"
 
 template <typename ReaderType, typename TensorAccessorType>
 void read_prev_output_and_lse(

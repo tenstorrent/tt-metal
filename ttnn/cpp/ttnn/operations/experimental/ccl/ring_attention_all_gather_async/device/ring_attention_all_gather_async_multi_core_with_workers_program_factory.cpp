@@ -5,7 +5,6 @@
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -162,14 +161,6 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     /* All gather fusion */
     const bool fuse_op = fused_op_signaler.has_value();
-    log_info(tt::LogOp, "Ring attn input_tensors size: {}", input_tensor.size());
-    log_info(tt::LogOp, "Ring attn output_tensor size: {}", output_tensor.size());
-    for (int i = 0; i < input_tensor.size(); i++) {
-        log_info(tt::LogOp, "input_tensors at i = {} shape = {}", i, input_tensor[i].logical_shape());
-    }
-    for (int i = 0; i < output_tensor.size(); i++) {
-        log_info(tt::LogOp, "output_tensors at i = {} shape = {}", i, output_tensor[i].logical_shape());
-    }
 
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
@@ -256,7 +247,6 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
-    /// needs fixing
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;
@@ -407,10 +397,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Kernel Runtime Args
     uint32_t reader_sender_rt_offset = 0;
     uint32_t writer_sender_rt_offset = 0;
-    // log_info(tt::LogOp, "Input tensor num pages: {}", input_tensor_num_pages);
     for (uint32_t link = 0; link < num_links; link++) {
         // Set Sender Reader runtime args
-        // Needs fixing for MLA take a look at this!
 
         std::vector<uint32_t> tensor_descriptor_args;
         for (uint32_t i = 0; i < num_inputs; i++) {
@@ -440,14 +428,6 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
             tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
         }
-
-        // log_info(tt::LogOp, "Link: {} input_tile_id_start: {} input_tile_id_end: {}", link, input_tile_id_start,
-        // input_tile_id_end);
-
-        // const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-        // const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
-        // const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
-        // const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
 
         std::vector<uint32_t> reader_forward_rt_args = {
             dim,                        // dim to gather on

@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);

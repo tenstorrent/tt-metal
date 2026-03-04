@@ -127,9 +127,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.topology,
         args.all_gather_operation_attributes.cluster_axis);
 
-    log_info(tt::LogOp, "device index: {}", device_index);
-    log_info(tt::LogOp, "is_causal: {}", args.is_causal);
-    log_info(tt::LogOp, "is_balanced: {}", args.is_balanced);
+    log_debug(tt::LogOp, "device index: {}", device_index);
+    log_debug(tt::LogOp, "is_causal: {}", args.is_causal);
+    log_debug(tt::LogOp, "is_balanced: {}", args.is_balanced);
 
     auto scale = args.scale;
     if (not scale.has_value()) {
@@ -163,16 +163,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& v_shape = gathered_input_tensor_v.logical_shape();
-    log_info(tt::LogOp, "q_shape: {}", q_shape);
-    log_info(tt::LogOp, "k_shape (gathered): {}", k_shape);
-    log_info(tt::LogOp, "v_shape (gathered): {}", v_shape);
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
     const uint32_t padded_N = k_shape[2];
     const uint32_t vDH = v_shape[3];
     const uint32_t L = joint_q_shape[2];
 
-    // this is something regarding q
     const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
@@ -198,8 +194,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
 
     log_debug(tt::LogOp, "B: {}", B);
-    log_info(tt::LogOp, "NH: {}", NH);
-    log_info(tt::LogOp, "NHK: {}", NHK);
+    log_debug(tt::LogOp, "NH: {}", NH);
+    log_debug(tt::LogOp, "NHK: {}", NHK);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
     log_debug(tt::LogOp, "vDH: {}", vDH);
@@ -623,7 +619,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
-    // probably gonna need some help here :)
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
     uint32_t v_addr = input_tensor_v.buffer()->address();

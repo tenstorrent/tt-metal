@@ -4,6 +4,7 @@
 import math
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -231,7 +232,7 @@ class ttMLA:
             state_dict["o_proj.weight"].transpose(-2, -1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_mapper
         )
 
-        print(f"✓ Loaded {len(state_dict)} weights in MLA layer {self.layer_idx} to TT device")
+        logger.info(f"✓ Loaded {len(state_dict)} weights in MLA layer {self.layer_idx} to TT device")
 
     def _to_tt_tensor(
         self, tensor: torch.Tensor, dtype: ttnn.DataType, layout: ttnn.Layout, mesh_mapper: ttnn.TensorToMesh
