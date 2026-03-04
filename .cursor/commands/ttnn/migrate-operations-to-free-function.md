@@ -55,3 +55,11 @@ ttnn::bind_function<"operation">(mod, doc, ttnn::overload_t(&operation, args...)
   - Migrate the python nanobind wrappers for the new header API
 - Do not suggest to run the build command during migration, the developer will perform build manually and report any issues back.
 - ALWAYS Migrate operations in batch -- if the nanobind file contains more than one operation slated for migration, rewrite them all in one go, and then adjust other relevant files where the operation logic is defined.
+
+##
+
+- Do not use local lambdas for wrapping the functions. If the function signature cannot be used directly in the wrapper (due to span usage, multiple overloads, changed order of arguments in the actual lambda and function), consider two options:
+  - Use `nb::overload_cast` to select the correct overload -- in case the lambda does not change the order of arguments between the python bindings and the C++ API
+  - Define an overload wrapper in the anonymous namespace if the function needs to perform additional operations on the arguments, or it needs to change the order of arguments between the python and C++ code.
+
+Find all local lambdas used in nanobind wrapping that pass the arguments to the function, without modifying any of the values. Apply the conversion rules. If the call to `bind_function` already uses the overload cast, regular function pointer etc., do not change this -- only change the code if it uses the lambda.

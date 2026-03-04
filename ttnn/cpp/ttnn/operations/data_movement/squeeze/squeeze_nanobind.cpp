@@ -12,6 +12,22 @@
 
 namespace ttnn::operations::data_movement {
 
+namespace {
+ttnn::Tensor squeeze_wrapper(const ttnn::Tensor& input_tensor, const nb::object& dim) {
+    if (dim.is_none()) {  // None
+        return ttnn::squeeze(input_tensor);
+    }
+    if (nb::isinstance<nb::int_>(dim)) {  // int
+        return ttnn::squeeze(input_tensor, nb::cast<int>(dim));
+    }
+    if (nb::isinstance<nb::list>(dim)) {  // List[int]
+        auto dims = nb::cast<ttnn::SmallVector<int>>(dim);
+        return ttnn::squeeze(input_tensor, dims);
+    }
+    throw std::invalid_argument("dim must be an int, a list of ints, or None");
+}
+}  // namespace
+
 void bind_squeeze(nb::module_& mod) {
     ttnn::bind_function<"squeeze">(
         mod,
@@ -32,19 +48,7 @@ void bind_squeeze(nb::module_& mod) {
             * :attr:`dim`: Dim where we want to squeeze
         )doc",
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor, const nb::object& dim) -> ttnn::Tensor {
-                if (dim.is_none()) {  // None
-                    return ttnn::squeeze(input_tensor);
-                }
-                if (nb::isinstance<nb::int_>(dim)) {  // int
-                    return ttnn::squeeze(input_tensor, nb::cast<int>(dim));
-                }
-                if (nb::isinstance<nb::list>(dim)) {  // List[int]
-                    auto dims = nb::cast<ttnn::SmallVector<int>>(dim);
-                    return ttnn::squeeze(input_tensor, dims);
-                }
-                throw std::invalid_argument("dim must be an int, a list of ints, or None");
-            },
+            &squeeze_wrapper,
             nb::arg("input_tensor"),
             nb::arg("dim") = nb::none()  // Default value is None
             ));
