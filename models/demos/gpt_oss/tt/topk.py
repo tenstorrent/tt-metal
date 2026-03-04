@@ -86,20 +86,37 @@ class TopKRouter:
         self.use_fused_op = os.environ.get("TOPK_FUSED_OP", "0") == "1"
         self._fused_bias = None
         self._fused_output = None
+        # Keep the original unsharded bias for fused op initialization
+        # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
+        # needs the full [1, num_experts] bias replicated on every device)
+        # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
+        # each), so it requires exactly 128 experts.  Silently fall back to the
+        # non-fused path for any other expert count.
+        if self.use_fused_op and self.num_experts != 128:
+            self.use_fused_op = False
+        if self.use_fused_op:
+            self._bias_torch = state_dict["bias"].unsqueeze(0).to(torch.bfloat16)
+        else:
+            self._bias_torch = None
 
     def _init_fused_op(self, device, B):
         """Lazily initialize fused op tensors (bias broadcast + output buffer)."""
+        # On a MeshDevice, from_torch must explicitly replicate — without a
+        # mesh_mapper the default 2D-shard splits columns across devices,
+        # corrupting the bias and output buffers.
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
+
         if self._fused_bias is None:
-            # self.bias may be a multi-device tensor — extract one device's copy
-            device_tensors = ttnn.get_device_tensors(self.bias)
-            bias_torch = ttnn.to_torch(device_tensors[0])  # [1, num_experts]
-            bias_bcast = bias_torch.to(torch.bfloat16).expand(B, -1).contiguous()
+            # Use the original unsharded bias (self._bias_torch is [1, num_experts])
+            # and broadcast to [B, num_experts] so every tile row has the bias vector.
+            bias_bcast = self._bias_torch.expand(B, -1).contiguous()
             self._fused_bias = ttnn.from_torch(
                 bias_bcast,
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
         if self._fused_output is None:
             self._fused_output = ttnn.from_torch(
@@ -107,13 +124,19 @@ class TopKRouter:
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
 
     def __call__(self, hidden_states, use_throughput_experts):
+        # Compute actual token count from the tensor volume before reshape,
+        # since shape[0] after reshape returns the tile-padded dimension
+        # (e.g. 8 tokens padded to 32 in TILE_LAYOUT).
+        actual_tokens = hidden_states.volume() // self.hidden_dim
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
 
         # Fused op only supports decode mode (B=32, seq_len=1 → shape [32, hidden_dim])
-        if self.use_fused_op and hidden_states.shape[0] == 32:
+        if self.use_fused_op and actual_tokens == 32:
             return self._fused_call(hidden_states, use_throughput_experts)
 
         # Output to L1 instead of DRAM (saves DRAM write+read round-trip)

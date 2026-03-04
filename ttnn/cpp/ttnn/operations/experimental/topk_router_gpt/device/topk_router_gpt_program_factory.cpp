@@ -192,6 +192,14 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         auto final_out_cb = CircularBufferConfig(2 * TILE_SIZE_BF16, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
                                 .set_page_size(tt::CBIndex::c_16, TILE_SIZE_BF16);
         CreateCircularBuffer(program, single_core, final_out_cb);
+
+        // CB17: Scratch buffer for software untilize (ROW_MAJOR output path)
+        // 32 rows × 64 cols × 2 bytes = 4096 bytes = 2 tiles
+        if (attributes.untilize_output) {
+            auto rm_out_cb = CircularBufferConfig(2 * TILE_SIZE_BF16, {{tt::CBIndex::c_17, tt::DataFormat::Float16_b}})
+                                 .set_page_size(tt::CBIndex::c_17, TILE_SIZE_BF16);
+            CreateCircularBuffer(program, single_core, rm_out_cb);
+        }
     }
 
     // ----- Kernel definitions -----
@@ -272,22 +280,24 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         uint32_t worker_gather_slot = group_id;
 
         std::vector<uint32_t> dm1_args = {
-            is_sender ? 1u : 0u,                // 0
-            is_worker ? 1u : 0u,                // 1
-            is_collector ? 1u : 0u,             // 2
-            worker_physical.x,                  // 3
-            worker_physical.y,                  // 4
-            collector_physical.x,               // 5
-            collector_physical.y,               // 6
-            sem_partial_ready,                  // 7
-            sem_topk_ready,                     // 8
-            TILE_SIZE_BF16,                     // 9
-            output_buffer->address(),           // 10
-            attributes.k,                       // 11: topk_k
-            sender_slot,                        // 12: sender's slot in worker's CB2
-            worker_gather_slot,                 // 13: worker's slot in collector's CB8/CB9
-            n_tile_id,                          // 14
-            static_cast<uint32_t>(NUM_GROUPS),  // 15
+            is_sender ? 1u : 0u,                     // 0
+            is_worker ? 1u : 0u,                     // 1
+            is_collector ? 1u : 0u,                  // 2
+            worker_physical.x,                       // 3
+            worker_physical.y,                       // 4
+            collector_physical.x,                    // 5
+            collector_physical.y,                    // 6
+            sem_partial_ready,                       // 7
+            sem_topk_ready,                          // 8
+            TILE_SIZE_BF16,                          // 9
+            output_buffer->address(),                // 10
+            attributes.k,                            // 11: topk_k
+            sender_slot,                             // 12: sender's slot in worker's CB2
+            worker_gather_slot,                      // 13: worker's slot in collector's CB8/CB9
+            n_tile_id,                               // 14
+            static_cast<uint32_t>(NUM_GROUPS),       // 15
+            attributes.untilize_output ? 1u : 0u,    // 16: untilize output flag
+            attributes.untilize_output ? 128u : 0u,  // 17: RM page size (64 bf16 = 128 bytes)
         };
         SetRuntimeArgs(program, dm1_kernel_id, core, dm1_args);
 

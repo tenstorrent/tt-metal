@@ -70,6 +70,8 @@ void kernel_main() {
     uint32_t worker_gather_slot = get_arg_val<uint32_t>(13);
     uint32_t n_tile_id = get_arg_val<uint32_t>(14);
     uint32_t num_groups = get_arg_val<uint32_t>(15);
+    uint32_t untilize_out = get_arg_val<uint32_t>(16);
+    uint32_t rm_page_size = get_arg_val<uint32_t>(17);
 
     constexpr uint32_t CB_PARTIAL_RECV = tt::CBIndex::c_2;
     constexpr uint32_t CB_LOCAL_OUT = tt::CBIndex::c_3;
@@ -249,11 +251,41 @@ void kernel_main() {
     cb_wait_front(CB_FINAL_OUT, 2);
     uint32_t final_out_l1 = get_read_ptr(CB_FINAL_OUT);
 
-    // 7. Write 2 output tiles to DRAM
-    const InterleavedAddrGenFast</*DRAM=*/true> output_addrgen = {
-        .bank_base_address = output_addr, .page_size = tile_size, .data_format = get_dataformat(CB_FINAL_OUT)};
-    noc_async_write_tile(0, output_addrgen, final_out_l1);
-    noc_async_write_tile(1, output_addrgen, final_out_l1 + tile_size);
-    noc_async_write_barrier();
+    // 7. Write output to DRAM
+    if (untilize_out) {
+        // Software untilize: rearrange 2 tiles (face layout) → row-major in CB17
+        constexpr uint32_t CB_RM_OUT = tt::CBIndex::c_17;
+        cb_reserve_back(CB_RM_OUT, 2);
+        uint32_t rm_buf = get_write_ptr(CB_RM_OUT);
+
+        volatile tt_l1_ptr uint16_t* src0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1);
+        volatile tt_l1_ptr uint16_t* src1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1 + tile_size);
+        volatile tt_l1_ptr uint16_t* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rm_buf);
+
+        for (uint32_t row = 0; row < 32; row++) {
+            for (uint32_t col = 0; col < 32; col++) {
+                uint32_t face = ((row >= 16) ? 2u : 0u) + ((col >= 16) ? 1u : 0u);
+                uint32_t idx = face * 256 + (row & 15) * 16 + (col & 15);
+                dst[row * 64 + col] = src0[idx];
+                dst[row * 64 + 32 + col] = src1[idx];
+            }
+        }
+
+        // Write 32 row-major pages (128 bytes each) to DRAM
+        const InterleavedAddrGen</*DRAM=*/true> rm_addrgen = {
+            .bank_base_address = output_addr, .page_size = rm_page_size};
+        for (uint32_t page = 0; page < 32; page++) {
+            uint64_t noc_addr = get_noc_addr(page, rm_addrgen);
+            noc_async_write(rm_buf + page * rm_page_size, noc_addr, rm_page_size);
+        }
+        noc_async_write_barrier();
+    } else {
+        // Tile-based output path
+        const InterleavedAddrGenFast</*DRAM=*/true> output_addrgen = {
+            .bank_base_address = output_addr, .page_size = tile_size, .data_format = get_dataformat(CB_FINAL_OUT)};
+        noc_async_write_tile(0, output_addrgen, final_out_l1);
+        noc_async_write_tile(1, output_addrgen, final_out_l1 + tile_size);
+        noc_async_write_barrier();
+    }
     cb_pop_front(CB_FINAL_OUT, 2);
 }

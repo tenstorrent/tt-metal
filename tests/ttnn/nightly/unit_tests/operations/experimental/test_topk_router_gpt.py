@@ -17,19 +17,21 @@ import ttnn
 from loguru import logger
 
 
-def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
+def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4, untilize_output=False):
     """Run the fused op and return the torch result."""
     # Pre-broadcast bias to [B, N] so all tile rows contain the bias vector.
     torch_bias_bcast = torch_bias.expand(B, N).contiguous()
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(torch_bias_bcast, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    # Output: 2 tiles = [B, 64] (tile 0 = weights, tile 1 = indices)
+
+    out_layout = ttnn.ROW_MAJOR_LAYOUT if untilize_output else ttnn.TILE_LAYOUT
+    # Output: [B, 64] packed (tile 0 / cols 0-31 = weights, tile 1 / cols 32-63 = indices)
     tt_output = ttnn.from_torch(
         torch.zeros(B, 64, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=out_layout,
     )
 
     result = ttnn.experimental.topk_router_gpt(
@@ -39,6 +41,7 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4):
         output_tensor=tt_output,
         k=k,
         num_experts=N,
+        untilize_output=untilize_output,
     )
 
     tt_result = ttnn.to_torch(result)[:B, :64]
@@ -160,13 +163,44 @@ def main():
         logger.info(f"  Weight row sums - mean: {row_sums.mean():.4f}")
 
         # ================================================================
+        # Test 4: Untilized (ROW_MAJOR) output — verify matches tile output
+        # ================================================================
+        logger.info("=" * 60)
+        logger.info("TEST 4: untilize_output=True (ROW_MAJOR output)")
+        torch.manual_seed(42)
+        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
+        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
+        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
+
+        # Run with TILE output (reference)
+        weights_tile, indices_tile = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k)
+        # Run with ROW_MAJOR output
+        weights_rm, indices_rm = run_fused_op(
+            device, torch_input, torch_weight, torch_bias, B, K, N, k, untilize_output=True
+        )
+
+        logger.info(f"  TILE indices row 0: {indices_tile[0].tolist()}")
+        logger.info(f"  RM   indices row 0: {indices_rm[0].tolist()}")
+        logger.info(f"  TILE weights row 0: {[f'{w:.4f}' for w in weights_tile[0].tolist()]}")
+        logger.info(f"  RM   weights row 0: {[f'{w:.4f}' for w in weights_rm[0].tolist()]}")
+
+        rm_idx_match = (indices_rm == indices_tile).all().item()
+        rm_weight_pcc = compute_pcc(weights_tile, weights_rm)
+        logger.info(f"  Indices exact match (RM vs TILE): {rm_idx_match}")
+        logger.info(f"  Weight PCC (RM vs TILE): {rm_weight_pcc:.6f}")
+
+        # ================================================================
         # Summary
         # ================================================================
         logger.info("=" * 60)
-        if weight_pcc >= 0.95 and idx_match_pct >= 90:
+        rm_pass = rm_idx_match and rm_weight_pcc >= 0.999
+        if weight_pcc >= 0.95 and idx_match_pct >= 90 and rm_pass:
             logger.info("PASSED")
         else:
-            logger.error(f"FAILED: weight_pcc={weight_pcc:.4f}, idx_match={idx_match_pct:.1f}%")
+            logger.error(
+                f"FAILED: weight_pcc={weight_pcc:.4f}, idx_match={idx_match_pct:.1f}%, "
+                f"rm_idx_match={rm_idx_match}, rm_weight_pcc={rm_weight_pcc:.4f}"
+            )
 
     finally:
         ttnn.close_device(device)

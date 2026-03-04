@@ -33,9 +33,11 @@ TopkRouterGptDeviceOperation::invoke(
     const Tensor& bias_tensor,
     const Tensor& output_tensor,
     uint32_t k,
-    uint32_t num_experts) {
+    uint32_t num_experts,
+    bool untilize_output) {
     return {
-        operation_attributes_t{k, num_experts}, tensor_args_t{input_tensor, weight_tensor, bias_tensor, output_tensor}};
+        operation_attributes_t{k, num_experts, untilize_output},
+        tensor_args_t{input_tensor, weight_tensor, bias_tensor, output_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt
