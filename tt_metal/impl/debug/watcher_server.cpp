@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <map>
 #include <mutex>
@@ -18,15 +19,17 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <fmt/core.h>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include "core_coord.hpp"
-#include "debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -117,7 +120,8 @@ void WatcherServer::Impl::attach_devices() {
         for (ChipId device_id : all_devices) {
             device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
             log_info(LogLLRuntime, "Watcher attached device {}", device_id);
-            fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
+            fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
+            fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
 
         // Since dma library is not thread-safe, disable it when watcher runs.
@@ -144,14 +148,6 @@ void WatcherServer::Impl::detach_devices() {
     }
 
     if (server_thread_) {
-        // Let one full watcher dump happen so we can catch anything between the last scheduled dump and teardown.
-        // Don't do this in test mode, to keep the tests running quickly.
-        if (!MetalContext::instance().rtoptions().get_test_mode_enabled() and !server_killed_due_to_error_) {
-            int target_count = dump_count() + 1;
-            while (dump_count() < target_count) {
-                ;
-            }
-        }
         // Signal the server thread to finish
         stop_server_ = true;
         stop_server_cv_.notify_all();
@@ -170,7 +166,7 @@ void WatcherServer::Impl::detach_devices() {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
-            TT_ASSERT(device_id_to_reader_.count(device_id) > 0);
+            TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
             log_info(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
@@ -204,7 +200,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
 }
 
 std::string WatcherServer::Impl::log_file_name() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
@@ -235,19 +231,16 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 }
 
 void WatcherServer::Impl::read_kernel_ids_from_file() {
-    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    FILE* f = fopen(fname.c_str(), "r");
+    std::ifstream f(fname);
     if (!f) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
-    char* line = nullptr;
-    size_t len;
-    while (getline(&line, &len, f) != -1) {
-        std::string s(line);
-        s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(':') + 2));
+    std::string line;
+    while (std::getline(f, line)) {
+        kernel_names_.push_back(line.substr(line.find(':') + 2));
     }
 }
 
@@ -270,7 +263,7 @@ double WatcherServer::Impl::get_elapsed_secs() {
 void WatcherServer::Impl::create_log_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + LOG_FILE_NAME;
     if (rtoptions.get_watcher_skip_logging()) {
@@ -284,7 +277,15 @@ void WatcherServer::Impl::create_log_file() {
 
     fprintf(f, "At %.3lfs starting\n", get_elapsed_secs());
     fprintf(f, "Legend:\n");
-    fprintf(f, "\tComma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
+
+    // Get processor info from shared helper
+    auto tensix_info = get_enable_symbols_info(HalProgrammableCoreType::TENSIX);
+
+    fprintf(
+        f,
+        "\tComma separated list specifies waypoint for %s\n",
+        fmt::format("{}", fmt::join(tensix_info.processor_names, ", ")).c_str());
+    fprintf(f, "\t%s is main processor, others are subordinates\n", tensix_info.main_processor.c_str());
     fprintf(f, "\tI=initialization sequence\n");
     fprintf(f, "\tW=wait (top of spin loop)\n");
     fprintf(f, "\tR=run (entering kernel)\n");
@@ -296,10 +297,12 @@ void WatcherServer::Impl::create_log_file() {
     fprintf(f, "\t\tNWD is \"noc write done\"\n");
     fprintf(
         f,
-        "\trmsg(brisc host run message): D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
-        "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg(subordinate run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
-    fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
+        "\trmsg(%s host run message): D/H device/host dispatch; NOC ID; I/G/D init/go/done; | separator; "
+        "enable flags %s\n",
+        tensix_info.main_processor.c_str(),
+        tensix_info.enable_legend.c_str());
+    fprintf(f, "\tsmsg(subordinate run message): I/G/D for subordinate processors\n");
+    fprintf(f, "\tk_ids: kernel IDs per processor (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
 
@@ -309,7 +312,7 @@ void WatcherServer::Impl::create_log_file() {
 void WatcherServer::Impl::create_kernel_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
     FILE* f = fopen(fname.c_str(), fmode);
@@ -326,7 +329,7 @@ void WatcherServer::Impl::create_kernel_file() {
 
 void WatcherServer::Impl::create_kernel_elf_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
     FILE* f = fopen(fname.c_str(), "w");
@@ -475,7 +478,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
         auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
-        cluster.write_core(data.data(), data.size(), {device_id, virtual_core}, addr);
+        cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
     };
 
     // Initialize worker cores debug values
@@ -520,11 +523,6 @@ void WatcherServer::Impl::poll_watcher_data() {
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
-        std::unique_lock<std::mutex> lock(watch_mutex_);
-        if (stop_server_cv_.wait_for(lock, sleep_duration, [&] { return stop_server_.load(); })) {
-            break;
-        }
-
         fprintf(logfile_, "-----\n");
         fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
 
@@ -539,14 +537,30 @@ void WatcherServer::Impl::poll_watcher_data() {
             if (rtoptions.get_test_mode_enabled()) {
                 server_killed_due_to_error_ = true;
                 break;
-            } else {
-                throw e;
             }
+            throw e;
         }
 
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
         fflush(logfile_);
         dump_count_++;
+
+        // Wait for the interval, but check stop flag frequently to exit early
+        constexpr auto poll_interval = std::chrono::milliseconds(100);
+        auto remaining = sleep_duration;
+        while (remaining > std::chrono::milliseconds(0)) {
+            auto wait_time = std::min(remaining, poll_interval);
+            std::unique_lock<std::mutex> lock(watch_mutex_);
+            // wait_for with predicate returns true if stop requested, false on timeout
+            // Only decrement remaining on timeout (predicate handles spurious wakeups internally)
+            if (stop_server_cv_.wait_for(lock, wait_time, [&] { return stop_server_.load(); })) {
+                break;
+            }
+            remaining -= wait_time;
+        }
+        if (stop_server_.load()) {
+            break;
+        }
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");

@@ -5,6 +5,12 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+# Backward compatibility: filter_none moved to models.common.sampling._utils
+from models.common.sampling._utils import filter_none  # noqa: F401
+
+# Backward compatibility: LogProbsCalculator moved to models.common.sampling.tt_log_probs
+from models.common.sampling.tt_log_probs import LogProbsCalculator  # noqa: F401
+
 
 def top_k_top_p_filtering(
     logits: Tensor,

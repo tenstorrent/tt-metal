@@ -48,7 +48,29 @@ std::map<ChipId, IDevice*> CreateDevices(
     [[deprecated]] bool ignored = false,  // This argument was not used
     bool initialize_fabric_and_dispatch_fw = true);
 
+/**
+ * Close all devices in the given map.
+ *
+ * This function closes all devices in the given map, releasing many associated resources. After this call, this process
+ * still controls all devices. Call ReleaseOwnership() to fully release ownership.
+ *
+ * Return value: void
+ */
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
+
+/**
+ * Release ownership of the MetalContext singleton instance.
+ *
+ * The MetalContext is created when a hal function is called or a MeshDevice or IDevice are created. Only one process
+ * can have a MetalContext at any one time. This function destroys the MetalContext instance, releasing all associated
+ * resources and allowing another process to create a new MetalContext.
+ * All devices must be closed before calling this function.
+ *
+ * After calling this function, the MetalContext will be re-created on the next access.
+ *
+ * Return value: void
+ */
+void ReleaseOwnership();
 
 /**
  * Returns a pointer to an active device with the given ID, NULL otherwise
@@ -151,17 +173,16 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
- * `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`
+ * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
  *
+ *  The build key component accounts for device architecture as binaries are not compatible across architectures.
  *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
  * compiled kernels. Kernel uniqueness is determined by the kernel hash which is computed based on compile time args,
  * defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute
- * kernels
- *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
+ * kernels.
  *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static is enabled for the duration of the running process.
- *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache().
- * Setting this will skip compilation when output binary directory exists.
+ *  This cache is static and is enabled for the duration of the running process.
+ *  Across runs, previously compiled kernels are recompiled if the source code or dependencies have changed.
  *
  *  Return value: void
  *
@@ -184,7 +205,7 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | Argument            | Description                                                            | Type | Valid Range
  * | Required |
  * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device              | The device to whcih runtime args will be written                       | IDevice* | | Yes |
+ * | device              | The device to which runtime args will be written                       | IDevice* | | Yes |
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */

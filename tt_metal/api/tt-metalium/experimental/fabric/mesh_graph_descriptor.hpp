@@ -34,6 +34,9 @@ class GraphRef;
 class SwitchRef;
 enum Policy : int;
 enum RoutingDirection : int;
+class LogicalFabricNodeId;
+class PhysicalAsicPosition;
+class AsicPinning;
 }  // namespace proto
 
 inline namespace v1_1 {
@@ -75,6 +78,9 @@ struct ConnectionData {
     // TODO: Remove after MGD 1.0 is deprecated
     proto::RoutingDirection routing_direction;
 
+    // Flag to assign Z direction to intermesh connections (dev/testing feature)
+    bool assign_z_direction = false;
+
 private:
     static ConnectionId generate_next_global_id() {
         static std::atomic_uint32_t next_global_id_ = 0;
@@ -83,12 +89,18 @@ private:
 };
 }  // namespace v1_1
 
+// FabricNodeId is now defined in fabric_types.hpp (already included above)
+
+// Use ASICPosition type alias for consistency with TopologyMapper
+using AsicPosition = tt::tt_metal::ASICPosition;
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
@@ -121,6 +133,22 @@ public:
     const std::vector<GlobalNodeId>& all_meshes() const { return mesh_instances_; }
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
     const std::vector<GlobalNodeId>& all_switches() const { return switch_instances_; }
+    std::unordered_set<std::string> all_names() const {
+        std::unordered_set<std::string> names;
+        names.reserve(instances_by_name_.size());
+        for (const auto& [name, _] : instances_by_name_) {
+            names.insert(name);
+        }
+        return names;
+    }
+    std::unordered_set<std::string> all_types() const {
+        std::unordered_set<std::string> types;
+        types.reserve(instances_by_type_.size());
+        for (const auto& [type, _] : instances_by_type_) {
+            types.insert(type);
+        }
+        return types;
+    }
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
@@ -143,9 +171,7 @@ public:
         TT_FATAL(it != connections_by_type_.end(), "No connections found with type: {}", type);
         return it->second;
     }
-    bool has_connections_of_type(const std::string& type) const {
-        return connections_by_type_.find(type) != connections_by_type_.end();
-    }
+    bool has_connections_of_type(const std::string& type) const { return connections_by_type_.contains(type); }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
         TT_FATAL(
@@ -154,6 +180,23 @@ public:
             source_device_id);
         return it->second;
     }
+    const std::string& type_by_name(const std::string& name) const {
+        const auto& ids = instances_by_name(name);
+        return get_instance(ids[0]).type;
+    }
+
+    // Calculate chip count from device_topology dimensions for a mesh instance
+    // Returns the product of all dimensions in device_topology.dims()
+    // Example: [4, 4] = 4 × 4 = 16 chips
+    // Example: [8, 2] = 8 × 2 = 16 chips
+    // Example: [32, 4] = 32 × 4 = 128 chips
+    uint32_t get_chip_count(GlobalNodeId mesh_instance_id) const;
+    uint32_t get_chip_count(const InstanceData& mesh_instance) const;
+
+    // Count instances by type
+    // Returns a map from type name to count of instances with that type
+    // Example: count_instances_by_type({"MESH", "POD"}) returns {MESH: 4, POD: 2}
+    std::unordered_map<std::string, uint32_t> count_instances_by_type(const std::vector<std::string>& types) const;
 
     // TODO: This will disappear after we move to Physical discovery
     proto::Architecture get_arch() const;
@@ -162,9 +205,11 @@ public:
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
 
+    const std::vector<std::pair<AsicPosition, FabricNodeId>>& get_pinnings() const { return pinnings_; }
+
 private:
     // Descriptor fast lookup
-    std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
+    std::shared_ptr<const proto::MeshGraphDescriptor> proto_;
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
     std::unordered_map<std::string, const proto::GraphDescriptor*> graph_desc_by_name_;
     std::unordered_map<std::string, const proto::SwitchDescriptor*> switch_desc_by_name_;
@@ -187,30 +232,41 @@ private:
     std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pinnings_;
+
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
 
     // Helper methods for validation that return their own error lists
     static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_mesh_topology(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_mesh_topology(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_architecture_consistency(
-        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_switch_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_express_connections(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_switch_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_graph_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_graph_topology_and_connections(
-        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
-    static void validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_legacy_requirements(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     // Populates the MGD Graph from the proto file
     void populate();
 
     // Populate Descriptors
     void populate_descriptors();
+
+    // Populate Pinnings
+    void populate_pinnings();
 
     // Populate Instances
     void populate_top_level_instance();
@@ -229,7 +285,7 @@ private:
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in separate PR
     void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
     void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 

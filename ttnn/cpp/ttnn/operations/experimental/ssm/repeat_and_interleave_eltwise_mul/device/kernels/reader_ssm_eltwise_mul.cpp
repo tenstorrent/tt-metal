@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -57,7 +57,7 @@ void kernel_main() {
             cb_wait_front(cb_in1_transposed, onetile);
             uint64_t cb_in1_transposed_read_ptr = get_noc_addr(get_read_ptr(cb_in1_transposed));
 
-            // Manually unroll iterating across the tile to eliminate unncessary conditional checking
+            // Manually unroll iterating across the tile to eliminate unnecessary conditional checking
             // First + second face
             for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_face; tile_row_id++) {
                 cb_reserve_back(cb_in1_bcast_row, onetile);

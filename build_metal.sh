@@ -32,13 +32,13 @@ show_help() {
     echo "  --build-programming-examples     Build programming examples."
     echo "  --build-tt-train                 Build tt-train."
     echo "  --build-packages                 Build installation packages (.deb)"
-    echo "  --build-telemetry                Build tt-telemetry server."
     echo "  --build-all                      Build all optional components."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
+    echo "  --disable-pch                    Disable precompiled headers"
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
@@ -51,6 +51,7 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
+    echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
 }
 
 clean() {
@@ -75,8 +76,8 @@ build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
-build_telemetry="OFF"
 build_static_libs="OFF"
+pch="ON"
 unity_builds="ON"
 light_metal_trace="ON"
 build_packages="OFF"
@@ -85,18 +86,14 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
-# Requested handling for 20.04 -> 22.04 migration
-if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
-    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
-    toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-fi
 
 configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
+enable_lto="OFF"
 
 declare -a cmake_args
 
@@ -118,8 +115,8 @@ build-umd-tests
 build-programming-examples
 build-tt-train
 build-packages
-build-telemetry
 build-static-libs
+disable-pch
 disable-unity-builds
 disable-light-metal-trace
 release
@@ -136,6 +133,7 @@ configure-only
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
+enable-lto
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -185,8 +183,6 @@ while true; do
             build_tt_train="ON";;
         --build-packages)
             build_packages="ON";;
-        --build-telemetry)
-            build_telemetry="ON";;
         --build-static-libs)
             build_static_libs="ON";;
         --build-all)
@@ -199,6 +195,10 @@ while true; do
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
+        --enable-lto)
+            enable_lto="ON";;
+        --disable-pch)
+	    pch="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -255,10 +255,11 @@ fi
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
-    # Create and link the build directory
-    mkdir -p $build_dir
-    ln -nsf $build_dir build
 fi
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
 
 install_prefix_default=$build_dir
 cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
@@ -276,12 +277,14 @@ echo "INFO: Enable time trace: $enable_time_trace"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
+echo "INFO: Enable PCH: $pch"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+echo "INFO: Enable LTO: $enable_lto"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -350,13 +353,13 @@ if [ "$build_tt_train" = "ON" ]; then
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
 fi
 
-if [ "$build_telemetry" = "ON" ]; then
-    cmake_args+=("-DBUILD_TELEMETRY=ON")
-fi
-
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
     cmake_args+=("-DTT_INSTALL=OFF")
+fi
+
+if [ "$pch" = "OFF" ]; then
+    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON")
 fi
 
 if [ "$unity_builds" = "ON" ]; then
@@ -376,7 +379,6 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
-    cmake_args+=("-DBUILD_TELEMETRY=ON")
 fi
 
 if [ "$light_metal_trace" = "ON" ]; then
@@ -387,7 +389,7 @@ fi
 
 if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
-    cmake_args+=("-DPython3_EXECUTABLE=$(which python3)")
+    cmake_args+=("-DPython3_EXECUTABLE=$(command -v python3)")
     cmake_args+=("-DPython3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")")
     cmake_args+=("-DPython3_LIBRARY=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython' + sysconfig.get_config_var('LDVERSION') + '.so')")")
 else
@@ -406,7 +408,11 @@ else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
 fi
 
-# toolchain and cxx_compiler settings would conflict with eachother
+if [ "$enable_lto" = "ON" ]; then
+    cmake_args+=("-DTT_ENABLE_LTO=ON")
+fi
+
+# toolchain and cxx_compiler settings would conflict with each other
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"

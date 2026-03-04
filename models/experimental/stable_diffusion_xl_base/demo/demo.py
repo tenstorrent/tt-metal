@@ -4,7 +4,6 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
@@ -16,6 +15,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -28,6 +29,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtS
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     negative_prompts,
     num_inference_steps,
@@ -45,7 +47,7 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -88,6 +90,7 @@ def run_demo_inference(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
         pipeline_config=TtSDXLPipelineConfig(
+            image_resolution=image_resolution,
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
@@ -202,12 +205,14 @@ def run_demo_inference(
     return images
 
 
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
-
-
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -242,7 +247,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "negative_prompt",
-    ((None),),
+    (["disturbing"],),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -287,6 +292,7 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
     negative_prompt,
     num_inference_steps,
@@ -308,6 +314,7 @@ def test_demo(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
         negative_prompt,
         num_inference_steps,

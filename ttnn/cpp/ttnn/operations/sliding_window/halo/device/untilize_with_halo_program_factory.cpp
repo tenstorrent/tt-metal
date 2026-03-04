@@ -19,7 +19,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 constexpr int UNTILIZE_BLOCK_SIZE = 32;
@@ -62,10 +62,8 @@ static inline CBHandle create_circular_buffer(
 constexpr bool ENABLE_UNTILIZE_DOUBLE_BUFFERING = true;
 
 UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory::create(
-    const sliding_window::halo::operation_attributes_t& operation_attributes,
-    const sliding_window::halo::tensor_args_t& tensor_args,
-    sliding_window::halo::tensor_return_value_t& output_tensor) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const HaloParams& operation_attributes, const Tensor& tensor_args, Tensor& output_tensor) {
+    const auto& input_tensor = tensor_args;
     const auto& pad_val = operation_attributes.pad_val;
     const int block_size = UNTILIZE_BLOCK_SIZE;
     const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
@@ -79,6 +77,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
+    using namespace ttnn::operations;
     auto pad_metadata = sliding_window::generate_pad_metadata(operation_attributes.config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(operation_attributes.config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(operation_attributes.config);
@@ -170,11 +169,6 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t in_page_size = tt::tile_size(in_df);
-    if (skip_untilize) {
-        uint32_t in_nbytes = datum_size(in_df);
-        in_page_size = input_shard_shape[1] * in_nbytes;
-        input_npages = remapped_input_shard_shape_for_output_grid;
-    }
 
     // Calculate aligned stick size - used for both input and output since channels don't change
     const uint32_t stick_nbytes = output_shard_shape[1] * out_nbytes;
@@ -183,6 +177,14 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.buffer()->alignment());
     }
     const uint32_t out_tile_size = tt::tile_size(out_df);
+
+    // For ROW_MAJOR input the kernel reads with aligned_stick_nbytes stride
+    // across the full input shard, so the CB must match the actual buffer layout:
+    // page size = aligned stick width, npages = actual shard height.
+    if (skip_untilize) {
+        in_page_size = aligned_stick_nbytes;
+        input_npages = input_shard_shape[0];
+    }
 
     CBIndices cb_indices = CBIndices();
 
@@ -425,12 +427,12 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
 
 void UntilizeWithHaloProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const sliding_window::halo::operation_attributes_t& operation_attributes,
-    const sliding_window::halo::tensor_args_t& tensor_args,
-    sliding_window::halo::tensor_return_value_t& output_tensor) {
+    const HaloParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
 
-    auto *src_buffer = tensor_args.input_tensor.buffer();
+    auto* src_buffer = tensor_args.buffer();
     auto *dst_buffer = output_tensor.buffer();
     auto& src_cb = cached_program.shared_variables.src_cb;
     auto& out_cb = cached_program.shared_variables.out_cb;
@@ -439,18 +441,4 @@ void UntilizeWithHaloProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
-struct InplaceCBIndices {
-    uint32_t src_cb_id = 32;
-    uint32_t pad_cb_id = 32;
-    uint32_t out_cb_id = 32;
-    uint32_t padding_config_cb_id = 32;
-    uint32_t local_config_cb_id = 32;
-    uint32_t remote_config_cb_id = 32;
-    uint32_t untilize_out_cb_id = 32;
-    uint32_t get_next_cb_id() { return next_cb_id++; }
-
-private:
-    uint32_t next_cb_id = tt::CBIndex::c_0;
-};
-
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -41,7 +40,7 @@ namespace basic_tests::circular_buffer {
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const CoreRangeSet& cr_set,
+    const CoreRangeSet& /*cr_set*/,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
 
@@ -129,7 +128,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
-    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{NUM_CIRCULAR_BUFFERS, cb_config.data_format}}));
+    EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{max_cbs_, cb_config.data_format}}));
 }
 
 TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
@@ -175,6 +174,30 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
                                       .set_page_size(0, cb_config.page_size);
 
     EXPECT_ANY_THROW(CreateCircularBuffer(program, cr_set, config));
+}
+
+TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& cq = devices_.at(id)->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
+        // Extend one column beyond the compute grid into dispatch core territory
+        CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
+
+        CBConfig cb_config;
+        CircularBufferConfig config = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                          .set_page_size(0, cb_config.page_size);
+        CreateCircularBuffer(program_, cr_set, config);
+
+        EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
 }
 
 }  // end namespace basic_tests::circular_buffer

@@ -4,10 +4,10 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // Compile time args
@@ -100,7 +100,7 @@ void kernel_main() {
                     cb_reserve_back(
                         cb_id,
                         max_block_num_tiles *
-                            2);  // Reserve two blocks of spcae to issue multiple block reads in parallel
+                            2);  // Reserve two blocks of space to issue multiple block reads in parallel
                 }
             }
 

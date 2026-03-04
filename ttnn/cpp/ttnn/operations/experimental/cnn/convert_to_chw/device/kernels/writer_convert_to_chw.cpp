@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 constexpr uint32_t TILE_SIZE = 32;
 constexpr uint32_t ELEMENT_SIZE_BYTES = 2;
 constexpr uint32_t STICK_SIZE = TILE_SIZE * ELEMENT_SIZE_BYTES;

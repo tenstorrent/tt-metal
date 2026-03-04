@@ -4,10 +4,8 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <stddef.h>
-#include <stdint.h>
-#include "impl/dispatch/command_queue.hpp"
-#include <tt-metalium/event.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <future>
 #include <initializer_list>

@@ -4,6 +4,7 @@
 import itertools
 import json
 import math
+import os
 from itertools import takewhile
 from pathlib import Path
 from types import NoneType
@@ -11,19 +12,17 @@ from typing import Any, Sequence
 
 import torch
 from loguru import logger
-from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
-SPARSITY_BLOCK_SIZE = 32
 
 
 # Compute kernel configurations
@@ -69,31 +68,6 @@ COMPUTE_KERNEL_CONFIG_SDPA = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
 )
-
-
-# JSON serializer for the weight config
-class WeightConfigEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, SavedWeight):
-            obj = {
-                "path": str(obj.path),
-                "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
-            }
-        return obj
-
-
-def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
-    path_str = obj.get("path", None)
-    if not isinstance(path_str, str):
-        return obj
-    memory_config_dict = obj.get("memory_config", None)
-    if not isinstance(memory_config_dict, dict) or not {
-        "buffer_type",
-        "memory_layout",
-        "created_with_nd_shard_spec",
-    }.issubset(memory_config_dict.keys()):
-        return obj
-    return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
 
 
 # Helper math functions
@@ -521,11 +495,7 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
-    for i, block_dim in enumerate(block_shape):
-        inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
-    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
-    del inv_scale
-    return tensor
+    return dequantize_tensor(tensor, inv_scale, block_shape)
 
 
 def get_state_dicts(
@@ -600,6 +570,117 @@ def sub_state_dicts(
 
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
+# Cache specs dumping for conversion optimization
+_CACHE_SPECS_DUMP_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
+_CACHE_SPECS_DUMP_ENV_VAR_LEGACY = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
+
+
+def _enum_name_or_str(obj: Any) -> str | None:
+    """Get the name of an enum or return the string representation."""
+    if obj is None:
+        return None
+    if hasattr(obj, "name"):
+        return obj.name
+    return str(obj)
+
+
+def _memory_config_to_dict(memory_config: ttnn.MemoryConfig | None) -> dict[str, Any] | None:
+    """Convert a MemoryConfig to a dictionary for JSON serialization."""
+    if memory_config is None:
+        return None
+    # Use the built-in to_json() method for proper serialization, then parse it
+    # This handles CoreRangeSet and other complex types correctly
+    try:
+        return json.loads(memory_config.to_json())
+    except (AttributeError, TypeError):
+        # Fallback to manual conversion if to_json() is not available
+        # This handles the case where grid might be a CoreRangeSet
+        grid_dict = None
+        if memory_config.shard_spec is not None and memory_config.shard_spec.grid is not None:
+            grid = memory_config.shard_spec.grid
+            # Handle CoreRangeSet - convert to list of ranges
+            if hasattr(grid, "__iter__"):
+                # It's a CoreRangeSet (iterable of CoreRange objects)
+                grid_dict = [
+                    {
+                        "start": (core_range.start.x, core_range.start.y),
+                        "end": (core_range.end.x, core_range.end.y),
+                    }
+                    for core_range in grid
+                ]
+            elif hasattr(grid, "start") and hasattr(grid, "end"):
+                # It's a single CoreRange
+                grid_dict = {
+                    "start": (grid.start.x, grid.start.y),
+                    "end": (grid.end.x, grid.end.y),
+                }
+
+        return {
+            "memory_layout": _enum_name_or_str(memory_config.memory_layout),
+            "buffer_type": _enum_name_or_str(memory_config.buffer_type),
+            "shard_spec": (
+                {
+                    "grid": grid_dict,
+                    "shape": list(memory_config.shard_spec.shape) if memory_config.shard_spec.shape else None,
+                    "orientation": _enum_name_or_str(memory_config.shard_spec.orientation),
+                }
+                if memory_config.shard_spec is not None
+                else None
+            ),
+        }
+
+
+def _get_relative_cache_path(path: Path) -> str | None:
+    """Extract the relative cache path from an absolute path."""
+    if not path.is_absolute():
+        return str(path)
+    path_str = str(path)
+    mesh_idx = path_str.find("mesh_")
+    if mesh_idx == -1:
+        return None
+    parts = path_str[mesh_idx:].split("/", 1)
+    if len(parts) < 2:
+        return None
+    return parts[1]
+
+
+def _append_cache_specs_record(record: dict[str, Any]) -> None:
+    """Append a cache specs record to the JSONL file specified by the environment variable."""
+    dump_path_str = os.getenv(_CACHE_SPECS_DUMP_ENV_VAR) or os.getenv(_CACHE_SPECS_DUMP_ENV_VAR_LEGACY)
+    if not dump_path_str:
+        return
+
+    dump_path = Path(dump_path_str)
+    try:
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        data = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
+        fd = os.open(dump_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            fcntl_module = None
+            try:
+                import fcntl as fcntl_module
+            except Exception:
+                fcntl_module = None
+            if fcntl_module is not None:
+                try:
+                    fcntl_module.flock(fd, fcntl_module.LOCK_EX)
+                except Exception as e:
+                    # Best-effort locking: ignore failures but log for diagnostics.
+                    logger.debug(f"Failed to acquire file lock on {dump_path}: {e}")
+            bytes_written = os.write(fd, data)
+            if bytes_written != len(data):
+                raise OSError(f"Short write while appending cache specs to {dump_path}")
+            if fcntl_module is not None:
+                try:
+                    fcntl_module.flock(fd, fcntl_module.LOCK_UN)
+                except Exception as e:
+                    # Best-effort unlocking: ignore failures but log for diagnostics.
+                    logger.debug(f"Failed to release file lock on {dump_path}: {e}")
+        finally:
+            os.close(fd)
+    except Exception as e:
+        logger.warning(f"Failed to append cache specs record to {dump_path}: {e}")
+
 
 def shard_and_save(
     path: Path,
@@ -612,7 +693,6 @@ def shard_and_save(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
-    convert_meta=False,
 ) -> SavedWeight:
     """Shard a tensor and save it to a file."""
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
@@ -673,7 +753,6 @@ def shard_and_save(
             memory_config=memory_config,
         )
 
-    # Ensure the path has an appropriate extension
     if not path.name.endswith(TENSOR_CACHE_EXTENSION):
         path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
 
@@ -681,9 +760,41 @@ def shard_and_save(
 
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
-    ttnn.dump_tensor(path, ttnn_tensor)
+    record = {
+        "event": "deepseek_v3.cache_tensor_spec",
+        "pid": os.getpid(),
+        "cache_file_path": str(path),
+        "cache_file_relpath": _get_relative_cache_path(path),
+        "torch_shape": list(tensor.shape),
+        "torch_dtype": str(tensor.dtype),
+        "requested_dtype": _enum_name_or_str(dtype),
+        "requested_layout": _enum_name_or_str(layout),
+        "requested_memory_config": _memory_config_to_dict(memory_config),
+        "shard_dims": list(shard_dims),
+        "remove_dims": list(remove_dims),
+        "mesh_shape": list(mesh_device.shape),
+        "mesh_num_devices": mesh_device.get_num_devices(),
+        "dtype_is_tilized": dtype in {ttnn.bfloat4_b, ttnn.bfloat8_b},
+        "shard_device_impl_uses_dram_interleaved_workaround": memory_config == ttnn.DRAM_MEMORY_CONFIG,
+        "torch_impl": _torch_impl,
+        "status": "ok",
+        "result_shape": list(ttnn_tensor.shape),
+        "result_dtype": _enum_name_or_str(ttnn_tensor.dtype),
+        "result_layout": _enum_name_or_str(ttnn_tensor.layout),
+        "result_memory_config": _memory_config_to_dict(ttnn_tensor.memory_config()),
+    }
+    try:
+        ttnn.dump_tensor(path, ttnn_tensor)
+    except Exception as e:
+        record["status"] = f"error({type(e).__name__}: {e})"
+        _append_cache_specs_record(record)
+        raise
+    else:
+        _append_cache_specs_record(record)
 
-    if not convert_meta:
+    # Always convert absolute paths to relative paths for portability
+    # This ensures SavedWeight objects always have relative paths
+    if path.is_absolute():
         path_str = str(path)
         mesh_idx = path_str.find("mesh_")
         if mesh_idx == -1:
@@ -719,7 +830,7 @@ def _shard_device_impl(
         layout == ttnn.ROW_MAJOR_LAYOUT and dtype_is_tilized
     ), "Row-major layout is not supported for tilized dtypes"
     if dtype_is_tilized:
-        layout = ttnn.TILE_LAYOUT  # Force tiled layout for tilized dtypes
+        layout = ttnn.TILE_LAYOUT
 
     if isinstance(remove_dims, bool):
         remove_dims = (remove_dims, remove_dims)
@@ -731,11 +842,7 @@ def _shard_device_impl(
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    # NOTE: START OF THE WORKAROUND for issues #28715, #28805, #28806, #28807
-
-    if (
-        memory_config != ttnn.DRAM_MEMORY_CONFIG
-    ):  # TODO: remove these workaround once issues #28715, #28805, #28806, #28807 are resolved and implement things properly
+    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
         ttnn_tensor = ttnn.from_torch(
             tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
         )
@@ -758,9 +865,7 @@ def _shard_device_impl(
         if remove_dims[0]:
             new_tensor_shape.pop(shard_dims[0])
     else:
-        if (
-            None not in shard_dims and shard_dims[0] > shard_dims[1]
-        ):  # We will squeeze the least significant dimension first
+        if None not in shard_dims and shard_dims[0] > shard_dims[1]:
             shard_dims = (shard_dims[1], shard_dims[0])
             remove_dims = (remove_dims[1], remove_dims[0])
         if remove_dims[1]:
@@ -768,7 +873,7 @@ def _shard_device_impl(
         if remove_dims[0]:
             new_tensor_shape.pop(shard_dims[0])
 
-    new_tensor_shape = [1] * sum(remove_dims) + new_tensor_shape  # Keep the number of dimensions the same
+    new_tensor_shape = [1] * sum(remove_dims) + new_tensor_shape
     ttnn_tensor = ttnn_tensor.reshape(new_tensor_shape)
 
     return ttnn_tensor
@@ -785,9 +890,7 @@ def _shard_torch_impl(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> SavedWeight:
-    if (
-        shard_dims[0] == shard_dims[1]
-    ):  # This is a lil hacky case for when we want to shard a single dim over all devices
+    if shard_dims[0] == shard_dims[1]:
         assert remove_dims[0] == remove_dims[1], "If sharding a single dim, both remove_dim values must be the same"
         remove_dims = (remove_dims[0],)
         shard_dims = (shard_dims[0],)
@@ -795,7 +898,6 @@ def _shard_torch_impl(
     else:
         sharding_shape = (mesh_device.shape[0], mesh_device.shape[1])
 
-    # Create the ttnn sharded tensor
     return ttnn.from_host_shards(
         [
             ttnn.from_torch(
@@ -844,107 +946,6 @@ def _get_remove_dim_slices(
         assert shard_dim is not None
         slices[shard_dim] = 0
     return tuple(slices)
-
-
-def get_weight_config(
-    ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
-    hf_config: PretrainedConfig,
-    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None = None,
-    weight_cache_path: Path | None = None,
-    mesh_device: ttnn.Device | None = None,
-    force_recalculate: bool = False,
-    random_weights: bool = False,
-    model_path: str | None = None,
-    single_layer: str | None = None,
-):
-    """
-    Get weight configuration, either from cache or by converting weights.
-
-    Args:
-        ModuleClass: The module class to convert weights for
-        hf_config: HuggingFace model configuration
-        state_dicts: Optional pre-loaded state dicts. If None, will be loaded based on random_weights/model_path.
-        weight_cache_path: Path to cache weights
-        mesh_device: TTNN mesh device
-        force_recalculate: Force recalculation even if cached weights exist
-        random_weights: If True, generate random weights from reference model
-        model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
-        single_layer: Optional single layer name (used for validation with random weights)
-
-    Returns:
-        Weight configuration dictionary
-    """
-    if weight_cache_path is None:
-        raise ValueError("weight_cache_path must be provided")
-    if mesh_device is None:
-        raise ValueError("mesh_device must be provided")
-
-    weight_cache_path = (
-        weight_cache_path
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    )
-    config_path = weight_cache_path / "config.json"
-    weight_path = weight_cache_path / "weights"
-    for _ in range(1):
-        if force_recalculate:
-            break
-        if not config_path.exists():
-            break
-        weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
-        if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
-            break
-        logger.info(f"Using weights cached at {weight_cache_path}")
-        return weight_config
-
-    # Only prepare state dicts if we need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
-    if state_dicts is None:
-        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
-
-        model_state = prepare_model_state_dict(
-            hf_config=hf_config,
-            random_weights=random_weights,
-            model_path=model_path,
-            single_layer=single_layer,
-        )
-        state_dicts = (model_state,)
-
-    # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-    json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
-    _check_weights_exist_and_convert(weight_cache_path, weight_config)
-    logger.info("Converting weights to TTNN SavedWeight format...done")
-    return weight_config
-
-
-def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfig) -> bool:
-    if isinstance(weight_config, dict):
-        entries = weight_config.values()
-    else:
-        entries = weight_config
-    for entry in entries:
-        if entry is None:
-            continue
-        if isinstance(entry, SavedWeight):
-            if (
-                not (entry.path.is_absolute())
-                and not (root_path / entry.path).exists()
-                or entry.path.suffix != TENSOR_CACHE_EXTENSION
-            ):
-                return False
-            elif (
-                not (entry.path.is_absolute())
-                and (root_path / entry.path).exists()
-                and entry.path.suffix == TENSOR_CACHE_EXTENSION
-            ):
-                entry.path = root_path / entry.path
-            elif entry.path.is_absolute() and (not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION):
-                return False
-        elif not _check_weights_exist_and_convert(root_path, entry):
-            return False
-    return True
 
 
 def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:

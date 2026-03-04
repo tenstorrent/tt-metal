@@ -27,7 +27,7 @@ std::vector<T> untilize_nchw(
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
 
-    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
+    TT_FATAL(shape[0] % tile_H == 0 && shape[1] % tile_W == 0, "Shape dimensions must be divisible by tile dimensions");
 
     // Untilize into row major
     uint32_t H = shape[0];
@@ -65,7 +65,7 @@ std::vector<T> tilize_nchw(
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
 
-    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
+    TT_FATAL(shape[0] % tile_H == 0 && shape[1] % tile_W == 0, "Shape dimensions must be divisible by tile dimensions");
 
     uint32_t H = shape[0];
     uint32_t W = shape[1];
@@ -109,7 +109,7 @@ std::vector<T> convert_to_tile_layout(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
-    TT_ASSERT(data.size() % tile_HW == 0);
+    TT_FATAL(data.size() % tile_HW == 0, "data size must be divisible by tile_HW");
     int num_tiles = data.size() / tile_HW;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left;
@@ -130,7 +130,7 @@ std::vector<T> convert_to_tile_layout(
                     } else if (row >= face_H and col >= face_W) {
                         bottom_right.push_back(data[index]);
                     } else {
-                        TT_ASSERT(false);
+                        TT_FATAL(false, "Unexpected face index");
                     }
                     index += tile_W;
                 }
@@ -148,16 +148,17 @@ std::vector<T> convert_to_tile_layout(
                     } else if (row >= face_H and col >= face_W) {
                         bottom_right.push_back(data[index]);
                     } else {
-                        TT_ASSERT(false);
+                        TT_FATAL(false, "Unexpected face index");
                     }
                     index++;
                 }
             }
         }
-        TT_ASSERT(top_left.size() == face_HW);
-        TT_ASSERT((top_right.size() == 0) or (top_right.size() == face_HW));
-        TT_ASSERT((bottom_left.size() == 0) or (bottom_left.size() == face_HW));
-        TT_ASSERT((bottom_right.size() == 0) or (bottom_right.size() == face_HW));
+        TT_FATAL(top_left.size() == face_HW, "top_left size must equal face_HW");
+        TT_FATAL((top_right.size() == 0) or (top_right.size() == face_HW), "top_right size must be 0 or face_HW");
+        TT_FATAL((bottom_left.size() == 0) or (bottom_left.size() == face_HW), "bottom_left size must be 0 or face_HW");
+        TT_FATAL(
+            (bottom_right.size() == 0) or (bottom_right.size() == face_HW), "bottom_right size must be 0 or face_HW");
 
         if (transpose_face_order) {
             result.insert(result.end(), top_left.begin(), top_left.end());
@@ -195,7 +196,7 @@ std::vector<T> convert_to_flat_layout(
     auto face_HW = face_H * face_W;
     auto num_faces_col = tile_W / face_W;
     auto num_faces_row = tile_H / face_H;
-    TT_ASSERT(data.size() % tile_HW == 0);
+    TT_FATAL(data.size() % tile_HW == 0, "data size must be divisible by tile_HW");
     int num_tiles = data.size() / tile_HW;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         int tile_start = tile_idx * tile_HW;
@@ -273,7 +274,7 @@ std::vector<T> convert_layout(
             } else if (outL == TensorLayoutType::LIN_ROW_MAJOR) {
                 return untilize_nchw<T>(inp, shape, tile_shape);
             } else {
-                TT_ASSERT(false && "Unsupported conversion.");
+                TT_FATAL(false, "Unsupported conversion.");
             }
             break;
         case TensorLayoutType::LIN_ROW_MAJOR:
@@ -284,7 +285,7 @@ std::vector<T> convert_layout(
                 return convert_to_tile_layout<T>(
                     swiz32, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
-                TT_ASSERT(false && "Unsupported conversion.");
+                TT_FATAL(false, "Unsupported conversion.");
             }
             break;
         case TensorLayoutType::TILED_NFACES:
@@ -296,10 +297,10 @@ std::vector<T> convert_layout(
                     convert_to_flat_layout<T>(inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
                 return untilize_nchw<T>(swiz32, shape, tile_shape);
             } else {
-                TT_ASSERT(false && "Unsupported conversion");
+                TT_FATAL(false, "Unsupported conversion");
             }
             break;
-        default: TT_ASSERT(false && "Unsupported conversion");
+        default: TT_FATAL(false, "Unsupported conversion");
     }
     return std::vector<T>();
 }

@@ -3,17 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tilize.h"
+#include "api/compute/pack_untilize.h"
 
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t i = 0;
 
     uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
@@ -92,7 +91,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -109,7 +108,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -120,11 +119,11 @@ void MAIN {
                             // uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
                             // uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
                             // uint32_t in1_index = in1_index_subblock_offset; // offset into in1 block
-                            // // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                            // // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                             // for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                             //     // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             //     // accumulation is done by iterating matmul_block across inner dim
-                            //     // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                            //     // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                             //     matmul_block(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
                             //     in0_index ++;  // stride right by 1
                             //     in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
@@ -172,4 +171,3 @@ void MAIN {
     }  // batch
 
 }
-} // NAMESPACE

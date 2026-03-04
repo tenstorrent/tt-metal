@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "debug/dprint.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "api/debug/dprint.h"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto Wt = get_arg_val<uint32_t>(i++);
@@ -87,5 +86,4 @@ void MAIN {
     if (do_mask_w) {
         cb_pop_front(cb_mask_w, onetile);
     }
-}  // void MAIN
-}  // namespace NAMESPACE
+}

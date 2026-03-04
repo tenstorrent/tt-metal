@@ -43,7 +43,7 @@ public:
 
     void set_bypass_mode(bool enable, bool clear);
 
-    bool get_bypass_mode();
+    bool get_bypass_mode() const;
 
     std::vector<uint32_t>& get_bypass_data();
 
@@ -78,6 +78,8 @@ public:
 
     void send_completion_queue_read_ptr(uint8_t cq_id) const;
 
+    void* get_completion_queue_ptr(uint8_t cq_id) const;
+
     void wrap_issue_queue_wr_ptr(uint8_t cq_id);
 
     void wrap_completion_queue_rd_ptr(uint8_t cq_id);
@@ -88,13 +90,11 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
-    // Boths CQs on the device must be idle when this is called.
+    // Both CQs on the device must be idle when this is called.
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
 private:
-    void on_timeout_detected() const;
-
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;

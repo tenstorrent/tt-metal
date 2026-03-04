@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "compile_time_args.h"
+#include "api/compile_time_args.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 enum class FabricChannelPoolType {

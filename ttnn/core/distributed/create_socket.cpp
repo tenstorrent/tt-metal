@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
 #include "ttnn/distributed/fabric_socket.hpp"
@@ -24,13 +25,14 @@ std::unique_ptr<ISocket> create_socket(
         socket_type == SocketType::FABRIC, "Only FABRIC and MPI socket types are supported. Received: {}", socket_type);
     if (endpoint_socket_type == EndpointSocketType::SENDER) {
         return FabricSocket::create(mesh_device, socket_config.distributed_context->rank(), other_rank, socket_config);
-    } else if (endpoint_socket_type == EndpointSocketType::RECEIVER) {
-        return FabricSocket::create(mesh_device, other_rank, socket_config.distributed_context->rank(), socket_config);
-    } else if (endpoint_socket_type == EndpointSocketType::BIDIRECTIONAL) {
-        return BidirectionalFabricSocket::create(mesh_device, other_rank, socket_config);
-    } else {
-        throw std::runtime_error("Unsupported EndpointSocketType");
     }
+    if (endpoint_socket_type == EndpointSocketType::RECEIVER) {
+        return FabricSocket::create(mesh_device, other_rank, socket_config.distributed_context->rank(), socket_config);
+    }
+    if (endpoint_socket_type == EndpointSocketType::BIDIRECTIONAL) {
+        return BidirectionalFabricSocket::create(mesh_device, other_rank, socket_config);
+    }
+    throw std::runtime_error("Unsupported EndpointSocketType");
 }
 
 }  // namespace ttnn::distributed

@@ -38,6 +38,7 @@ protected:
             ids.push_back(id);
         }
         this->create_devices(ids);
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -99,6 +100,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -154,6 +156,7 @@ protected:
             GTEST_SKIP();
         }
         this->create_devices();
+        init_max_cbs();
     }
 };
 

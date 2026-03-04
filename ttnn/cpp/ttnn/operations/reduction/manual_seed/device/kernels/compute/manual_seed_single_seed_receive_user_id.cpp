@@ -2,25 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/rand.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile time args
-    constexpr uint32_t seed = get_compile_time_arg_val(0);
+    constexpr uint32_t kernel_communication_cb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t seed = get_compile_time_arg_val(1);
 
-    // Read core ID from mailbox
-    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
+    // Constants
+    constexpr uint32_t one_tile = 1;
 
-    // Initialize random generator if core_id matched
-    if (is_core_id) {
+    // Get message from reader
+    cb_wait_front(kernel_communication_cb_index, one_tile);
+
+    // Get communication entry
+    const uint32_t message = read_tile_value(kernel_communication_cb_index, /*tile_index=*/0, /*element_offset=*/0);
+    const bool is_core_id = (message != 0) ? true : false;
+
+    // A seed value of UINT32_MAX (0xFFFFFFFF) is a special value
+    // that skips rand_tile_init, leaving the PRNG state unchanged.
+    if (is_core_id && seed != UINT32_MAX) {
         rand_tile_init(seed);
     }
+
+    // Pop the communication entry
+    cb_pop_front(kernel_communication_cb_index, one_tile);
 }
-}  // namespace NAMESPACE

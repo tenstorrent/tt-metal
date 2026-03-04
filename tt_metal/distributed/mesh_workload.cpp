@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -97,7 +99,11 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     auto& program = programs_.at(device_range);
     program.impl().compile(mesh_device);
     program.impl().allocate_circular_buffers(mesh_device);
+    program.impl().validate_circular_buffer_core_ranges(mesh_device);
     program.impl().validate_circular_buffer_region(mesh_device);
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(mesh_device);
+    program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
@@ -126,7 +132,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     auto* mesh_device = mesh_cq.device();
     if (!program_binary_status_.empty()) {
         TT_FATAL(
-            program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
+            program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
             program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
@@ -187,7 +193,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
 }
 
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
-    if (program_binary_status_.find(mesh_id) != program_binary_status_.end()) {
+    if (program_binary_status_.contains(mesh_id)) {
         return program_binary_status_.at(mesh_id);
     }
     return ProgramBinaryStatus::NotSent;
@@ -405,7 +411,6 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         return this->semaphores();
     };
 
-    // Create a span with all programs
     std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
     program_impls.reserve(programs_.size());
     for (auto& [_, program] : programs_) {

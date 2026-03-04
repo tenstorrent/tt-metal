@@ -28,7 +28,6 @@ class RMSNorm(RMSNormBase):
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
-        convert_meta: bool = False,
     ) -> WeightConfig:
         torch_metaweight = get_state_dicts(state_dicts, "weight", dtype=torch.bfloat16)
         num_shards = torch_metaweight.shape[0]
@@ -47,7 +46,6 @@ class RMSNorm(RMSNormBase):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                convert_meta=convert_meta,
             ),
         }
 
@@ -57,7 +55,6 @@ class RMSNorm(RMSNormBase):
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
             compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     @classmethod

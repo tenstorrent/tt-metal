@@ -192,7 +192,8 @@ These regressions will also run after every pushed commit to the GitHub repo.
 ```
 # Build directly with CMake for full control or run the provided script for building all tests.
 ./build_metal.sh --build-tests
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
+./tests/scripts/run_python_api_unit_tests.sh
+./tests/scripts/run_cpp_unit_tests.sh
 ```
 
 If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests
@@ -224,13 +225,13 @@ on model tests.
 If you are using a machine with virtual machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_virtual_machine
+pytest models/ -m models_performance_virtual_machine
 ```
 
 If you are using a machine with bare metal machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_bare_metal
+pytest models/ -m models_performance_bare_metal
 ```
 
 ### Running C++ Integration Tests (Legacy)
@@ -329,7 +330,7 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
   - Once the design has been "proven", disable watcher for performance testing.
 - To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/kernel_print.rst):
   - Define the environment variable to specify which cores to print from, `export TT_METAL_DPRINT_CORES=(0,0)-(4,4)` to print from a 5x5 grid of cores.
-  - In the kernel, `#include "debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
+  - In the kernel, `#include "api/debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
   - For more information on kernel printing, see the [Kernel Debug Print documentation](docs/source/tt-metalium/tools/kernel_print.rst).
 
 ### Debugging device hangs
@@ -813,11 +814,6 @@ After that, the UI will usually delete your branch.
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
 
-### A recommended development flow for model writers
-
-Please refer to documentation for [adding a model](./models/docs/MODEL_ADD.md) and
-for [graduating](./models/docs/MODEL_GRADUATION.md) it.
-
 ### New feature and design specifications
 
 - New or changing features require the following accompanying documentation:
@@ -856,3 +852,24 @@ For T3000 (QuietBox, LoudBox etc.): `tt-smi -r 0,1,2,3`
 
 If the software reset does not work, unfortunately you will have to power cycle
 the board. This usually means rebooting the host of a board.
+
+## Bug Bounty Program - AI Tool Restrictions
+
+**Important Notice for Bug Bounty Issues:**
+
+Use of automation or AI agents to claim or request assignment of bug bounty issues is **strictly prohibited**. This restriction targets automated posting/claiming behavior, not offline AI assistance by human contributors. This includes but is not limited to:
+- AI agents posting directly to GitHub issues
+- Automated systems submitting bug bounty claims
+- AI-generated responses claiming or requesting assignment of bug bounty issues
+
+**Allowed AI Usage:**
+- Users may use AI tools to translate content from other languages into English for communication purposes
+- Users may use AI tools (locally or via non-autonomous services) to assist in their own development work, including code generation or refactoring, provided they personally review, understand, and take responsibility for all submissions
+- Any AI-assisted content must be posted manually by the human contributor and must not be used to automatically claim or request assignment of bug bounty issues
+
+**Enforcement:**
+- Any AI-generated or automated posts attempting to claim a bug bounty will result in the associated account being **permanently banned** from the repository
+- This policy applies regardless of whether the issue is already assigned to another person
+- Human contributors must personally engage with bug bounty issues and take full responsibility for their contributions
+
+If you have questions about this policy, please reach out to the maintainers before posting.

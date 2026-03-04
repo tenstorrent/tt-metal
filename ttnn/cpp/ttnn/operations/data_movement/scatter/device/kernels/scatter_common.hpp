@@ -4,52 +4,10 @@
 
 #pragma once
 
+#include "common.hpp"
+
 #include <array>
 #include <cstdint>
-
-constexpr uint32_t ONE_PAGE = 1;
-
-// supported reduction methods for scatter to be applied for source values coming from recurring indices
-enum class ScatterReductionType : uint8_t { INVALID, ADD, MULTIPLY, AMIN, AMAX };
-
-// choose the right C++ POD type at compile-time
-template <DataFormat df>
-struct df_to_std {
-    using std_type = void;
-};
-
-template <>
-struct df_to_std<DataFormat::Float32> {
-    using std_type = float;
-};
-
-template <>
-struct df_to_std<DataFormat::Float16_b> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::Int32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt16> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt8> {
-    using std_type = uint8_t;
-};
-
-template <DataFormat df>
-using std_type_t = typename df_to_std<df>::std_type;
 
 template <
     typename InputAccessorArgs,
@@ -74,7 +32,6 @@ struct ScatterCTAs {
     const uint32_t source_stick_size_bytes;
     const uint32_t output_stick_size_bytes;
     const uint32_t input_rank;
-    const ScatterReductionType scatter_reduction_type;
     const InputAccessorArgs input_args;
     const IndexAccessorArgs index_args;
     const SourceAccessorArgs source_args;
@@ -104,20 +61,9 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
-        static_cast<ScatterReductionType>(get_compile_time_arg_val(17)),
         input_args,
         index_args,
         source_args,
         output_args,
     };
-}
-
-template <uint32_t N>
-std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
-    std::array<uint32_t, N> ret{};
-    for (uint32_t i = C; i < C + N; ++i) {
-        ret[i - C] = get_arg_val<uint32_t>(i);
-    }
-
-    return ret;
 }

@@ -9,7 +9,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/maybe_remote.hpp>
@@ -114,7 +113,7 @@ bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 
-std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
+std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -205,6 +204,7 @@ private:
 
 bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
+bool operator<(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range);
 
 // Represents a set of non-overlapping MeshCoordinateRanges.
@@ -217,7 +217,7 @@ public:
     explicit MeshCoordinateRangeSet(const MeshCoordinateRange&);
 
     // Merges the given range into the set.
-    void merge(const MeshCoordinateRange& range);
+    void merge(const MeshCoordinateRange& to_merge);
 
     // Returns the number of ranges in the set.
     size_t size() const { return ranges_.size(); }
@@ -447,8 +447,8 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
     shape_(shape), coord_range_(shape), values_(std::move(values)) {
     TT_FATAL(
         shape.mesh_size() == values_.size(),
-        "Shape and values size mismatch; shape: {}, values: {}",
-        shape,
+        "Shape and values size mismatch; shape mesh_size: {}, values size: {}",
+        shape.mesh_size(),
         values_.size());
 }
 
@@ -572,23 +572,17 @@ struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValuePr
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinate> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept;
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRange> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept;
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept;
 };
 
 }  // namespace std

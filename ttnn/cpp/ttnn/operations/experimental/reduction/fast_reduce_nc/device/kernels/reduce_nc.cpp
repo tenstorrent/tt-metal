@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
@@ -49,4 +48,3 @@ void MAIN {
         cb_push_back(cb_out0, onetile);
     }
 }
-}  // namespace NAMESPACE

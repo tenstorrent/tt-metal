@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include <string.h>
+#include <cstdint>
+#include <cstring>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -18,7 +18,6 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -86,7 +85,7 @@ protected:
     // Hook method to be implemented by derived classes
     virtual void print_datum(std::stringstream& ss, uint32_t datum) = 0;
 
-    void print_new_line(std::stringstream& ss, uint32_t i) {
+    void print_new_line(std::stringstream& ss, uint32_t i) const {
         if (i > 0) {
             ss << std::endl;
         }
@@ -416,10 +415,9 @@ static bool reader_datacopy_writer(
     // Check the print log against golden output.
     if (config.data_format == tt::DataFormat::Float32 && arch == ARCH::WORMHOLE_B0) {
         // Skip all device-side warning lines added before each tile print
-        DeleteLinesStartingWith(
-            DPrintMeshFixture::dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
     }
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
     // Compare input and output data
     return input_data == output_data;
@@ -455,10 +453,6 @@ protected:
     void TearDown() override { DPrintMeshFixture::TearDown(); }
 
     void RunDestPrintTest(const DestPrintTestConfig& config) {
-        if (config.data_format == tt::DataFormat::Float32 && this->arch_ == ARCH::GRAYSKULL) {
-            GTEST_SKIP() << "Float32 dest is not supported on grayskull.";
-        }
-
         if (config.data_format == tt::DataFormat::Int32 && this->arch_ != ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Int32 dest is not supported on non-blackhole.";
         }

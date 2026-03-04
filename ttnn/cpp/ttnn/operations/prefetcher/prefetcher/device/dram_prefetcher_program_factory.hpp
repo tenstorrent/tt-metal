@@ -6,7 +6,7 @@
 #include "dram_prefetcher_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::dram_prefetcher::program {
+namespace ttnn::prim {
 
 struct DramPrefetcherProgramFactory {
     struct shared_variables_t {
@@ -16,15 +16,15 @@ struct DramPrefetcherProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        const DramPrefetcherParams& operation_attributes,
+        const DramPrefetcherInputs& tensor_args,
+        Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        const DramPrefetcherParams& operation_attributes,
+        const DramPrefetcherInputs& tensor_args,
+        Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::dram_prefetcher::program
+}  // namespace ttnn::prim

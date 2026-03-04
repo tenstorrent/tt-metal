@@ -52,7 +52,7 @@ struct ApplyDeviceDelayDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -61,22 +61,19 @@ struct ApplyDeviceDelayDeviceOperation {
     using program_factory_t = std::variant<ApplyDeviceDelayMeshWorkload>;
 
     // Mandatory methods
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        ttnn::MeshDevice& mesh_device,
-        const std::vector<std::vector<uint32_t>>& delays,
-        const CoreRangeSet& subdevice_core_range_set);
 };
 
 }  // namespace ttnn::operations::debug
 
 namespace ttnn::prim {
-// Register the operation
-constexpr auto apply_device_delay = ttnn::
-    register_operation<"ttnn::prim::apply_device_delay", ttnn::operations::debug::ApplyDeviceDelayDeviceOperation>();
+
+ttnn::operations::debug::ApplyDeviceDelayDeviceOperation::tensor_return_value_t apply_device_delay(
+    ttnn::MeshDevice& mesh_device,
+    const std::vector<std::vector<uint32_t>>& delays,
+    const CoreRangeSet& subdevice_core_range_set);
+
 }  // namespace ttnn::prim

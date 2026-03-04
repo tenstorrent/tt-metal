@@ -159,7 +159,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 
     uint32_t ncores_y = ncores / ncores_x;
-    TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be devisible by batch size of input1");
+    TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be divisible by batch size of input1");
     uint32_t Ht_per_batch_b = std::min((NC * H / TILE_HEIGHT) / bN, Ht);
     uint32_t batch_b = Ht / Ht_per_batch_b;
 
@@ -235,7 +235,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
 
 void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -263,10 +263,8 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
     uint32_t N = ashape[0], C = ashape[1];
     uint32_t bN = input_tensor_b->padded_shape()[0];
     uint32_t NC = N * C;
-    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else {

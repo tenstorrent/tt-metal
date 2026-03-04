@@ -7,18 +7,9 @@
 #include <enchantum/enchantum.hpp>
 
 #include "rmsnorm_fw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
-
-RMSNormForwardDeviceOperation::program_factory_t RMSNormForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return RMSNormForwardProgramFactory{};
-}
-
-void RMSNormForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -127,32 +118,35 @@ ttsl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }
 
-std::tuple<RMSNormForwardDeviceOperation::operation_attributes_t, RMSNormForwardDeviceOperation::tensor_args_t>
-RMSNormForwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::rmsnorm_fw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_fw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     bool return_intermediates,
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_rms,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .return_intermediates = return_intermediates,
-            .epsilon = epsilon,
-        },
-        tensor_args_t{
-            .input = input_tensor,
-            .gamma = gamma_tensor,
-            .preallocated_rms = preallocated_rms,
-            .preallocated_output = preallocated_output,
-        }};
+    using OperationType = ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation;
+
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.return_intermediates = return_intermediates, .epsilon = epsilon};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .gamma = gamma_tensor,
+        .preallocated_rms = preallocated_rms,
+        .preallocated_output = preallocated_output,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::rmsnorm_fw::device
+}  // namespace ttnn::prim

@@ -5,8 +5,8 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <math.h>
-#include <stdint.h>
+#include <cmath>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -36,6 +36,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/data_format/bfloat16_utils.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -213,6 +214,7 @@ void run_single_core_transpose(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

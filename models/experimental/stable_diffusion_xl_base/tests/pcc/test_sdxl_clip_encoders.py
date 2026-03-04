@@ -6,14 +6,14 @@ import time
 
 import pytest
 import torch
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
-import ttnn
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextModel
+from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.experimental.tt_dit.utils.check import assert_quality
+import ttnn
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.tt_dit.encoders.clip.model_clip import CLIPConfig, CLIPEncoder
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(
@@ -31,26 +31,53 @@ from models.experimental.tt_dit.utils.check import assert_quality
     indirect=["device_params"],
 )
 def test_clip_encoder(
-    *, mesh_device: ttnn.Device, clip_path: str, tokenizer_path: str, expected_pcc: float, is_ci_env, reset_seeds
+    *,
+    mesh_device: ttnn.Device,
+    clip_path: str,
+    tokenizer_path: str,
+    expected_pcc: float,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
 ) -> None:
-    model_name_checkpoint = f"stabilityai/stable-diffusion-xl-base-1.0"
+    model_name_checkpoint = "stabilityai/stable-diffusion-xl-base-1.0"
+
+    # Download model for CI v2
+    model_location = model_location_generator(
+        f"stable-diffusion-xl-base-1.0/{clip_path}",
+        download_if_ci_v2=True,
+        ci_v2_timeout_in_s=1800,
+    )
+    tokenizer_location = model_location_generator(
+        f"stable-diffusion-xl-base-1.0/{tokenizer_path}",
+        download_if_ci_v2=True,
+        ci_v2_timeout_in_s=1800,
+    )
 
     has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
 
-    # Note: Factor for SDXL should always be 1; since we don't support TP
-    parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
-    )
-    ccl_manager = None
+    # Build kwargs conditionally to avoid transformers subfolder=None bug
+    model_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
+    tokenizer_kwargs = {"local_files_only": is_ci_env or is_ci_v2_env}
+
+    if not is_ci_v2_env:
+        model_kwargs["subfolder"] = clip_path
+        tokenizer_kwargs["subfolder"] = tokenizer_path
 
     if has_projection:
         hf_model = CLIPTextModelWithProjection.from_pretrained(
-            model_name_checkpoint, subfolder=clip_path, local_files_only=is_ci_env
+            model_location if is_ci_v2_env else model_name_checkpoint,
+            **model_kwargs,
         )
     else:
-        hf_model = CLIPTextModel.from_pretrained(model_name_checkpoint, subfolder=clip_path, local_files_only=is_ci_env)
+        hf_model = CLIPTextModel.from_pretrained(
+            model_location if is_ci_v2_env else model_name_checkpoint,
+            **model_kwargs,
+        )
     tokenizer = CLIPTokenizer.from_pretrained(
-        model_name_checkpoint, subfolder=tokenizer_path, local_files_only=is_ci_env
+        tokenizer_location if is_ci_v2_env else model_name_checkpoint,
+        **tokenizer_kwargs,
     )
 
     hf_model.eval()
@@ -73,6 +100,13 @@ def test_clip_encoder(
     start_time = time.time()
 
     # === TT-DiT CLIP ====
+
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+    ccl_manager = None
+
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.hidden_size,
@@ -83,10 +117,11 @@ def test_clip_encoder(
         layer_norm_eps=hf_model.config.layer_norm_eps,
         attention_dropout=hf_model.config.attention_dropout,
         hidden_act=hf_model.config.hidden_act,
+        projection_dim=hf_model.config.projection_dim if has_projection else None,
     )
 
     tt_clip = CLIPEncoder(config, mesh_device, ccl_manager, parallel_config, eos_token_id)
-    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip.load_torch_state_dict(hf_model.state_dict())
     logger.info(f"text encoder creation time: {time.time() - start_time}")
 
     # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
@@ -117,12 +152,14 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
+    tt_clip(tt_tokens, mesh_device)
 
     logger.info("executing text encoder...")
     start_time = time.time()
 
-    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")

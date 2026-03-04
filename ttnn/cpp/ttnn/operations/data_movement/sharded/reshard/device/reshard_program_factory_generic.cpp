@@ -10,7 +10,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshard {
+namespace ttnn::prim {
 
 namespace detail {
 // start is inclusive, end is exclusive
@@ -39,17 +39,7 @@ struct CompressedStrideBlock {
     uint32_t num_repeats = 0;
 };
 
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range{};
-};
-
-struct CorePageStride {
-    CoreCoord core;
-    PageStride page_stride;
-};
-
-enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
+enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF };
 
 std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_reshard(
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page,
@@ -109,12 +99,9 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                     while (consecutive_it != end and consecutive_it->has_value()) {
                         auto next_input_page = *(consecutive_it);
                         auto curr_input_page = *(last_it_consec);
-                        // diff core , not consecutive
-                        if (curr_input_page.value().first != next_input_page.value().first) {
-                            break;
-                        }
-                        // not consecutive
-                        else if ((curr_input_page.value().second + 1) != next_input_page.value().second) {
+                        // diff core or not consecutive
+                        if (curr_input_page.value().first != next_input_page.value().first ||
+                            (curr_input_page.value().second + 1) != next_input_page.value().second) {
                             break;
                         }
                         // next page is padding
@@ -635,13 +622,10 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 }  // namespace detail
 
-namespace program {
 ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
-    const reshard::operation_attributes_t& operation_attributes,
-    const reshard::tensor_args_t& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    auto& output = tensor_return_value;
+    auto& output = output_tensor;
 
     auto* device = input.device();
 
@@ -766,11 +750,11 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
 void ReshardGenericFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const reshard::operation_attributes_t& operation_attributes,
-    const reshard::tensor_args_t& tensor_args,
-    reshard::tensor_return_value_t& tensor_return_value) {
+    const ReshardParams& /*operation_attributes*/,
+    const ReshardInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     uint32_t input_addr = input.buffer()->address();
     auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
     auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
@@ -784,5 +768,5 @@ void ReshardGenericFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.cb_dst0, *output.buffer());
 }
-}  // namespace program
-}  // namespace ttnn::operations::data_movement::reshard
+
+}  // namespace ttnn::prim

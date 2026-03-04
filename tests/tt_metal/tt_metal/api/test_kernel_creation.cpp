@@ -16,7 +16,7 @@
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
@@ -32,8 +32,7 @@ using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
 TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
-    for (unsigned int id = 0; id < this->devices_.size(); id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -56,8 +55,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
-    for (unsigned int id = 0; id < this->devices_.size(); id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (const auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
 
         distributed::MeshWorkload workload;
@@ -68,7 +66,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         auto& program_ = workload.get_programs().at(device_range);
 
         const auto& dispatch_core_config = get_dispatch_core_config();
-        CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+        CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
         std::vector<CoreCoord> dispatch_cores =
             tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
@@ -120,6 +118,36 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     EXPECT_THROW(this->create_kernel(kernel_file), std::exception);
+}
+
+TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
+    const std::string inline_source = "void kernel_main() {}";
+
+    auto program = CreateProgram();
+
+    auto file_kernel_handle = CreateKernel(
+        program,
+        kernel_file,
+        CoreCoord(0, 0),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    auto inline_kernel_handle = CreateKernelFromString(
+        program,
+        inline_source,
+        CoreCoord(0, 0),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto file_kernel = program.impl().get_kernel(file_kernel_handle);
+    auto inline_kernel = program.impl().get_kernel(inline_kernel_handle);
+
+    auto file_meta = file_kernel->meta(nullptr);
+    auto inline_meta = inline_kernel->meta(nullptr);
+
+    EXPECT_EQ(inline_meta.source, "Inline source")
+        << "SOURCE_CODE kernels should report 'Inline source' in metadata, not the raw source code";
+
+    EXPECT_EQ(file_meta.source, kernel_file) << "FILE_PATH kernels should report their file path in metadata";
 }
 
 // Unit test for Kernel::compute_hash() - tests that different unpack_to_dest_mode produces different hashes

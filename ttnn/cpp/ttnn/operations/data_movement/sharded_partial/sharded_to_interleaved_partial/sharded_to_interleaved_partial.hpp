@@ -13,8 +13,8 @@ struct ShardedToInterleavedPartialOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& cache_tensor,
-        int64_t& num_slices,
-        int64_t& slice_index,
+        int64_t num_slices,
+        int64_t slice_index,
         const std::optional<MemoryConfig>& memory_config_arg,
         const std::optional<DataType>& data_type_arg);
 };

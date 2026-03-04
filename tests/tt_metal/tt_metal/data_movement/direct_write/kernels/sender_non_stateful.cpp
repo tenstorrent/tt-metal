@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(0);
@@ -60,5 +60,5 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Same destination", same_destination);
     DeviceTimestampedData("Same value", same_value);
-    DeviceTimestampedData("NOC Index", noc_id);
+    DeviceTimestampedData("NoC Index", noc_id);
 }

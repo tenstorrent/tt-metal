@@ -7,7 +7,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -104,7 +104,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
     }
-    volatile uint32_t* responder_receive_ptr = reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address);
+
+    // Use the last word of the buffer for synchronization, indicating the entire rest of the payload has arrived before it
+    const size_t payload_end_offset = payload_size_bytes - sizeof(uint32_t);
+    volatile uint32_t* responder_receive_ptr =
+        reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address + payload_end_offset);
     *responder_receive_ptr = 0;
     // Warmup: respond to flush packet
     {

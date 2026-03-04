@@ -1,13 +1,16 @@
 add_library(common OBJECT)
 add_library(TT::Metalium::Common ALIAS common)
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(common)
+target_precompile_headers(common REUSE_FROM metal_common_pch)
+
 target_sources(
     common
     PRIVATE
         core_assignment.cpp
         core_coord.cpp
         mesh_coord.cpp
-        metal_soc_descriptor.cpp
         shape.cpp
         shape2d.cpp
         shape_base.cpp

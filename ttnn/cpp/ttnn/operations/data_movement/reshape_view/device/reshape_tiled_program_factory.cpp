@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <numeric>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -15,7 +15,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
-namespace ttnn::operations::data_movement::reshape {
+namespace ttnn::prim {
 
 namespace detail {
 
@@ -60,7 +60,7 @@ uint32_t tensor_idxs_to_page_idx(
     const uint32_t c,
     const uint32_t h,
     const uint32_t w,
-    const Shape& shape,
+    const Shape& /*shape*/,
     const std::array<uint32_t, 2>& tile_shape,
     const Dims& tile_dims) {
     return (c * tile_dims.c) + (h / tile_shape[0] * tile_dims.w) + (w / tile_shape[1]);
@@ -89,13 +89,7 @@ uint32_t tensor_idxs_to_faced_tile_offset(
 struct TileIterator {
     TileIterator(
         const uint32_t& in_start_h, const uint32_t& in_start_w, const uint32_t& in_end_h, const uint32_t& in_end_w) :
-        start_h(in_start_h),
-        start_w(in_start_w),
-        tile_idx_h(0),
-        tile_idx_w(0),
-        tile_end_h(in_end_h - 1),
-        tile_end_w(in_end_w - 1),
-        first(true) {};
+        start_h(in_start_h), start_w(in_start_w), tile_end_h(in_end_h - 1), tile_end_w(in_end_w - 1) {};
 
     bool next() {
         if (first) {
@@ -105,31 +99,31 @@ struct TileIterator {
         if (tile_idx_w < tile_end_w) {
             ++tile_idx_w;
             return true;
-        } else if (tile_idx_h < tile_end_h) {
+        }
+        if (tile_idx_h < tile_end_h) {
             tile_idx_w = 0;
             ++tile_idx_h;
             return true;
-        } else {
-            return false;
         }
+        return false;
     }
 
     auto operator*() { return std::make_tuple(this->h(), this->w()); }
 
-    uint32_t size() { return (tile_end_h + 1) * (tile_end_w + 1); }
+    uint32_t size() const { return (tile_end_h + 1) * (tile_end_w + 1); }
 
 protected:
     const uint32_t& start_h;
     const uint32_t& start_w;
-    uint32_t tile_idx_h;
-    uint32_t tile_idx_w;
+    uint32_t tile_idx_h{0};
+    uint32_t tile_idx_w{0};
     const uint32_t tile_end_h;
     const uint32_t tile_end_w;
-    bool first;
+    bool first{true};
 
-    uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() const { return start_h + tile_idx_h; }
 
-    uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() const { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
@@ -173,7 +167,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
         TT_ASSERT(wi < input_shape[2], "wi: {} input_shape[2]: {} ", wi, input_shape[2]);
         TT_ASSERT(offset_i < tile_shape[0] * tile_shape[1]);
 
-        if (map_data.count(page_idx_i)) {
+        if (map_data.contains(page_idx_i)) {
             if (page_idx_i == prev_page_idx_i && offset_i - prev_offset_i == 1 && offset_o - prev_offset_o == 1) {
                 ++map_data[page_idx_i].back().num_elements;
             } else {
@@ -211,7 +205,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 }
 
 Tensor compute_reshape_mapping_host_tensor(
-    const uint32_t num_input_pages,
+    const uint32_t /*num_input_pages*/,
     const uint32_t num_output_pages,
     const Shape& input_shape,
     const Shape& output_shape,
@@ -277,10 +271,8 @@ Tensor compute_reshape_mapping_host_tensor(
 // map, the reader copies the segment from the input page to a scratch page stored in L1. When all segments are written,
 // the scratch page is copied to its output destination.
 
-ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+ReshapeViewTiledProgramFactory::cached_program_t ReshapeViewTiledProgramFactory::create(
+    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_return_value;
 
@@ -416,11 +408,11 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
     return {std::move(program), {reader_kernel_id, writer_kernel_id, utilized_cores, mapping_tensor}};
 }
 
-void ReshapeTiledProgramFactory::override_runtime_arguments(
+void ReshapeViewTiledProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReshapeViewParams& operation_attributes,
+    const ReshapeViewInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = shared_variables.writer_kernel_id;
@@ -462,4 +454,4 @@ void ReshapeTiledProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::prim

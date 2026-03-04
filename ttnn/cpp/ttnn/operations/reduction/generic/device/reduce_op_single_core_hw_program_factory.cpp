@@ -12,15 +12,13 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::reduction::generic::program {
+namespace ttnn::prim {
 
 ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceParams& operation_attributes, const Tensor& tensor_args, Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    const auto& a = tensor_args.input_tensor;
+    const auto& a = tensor_args;
     auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -83,6 +81,22 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
+    if (operation_attributes.negate) {
+        uint32_t acc_cb_index = tt::CBIndex::c_4;
+        uint32_t num_acc_tiles = 1;
+        tt_metal::CircularBufferConfig cb_acc_config =
+            tt_metal::CircularBufferConfig(num_acc_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+                .set_page_size(acc_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, core, cb_acc_config);
+
+        uint32_t inv_cb_index = tt::CBIndex::c_5;
+        uint32_t num_inv_tiles = 1;
+        tt_metal::CircularBufferConfig cb_inv_config =
+            tt_metal::CircularBufferConfig(num_inv_tiles * dst_single_tile_size, {{inv_cb_index, dst_cb_data_format}})
+                .set_page_size(inv_cb_index, dst_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, core, cb_inv_config);
+    }
+
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
@@ -95,7 +109,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -105,9 +119,13 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
         NC,  // NC
     };
 
+    const std::string compute_kernel =
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw") +
+        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw.cpp",
+        compute_kernel,
         core,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -127,12 +145,12 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
 void ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ReduceParams& /*operation_attributes*/,
+    const Tensor& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
+    auto* src_dram_buffer = tensor_args.buffer();
     auto* dst_dram_buffer = tensor_return_value.buffer();
     CoreCoord core = cached_program.shared_variables.selected_core_coord;
 
@@ -149,4 +167,4 @@ void ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::generic::program
+}  // namespace ttnn::prim

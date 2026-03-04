@@ -10,9 +10,9 @@
 #include <memory>
 #include <random>
 #include <set>
-#include <stdlib.h>
+#include <cstdlib>
 #include <string>
-#include <string.h>
+#include <cstring>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -58,10 +58,6 @@
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -167,16 +163,15 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
 
 void initialize_dummy_semaphores(
     Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values) {
-    for (uint32_t i = 0; i < init_values.size(); i++) {
-        CreateSemaphore(program, core_ranges, init_values[i]);
+    for (unsigned int init_value : init_values) {
+        CreateSemaphore(program, core_ranges, init_value);
     }
 }
 
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -195,12 +190,12 @@ bool cb_config_successful(
     distributed::MeshWorkload& workload,
     const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
     // to read from
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     auto* device = mesh_device->get_devices()[0];
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
@@ -213,10 +208,10 @@ bool cb_config_successful(
                 cb_config_vector);
 
             uint32_t cb_addr = l1_unreserved_base;
-            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
-                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+            for (const auto& config : program_config.cb_config_vector) {
+                const uint32_t index = config.cb_id * sizeof(uint32_t);
+                const uint32_t cb_num_pages = config.num_pages;
+                const uint32_t cb_size = cb_num_pages * config.page_size;
                 const bool addr_match = cb_config_vector.at(index) == cb_addr;
                 const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -342,7 +337,11 @@ bool test_dummy_EnqueueProgram_with_sems(
     distributed::MeshWorkload& workload,
     const DummyProgramConfig& program_config,
     const vector<vector<uint32_t>>& expected_semaphore_vals) {
-    TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
+    TT_FATAL(
+        program_config.cr_set.size() == expected_semaphore_vals.size(),
+        "cr_set size {} must match expected_semaphore_vals size {}",
+        program_config.cr_set.size(),
+        expected_semaphore_vals.size());
 
     bool are_all_semaphore_values_correct = true;
 
@@ -354,7 +353,11 @@ bool test_dummy_EnqueueProgram_with_sems(
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
-        TT_ASSERT(expected_semaphore_vals_for_core.size() == program_config.num_sems);
+        TT_FATAL(
+            expected_semaphore_vals_for_core.size() == program_config.num_sems,
+            "expected_semaphore_vals_for_core size {} must match num_sems {}",
+            expected_semaphore_vals_for_core.size(),
+            program_config.num_sems);
         expected_semaphore_vals_idx++;
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
@@ -846,7 +849,8 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
         case HalProgrammableCoreType::TENSIX:
             switch (processor_class) {
                 case HalProcessorClassType::DM:
-                    TT_ASSERT(0 <= processor_id && processor_id < 2);
+                    TT_FATAL(
+                        0 <= processor_id && processor_id < 2, "processor_id {} must be 0 or 1 for DM", processor_id);
                     unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
                                        processor_id * 256 * sizeof(uint32_t);
                     common_args_addr = unique_args_addr + (3 + processor_id) * 256 * sizeof(uint32_t);
@@ -1185,8 +1189,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
     for (const auto& device : devices_) {
@@ -1467,8 +1470,8 @@ namespace multicore_tests {
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1488,8 +1491,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1530,8 +1533,8 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCo
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1554,8 +1557,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges)
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1856,7 +1859,9 @@ namespace stress_tests {
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();  // Running on second CQ is hanging on CI
@@ -1896,14 +1901,14 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             BRISC_OUTER_LOOP = MAX_LOOP;
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
-            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_CBS = max_cbs_;
             NUM_SEMS = NUM_SEMAPHORES;
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_CBS = rand() % (max_cbs_) + 1;
             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
             USE_MAX_RT_ARGS = false;
         }
@@ -2135,7 +2140,9 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
@@ -2177,14 +2184,14 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             BRISC_OUTER_LOOP = MAX_LOOP;
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
-            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_CBS = max_cbs_;
             NUM_SEMS = NUM_SEMAPHORES;
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_CBS = rand() % (max_cbs_) + 1;
             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
             USE_MAX_RT_ARGS = false;
         }

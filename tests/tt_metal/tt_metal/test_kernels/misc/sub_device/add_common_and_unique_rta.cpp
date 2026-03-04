@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 /**
  * add two ints

@@ -5,8 +5,8 @@
 #include <array>
 #include <cstdint>
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "eth_l1_address_map.h"
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -330,7 +330,7 @@ void kernel_main() {
             // advance sender channel state as soon as we receive an ack. Since we
             // may be the last active channel, and advance to done state just from ack
             // from the receiver ("I got a payload"), then we need to wait for done
-            // at the very end here. Otherise if we invoke another erisc op back-to-back,
+            // at the very end here. Otherwise if we invoke another erisc op back-to-back,
             // we may mess up transaction state because it's possible for receiver of this
             // op to send the completion done after that one has already started.
             uint32_t wait_count = 0;

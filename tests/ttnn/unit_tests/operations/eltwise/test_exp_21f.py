@@ -8,13 +8,15 @@ import ttnn
 import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
+pytestmark = pytest.mark.use_module_device
+
 
 def test_exp_arange_masking(device):
     # Exp Working range - Overflow from 88.5(inf), Underflow till -87(<0)
     low = -87.0
     high = 88.5
 
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor_f32 = input_tensor.to(torch.float32)

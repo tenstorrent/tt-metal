@@ -16,12 +16,10 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
-namespace ttnn::operations::pool::grid_sample::program {
+namespace ttnn::prim {
 
 GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
     bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
@@ -227,26 +225,32 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
             input_cb_index_1,                  // ct_arg[8]: input_cb_index_1
             scalar_cb_index_0,                 // ct_arg[9]: scalar_cb_index_0
             scalar_cb_index_1,                 // ct_arg[10]: scalar_cb_index_1
-            DUMMY_CB_ID,                       // ct_arg[11]: unused
-            DUMMY_CB_ID,                       // ct_arg[12]: unused
-            DUMMY_CB_ID,                       // ct_arg[13]: unused
-            DUMMY_CB_ID,                       // ct_arg[14]: unused
-            DUMMY_CB_ID,                       // ct_arg[15]: unused
-            DUMMY_CB_ID,                       // ct_arg[16]: unused
-            output_cb_index,                   // ct_arg[17]: output_cb_index
-            DUMMY_CB_ID,                       // ct_arg[18]: unused
-            ONE_SCALAR_PER_CORE,               // ct_arg[19]: ONE_SCALAR_PER_CORE
-            pre_tilize_cb_id,                  // ct_arg[20]: pre_tilize_cb_id
-            is_output_tiled ? 1U : 0U,         // ct_arg[21]: is_output_tiled
-            is_output_block_format ? 1U : 0U,  // ct_arg[22]: is_output_block_format
-            false,                             // ct_arg[23]: return_indices (unused)
-            1,                                 // ct_arg[24]: stride_h (unused)
-            1,                                 // ct_arg[25]: stride_w (unused)
-            1,                                 // ct_arg[26]: in_h_padded (unused)
-            1,                                 // ct_arg[27]: in_w_padded (unused)
-            1,                                 // ct_arg[28]: eff_kernel_h (unused)
-            1,                                 // ct_arg[29]: eff_kernel_w (unused)
-            1,                                 // ct_arg[30]: pad_l (unused)
+            output_cb_index,                   // ct_arg[11]: output_cb_index
+            ONE_SCALAR_PER_CORE,               // ct_arg[12]: ONE_SCALAR_PER_CORE
+            pre_tilize_cb_id,                  // ct_arg[13]: pre_tilize_cb_id
+            is_output_tiled ? 1U : 0U,         // ct_arg[14]: is_output_tiled
+            is_output_block_format ? 1U : 0U,  // ct_arg[15]: is_output_block_format
+            DUMMY_CB_ID,                       // ct_arg[16]: unused (in_idx_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[17]: unused (pack_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[18]: unused (pack_idx_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[19]: unused (right_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[20]: unused (down_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[21]: unused (up_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[22]: unused (out_idx_cb_id for mpwi)
+            1,                                 // ct_arg[23]: stride_h (unused by grid_sample)
+            1,                                 // ct_arg[24]: stride_w (unused by grid_sample)
+            1,                                 // ct_arg[25]: in_h_padded (unused by grid_sample)
+            1,                                 // ct_arg[26]: in_w_padded (unused by grid_sample)
+            1,                                 // ct_arg[27]: eff_kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[28]: eff_kernel_w (unused by grid_sample)
+            1,                                 // ct_arg[29]: pad_l (unused by grid_sample)
+            DUMMY_CB_ID,                       // ct_arg[30]: intra_kernel_right_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_down_left_wrap_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[32]: compute_tmp_idx_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[33]: clear_value_cb_id (unused)
+            1,                                 // ct_arg[34]: kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[35]: kernel_w (unused by grid_sample)
+            0,                                 // ct_arg[36]: indexes_32_bit (unused by grid_sample)
         };
 
         return tt::tt_metal::CreateKernel(
@@ -258,7 +262,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args,
-                .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
+                .defines = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D)});
     };
 
     if (is_sharded || core_group_1.num_cores() > 0) {
@@ -354,9 +358,9 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
 
 void GridSampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const GridSampleParams& /*operation_attributes*/,
+    const GridSampleInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& prog = cached_program.program;
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& grid_tensor = tensor_args.grid;
@@ -393,4 +397,4 @@ void GridSampleBilinearProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::pool::grid_sample::program
+}  // namespace ttnn::prim

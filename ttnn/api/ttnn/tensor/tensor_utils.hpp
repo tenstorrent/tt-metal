@@ -5,62 +5,24 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace tt::tt_metal {
 
-tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
-
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const size_t> strides);
-
-std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile);
-
-constexpr auto compute_flat_input_index = [](const auto& indices, const auto& strides) {
-    uint32_t flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
-        flat_index += indices[i] * strides[i];
-    }
-    return flat_index;
-};
-
-// Returns true if architecture is GRAYSKULL.
-bool is_arch_gs(const tt::ARCH& arch);
-
-// Returns true if architecture is WORMHOLE_B0.
-bool is_arch_whb0(const tt::ARCH& arch);
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
+bool logical_matches_physical(const TensorSpec& tensor_spec);
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
 
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
-
-template <class T>
-uint32_t get_batch_size(const T& shape) {
-    uint32_t result = 1;
-    for (int i = 0; i < (int)shape.rank() - 2; i++) {
-        result *= shape[i];
-    }
-    return result;
-}
-
-// Useful information about how a shard_shape cuts a 2D shape
-// - num_shards_height: Number of shards along the height (including partial last shard, if any)
-// - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)
-// - num_shards_width: Number of shards along the width (including partial last shard, if any)
-// - last_shard_width: Width of last partial shard (if None, it will be same as full shard shape width)
-struct ShardDivisionSpec {
-    size_t num_shards_height = 0;
-    size_t last_shard_height = 0;
-    size_t num_shards_width = 0;
-    size_t last_shard_width = 0;
-};
-
-// Returns ShardDivisionSpecs given 2D shape and shard_shape
-ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape);
 
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.
@@ -73,6 +35,9 @@ ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2
  *
  * @param cb_index The CB ID to use for this circular buffer
  * @param tensor The sharded tensor to derive CB configuration from
+ * @param address_offset Byte offset from buffer base address for CB placement (default 0)
+ * @param total_size Total CB size in bytes (default 0 = use tensor's full bank size)
+ * @param core_ranges Optional CoreRangeSet override; if std::nullopt, uses the tensor's shard grid
  * @return CBDescriptor with all fields populated from the tensor
  *
  * Example usage (replaces manual calculation of all CB fields):
@@ -93,6 +58,24 @@ ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2
  *   CBDescriptor cb = cb_descriptor_from_sharded_tensor(in_cb_id, device_input_tensor);
  * @endcode
  */
-CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor);
+CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index,
+    const Tensor& tensor,
+    uint32_t address_offset = 0,
+    uint32_t total_size = 0,
+    const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
+
+/**
+ * @brief Get the L1 byte address of a CB descriptor.
+ *
+ * Returns buffer->address() + address_offset when a buffer is present,
+ * or just address_offset when no buffer is set (manually placed CB).
+ */
+inline uint32_t get_cb_address(const CBDescriptor& desc) {
+    if (desc.buffer == nullptr) {
+        return desc.address_offset;
+    }
+    return desc.buffer->address() + desc.address_offset;
+}
 
 }  // namespace tt::tt_metal

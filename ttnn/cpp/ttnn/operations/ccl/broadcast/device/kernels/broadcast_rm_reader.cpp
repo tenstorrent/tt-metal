@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"

@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
@@ -27,12 +27,13 @@ void kernel_main() {
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(19);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
@@ -46,18 +47,72 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
+#ifdef FUSE_TERNARY
+    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
+    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+#endif  // FUSE_TERNARY
+
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
+
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<20>();
+    constexpr auto in0_args = TensorAccessorArgs<22>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
-    constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
+
+    // Always create tuple of output accessors (size = N_chunks)
+    constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
+    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size(outputs_args, out_addr_rt_arg_idx, out_tile_size);
+
 #ifdef FUSE_BIAS
-    constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in2_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
 
+#ifdef FUSE_TERNARY
+// Calculate offset for ternary_a_args - must account for FUSE_BIAS and potentially FUSE_AG
+#if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
+// If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
+#ifdef FUSE_BIAS
+    // After in2, then in3, then ternary
+    constexpr uint32_t ternary_a_args_cta_offset =
+        in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS() * 2;
+#else
+    // After outputs, then in3, then ternary
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>() +
+        tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS();
+#endif
+#else
+// No FUSE_AG, same as dm_in1_sender_out
+#ifdef FUSE_BIAS
+    constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
+
+#else
+
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+#endif
+#endif
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+
+    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
+    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
+
+#endif  // FUSE_TERNARY
+
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+    const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -72,8 +127,9 @@ void kernel_main() {
 #ifdef FUSE_AG
     // Receiver for ccl fusing
     MinimalMatmulOpReceiver fused_op_receiver;
-    uint32_t num_devices = get_arg_val<uint32_t>(argidx);
-    uint32_t num_k_blocks = get_arg_val<uint32_t>(argidx + 1);
+    uint32_t fused_op_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+    uint32_t num_devices = get_arg_val<uint32_t>(fused_op_rt_args_idx);
+    uint32_t num_k_blocks = get_arg_val<uint32_t>(fused_op_rt_args_idx + 1);
     uint8_t k_block_device_expected[num_k_blocks]{};
     uint8_t k_block_device_received[num_k_blocks]{};
     uint32_t device_k_block_counts[num_devices]{};
@@ -82,7 +138,7 @@ void kernel_main() {
     if constexpr (is_injector_core) {
         fused_op_receiver = MinimalMatmulOpReceiver(
             true,
-            argidx,
+            fused_op_rt_args_idx,
             k_block_device_expected,
             k_block_device_received,
             device_k_block_counts,
@@ -92,9 +148,12 @@ void kernel_main() {
 
 #ifdef READ_FROM_LOCAL_INPUT
 #ifdef FUSE_BIAS
-    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+    constexpr auto in3_args =
+        TensorAccessorArgs<in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS>();
 #else
-    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in3_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
 #endif
@@ -115,15 +174,11 @@ void kernel_main() {
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
 
     /**
-     * This is a Serpentine (Boustrophedon) output block ordering.
-     * It enables reuse of one of the input blocks for the last output block.
-     * Starting at output block (0,0), go east until the end, then south one block, then west until the end, then south
-     * one block, and repeat. At the same time, alternate between K striding forwards or backwards in order to enable
-     * reuse.
+     * This is a Row-Major output block ordering.
+     * It enables reuse of the last in0 block when striding the output block N dimension.
      */
 
     bool k_forward = true;
-    bool n_forward = true;
     bool reuse_block = false;
 
     uint32_t defer_write_m_tile = 0;
@@ -145,9 +200,9 @@ void kernel_main() {
 
         // When striding M block, in0 gets no reuse
         reuse_block = false;
+        k_forward = true;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
-                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
@@ -155,15 +210,30 @@ void kernel_main() {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                        write_block_sync<M_block_tiles, N_block_tiles>(
-                            out_reader,
-                            out_shape,
-                            out_read_ptr,
-                            out_tile_size,
-                            defer_write_m_tile,
-                            defer_write_m_tile_end,
-                            defer_write_n_tile,
-                            defer_write_n_tile_end);
+
+                        // write_block_sync_split is more generic (support multiple output tensors)
+                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                        if constexpr (N_chunks == 1) {
+                            write_block_sync<M_block_tiles, N_block_tiles>(
+                                std::get<0>(outputs_tuple),
+                                out_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        } else {
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                outputs_tuple,
+                                out0_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        }
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
@@ -244,6 +314,23 @@ void kernel_main() {
             }
 #endif
 
+#ifdef FUSE_TERNARY
+            if constexpr (!is_output_writer) {
+                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
+                    ternary_a_reader,
+                    ternary_b_reader,
+                    out_shape,
+                    cb_id_ternary_a,
+                    cb_id_ternary_b,
+                    ternary_a_tile_size,
+                    ternary_b_tile_size,
+                    m_tile,
+                    m_tile_end,
+                    n_tile,
+                    n_tile_end);
+            }
+#endif
+
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
             reuse_block = true;
@@ -261,14 +348,32 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
-                        out_reader, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
+                    // write_block_sync_granular_split is more generic (support multiple output tensors)
+                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
+                    if constexpr (N_chunks == 1) {
+                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                            std::get<0>(outputs_tuple),
+                            out_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    } else {
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            outputs_tuple,
+                            out0_shape,
+                            cb_id_out,
+                            out_tile_size,
+                            m_tile,
+                            m_tile_end,
+                            n_tile,
+                            n_tile_end);
+                    }
                 }
             }
         }
-#ifndef FUSE_AG
-        n_forward = !n_forward;
-#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

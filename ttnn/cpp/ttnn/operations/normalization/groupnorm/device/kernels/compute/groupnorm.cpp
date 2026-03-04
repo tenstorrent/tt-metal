@@ -10,17 +10,16 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/matmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // clang-format off
     // Definitions
     //   block_h: This the length of the row we wish to processes in terms of tiles
@@ -42,7 +41,7 @@ void MAIN {
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
     //
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // This is a high level description of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
     // Batch Loop:
@@ -86,7 +85,7 @@ void MAIN {
     //           We add beta to this value
     //
     // We are now done! Nice
-    //   To look at where the code starts and stops seach for
+    //   To look at where the code starts and stops search for
     //   Start LABEL or End Label
     //   Ex: Start Local Reduce or End Local Reduce
     // clang-format on
@@ -822,4 +821,3 @@ void MAIN {
     }
     // End Batch Loop
 }
-}  // namespace NAMESPACE

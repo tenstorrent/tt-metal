@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 template <typename T = uint16_t>
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {

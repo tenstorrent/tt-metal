@@ -146,6 +146,7 @@ class TtTransformer(LightweightModule):
             mode="prefill",
             mesh_sub_device_manager_id_prefill=mesh_sub_device_manager_id_prefill,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
@@ -168,6 +169,7 @@ class TtTransformer(LightweightModule):
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
         self.mesh_device.set_sub_device_stall_group(
@@ -429,14 +431,46 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
+    def process_output_prefill_logits(self, tt_out, last_token_idx):
+        """
+        Process prefill output to get logits tensor for on-device sampling.
+        Returns logits in the same format as decode (before all-gather), suitable for sampling module.
+        For non-batched prefill, returns single user logits. For batched prefill, returns list of logits.
+        """
+        x, _ = self.norm(tt_out, res=None, mode="prefill")
+        if isinstance(last_token_idx, list):
+            # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
+            batch_size = len(last_token_idx)
+            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
+        else:
+            x_split = [x]
+
+        logits_list = []
+        for i, x in enumerate(x_split):
+            if isinstance(last_token_idx, list):
+                last_token_idx_i = last_token_idx[i]
+            else:
+                last_token_idx_i = last_token_idx
+            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            # lm_head returns logits in sharded format (same as decode before all-gather)
+            tt_logits = self.lm_head(x, None, mode="prefill")
+            tt_logits = tt_logits[0]
+            tt_logits = ttnn.reshape(
+                tt_logits,
+                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            )
+            logits_list.append(tt_logits)
+
+        return logits_list
+
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor.
+        Input is ttnn device tensor of logits. Output is torch logits or tokens tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
         x, _ = self.norm(tt_out, res=None, mode="prefill")
@@ -454,9 +488,7 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
-
             tt_logits = self.lm_head(x, None, mode="prefill")
-
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
@@ -495,8 +527,19 @@ class TtTransformer(LightweightModule):
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
-        tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
-        return tt_out_cpu, ttnn.record_event(self.mesh_device, 0)
+        if isinstance(tt_out, tuple):
+            tt_log_probs = tt_out[1]
+            tt_out = tt_out[0]
+            tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+
+            if tt_log_probs is not None:
+                tt_log_probs_cpu = tt_log_probs.cpu(blocking=False, cq_id=0)
+            else:
+                tt_log_probs_cpu = None
+        else:
+            tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+            tt_log_probs_cpu = None
+        return tt_out_cpu, tt_log_probs_cpu, ttnn.record_event(self.mesh_device, 0)
 
     def ttnn_prefill_forward(
         self,
@@ -523,7 +566,7 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
-            get_last_token=get_last_token,
+            get_last_token=get_last_token,  # ignored with mode=="prefill"
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
@@ -552,7 +595,7 @@ class TtTransformer(LightweightModule):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         return_logits=False,
-        capture_sampling_trace=False,
+        capture_sampling_trace=False,  # If true, return logits so sampling can be traced elsewhere
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -582,7 +625,7 @@ class TtTransformer(LightweightModule):
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
 
-            return tt_logits
+            return tt_logits, None
 
         # Save output logits to global python object
         if tt_out_logits_saved is not None:
@@ -599,12 +642,12 @@ class TtTransformer(LightweightModule):
         if capture_sampling_trace:
             return tt_logits
 
-        tt_toks = self.sampling.sample(
+        tt_toks, tt_log_probs = self.sampling.sample(
             tt_logits[0],
             tt_out_tok=x,
             enable_trace=False,
         )
-        return tt_toks
+        return tt_toks, tt_log_probs
 
     def switch_mode(self, mode):
         if mode == "decode":
@@ -696,7 +739,13 @@ class TtTransformer(LightweightModule):
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        lm_head_output = self.lm_head(
+            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+        )
+        # if mode is decode and Qwen model
+        if mode == "decode" and self.args.is_qwen:
+            ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
+        return lm_head_output
 
     def __del__(self):
         self.tt_ccl.close()

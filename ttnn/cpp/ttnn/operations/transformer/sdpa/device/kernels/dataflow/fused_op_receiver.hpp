@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "dataflow_api.h"
-#include "debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include <array>
 
 struct RingSDPAOpReceiver {
@@ -81,7 +81,7 @@ struct RingSDPAOpReceiver {
             }
         }
 
-        // Wait for a sempaphore signal to start processing the tensor slice
+        // Wait for a semaphore signal to start processing the tensor slice
 
         if (this->wait_for_op_signal) {
             noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], sem_wait_val);

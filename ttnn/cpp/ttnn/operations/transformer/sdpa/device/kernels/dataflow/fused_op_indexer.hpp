@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "compute_kernel_api/common.h"
-#include "debug/assert.h"
+#include "api/compute/common.h"
+#include "api/debug/assert.h"
 #include <array>
 
 struct RingSDPAOpIndexer {

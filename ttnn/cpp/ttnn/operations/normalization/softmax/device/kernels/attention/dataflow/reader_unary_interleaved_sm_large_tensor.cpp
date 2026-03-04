@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "dataflow_api.h"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -70,7 +70,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
-        // We need to pass once in order to calcualte the sum and then to calculate the final value.
+        // We need to pass once in order to calculate the sum and then to calculate the final value.
         for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             uint32_t tile_index = tile_offset + (ncht * Wt);

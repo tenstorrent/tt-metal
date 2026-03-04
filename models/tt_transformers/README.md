@@ -184,6 +184,8 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
+NOTE: for models that are not listed in [`get_supported_trace_region_size` function](demo/trace_region_config.py#L79), the default trace region size will be used as set in the [`demo/simple_text_demo.py` script](demo/simple_text_demo.py#L704). The default trace region size may not be sufficient for such a model and there will be a helpful error message that informs the required trace region size, which can be overridden by setting the `trace_region_size` argument in the demo.
+
 ## Details
 
 ### Extra compatibility settings for non-Llama models
@@ -194,7 +196,7 @@ If you are bringing up a new model that is similar to these but is not listed ab
 
 You should also watch out for:
 - RoPE encoding style. `llama3`, `yarn` and of course `none` are supported. HuggingFace models encode the complex numbers in RoPE as r1, r2, ..., i1, i2, ... whereas Meta models encode the complex numbers as r1, i1, r2, i2, ... - TTT uses a Meta-style implementation of the RoPE op and when loading a HuggingFace it will reshuffle the weights of the pre-rope attention weights to interleave their outputs in this style (see `reverse_permute` in [load_checkpoints.py](tt/load_checkpoints.py)). When _using_ TTT this happens invisibly and should not affect you, but when bringing up a new model or modifying TTT being aware of this will make some otherwise confusing things clearer.
-- Our [accuracy test](tests/test_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
+- Our [accuracy test](demo/simple_text_demo.py -k ci-token-matching) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
 - We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
 
 Huggingface models specify their architecture in the `config.json` file. The following architectures are known to work:
@@ -314,7 +316,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 
 ### Implementation notes
 
-**Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
+**Chunked prefill (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 32k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
 
 Max Prefill Chunk Sizes (text-only):
 |              |      N150     |      N300     |      T3K       |      TG     |

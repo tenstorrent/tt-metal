@@ -30,8 +30,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
 
         self.num_in_channels_unet = 4
         self.num_channels_image_latents = 4
-        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
-        self.tt_latents_shape = [B, C, H, W]
+        self.tt_latents_shape = self.get_latents_shape(1, self.num_in_channels_unet, self.height, self.width)
 
     def set_strength(self, strength: float):
         # When changing strength, the timesteps and latents need to be recreated.
@@ -87,7 +86,6 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self._prepare_timesteps(timesteps, sigmas, denoising_start)
 
         num_channels_image_latents = self.torch_pipeline.vae.config.latent_channels
-        height = width = 1024
         assert (
             num_channels_image_latents == self.num_channels_image_latents
         ), f"num_channels_latents is {num_channels_image_latents}, but it should be {self.num_channels_image_latents}"
@@ -96,22 +94,22 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         ), "start_latent_seed must be an integer or None"
 
         # Encode image to latents (standard img2img case)
-        if start_latent_seed is not None:
-            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
         add_noise = True if denoising_start is None else False
         img_latents = prepare_image_latents(
             self.torch_pipeline,
             self,
             torch_image.shape[0],
             num_channels_image_latents,
-            height,
-            width,
+            self.height,
+            self.width,
             self.cpu_device,
             all_prompt_embeds_torch.dtype,
             torch_image,
             False,  # No max strength path in ref img2img implementation
             add_noise,
             None,  # passed in latents
+            start_latent_seed,
+            fixed_seed_for_batch,
         )
 
         if isinstance(img_latents, ttnn.Tensor):
@@ -125,7 +123,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
                 img_latents = ttnn.permute(img_latents, (0, 2, 3, 1))  # [B, H, W, C]
                 tt_img_latents = ttnn.reshape(img_latents, (B, 1, H * W, C))  # [B, 1, H*W, C]
         else:
-            B, C, H, W = img_latents.shape  # B, 4, 128, 128
+            B, C, H, W = img_latents.shape
             img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [B, H, W, C]
             tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [B, 1, H*W, C]
 
@@ -135,8 +133,8 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             text_encoder_projection_dim == 1280
         ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
 
-        original_size = (height, width)
-        target_size = (height, width)
+        original_size = (self.height, self.width)
+        target_size = (self.height, self.width)
         crops_coords_top_left = self.pipeline_config.crop_coords_top_left
 
         add_time_ids, negative_add_time_ids = self.torch_pipeline._get_add_time_ids(

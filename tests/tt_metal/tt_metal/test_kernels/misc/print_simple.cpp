@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 #if defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
-#else
-void kernel_main() {
+#include "api/compute/common.h"
 #endif
+void kernel_main() {
     DPRINT << "Printing on a RISC." << ENDL();
     DPRINT_UNPACK(DPRINT << "Printing on TR0." << ENDL(););
     DPRINT_MATH(DPRINT << "Printing on TR1." << ENDL(););
@@ -18,6 +15,3 @@ void kernel_main() {
     DPRINT_DATA0(DPRINT << "Printing on BR." << ENDL(););
     DPRINT_DATA1(DPRINT << "Printing on NC." << ENDL(););
 }
-#if defined(COMPILE_FOR_TRISC)
-}
-#endif

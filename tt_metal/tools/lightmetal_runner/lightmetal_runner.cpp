@@ -43,8 +43,7 @@ int main(int argc, char* argv[]) {
     if (!lm_replay.run()) {
         log_fatal(tt::LogMetalTrace, "Light Metal Binary {} failed to execute or encountered errors.", binary_filename);
         return 1;
-    } else {
-        log_info(tt::LogMetalTrace, "Light Metal Binary {} executed successfully", binary_filename);
-        return 0;
     }
+    log_info(tt::LogMetalTrace, "Light Metal Binary {} executed successfully", binary_filename);
+    return 0;
 }

@@ -4,7 +4,6 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline
 from PIL import Image
@@ -17,6 +16,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -32,6 +33,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     images,
     negative_prompts,
@@ -51,7 +53,7 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -93,6 +95,7 @@ def run_demo_inference(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
         pipeline_config=TtSDXLImg2ImgPipelineConfig(
+            image_resolution=image_resolution,
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
@@ -109,18 +112,20 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
+    height, width = image_resolution
+
     images = images + [images[0]] * needed_padding
     images = [
         tt_sdxl.torch_pipeline.image_processor.preprocess(
-            image, height=1024, width=1024, crops_coords=None, resize_mode="default"
+            image, height=height, width=width, crops_coords=None, resize_mode="default"
         ).to(dtype=torch.float32)
         for image in images
     ]
 
-    images = torch.cat(images, dim=0)  # [batch_size, 3, 1024, 1024]
+    images = torch.cat(images, dim=0)  # [batch_size, 3, height, width]
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        torch_image=torch.randn(batch_size, 3, 1024, 1024),
+        torch_image=torch.randn(batch_size, 3, height, width),
         all_prompt_embeds_torch=torch.randn(
             batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
         ),
@@ -221,12 +226,14 @@ def run_demo_inference(
     return out_images
 
 
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
-
-
+@pytest.mark.parametrize(
+    "image_resolution, images_or_path",
+    [
+        ((1024, 1024), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_1024x1024.jpg"),
+        ((512, 512), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_512x512.jpg"),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -310,7 +317,9 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
+    images_or_path,
     negative_prompt,
     num_inference_steps,
     vae_on_device,
@@ -328,15 +337,18 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    image_path = "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"
-    img = Image.open(image_path).convert("RGB")
+    if isinstance(images_or_path, str):
+        images = [Image.open(images_or_path).convert("RGB")]
+    else:
+        images = images_or_path if isinstance(images_or_path, list) else [images_or_path]
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
-        [img],
+        images,
         negative_prompt,
         num_inference_steps,
         vae_on_device,

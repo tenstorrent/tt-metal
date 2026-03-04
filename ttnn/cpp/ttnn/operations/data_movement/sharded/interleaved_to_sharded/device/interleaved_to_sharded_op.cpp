@@ -3,15 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "interleaved_to_sharded_op.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <ttnn/operation.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::data_movement {
-
-InterleavedToShardedDeviceOperation::program_factory_t InterleavedToShardedDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return interleaved_to_sharded::InterleavedToShardedProgramFactory{};
-}
+namespace ttnn::prim {
 
 void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -54,11 +51,6 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void InterleavedToShardedDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
@@ -90,30 +82,24 @@ InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedD
 tt::stl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         operation_attributes.keep_l1_aligned,
-        program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),
         input_tensor.padded_shape());
 }
 
-std::tuple<
-    InterleavedToShardedDeviceOperation::operation_attributes_t,
-    InterleavedToShardedDeviceOperation::tensor_args_t>
-InterleavedToShardedDeviceOperation::invoke(
+Tensor interleaved_to_sharded(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     bool keep_l1_aligned,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{output_mem_config, output_dtype, keep_l1_aligned},
-        tensor_args_t{input_tensor, preallocated_output}};
+    return ttnn::device_operation::launch<InterleavedToShardedDeviceOperation>(
+        InterleavedToShardedParams{output_mem_config, output_dtype, keep_l1_aligned},
+        InterleavedToShardedInputs{input_tensor, preallocated_output});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

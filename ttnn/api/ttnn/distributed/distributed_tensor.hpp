@@ -62,7 +62,9 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 // Creates a mapper that shards a tensor along a single dimension.
 // Shorthand for specifying a MeshMapperConfig with 1D mesh shape, and sharding the tensor along a single dimension of
 // the tensor.
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
+
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
+    MeshDevice& mesh_device, int dim, std::optional<int> cluster_axis = std::nullopt);
 
 // Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {
@@ -109,7 +111,7 @@ Tensor distribute_tensor(
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
 // `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
-// and the `shard_layout` will be applied subsequently. `buffer` may be re-used to create tensors directly, taking
+// and the `shard_layout` will be applied subsequently. `buffer` may be reused to create tensors directly, taking
 // `buffer_pin` as the RAII to retain reference count to the object.
 template <typename T>
 Tensor create_distributed_tensor(

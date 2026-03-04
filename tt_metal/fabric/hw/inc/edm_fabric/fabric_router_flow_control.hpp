@@ -6,8 +6,8 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "internal/ethernet/tt_eth_api.h"
+#include "internal/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
@@ -24,8 +24,8 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         }
     }
 
-    FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        completion_counters[src_id]++;
+    FORCE_INLINE void send_completion_credit(uint8_t src_id, uint32_t num_completions) {
+        completion_counters[src_id] += num_completions;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
         update_sender_side_credits();
     }
@@ -61,8 +61,8 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         }
     }
 
-    FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
+    FORCE_INLINE void send_completion_credit(uint8_t src_id, uint32_t num_completions) {
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], num_completions);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
@@ -237,12 +237,14 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
 // MUST CHECK !is_eth_txq_busy() before calling
 template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_completion_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
+    uint8_t src_id,
+    uint32_t num_completions = 1) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
     }
-    receiver_channel_response_credit_sender.send_completion_credit(src_id);
+    receiver_channel_response_credit_sender.send_completion_credit(src_id, num_completions);
 }
 
 template <bool CHECK_BUSY>

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import pandas as pd
 
@@ -53,9 +55,7 @@ def run_test_do_post_proc(request, do_postproc):
 def run_test_do_cpp_and_python_post_procs(request):
     assert "command" in request.param, "Bad test setup, command not found in test setup dict"
     assert "name" in request.param, "Bad test setup, name not found in test setup dict"
-    run_device_profiler(
-        request.param["command"], request.param["name"], cpp_post_process=True, python_post_process=True
-    )
+    run_device_profiler(request.param["command"], request.param["name"], python_post_process=True)
     return request
 
 
@@ -70,7 +70,6 @@ def run_test_do_cpp_post_proc(request):
     run_device_profiler(
         request.param["command"],
         request.param["name"],
-        cpp_post_process=True,
         python_post_process=False,
         sum_profiling=sum_profiling,
         op_support_count=op_support_count,
@@ -140,7 +139,7 @@ class TestSingleOp:
 
 matmul_test_tensor_io = {
     "name": "Matmul_tensor_io",
-    "command": 'pytest "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_padding[program_config=MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=1,fused_activation=std::nullopt)-input_a_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=2,y=0)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-input_b_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=2,y=0)]},shape={96, 32},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-output_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-input_a_shape=(32, 96)-input_b_shape=(96, 32)-input_a_reshape=(1, 65)-input_b_reshape=(65, 16)-input_a_value=4.0-input_b_value=2.0]"',
+    "command": 'pytest "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_padding[dram_sharded-2_faces_padded-input_a_value=4.0-input_b_value=2.0]"',
 }
 
 
@@ -286,9 +285,44 @@ class TestOpSupportCount:
         ), f"Expected to detect {expected_count} ops, but detected {actual_count} ops"
 
 
+slow_dispatch_test = {
+    "name": "SlowDispatch",
+    "command": "pytest tests/ttnn/tracy/test_profiler_sync.py::test_with_ops",
+}
+
+
+@pytest.fixture(scope="class")
+def run_slow_dispatch_test(request):
+    assert "command" in request.param, "Bad test setup, command not found in test setup dict"
+    assert "name" in request.param, "Bad test setup, name not found in test setup dict"
+    prev_value = os.environ.get("TT_METAL_SLOW_DISPATCH_MODE")
+    os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+    try:
+        run_device_profiler(request.param["command"], request.param["name"])
+    finally:
+        if prev_value is None:
+            os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+        else:
+            os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = prev_value
+    return request.param
+
+
+@pytest.mark.parametrize(
+    "run_slow_dispatch_test",
+    [pytest.param(slow_dispatch_test, id=slow_dispatch_test["name"])],
+    indirect=True,
+)
+class TestSlowDispatch:
+    def test_slow_dispatch_profiling(self, run_slow_dispatch_test):
+        name = run_slow_dispatch_test["name"]
+        filename = get_latest_ops_log_filename(name)
+        df = pd.read_csv(filename)
+        assert len(df) > 0, "Expected at least one op in the slow dispatch profiler output"
+
+
 op_support_count_with_sum_profiling_enabled_test = {
     "name": "Op_Support_Count_200_With_Sum_Profiling_Enabled",
-    "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops_single_core"',
+    "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops_single_core[100-5]"',
     "op_support_count": 200,
     # Number of ops we expect to detect is higher than the op support count value because BRISC, NCRISC, and TRISC1 use the extra space reserved for accumulation zones to record ops instead
     "expected_op_count": 266,

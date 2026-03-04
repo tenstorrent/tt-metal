@@ -6,6 +6,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from loguru import logger
 import math
+from models.common.utility_functions import is_blackhole
+import pytest
 
 
 def get_abs_and_relative_error(tensor_a, tensor_b):
@@ -59,3 +61,29 @@ def check_ttnn_output(
         )
 
     return passed_pcc and passed_tolerance
+
+
+def skip_if_not_blackhole_20_cores(device):
+    """
+    This function is meant to be run only inside pytest tests.
+    """
+    if not is_blackhole():
+        pytest.skip("This test is intended to run only on Blackhole devices with 20 cores.")
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(
+            f"This test is intended to run only on Blackhole devices with 20 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [5, 4]."
+        )
+
+
+def skip_if_not_blackhole_110_cores(device):
+    """
+    This function is meant to be run only inside pytest tests.
+    """
+    if not is_blackhole():
+        pytest.skip("This test is intended to run only on Blackhole P150 devices with 110 cores.")
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 11 or compute_grid.y != 10:
+        pytest.skip(
+            f"This test is intended to run only on Blackhole P150 devices with 110 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [11, 10]."
+        )

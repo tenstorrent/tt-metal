@@ -11,8 +11,8 @@ from typing import List, Optional, Union
 
 from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.common.utility_functions import profiler
 
 import ttnn
@@ -22,9 +22,9 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 # For basic SDXL demo, L1 small size of 23000 is enough,
 # but for inpainting/img2img, we need larger L1 small due
 # to having an extra VAE encode call, which increases it.
-# For simplicity, increase both to 30500 as there's enough
+# For simplicity, increase both to 30800 as there's enough
 # space left in base variant as well.
-SDXL_L1_SMALL_SIZE = 30500
+SDXL_L1_SMALL_SIZE = 30800
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
@@ -33,6 +33,28 @@ MAX_SEQUENCE_LENGTH = 77
 TEXT_ENCODER_2_PROJECTION_DIM = 1280
 CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER = 1280
+
+
+def determine_data_parallel(ttnn_device, use_cfg_parallel):
+    # ttnn_device mesh shape is set to (TP, DP)
+    return list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+
+
+def determine_tensor_parallel(ttnn_device, use_cfg_parallel):
+    # ttnn_device mesh shape is set to (TP, DP)
+    tensor_parallel = list(ttnn_device.shape)[0] if use_cfg_parallel else 1
+    assert tensor_parallel == 1 or tensor_parallel == 2, f"Only TP 1 and 2 are supported, got {tensor_parallel}"
+    return tensor_parallel
+
+
+def determinate_min_batch_size(ttnn_device, use_cfg_parallel):
+    return determine_data_parallel(ttnn_device, use_cfg_parallel)
+
+
+def prepare_device(mesh_device, use_cfg_parallel):
+    if use_cfg_parallel:
+        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
+        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
@@ -51,7 +73,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
             hidden_act=text_encoder_1.config.hidden_act,
         )
 
-        # Note: Factor for SDXL should always be 1; since we don't support TP
+        # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
         parallel_config_1 = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
         )
@@ -59,7 +81,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         tt_text_encoder = CLIPEncoder(
             config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
         )
-        tt_text_encoder.load_state_dict(text_encoder_1.state_dict())
+        tt_text_encoder.load_torch_state_dict(text_encoder_1.state_dict())
     else:
         tt_text_encoder = None
 
@@ -74,9 +96,10 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         layer_norm_eps=text_encoder_2.config.layer_norm_eps,
         attention_dropout=text_encoder_2.config.attention_dropout,
         hidden_act=text_encoder_2.config.hidden_act,
+        projection_dim=text_encoder_2.config.projection_dim,
     )
 
-    # Note: Factor for SDXL should always be 1; since we don't support TP
+    # Note: Factor for SDXL CLIP encoder should always be 1; since it doesn't support TP
     parallel_config_2 = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
@@ -84,14 +107,14 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
     tt_text_encoder_2 = CLIPEncoder(
         config_2, ttnn_device, ccl_manager, parallel_config_2, text_encoder_2.config.eos_token_id
     )
-    tt_text_encoder_2.load_state_dict(text_encoder_2.state_dict())
+    tt_text_encoder_2.load_torch_state_dict(text_encoder_2.state_dict())
 
     return tt_text_encoder, tt_text_encoder_2
 
 
 def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
-    batch_size = ttnn_device.get_num_devices()
+    batch_size = ttnn_device.get_num_devices()  # warmup on all devices; tp/dp config doesn't matter here
     dummy_prompt = ["abc"] * batch_size
     if tt_text_encoder is not None:
         dummy_ids = tokenizer(
@@ -108,7 +131,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
             device=ttnn_device,
             mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
         )
-        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, with_projection=False)
+        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device)
 
     dummy_ids_2 = tokenizer_2(
         dummy_prompt,
@@ -124,8 +147,62 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         device=ttnn_device,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
-    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
+    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device)
     ttnn.synchronize_device(ttnn_device)
+
+
+def normalize_prompt_for_text_encoder(
+    prompt: Union[str, List[str]],
+    tensor_parallel: int,
+    data_parallel: int,
+) -> List[str]:
+    """
+    Normalizes prompt input to match device requirements for tensor and data parallelism.
+
+    Args:
+        prompt: Single prompt string or list of prompts
+        tensor_parallel: Tensor parallel factor (1 or 2)
+        data_parallel: Data parallel factor (number of data parallel devices)
+
+    Returns:
+        List of prompts with length equal to tensor_parallel * data_parallel
+
+    Prompt distribution strategy:
+    - Single string inputs are converted to single-element lists
+    - Length 1: Broadcast prompt across data_parallel devices, pad with (tensor_parallel-1) empty strings per device
+    - Length data_parallel: Each prompt padded with (tensor_parallel-1) empty strings
+    - Length tensor_parallel * data_parallel: Use as-is
+    - Otherwise: raise ValueError
+
+    The output ordering is: [prompt[0], prompt[1], ..., prompt[data_parallel-1], '', '', ..., '']
+    where empty strings fill the remaining (data_parallel * (tensor_parallel-1)) slots.
+
+    Raises:
+        ValueError: If prompt list length is not 1, data_parallel, or tensor_parallel * data_parallel
+        AssertionError: If tensor_parallel is not 1 or 2
+    """
+    assert tensor_parallel in [1, 2], f"Only TP 1 and 2 are supported, got {tensor_parallel}"
+
+    # Convert string to list
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+
+    num_prompts = len(prompt_list)
+
+    # Handle prompt distribution based on parallelism mode
+    if len(prompt_list) == 1:
+        prompt_list = prompt_list * data_parallel + [""] * data_parallel * (tensor_parallel - 1)
+    elif len(prompt_list) == data_parallel:
+        prompt_list = prompt_list + [""] * data_parallel * (tensor_parallel - 1)
+    elif len(prompt_list) == data_parallel * tensor_parallel:
+        # do nothing, already correct
+        pass
+    else:
+        raise ValueError(
+            f"Prompt list length must be 1, or match data parallel {data_parallel} devices, or equal to total number of devices ({tensor_parallel * data_parallel}), "
+            f"but got {num_prompts} prompts"
+        )
+
+    return prompt_list
 
 
 # encode_prompt function, adapted from sdxl pipeline to work with on device tt text encoders
@@ -192,20 +269,15 @@ def batch_encode_prompt_on_device(
             Number of layers to be skipped from CLIP while computing the prompt embeddings. A value of 1 means that
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
-    prompt = [prompt] if isinstance(prompt, str) else prompt
 
+    tensor_parallel = determine_tensor_parallel(ttnn_device, use_cfg_parallel)
+    data_parallel = determine_data_parallel(ttnn_device, use_cfg_parallel)
+
+    prompt = normalize_prompt_for_text_encoder(prompt, tensor_parallel, data_parallel)
     prompt_2 = prompt_2 or prompt
-    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+    prompt_2 = normalize_prompt_for_text_encoder(prompt_2, tensor_parallel, data_parallel)
 
-    num_devices = ttnn_device.get_num_devices()
-    num_prompts = len(prompt)
-    if use_cfg_parallel and num_prompts < num_devices:
-        # Pad prompts by appending empty strings to match num_devices
-        prompt = prompt + [""] * (num_devices - len(prompt))
-        if prompt_2 is not None:
-            prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
-
-    assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
+    assert len(prompt) == ttnn_device.get_num_devices(), "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
@@ -271,7 +343,7 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=with_projection)
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device)
 
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output[-2],
@@ -318,10 +390,8 @@ def batch_encode_prompt_on_device(
         negative_prompt_2 = negative_prompt_2 or negative_prompt
 
         # normalize str to list
-        negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-        negative_prompt_2 = (
-            batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
-        )
+        negative_prompt = normalize_prompt_for_text_encoder(negative_prompt, tensor_parallel, data_parallel)
+        negative_prompt_2 = normalize_prompt_for_text_encoder(negative_prompt_2, tensor_parallel, data_parallel)
 
         uncond_tokens: List[str]
         if prompt is not None and type(prompt) is not type(negative_prompt):
@@ -360,9 +430,7 @@ def batch_encode_prompt_on_device(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
-            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(
-                tt_tokens, ttnn_device, with_projection=with_projection
-            )
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device)
             tt_sequence_output_neg_torch = ttnn.to_torch(
                 tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
@@ -423,7 +491,7 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    slice_to = num_prompts if use_cfg_parallel else None
+    slice_to = data_parallel if use_cfg_parallel else None
     return (
         prompt_embeds[:slice_to],
         negative_prompt_embeds[:slice_to],
@@ -761,6 +829,88 @@ def run_tt_image_gen(
     one_minus_guidance_rescale=1.0,
     return_latents=False,  # If True, skip VAE decoding and return latents
 ):
+    """Run TT (Tenstorrent) image generation pipeline for Stable Diffusion XL.
+
+    This function executes the complete image generation pipeline including the
+    multiple denoising loops with the UNet model and optional VAE decoding at
+    the end. It supports trace capture and reply for performance optimization,
+    classifier-free guidance (CFG) parallel processing, and guidance rescaling.
+
+    Args:
+        ttnn_device: The TTNN device instance to execute operations on.
+        tt_unet: The TT UNet model for denoising predictions.
+        tt_scheduler: The TT scheduler for managing diffusion timesteps.
+        tt_latents: Initial latent tensor with shape [batch_size, 1, H*W, C].
+            It is assumed that C=4.
+        tt_prompt_embeds: Prompt embeddings tensor. Shape depends on
+            use_cfg_parallel mode.
+        tt_time_ids: Time embedding IDs tensor for conditioning.
+        tt_text_embeds: Additional text embeddings from the text encoder.
+        num_steps (int): Number of denoising steps to perform.
+        tt_extra_step_kwargs: Additional keyword arguments for the scheduler
+            step function.
+        guidance_scale (float): Classifier-free guidance scale. Higher values
+            make the model follow the prompt more closely.
+        scaling_factor (float): VAE scaling factor for latent normalization.
+        input_shape (tuple): Input shape tuple (B, C, H, W) where B is batch
+            size, C is channels, H and W are height and width.
+        vae: VAE model for decoding. Can be either TtAutoencoderKL (TT VAE)
+            or host-based VAE (torch model).
+        batch_size (int): Number of images to generate in the batch.
+        output_device (ttnn.Tensor, optional): Pre-allocated output device
+            tensor for VAE decoding. Used when reusing traces.
+        output_shape (list, optional): Pre-computed output shape [B, C, H, W]
+            for VAE decoding. Used when reusing traces.
+        tid (int, optional): Trace ID for the denoising loop. If provided,
+            the captured trace will be replayed instead of capturing a new one.
+            If None and capture_trace is False, operations run normally.
+        tid_vae (int, optional): Trace ID for the VAE decoding step. If
+            provided, the captured VAE trace will be replayed. If None and
+            capture_trace is False, VAE runs normally.
+        capture_trace (bool): If True, capture execution traces for both
+            denoising loop and VAE. Requires num_steps=1. Defaults to False.
+        use_cfg_parallel (bool): If True, use parallel processing for
+            classifier-free guidance. Defaults to False.
+        guidance_rescale (float): Guidance rescale factor for noise prediction.
+            Defaults to 0.0 (disabled).
+        one_minus_guidance_rescale (float): Complement of guidance_rescale
+            (1.0 - guidance_rescale). Defaults to 1.0.
+        return_latents (bool): If True, skip VAE decoding and return latents
+            instead of decoded images. Useful for multi-stage pipelines.
+            Defaults to False.
+
+    Returns:
+        tuple: A tuple containing:
+            - imgs (torch.Tensor or None): Generated images as a torch tensor
+                with shape [batch_size * B, C, H, W], or None if return_latents
+                is True or warmup run. If return_latents is True, this is
+                replaced by tt_latents (ttnn.Tensor).
+            - tid (int or None): Trace ID for the denoising loop. Can be used
+                for subsequent executions to reuse the captured trace.
+            - output_device (ttnn.Tensor or None): Device tensor containing
+                VAE output (if VAE is on device). Used for trace reuse.
+            - output_shape (list or None): Output shape [B, C, H, W] from VAE
+                decoding. Used for trace reuse.
+            - tid_vae (int or None): Trace ID for VAE decoding. Can be used
+                for subsequent executions to reuse the captured VAE trace.
+
+    Raises:
+        AssertionError: If capture_trace is True and num_steps != 1, as trace
+            capture requires exactly one iteration.
+
+    Note:
+        - The function performs guidance rescaling by computing standard
+            deviations of noise predictions and applying rescaling factors.
+        - When use_cfg_parallel is True, the function uses all_gather to
+            combine parallel predictions.
+        - If vae is a TtAutoencoderKL instance, VAE decoding runs on device.
+            Otherwise, latents are transferred to host and decoded using the
+            torch VAE model.
+        - The scheduler is reset to begin_index=0 after the denoising loop.
+        - Memory management is handled throughout with explicit deallocation
+            of intermediate tensors.
+    """
+
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
     profiler.start("denoising_loop")

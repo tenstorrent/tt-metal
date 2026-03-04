@@ -8,17 +8,21 @@ Usage:
     dump_watcher_ringbuffer
 
 Description:
-    Dump watcher ring buffer contents for all cores, skipping cores with empty buffers.
+    Dump watcher ring buffer contents for all cores, skipping cores with empty buffers. This ringbuffer can be written
+    into by using the WATCHER_RING_BUFFER_PUSH macro in a kernel.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script
-from run_checks import run as get_run_checks
+from run_checks import run as get_run_checks, RunChecks
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.elf import MemoryAccess
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
@@ -42,12 +46,13 @@ def read_ring_buffer(
     """Read watcher ring buffer for the core. Returns None if ring buffer is empty or unreadable."""
     try:
         fw_path = dispatcher_data.get_cached_core_data(location, risc_name).firmware_path
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
         return None
 
     fw_elf = elf_cache[fw_path]
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
-    mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
+    mailboxes = dispatcher_data.get_cached_core_data(location, risc_name).mailboxes
 
     current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr
     if current_ptr == 65535:
@@ -84,10 +89,11 @@ def read_ring_buffer_for_block(
     location: OnChipCoordinate,
     dispatcher_data: DispatcherData,
     elf_cache: ElfsCache,
+    run_checks: RunChecks,
 ):
     """Select appropriate RISC per block type and read the ring buffer."""
     try:
-        block_type = location._device.get_block_type(location)
+        block_type = run_checks.get_block_type(location)
     except Exception:
         return None
 
@@ -103,7 +109,7 @@ def run(args, context: Context):
     elfs_cache = get_elfs_cache(args, context)
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
     return run_checks.run_per_block_check(
-        lambda location: read_ring_buffer_for_block(location, dispatcher_data, elfs_cache),
+        lambda location: read_ring_buffer_for_block(location, dispatcher_data, elfs_cache, run_checks),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 

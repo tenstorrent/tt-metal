@@ -44,7 +44,8 @@ def decode_forward(
     Returns:
         Attention output [batch, 1, hidden_size]
     """
-    batch_size, seq_len, hidden_size = hidden_states.shape
+    # batch_size, seq_len, hidden_size = hidden_states.shape
+    _, seq_len, batch_size, hidden_size = hidden_states.shape
 
     # Validate decode mode
     if seq_len != 1:
@@ -54,7 +55,7 @@ def decode_forward(
     xqkv_fused = ttnn.matmul(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
-    xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
@@ -71,8 +72,15 @@ def decode_forward(
     xqkv_fused.deallocate(True)
 
     # Apply RoPE
+    tt_q_orig = tt_q
+    tt_k_orig = tt_k
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
+    tt_q_orig.deallocate(True)
+    tt_k_orig.deallocate(True)
+
+    # DEBUG: Check for NaN/Inf in Q/K after rope (enable with DEBUG_ATTENTION=1)
+    # Disabled by default to avoid performance impact
 
     # Update KV cache
     k_cache, v_cache = kv_cache
@@ -94,7 +102,7 @@ def decode_forward(
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)
     batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
 
     # Calculate padded heads (must be tile-aligned, e.g., 32)
@@ -121,8 +129,10 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            memory_config=height_sharded_mem_config,
+            # memory_config=height_sharded_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
@@ -146,16 +156,26 @@ def decode_forward(
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
+
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+
+    # Calculate padded hidden size for tile-aligned CCL operations.
+    # o_proj weights may be padded so local_hidden becomes tile-aligned.
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32
+    padded_hidden = padded_local_hidden * mesh_config.tp if mesh_config.tp > 1 else hidden_size
+
     tt_out = ttnn.reshape(
         tt_out,
-        (batch_size, seq_len, hidden_size),
-        (batch_size, 32, hidden_size),
+        (1, 1, batch_size, padded_hidden),
+        (1, 1, 32, padded_hidden),
     )
+    # tt_out = ttnn.unsqueeze(tt_out, 0)
 
     # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
+    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
 
     return tt_out

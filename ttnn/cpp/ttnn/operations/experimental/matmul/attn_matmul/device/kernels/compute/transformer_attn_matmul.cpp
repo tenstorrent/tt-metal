@@ -3,17 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
 
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
@@ -45,7 +44,7 @@ void MAIN {
                         }
                         cb_wait_front(cb_in1, onetile);
 
-                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
+                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0);
 
                         cb_pop_front(cb_in1, onetile);
                     }
@@ -92,4 +91,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

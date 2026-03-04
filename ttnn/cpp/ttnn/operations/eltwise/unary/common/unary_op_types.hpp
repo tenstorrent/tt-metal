@@ -4,7 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include <concepts>
+#include <optional>
+#include <span>
+#include <utility>
 #include <vector>
+#include <variant>
+
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
@@ -39,6 +46,7 @@ enum class UnaryOpType {
     RELU_MAX,
     RELU_MIN,
     POWER,
+    POWER_ITERATIVE,
     LEAKY_RELU,
     ELU,
     EXP2,
@@ -121,6 +129,8 @@ enum class UnaryOpType {
     RPOW,
     CBRT,
     LOGSIGMOID,
+    LOGIT,
+    XIELU,
 };
 
 enum class VecMode {
@@ -151,6 +161,11 @@ struct BasicUnaryWithParam {
         requires(... or std::same_as<T, Ts>)
     BasicUnaryWithParam(UnaryOpType op_type, T param) :
         base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, param} {}
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, T param0, T param1) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, param0, param1} {}
 
     BasicUnaryWithParam(UnaryOpType op_type) : base{std::in_place_index<0>, op_type} {}
 
@@ -206,6 +221,7 @@ struct BasicUnaryWithParam<T> {
     BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) : op_type{op_type}, params{params} {}
     BasicUnaryWithParam(UnaryOpType op_type, std::initializer_list<T> params) : op_type{op_type}, params{params} {}
     BasicUnaryWithParam(UnaryOpType op_type, T param) : op_type{op_type}, params{param} {}
+    BasicUnaryWithParam(UnaryOpType op_type, T param0, T param1) : op_type{op_type}, params{param0, param1} {}
     BasicUnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
 
     UnaryOpType type() const noexcept { return op_type; }

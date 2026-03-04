@@ -4,6 +4,7 @@
 
 #include "fabric_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -34,6 +35,7 @@ FabricBuilder::FabricBuilder(
 void FabricBuilder::discover_channels() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
+    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
 
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
         auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
@@ -67,8 +69,8 @@ void FabricBuilder::discover_channels() {
         channels_by_direction_[direction] = active_eth_chans;
 
         // Identify and cache dispatch links
-        uint32_t dispatch_link_idx =
-            tt::tt_metal::RelayMux::get_dispatch_link_index(local_node_, neighbor_fabric_node_id, device_);
+        uint32_t dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
+            control_plane, is_galaxy_cluster, local_node_, neighbor_fabric_node_id, device_);
         for (const auto& eth_chan : active_eth_chans) {
             if (is_dispatch_link(eth_chan, dispatch_link_idx)) {
                 dispatch_links_.insert(eth_chan);
@@ -83,7 +85,7 @@ void FabricBuilder::create_routers() {
         const auto& neighbor_node = chip_neighbors_.at(direction);
 
         for (const auto& eth_chan : eth_channels) {
-            bool is_dispatch = dispatch_links_.count(eth_chan) > 0;
+            bool is_dispatch = dispatch_links_.contains(eth_chan);
 
             RouterLocation location{
                 .eth_chan = eth_chan,
@@ -120,8 +122,8 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
 
     // Check if we can connect two directions
     auto can_connect = [&](RoutingDirection dir1, RoutingDirection dir2) {
-        return chip_neighbors_.count(dir1) > 0 && chip_neighbors_.count(dir2) > 0 &&
-               channels_by_direction_.count(dir1) > 0 && channels_by_direction_.count(dir2) > 0;
+        return chip_neighbors_.contains(dir1) && chip_neighbors_.contains(dir2) &&
+               channels_by_direction_.contains(dir1) && channels_by_direction_.contains(dir2);
     };
 
     // Add connection pairs for two directions
@@ -152,6 +154,12 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
         add_direction_pairs(RoutingDirection::N, RoutingDirection::W);
         add_direction_pairs(RoutingDirection::S, RoutingDirection::E);
         add_direction_pairs(RoutingDirection::S, RoutingDirection::W);
+
+        // Z router connections - connect Z routers to all 4 mesh directions
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::N);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::S);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::E);
+        add_direction_pairs(RoutingDirection::Z, RoutingDirection::W);
     } else if (wrap_around_mesh_ && num_intra_chip_neighbors == 2) {
         // 1D Routing wrap the corner chips, fold the internal connections
         auto it = chip_neighbors_.begin();
@@ -172,15 +180,45 @@ void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
     const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
+    // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
+    // routers on the same device together
+    if (topology == Topology::NeighborExchange) {
+        return;
+    }
+
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair
+    std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>> routers_by_direction_map{};
+    // Connect each pair (inter-device INTRA_MESH connections)
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+
+        routers_by_direction_map[router1.get()].insert({router2->get_location().direction, router2.get()});
+        routers_by_direction_map[router2.get()].insert({router1->get_location().direction, router1.get()});
+    }
+
+    // Configure local connections between routers on this device
+    configure_local_connections(routers_by_direction_map);
+}
+
+void FabricBuilder::configure_local_connections(
+    const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>& routers_by_direction_map) {
+    // Generic local connection establishment: iterate through all routers and
+    // establish connections to local targets based on their connection mappings
+
+    // For each router, establish its local connections
+    for (const auto& [source_router, target_routers_by_direction] : routers_by_direction_map) {
+        // Build map of potential local targets (all other routers on this device)
+        std::map<RoutingDirection, FabricRouterBuilder*> local_targets;
+        for (const auto& [target_dir, target_router] : target_routers_by_direction) {
+            local_targets[target_dir] = target_router;
+        }
+
+        source_router->configure_local_connections(local_targets);
     }
 }
 

@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -16,34 +16,51 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc",
+    "image_resolution, input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, block, pcc",
     [
-        ((1, 384, 128, 128), (1, 1536), 0, 0, False, 1, "down_blocks", 0.999),
-        ((1, 384, 64, 64), (1, 1536), 1, 0, True, 1, "down_blocks", 0.999),
-        ((1, 768, 64, 64), (1, 1536), 1, 1, False, 1, "down_blocks", 0.999),
-        ((1, 768, 32, 32), (1, 1536), 2, 0, True, 1, "down_blocks", 0.999),
-        ((1, 1536, 32, 32), (1, 1536), 2, 1, False, 1, "down_blocks", 0.999),
-        ((1, 1536, 16, 16), (1, 1536), 3, 0, False, 1, "down_blocks", 0.999),
-        ((1, 1536, 16, 16), (1, 1536), -1, 0, False, 1, "mid_block", 0.997),
-        ((1, 3072, 16, 16), (1, 1536), 0, 0, True, 1, "up_blocks", 0.999),
-        ((1, 3072, 32, 32), (1, 1536), 1, 0, True, 1, "up_blocks", 0.999),
-        ((1, 2304, 32, 32), (1, 1536), 1, 2, True, 1, "up_blocks", 0.999),
-        ((1, 2304, 64, 64), (1, 1536), 2, 0, True, 1, "up_blocks", 0.999),
-        ((1, 1536, 64, 64), (1, 1536), 2, 1, True, 1, "up_blocks", 0.999),
-        ((1, 1152, 64, 64), (1, 1536), 2, 2, True, 1, "up_blocks", 0.999),
-        ((1, 1152, 128, 128), (1, 1536), 3, 0, True, 1, "up_blocks", 0.999),
-        ((1, 768, 128, 128), (1, 1536), 3, 1, True, 1, "up_blocks", 0.999),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 384, 128, 128), (1, 1536), 0, 0, False, "down_blocks", 0.999),
+        ((1024, 1024), (1, 384, 64, 64), (1, 1536), 1, 0, True, "down_blocks", 0.999),
+        ((1024, 1024), (1, 768, 64, 64), (1, 1536), 1, 1, False, "down_blocks", 0.999),
+        ((1024, 1024), (1, 768, 32, 32), (1, 1536), 2, 0, True, "down_blocks", 0.999),
+        ((1024, 1024), (1, 1536, 32, 32), (1, 1536), 2, 1, False, "down_blocks", 0.998),
+        ((1024, 1024), (1, 1536, 16, 16), (1, 1536), 3, 0, False, "down_blocks", 0.998),
+        ((1024, 1024), (1, 1536, 16, 16), (1, 1536), -1, 0, False, "mid_block", 0.996),
+        ((1024, 1024), (1, 3072, 16, 16), (1, 1536), 0, 0, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 3072, 32, 32), (1, 1536), 1, 0, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 2304, 32, 32), (1, 1536), 1, 2, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 2304, 64, 64), (1, 1536), 2, 0, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 1536, 64, 64), (1, 1536), 2, 1, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 1152, 64, 64), (1, 1536), 2, 2, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 1152, 128, 128), (1, 1536), 3, 0, True, "up_blocks", 0.999),
+        ((1024, 1024), (1, 768, 128, 128), (1, 1536), 3, 1, True, "up_blocks", 0.999),
+        # 512x512 image resolution
+        ((512, 512), (1, 384, 64, 64), (1, 1536), 0, 0, False, "down_blocks", 0.999),
+        ((512, 512), (1, 384, 32, 32), (1, 1536), 1, 0, True, "down_blocks", 0.999),
+        ((512, 512), (1, 768, 32, 32), (1, 1536), 1, 1, False, "down_blocks", 0.999),
+        ((512, 512), (1, 768, 16, 16), (1, 1536), 2, 0, True, "down_blocks", 0.999),
+        ((512, 512), (1, 1536, 16, 16), (1, 1536), 2, 1, False, "down_blocks", 0.998),
+        ((512, 512), (1, 1536, 8, 8), (1, 1536), 3, 0, False, "down_blocks", 0.998),
+        ((512, 512), (1, 1536, 8, 8), (1, 1536), -1, 0, False, "mid_block", 0.996),
+        ((512, 512), (1, 3072, 8, 8), (1, 1536), 0, 0, True, "up_blocks", 0.999),
+        ((512, 512), (1, 3072, 16, 16), (1, 1536), 1, 0, True, "up_blocks", 0.999),
+        ((512, 512), (1, 2304, 16, 16), (1, 1536), 1, 2, True, "up_blocks", 0.999),
+        ((512, 512), (1, 2304, 32, 32), (1, 1536), 2, 0, True, "up_blocks", 0.999),
+        ((512, 512), (1, 1536, 32, 32), (1, 1536), 2, 1, True, "up_blocks", 0.999),
+        ((512, 512), (1, 1152, 32, 32), (1, 1536), 2, 2, True, "up_blocks", 0.999),
+        ((512, 512), (1, 1152, 64, 64), (1, 1536), 3, 0, True, "up_blocks", 0.999),
+        ((512, 512), (1, 768, 64, 64), (1, 1536), 3, 1, True, "up_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_resnetblock2d(
     device,
+    image_resolution,
     temb_shape,
     input_shape,
     down_block_id,
     resnet_id,
     conv_shortcut,
-    split_in,
     block,
     pcc,
     debug_mode,
@@ -71,17 +88,14 @@ def test_resnetblock2d(
     else:
         assert "Incorrect block name"
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_resnet = TtResnetBlock2D(
         device,
         state_dict,
         f"{block}.resnets.{resnet_id}",
         model_config,
         conv_shortcut,
-        split_in,
         debug_mode=debug_mode,
-        use_negative_mask=(block == "up_blocks.3" and resnet_id != 0),
-        dram_groupnorm=(block == "up_blocks.3" and resnet_id == 0),
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

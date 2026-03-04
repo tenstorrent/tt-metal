@@ -14,7 +14,9 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
+#include <bitset>
 #include <optional>
+#include <vector>
 
 /**
  * TODO (#34009): Move to experimental namespace
@@ -63,10 +65,12 @@ struct CBDescriptor {
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
+    uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 
 struct SemaphoreDescriptor {
+    uint32_t id{};
     CoreType core_type = CoreType::WORKER;
     CoreRangeSet core_ranges;
     uint32_t initial_value = 0;
@@ -89,11 +93,6 @@ struct ComputeConfigDescriptor {
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
 };
-struct EthernetConfigDescriptor {
-    Eth eth_mode = Eth::SENDER;
-    NOC noc = NOC::NOC_0;
-    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
-};
 
 struct KernelDescriptor {
     // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
@@ -102,14 +101,10 @@ struct KernelDescriptor {
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = std::vector<std::pair<std::string, std::string>>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
-    using RuntimeArgs = std::vector<std::vector<CoreRuntimeArgs>>;
-    using CommonRuntimeArgs = std::vector<uint32_t>;
-    using ConfigDescriptor = std::variant<
-        ReaderConfigDescriptor,
-        WriterConfigDescriptor,
-        DataMovementConfigDescriptor,
-        ComputeConfigDescriptor,
-        EthernetConfigDescriptor>;
+    using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
+    using CommonRuntimeArgs = CoreRuntimeArgs;
+    using ConfigDescriptor = std::
+        variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
 
     std::string kernel_source;
@@ -120,7 +115,8 @@ struct KernelDescriptor {
     NamedCompileTimeArgs named_compile_time_args;
     Defines defines;
 
-    // triple-nested vectors, where runtime_args[i][j] is a vector of rt args for core(i, j)
+    // vector of pairs, where runtime_args[i].first is the core coord and runtime_args[i].second is the vector of
+    // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
 
@@ -137,10 +133,19 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
-    std::optional<ttsl::hash::hash_t> custom_program_hash;
+    std::optional<std::uint64_t> custom_program_hash;
 
-    uint32_t add_semaphore(CoreRangeSet core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
+    std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
+
+/**
+ * Merge multiple ProgramDescriptors into a single one.
+ *
+ * @param descriptors Vector of ProgramDescriptors to merge.
+ * @return A new ProgramDescriptor containing all kernels, CBs, and semaphores.
+ * @throws TT_FATAL if any core ranges overlap between any of the descriptors.
+ */
+ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
 }  // namespace tt::tt_metal
 
@@ -148,9 +153,7 @@ struct ProgramDescriptor {
 namespace std {
 template <>
 struct hash<tt::tt_metal::TileDescriptor> {
-    std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
-    }
+    std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept;
 };
 }  // namespace std
 

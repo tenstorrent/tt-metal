@@ -71,7 +71,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
             {tt::CBIndex::c_28, 1, intermed_data_format},  // tmp
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -162,7 +162,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
 
 void MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;

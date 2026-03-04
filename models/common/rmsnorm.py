@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import Mode
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -52,6 +53,7 @@ class RMSNorm(LightweightModule):
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
         tt_ccl=None,
+        fp32_dest_acc_en=True,
     ):
         super().__init__()
         self.device = device
@@ -113,14 +115,33 @@ class RMSNorm(LightweightModule):
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        mode: Mode | str,
+        in_sharded=False,
+        out_sharded=False,
+        norm_config=None,
+    ) -> ttnn.Tensor:
+        if isinstance(mode, str):
+            try:
+                mode = Mode(mode)
+            except ValueError:
+                raise ValueError(f"Invalid mode: {mode}")
+        elif not isinstance(mode, Mode):
+            raise ValueError(f"Invalid mode: {mode}")
+
+        sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
+        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
+        output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+
         # If input is sharded do sharded RMSNorm and optionally return sharded output
-        program_config = self.sharded_program_config if in_sharded else None
-        memory_config = self.sharded_output_config if out_sharded else None
+        program_config = sharded_program_config if in_sharded else None
+        memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
         norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
         weight = self.weight_distributed if distributed else self.weight
@@ -142,6 +163,8 @@ class RMSNorm(LightweightModule):
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
         else:
+            if output_mem_config is not None:
+                x = ttnn.to_memory_config(x, output_mem_config)
             return x
 
     def _distributed_rmsnorm(

@@ -22,9 +22,9 @@
 namespace {
 /*
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
-or setting 'is_nigthly_tt_train_tests_enabled' variable to true.
+or setting 'is_nightly_tt_train_tests_enabled' variable to true.
 */
-constexpr bool is_nigthly_tt_train_tests_enabled = false;
+constexpr bool is_nightly_tt_train_tests_enabled = false;
 
 [[nodiscard]] bool is_wormhole_b0() {
     static bool arch_is_wormhole_b0 = []() {
@@ -39,7 +39,7 @@ constexpr bool is_nigthly_tt_train_tests_enabled = false;
 [[nodiscard]] bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
     bool is_whb0 = is_wormhole_b0();
-    bool is_ci = env_var && is_nigthly_tt_train_tests_enabled;
+    bool is_ci = env_var && is_nightly_tt_train_tests_enabled;
     return is_whb0 && is_ci;
 }
 
@@ -127,6 +127,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_ddp = use_ddp, .enable_tp = use_tensor_parallel});
 
     std::string text;
     // reading training data from txt file
@@ -271,7 +272,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         // synchronize gradients for multi-device case, no-op if single device
         auto parameters = model->parameters();
         if (!use_tensor_parallel) {
-            ttml::core::distributed::synchronize_parameters(parameters);
+            ttml::core::distributed::synchronize_gradients(parameters);
         }
 
         optimizer->step();

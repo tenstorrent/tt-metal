@@ -44,6 +44,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
     auto device_id = all_active_devices.front()->id();
     const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
@@ -75,8 +76,8 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
         std::vector<chan_id_t> non_dispatch_active_channels;
         std::set<routing_plane_id_t> non_dispatch_routing_planes;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
-            dispatch_link_idx_ =
-                tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+            dispatch_link_idx_ = tt_metal::RelayMux::get_dispatch_link_index(
+                control_plane, is_galaxy_cluster, fabric_node_id, remote_fabric_node_id, device);
 
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
                 auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
@@ -178,7 +179,7 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
 }
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    // Initialize channel mappings and configurations, skipping the rest initialization if there are no ethernet found
     if (!initialize_channel_mappings()) {
         return;
     }
@@ -211,11 +212,12 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
     }
 
     // For each active routing plane, check which of the 4 directions (E, W, N, S) are missing
+    // Skip Z direction - it's for 3D routing and not relevant for missing directions on a chip
     std::set<std::pair<routing_plane_id_t, eth_chan_directions>> missing_plane_dirs;
     for (auto routing_plane_id : active_routing_planes) {
-        for (uint8_t dir_idx = 0; dir_idx < eth_chan_directions::COUNT; dir_idx++) {
+        for (uint8_t dir_idx = 0; dir_idx < eth_chan_directions::Z; dir_idx++) {
             auto dir = static_cast<eth_chan_directions>(dir_idx);
-            if (active_plane_directions.find({routing_plane_id, dir}) == active_plane_directions.end()) {
+            if (!active_plane_directions.contains({routing_plane_id, dir})) {
                 missing_plane_dirs.insert({routing_plane_id, dir});
             }
         }
@@ -492,6 +494,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
 
+    // Guard against division by zero
+    TT_FATAL(
+        num_used_riscs_per_tensix_ > 0,
+        "num_used_riscs_per_tensix_ must be greater than 0, but got {}",
+        num_used_riscs_per_tensix_);
+
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =
         fabric_context.get_fabric_packet_header_size_bytes() + tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -522,8 +530,18 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = std::bit_floor(space_per_risc_ / space_needed_for_max_channels);
-    TT_FATAL(num_buffers_per_channel_ > 0, "num_buffers_per_channel_ must be non-zero");
+
+    size_t number_of_buffers_per_channel = std::bit_floor(space_per_risc_ / space_needed_for_max_channels);
+    TT_FATAL(number_of_buffers_per_channel > 0, "number of buffers per channel must be non-zero");
+
+    // To prevent overflow of num_buffers_per_channel_ (which is uint8_t), we max number of buffers per channel to 128
+    if (number_of_buffers_per_channel >= std::numeric_limits<uint8_t>::max()) {
+        log_warning(
+            tt::LogMetal, "Number of buffers per channel overflows uint8_t, setting to 128 to prevent byte overflow");
+        num_buffers_per_channel_ = 128;
+    } else {
+        num_buffers_per_channel_ = static_cast<uint8_t>(number_of_buffers_per_channel);
+    }
 
     // Build buffer counts map for each mux channel type (all use same buffer count for now)
     for (const auto& [type, channel_count] : mux_channel_counts_) {
@@ -657,7 +675,7 @@ std::shared_ptr<FabricTensixDatamoverBaseConfig> FabricTensixDatamoverConfig::ge
 }
 
 bool FabricTensixDatamoverConfig::is_core_id_active(FabricTensixCoreType core_id) const {
-    return configs_.find(core_id) != configs_.end();
+    return configs_.contains(core_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(

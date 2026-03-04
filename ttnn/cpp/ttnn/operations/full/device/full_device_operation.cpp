@@ -3,15 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "full_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::full {
-void FullOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+
+FullDeviceOperation::program_factory_t FullDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    if (operation_attributes.memory_config.is_sharded()) {
+        if (operation_attributes.memory_config.shard_spec().has_value()) {
+            return FullShardedProgramFactory{};
+        }
+        return FullNDShardedProgramFactory{};
+    }
+    return FullInterleavedProgramFactory{};
+}
+
+void FullDeviceOperation::validate_inputs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Full operation error: Not currently supporting sharding");
+        operation_attributes.dtype == DataType::BFLOAT16 || operation_attributes.dtype == DataType::INT32 ||
+            operation_attributes.dtype == DataType::FLOAT32,
+        "Full: Unsupported data type {}",
+        operation_attributes.dtype);
 
     const auto shape = operation_attributes.shape;
 
@@ -20,7 +36,7 @@ void FullOperation::validate_inputs(
         "Full operation error: Shape size must be greater than 1, but got shape size = {}",
         shape.size());
 
-    for (int i = 0; i < shape.size(); i++) {
+    for (size_t i = 0; i < shape.size(); i++) {
         TT_FATAL(
             shape[i] > 0,
             "Full operation error: Invalid shape at index {}. Each dimension of the shape must be greater than 0, but"
@@ -31,22 +47,12 @@ void FullOperation::validate_inputs(
     }
 }
 
-FullOperation::program_factory_t FullOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
-}
-
-void FullOperation::validate_on_program_cache_miss(
+void FullDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void FullOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-FullOperation::spec_return_value_t FullOperation::compute_output_specs(
+FullDeviceOperation::spec_return_value_t FullDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t&) {
     return TensorSpec(
         Shape(operation_attributes.shape),
@@ -56,29 +62,33 @@ FullOperation::spec_return_value_t FullOperation::compute_output_specs(
             operation_attributes.memory_config));
 };
 
-FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
+FullDeviceOperation::tensor_return_value_t FullDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, operation_attributes.mesh_device);
 }
 
-std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> FullOperation::invoke(
+}  // namespace ttnn::operations::full
+
+namespace ttnn::prim {
+ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
     ttnn::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
     const Layout& layout,
     const MemoryConfig& memory_config) {
-    return {
-        operation_attributes_t{
-            std::move(shape),
-            fill_value,
-            mesh_device,
-            dtype,
-            layout,
-            memory_config,
-        },
-        tensor_args_t{},
+    using OperationType = ttnn::operations::full::FullDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        std::move(shape),
+        fill_value,
+        mesh_device,
+        dtype,
+        layout,
+        memory_config,
     };
+    auto tensor_args = OperationType::tensor_args_t{};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::full
+}  // namespace ttnn::prim

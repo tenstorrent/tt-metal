@@ -2,10 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_results.hpp"
+#include <tt_stl/reflection.hpp>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <fstream>
+#include <functional>
+#include <iomanip>
+#include <numeric>
+#include <sstream>
+#include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_bandwidth_results.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_config.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_latency_results.hpp"
+#include "tt_fabric_test_results.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
-
 void PostComparisonAnalyzer::organize_speedups_by_topology() {
     // Go through each comparison result and add its speedup to the corresponding topology->packet_size and
     // topology->ntype combination
@@ -32,8 +47,7 @@ double PostComparisonAnalyzer::calculate_geomean_speedup(const std::vector<doubl
         log_geomean_speedup += std::log(speedup);
     }
     log_geomean_speedup /= speedups.size();
-    double geomean_speedup = std::exp(log_geomean_speedup);
-    return geomean_speedup;
+    return std::isinf(log_geomean_speedup) ? 1.0 : std::exp(log_geomean_speedup);
 }
 
 void PostComparisonAnalyzer::calculate_overall_geomean_speedup() {
@@ -139,5 +153,107 @@ void PostComparisonAnalyzer::generate_comparison_statistics_csv(const std::files
     comparison_statistics_csv_stream.close();
     log_info(tt::LogTest, "Comparison statistics CSV results appended to: {}", csv_file_path.string());
 }
+template <typename T, typename U>
+std::string ResultsManager<T, U>::convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) const {
+    std::string num_devices_str = "[";
+    for (size_t i = 0; i < num_devices.size(); ++i) {
+        if (i > 0) {
+            num_devices_str += ",";
+        }
+        num_devices_str += std::to_string(num_devices[i]);
+    }
+    num_devices_str += "]";
+    return num_devices_str;
+}
 
+template <typename T, typename U>
+void ResultsManager<T, U>::populate_upload_metadata_fields() {
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    std::string machine_type = std::string(enchantum::to_string(cluster_type));
+    std::transform(machine_type.begin(), machine_type.end(), machine_type.begin(), ::tolower);
+
+    std::string file_name = get_perf_metric_name() + "_" + arch_name + "_" + machine_type;
+
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::tm timestamp_now{};
+    localtime_r(&time_t_now, &timestamp_now);
+    std::ostringstream timestamp_oss;
+    timestamp_oss << std::put_time(&timestamp_now, "%Y-%m-%d %H:%M:%S");
+    std::string test_ts = timestamp_oss.str();
+
+    for (auto& result : results_summary_) {
+        result.file_name = file_name;
+        result.machine_type = machine_type;
+        result.test_ts = test_ts;
+    }
+}
+
+template <typename T, typename U>
+void ResultsManager<T, U>::generate_summary_csv() {
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    std::ostringstream summary_oss;
+    summary_oss << get_perf_metric_name() + "_summary_results_" << arch_name << ".csv";
+
+    std::filesystem::path output_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::string(OUTPUT_DIR);
+    csv_summary_file_path_ = output_path / summary_oss.str();
+
+    write_summary_csv_to_file(csv_summary_file_path_, false);
+}
+
+template <typename T, typename U>
+void ResultsManager<T, U>::generate_summary_upload_csv() {
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    std::ostringstream upload_oss;
+
+    upload_oss << get_perf_metric_name() + "_summary_results_" << arch_name << "_upload.csv";
+
+    std::filesystem::path output_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::string(OUTPUT_DIR);
+    csv_summary_upload_file_path_ = output_path / upload_oss.str();
+
+    populate_upload_metadata_fields();
+    write_summary_csv_to_file(csv_summary_upload_file_path_, true);
+}
+
+template <typename T, typename U>
+std::ofstream ResultsManager<T, U>::init_diff_csv_file(
+    std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
+    std::filesystem::path output_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::string(OUTPUT_DIR);
+    std::ostringstream diff_oss;
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    diff_oss << test_type << "_diff_" << arch_name << ".csv";
+    diff_csv_path = output_path / diff_oss.str();
+
+    std::ofstream diff_csv_stream(diff_csv_path, std::ios::out | std::ios::trunc);
+    if (!diff_csv_stream.is_open()) {
+        log_error(tt::LogTest, "Failed to create {} diff CSV file: {}", test_type, diff_csv_path.string());
+    } else {
+        diff_csv_stream << csv_header << "\n";
+        log_info(tt::LogTest, "Initialized {} diff CSV file: {}", test_type, diff_csv_path.string());
+    }
+    return diff_csv_stream;
+}
+
+template <typename T, typename U>
+std::string ResultsManager<T, U>::get_golden_csv_filename() {
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+
+    // Convert cluster type enum to lowercase string
+    std::string cluster_name = std::string(enchantum::to_string(cluster_type));
+    std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
+
+    std::string file_name = "golden_" + get_perf_metric_name() + "_summary_" + arch_name + "_" + cluster_name + ".csv";
+    return file_name;
+}
+
+template class ResultsManager<BandwidthResult, BandwidthResultSummary>;
+template class ResultsManager<LatencyResult, LatencyResultSummary>;
 }  // namespace tt::tt_fabric::fabric_tests

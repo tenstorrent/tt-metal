@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Tuple
-import pathlib
+import ast
 import json
-from elasticsearch import Elasticsearch, NotFoundError
-from framework.statuses import VectorStatus
-from framework.elastic_config import VECTOR_INDEX_PREFIX
+import pathlib
+from abc import ABC, abstractmethod
+
 from framework.sweeps_logger import sweeps_logger as logger
 
 
@@ -16,14 +14,12 @@ class VectorSource(ABC):
     """Abstract base class for test vector sources"""
 
     @abstractmethod
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
         """Load test vectors based on criteria"""
         pass
 
     @abstractmethod
-    def get_available_suites(self, module_name: str) -> List[str]:
+    def get_available_suites(self, module_name: str) -> list[str]:
         """Get list of available suites for a module"""
         pass
 
@@ -33,106 +29,13 @@ class VectorSource(ABC):
         pass
 
 
-class ElasticVectorSource(VectorSource):
-    """Elasticsearch-based vector source"""
-
-    def __init__(self, connection_string: str, username: str, password: str, tag: str):
-        logger.info(
-            f"Initializing Elasticsearch vector source with connection string: {connection_string}, username: {username}, tag: {tag}"
-        )
-        try:
-            self.client = Elasticsearch(connection_string, basic_auth=(username, password))
-        except Exception as e:
-            logger.error(f"Error connecting to Elasticsearch: {e}")
-            exit(1)
-        self.tag = tag
-        self.connection_string = connection_string
-        self.username = username
-        self.password = password
-
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
-        """Load test vectors from Elasticsearch"""
-        vector_index = VECTOR_INDEX_PREFIX + module_name
-
-        if vector_id:
-            # Load single vector by ID
-            try:
-                response = self.client.get(index=vector_index, id=vector_id)
-                vector = response["_source"]
-                vector["vector_id"] = vector_id
-                return [vector]
-            except NotFoundError:
-                return []
-
-        # Build query
-        query = {
-            "bool": {
-                "must": [
-                    {"match": {"status": str(VectorStatus.CURRENT)}},
-                    {"match": {"tag.keyword": self.tag}},
-                ]
-            }
-        }
-
-        if suite_name:
-            query["bool"]["must"].append({"match": {"suite_name.keyword": suite_name}})
-
-        try:
-            response = self.client.search(
-                index=vector_index,
-                query=query,
-                size=10000,
-            )
-
-            test_ids = [hit["_id"] for hit in response["hits"]["hits"]]
-            test_vectors = [hit["_source"] for hit in response["hits"]["hits"]]
-
-            # Add vector IDs to the vectors
-            for i in range(len(test_ids)):
-                test_vectors[i]["vector_id"] = test_ids[i]
-
-            return test_vectors
-
-        except NotFoundError:
-            return []
-
-    def get_available_suites(self, module_name: str) -> List[str]:
-        """Get list of available suites for a module from Elasticsearch"""
-        vector_index = VECTOR_INDEX_PREFIX + module_name
-
-        try:
-            response = self.client.search(
-                index=vector_index,
-                query={"match": {"tag.keyword": self.tag}},
-                aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
-                size=0,  # We only want aggregations, not documents
-            )
-            suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
-            logger.info(f"Available suites for module {module_name}: {suites}")
-            return suites
-        except (NotFoundError, Exception):
-            return []
-
-    def validate_connection(self) -> bool:
-        """Validate that the Elasticsearch connection works"""
-        # If we got this far, the client was created successfully in __init__
-        # The original sweeps_runner.py doesn't do additional validation beyond client creation
-        # The es_sweeps user doesn't have cluster monitor permissions, but that's fine for our use case
-        logger.info("✓ Elasticsearch client created successfully - skipping additional validation")
-        return True
-
-
 class FileVectorSource(VectorSource):
     """File-based vector source"""
 
     def __init__(self, file_path: str):
         self.file_path = pathlib.Path(file_path)
 
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
         """Load test vectors from JSON file"""
         if not self.file_path.exists():
             return []
@@ -150,7 +53,9 @@ class FileVectorSource(VectorSource):
                         vector = suite_content[vector_id]
                         vector["input_hash"] = vector_id
                         vector["suite_name"] = suite_key
-                        vector["sweep_name"] = module_name
+                        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                        if "sweep_name" not in vector:
+                            vector["sweep_name"] = module_name
                         vectors.append(vector)
                         break
             else:
@@ -162,7 +67,9 @@ class FileVectorSource(VectorSource):
                     for input_hash, vector_data in suite_content.items():
                         vector_data["input_hash"] = input_hash
                         vector_data["suite_name"] = suite_key
-                        vector_data["sweep_name"] = module_name
+                        # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                        if "sweep_name" not in vector_data:
+                            vector_data["sweep_name"] = module_name
                         vectors.append(vector_data)
 
             return vectors
@@ -170,7 +77,7 @@ class FileVectorSource(VectorSource):
         except (json.JSONDecodeError, IOError):
             return []
 
-    def get_available_suites(self, module_name: str) -> List[str]:
+    def get_available_suites(self, module_name: str) -> list[str]:
         """Get list of available suites from JSON file"""
         if not self.file_path.exists():
             return []
@@ -190,18 +97,30 @@ class FileVectorSource(VectorSource):
 class VectorExportSource(VectorSource):
     """Vectors export directory source"""
 
-    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+    def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
             # Default to vectors_export directory relative to this file
             self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
 
-    def _find_module_file(self, module_name: str) -> Optional[pathlib.Path]:
-        """Find the JSON file for a given module"""
-        potential_files = list(self.export_dir.glob(f"{module_name}.json"))
-        if potential_files:
-            return potential_files[0]
+    def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
+        """Find all JSON files for a given module (including mesh variants)"""
+        all_files = []
+
+        # First try exact match (backward compatibility)
+        exact_match = list(self.export_dir.glob(f"{module_name}.json"))
+        if exact_match:
+            all_files.extend(exact_match)
+
+        # Also look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
+        mesh_variants = list(self.export_dir.glob(f"{module_name}__mesh_*.json"))
+        if mesh_variants:
+            logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
+            all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
+
+        if all_files:
+            return all_files
 
         logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
@@ -212,63 +131,307 @@ class VectorExportSource(VectorSource):
                 logger.info(f"Similar files found: {top_names}")
         except Exception:
             pass
-        return None
+        return []
 
-    def load_vectors(
-        self, module_name: str, suite_name: Optional[str] = None, vector_id: Optional[str] = None
-    ) -> List[Dict]:
-        """Load test vectors from vectors_export directory"""
-        module_file = self._find_module_file(module_name)
-        if not module_file:
+    def _get_machine_info(self):
+        """Get machine info using get_machine_info from generic_ops_tracer."""
+        try:
+            import sys
+            import os
+
+            # Add model_tracer to path if not already there
+            # Go up 4 levels from this file (tests/sweep_framework/framework/vector_source.py)
+            # to get to repo root, then into model_tracer
+            model_tracer_path = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "model_tracer"
+            model_tracer_path_str = str(model_tracer_path)
+
+            if model_tracer_path_str not in sys.path:
+                sys.path.insert(0, model_tracer_path_str)
+
+            # Import the module
+            from generic_ops_tracer import get_machine_info
+
+            machine_info = get_machine_info()
+
+            # get_machine_info() might return None if tt-smi fails
+            if machine_info is None:
+                logger.warning("get_machine_info() returned None - tt-smi might have failed")
+                return None
+
+            logger.debug(f"Successfully retrieved machine info: {machine_info}")
+            return machine_info
+        except Exception as e:
+            import traceback
+
+            logger.warning(f"Failed to get machine info: {e}\n{traceback.format_exc()}")
+            return None
+
+    def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
+        """Load test vectors from vectors_export directory (including mesh variants)
+
+        If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
+        those matching the current machine's configuration.
+        """
+        import os
+
+        module_files = self._find_module_files(module_name)
+        if not module_files:
             return []
 
-        try:
-            with open(module_file, "r") as file:
-                data = json.load(file)
+        # Check if this is a model_traced run (resource filtering only applies to model_traced)
+        is_model_traced = "model_traced" in module_name
+        is_lead_models = os.environ.get("LEAD_MODELS_RUN", "").strip() == "1"
 
-            vectors = []
+        # Get current machine info (for device/card filtering in model_traced runs)
+        current_machine_info = None
+        if is_model_traced:
+            current_machine_info = self._get_machine_info()
 
-            for suite_key, suite_content in data.items():
-                if suite_name and suite_name != suite_key:
-                    continue
+        # Check if mesh filtering is enabled via environment variable
+        mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+        target_mesh = None
 
-                if vector_id:
-                    if vector_id in suite_content:
-                        vector = suite_content[vector_id]
-                        vector["input_hash"] = vector_id
-                        vector["suite_name"] = suite_key
-                        vector["sweep_name"] = module_name
-                        vectors.append(vector)
-                        logger.info(f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}'")
+        if mesh_filter:
+            logger.info(f"Mesh filtering enabled: MESH_DEVICE_SHAPE={mesh_filter}")
+
+            if current_machine_info:
+                logger.info(
+                    f"Current machine: board_type={current_machine_info['board_type']}, "
+                    f"device_series={current_machine_info['device_series']}, "
+                    f"card_count={current_machine_info['card_count']}"
+                )
+            else:
+                logger.warning("Could not determine current machine info from tt-smi")
+
+            # Parse target mesh shape from the env var (e.g., "1x2" -> (1, 2))
+            try:
+                target_rows, target_cols = map(int, mesh_filter.lower().split("x"))
+                target_mesh = (target_rows, target_cols)
+            except (ValueError, AttributeError):
+                logger.warning(f"Invalid MESH_DEVICE_SHAPE format: {mesh_filter}, expected NxM (e.g., 1x2)")
+
+        all_vectors = []
+        filtered_count = 0
+        machine_mismatch_count = 0
+
+        # Load vectors from all matching files (e.g., base + mesh variants)
+        for module_file in module_files:
+            try:
+                with open(module_file, "r") as file:
+                    data = json.load(file)
+
+                for suite_key, suite_content in data.items():
+                    if suite_name and suite_name != suite_key:
+                        continue
+
+                    if vector_id:
+                        if vector_id in suite_content:
+                            vector = suite_content[vector_id]
+                            vector["input_hash"] = vector_id
+                            vector["suite_name"] = suite_key
+                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                            if "sweep_name" not in vector:
+                                vector["sweep_name"] = module_name
+                            all_vectors.append(vector)
+                            logger.info(
+                                f"Vector ID '{vector_id}' found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
+                            )
+                        else:
+                            logger.warning(
+                                f"Vector ID '{vector_id}' not found in suite '{suite_name}' of module '{module_name}' (file: {module_file.name})"
+                            )
+                        break
                     else:
-                        logger.warning(
-                            f"Vector ID '{vector_id}' not found in suite '{suite_name}' of module '{module_name}'"
-                        )
-                    break
-                else:
-                    for input_hash, vector_data in suite_content.items():
-                        vector_data["input_hash"] = input_hash
-                        vector_data["suite_name"] = suite_key
-                        vector_data["sweep_name"] = module_name
-                        vectors.append(vector_data)
+                        for input_hash, vector_data in suite_content.items():
+                            vector_data["input_hash"] = input_hash
+                            vector_data["suite_name"] = suite_key
+                            # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
+                            if "sweep_name" not in vector_data:
+                                vector_data["sweep_name"] = module_name
 
-            return vectors
+                            # Normalize traced_machine_info to a list of dict entries.
+                            # Some vectors carry multiple machine descriptors; filtering
+                            # should accept a vector if ANY entry matches.
+                            traced_machine_info = vector_data.get("traced_machine_info")
+                            traced_machine_entries = []
+                            if isinstance(traced_machine_info, dict):
+                                traced_machine_entries = [traced_machine_info]
+                            elif isinstance(traced_machine_info, list):
+                                traced_machine_entries = [
+                                    entry for entry in traced_machine_info if isinstance(entry, dict)
+                                ]
 
-        except (json.JSONDecodeError, IOError):
+                            def _extract_mesh_shape(entry: dict) -> tuple[int, int] | None:
+                                """Extract mesh shape from machine entry when present."""
+                                mesh = entry.get("mesh_device_shape")
+                                if isinstance(mesh, list) and len(mesh) == 2:
+                                    return (mesh[0], mesh[1])
+                                if isinstance(mesh, str):
+                                    try:
+                                        parsed = ast.literal_eval(mesh)
+                                        if isinstance(parsed, list) and len(parsed) == 2:
+                                            return (parsed[0], parsed[1])
+                                    except (SyntaxError, ValueError):
+                                        pass
+
+                                # Legacy location used by some vectors
+                                placements = entry.get("tensor_placements")
+                                if isinstance(placements, list) and placements:
+                                    placement_mesh = placements[0].get("mesh_device_shape")
+                                    if isinstance(placement_mesh, list) and len(placement_mesh) == 2:
+                                        return (placement_mesh[0], placement_mesh[1])
+                                    if isinstance(placement_mesh, str):
+                                        try:
+                                            parsed = ast.literal_eval(placement_mesh)
+                                            if isinstance(parsed, list) and len(parsed) == 2:
+                                                return (parsed[0], parsed[1])
+                                        except (SyntaxError, ValueError):
+                                            pass
+                                return None
+
+                            # Filter vectors based on hardware compatibility.
+                            # Lead models use strict 4-field matching (board_type, device_series,
+                            # card_count, device_count) since they are routed to correct hardware.
+                            # Non-lead runs only skip multi-card vectors since CI only has N150.
+                            skip_for_resources = False
+                            if current_machine_info and traced_machine_entries:
+                                if is_lead_models:
+                                    current_board = current_machine_info.get("board_type", "").lower()
+                                    current_series = current_machine_info.get("device_series", "").lower()
+                                    current_card_count = current_machine_info.get("card_count")
+                                    current_device_count = current_machine_info.get("device_count")
+
+                                    has_matching_hardware = False
+                                    for entry in traced_machine_entries:
+                                        traced_board = entry.get("board_type", "").lower()
+                                        traced_series = entry.get("device_series", "").lower()
+                                        traced_card_count = entry.get("card_count")
+                                        traced_device_count = entry.get("device_count")
+
+                                        board_match = (
+                                            not traced_board
+                                            or not current_board
+                                            or traced_board == current_board
+                                            or ("wormhole" in traced_board and "wormhole" in current_board)
+                                        )
+                                        series_match = (
+                                            not traced_series or not current_series or traced_series == current_series
+                                        )
+                                        card_match = (
+                                            traced_card_count is None or traced_card_count == current_card_count
+                                        )
+                                        device_match = (
+                                            traced_device_count is None or traced_device_count == current_device_count
+                                        )
+
+                                        if board_match and series_match and card_match and device_match:
+                                            has_matching_hardware = True
+                                            break
+
+                                    if not has_matching_hardware:
+                                        logger.debug(
+                                            f"Skipping vector - traced hardware does not match current machine "
+                                            f"(current: board_type={current_machine_info.get('board_type')}, "
+                                            f"device_series={current_machine_info.get('device_series')}, "
+                                            f"card_count={current_machine_info.get('card_count')}, "
+                                            f"device_count={current_machine_info.get('device_count')})"
+                                        )
+                                        machine_mismatch_count += 1
+                                        skip_for_resources = True
+                                else:
+                                    # TODO: Tighten this once CI runners cover more hardware variants.
+                                    has_single_card = any(
+                                        entry.get("card_count") == 1 or entry.get("card_count") is None
+                                        for entry in traced_machine_entries
+                                    )
+                                    if not has_single_card:
+                                        logger.debug(
+                                            "Skipping vector - no single-card entry found and " "not a lead models run"
+                                        )
+                                        machine_mismatch_count += 1
+                                        skip_for_resources = True
+
+                            if skip_for_resources:
+                                continue
+
+                            # Apply mesh filtering if enabled
+                            if mesh_filter and target_mesh:
+                                # If mesh shape is missing in JSON, do not filter out.
+                                # Otherwise, accept when ANY traced entry matches target mesh.
+                                traced_mesh_entries = []
+                                for entry in traced_machine_entries:
+                                    mesh_shape = _extract_mesh_shape(entry)
+                                    if mesh_shape is not None:
+                                        traced_mesh_entries.append((entry, mesh_shape))
+
+                                if traced_mesh_entries:
+                                    matching_entries = [
+                                        entry for entry, mesh_shape in traced_mesh_entries if mesh_shape == target_mesh
+                                    ]
+                                    if not matching_entries:
+                                        filtered_count += 1
+                                        continue
+
+                                    # Optional machine compatibility check: require at least one compatible entry.
+                                    if current_machine_info:
+                                        current_board = current_machine_info.get("board_type", "").lower()
+                                        current_series = current_machine_info.get("device_series", "").lower()
+                                        has_compatible_entry = False
+                                        for entry in matching_entries:
+                                            traced_board = entry.get("board_type", "").lower()
+                                            traced_series = entry.get("device_series", "").lower()
+
+                                            board_match = True
+                                            if traced_board and current_board:
+                                                board_match = traced_board == current_board or (
+                                                    "wormhole" in traced_board and "wormhole" in current_board
+                                                )
+
+                                            series_match = True
+                                            if traced_series and current_series:
+                                                series_match = traced_series == current_series
+
+                                            if board_match and series_match:
+                                                has_compatible_entry = True
+                                                break
+
+                                        if not has_compatible_entry:
+                                            machine_mismatch_count += 1
+                                            continue
+
+                            all_vectors.append(vector_data)
+
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Error loading vectors from {module_file}: {e}")
+
+        # Log filtering results if filtering was enabled
+        if mesh_filter and (filtered_count > 0 or machine_mismatch_count > 0):
+            total_filtered = filtered_count + machine_mismatch_count
+            logger.info(
+                f"Filtered out {total_filtered} vectors "
+                f"(mesh mismatch: {filtered_count}, machine mismatch: {machine_mismatch_count}), "
+                f"loaded {len(all_vectors)} vectors"
+            )
+
+        return all_vectors
+
+    def get_available_suites(self, module_name: str) -> list[str]:
+        """Get list of available suites for a module from vectors_export directory (including mesh variants)"""
+        module_files = self._find_module_files(module_name)
+        if not module_files:
             return []
 
-    def get_available_suites(self, module_name: str) -> List[str]:
-        """Get list of available suites for a module from vectors_export directory"""
-        module_file = self._find_module_file(module_name)
-        if not module_file:
-            return []
+        # Collect unique suite names across all mesh variant files
+        all_suites = set()
+        for module_file in module_files:
+            try:
+                with open(module_file, "r") as file:
+                    data = json.load(file)
+                all_suites.update(data.keys())
+            except (json.JSONDecodeError, IOError):
+                continue
 
-        try:
-            with open(module_file, "r") as file:
-                data = json.load(file)
-            return list(data.keys())
-        except (json.JSONDecodeError, IOError):
-            return []
+        return sorted(list(all_suites))
 
     def validate_connection(self) -> bool:
         """Validate that the export directory exists"""
@@ -278,15 +441,11 @@ class VectorExportSource(VectorSource):
 class VectorSourceFactory:
     """Factory to create appropriate vector source based on configuration"""
 
+    SUPPORTED_SOURCES = {"file", "vectors_export"}
+
     @staticmethod
     def create_source(vector_source: str, **kwargs) -> VectorSource:
-        if vector_source == "elastic":
-            required_args = ["connection_string", "username", "password", "tag"]
-            for arg in required_args:
-                if arg not in kwargs:
-                    raise ValueError(f"Missing required argument '{arg}' for elastic vector source")
-            return ElasticVectorSource(**kwargs)
-        elif vector_source == "file":
+        if vector_source == "file":
             if "file_path" not in kwargs:
                 raise ValueError("Missing required argument 'file_path' for file vector source")
             return FileVectorSource(kwargs["file_path"])
@@ -294,4 +453,7 @@ class VectorSourceFactory:
             export_dir = kwargs.get("export_dir")
             return VectorExportSource(export_dir)
         else:
-            raise ValueError(f"Unknown vector source: {vector_source}")
+            raise ValueError(
+                f"Unknown vector source: '{vector_source}'. "
+                f"Supported sources: {', '.join(sorted(VectorSourceFactory.SUPPORTED_SOURCES))}"
+            )

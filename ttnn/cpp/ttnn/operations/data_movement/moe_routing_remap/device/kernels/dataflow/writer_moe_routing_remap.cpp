@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "dprint_pages.h"
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 using namespace tt::data_movement::common;
 

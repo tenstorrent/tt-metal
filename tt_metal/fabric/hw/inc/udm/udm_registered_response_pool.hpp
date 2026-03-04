@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include "debug/assert.h"
-#include "dataflow_api.h"
+#include "api/debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
 #include "noc_parameters.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 
@@ -15,7 +15,7 @@ namespace tt::tt_fabric::udm {
 /**
  * @brief Registered response entry for tracking pending write/read responses
  *
- * This struct contains all information needed to send a response back to the requestor
+ * This struct contains all information needed to send a response back to the requester
  * after the NOC operation completes. For writes, this includes acknowledgment info.
  * For reads, this includes source location and memory pool slot tracking.
  */

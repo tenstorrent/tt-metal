@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/to_string.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
+#include "ttnn/graph/graph_serialization.hpp"
 
 namespace ttnn {
 
@@ -23,18 +26,18 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
             tensor.layout());
     }
 
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        auto storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+    if (is_device_tensor(tensor)) {
+        const auto& storage = tensor.device_storage();
         if (storage.mesh_buffer != nullptr) {
             auto* mesh_device = storage.mesh_buffer->device();
 
             if (mesh_device->num_devices() == 1) {
                 auto cpu_tensor = tensor.cpu();
-                return tt::tt_metal::tensor_impl::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+                return tt::tt_metal::to_string(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
             }
         }
     }
-    auto result = tt::tt_metal::tensor_impl::to_string(tensor);
+    auto result = tt::tt_metal::to_string(tensor);
     tt::tt_metal::GraphTracker::instance().track_function_end();
     return result;
 }

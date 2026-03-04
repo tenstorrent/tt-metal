@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <array>
 #include "eth_l1_address_map.h"
-#include "ethernet/dataflow_api.h"
-#include "debug/assert.h"
+#include "internal/ethernet/dataflow_api.h"
+#include "api/debug/assert.h"
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {

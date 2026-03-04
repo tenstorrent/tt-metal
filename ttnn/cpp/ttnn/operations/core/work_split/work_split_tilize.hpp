@@ -39,8 +39,25 @@ struct BlockSplitWH {
     bool has_cliff_col = false;
     uint32_t full_cores_per_row = 0;
     uint32_t full_cores_per_col = 0;
+    uint32_t single_sub_block_size = 0;
 };
 
+struct NcoresWH {
+    uint32_t ncores = 0;
+    uint32_t nblocks_per_core = 0;
+    uint32_t total_blocks_width = 0;
+    uint32_t total_blocks_height = 0;
+    uint32_t single_block_size = 0;
+};
+
+struct NcoresWHsb {
+    uint32_t ncores = 0;
+    uint32_t nblocks_per_core = 0;
+    uint32_t total_blocks_width = 0;
+    uint32_t total_blocks_height = 0;
+    uint32_t single_block_size = 0;
+    uint32_t single_sub_block_size = 0;
+};
 inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int height, int ref) {
     if (ref <= 0) {
         return {1, 1};
@@ -71,11 +88,8 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
     return {1, 1};
 }
 
-inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreRangeSet& grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
-    const uint32_t grid_area = grid.num_cores();
-    auto grid_cores = corerange_to_cores(grid);
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
 
     // Find the closest square larger than nblocks_per_core
@@ -83,11 +97,99 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
     nblocks_per_core = adjusted_nblocks_per_core;
 
-    // Helper lambda for ceiling division.
     const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
     const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    return NcoresWH{ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size};
+}
+
+inline NcoresWHsb compute_ncores_wh_sb(
+    size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
+    // check single_block_size_limit is valid
+    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
+    // Compute grid area and initial blocks-per-core using integer math.
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+    // Calculate ncores using single_block_size_limit.
+    uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size_limit);
+    uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size_limit);
+    uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    uint32_t ncores = total_blocks;
+    // If ncores is smaller than grid_area, return an NcoresWH constructed using these values.
+    if (ncores < grid_area) {
+        return NcoresWHsb{
+            ncores,
+            nblocks_per_core,
+            total_blocks_width,
+            total_blocks_height,
+            single_block_size_limit,
+            single_block_size_limit};
+    }
+    // single_block_size = n * single_sub_block_size
+    // Conditions: (1) single_sub_block_size < single_block_size_limit
+    //             (2) Maximize total_blocks_sb (computed by single_block_size)
+    //             (3) Minimize n (prefer smaller n for tie-breaker)
+    //             (4) blocks_row_cliff < single_sub_block_size_limit
+    uint32_t single_block_size = 0;
+    uint32_t opt_n = 0;
+    uint32_t single_sub_block_size = 0;
+    uint32_t opt_ncores_sb = 0;
+    for (uint32_t candidate_sub_block_size = single_block_size_limit - 1; candidate_sub_block_size >= 1;
+         --candidate_sub_block_size) {
+        uint32_t max_n = tt::div_up(width_tiles, candidate_sub_block_size);
+        for (uint32_t n = 2; n <= max_n; ++n) {
+            uint32_t tmp_single_block_size = n * candidate_sub_block_size;
+            uint32_t total_blocks_width_sb = tt::div_up(width_tiles, tmp_single_block_size);
+            uint32_t total_blocks_height_sb = tt::div_up(height_tiles, tmp_single_block_size);
+            uint32_t total_blocks_sb = total_blocks_width_sb * total_blocks_height_sb;
+            uint32_t full_cores_per_row = width_tiles / tmp_single_block_size;
+            uint32_t cliff_nblocks_row = width_tiles - full_cores_per_row * tmp_single_block_size;
+            // Select for max total_blocks_sb, for tie-break: prefer smaller n
+            if (total_blocks_sb <= grid_area && cliff_nblocks_row < single_block_size_limit &&
+                (opt_n == 0 || total_blocks_sb > opt_ncores_sb || (total_blocks_sb == opt_ncores_sb && n < opt_n))) {
+                opt_n = n;
+                opt_ncores_sb = total_blocks_sb;
+                single_sub_block_size = candidate_sub_block_size;
+                single_block_size = tmp_single_block_size;
+            }
+        }
+    }
+
+    // If no solution found, use single_block_size_limit
+    if (opt_n == 0) {
+        TT_FATAL(false, "No solution found for single_block_size");
+    }
+
+    total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    total_blocks_height = tt::div_up(height_tiles, single_block_size);
+    total_blocks = total_blocks_width * total_blocks_height;
+    ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    return NcoresWHsb{
+        ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size, single_sub_block_size};
+}
+
+inline BlockSplitWH split_blocks_for_tilize_wh(
+    CoreRangeSet& grid,
+    uint32_t nblocks,
+    uint32_t width_tiles,
+    uint32_t height_tiles,
+    std::optional<uint32_t> single_block_size_limit = std::nullopt) {
+    // Compute grid area and initial blocks-per-core using integer math.
+    const uint32_t grid_area = grid.num_cores();
+    auto grid_cores = corerange_to_cores(grid);
+    auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
+        compute_ncores_wh(grid_area, nblocks, width_tiles, height_tiles);
+    uint32_t single_sub_block_size = single_block_size;
+    if (single_block_size_limit.has_value() && single_block_size > single_block_size_limit.value()) {
+        auto result =
+            compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit.value());
+        ncores = result.ncores;
+        nblocks_per_core = result.nblocks_per_core;
+        total_blocks_width = result.total_blocks_width;
+        total_blocks_height = result.total_blocks_height;
+        single_block_size = result.single_block_size;
+        single_sub_block_size = result.single_sub_block_size;
+    }
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;
@@ -138,25 +240,31 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         has_cliff_row,
         has_cliff_col,
         full_cores_per_row,
-        full_cores_per_col};
+        full_cores_per_col,
+        single_sub_block_size};
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    CoreCoord grid_size,
+    uint32_t nblocks,
+    uint32_t width_tiles,
+    uint32_t height_tiles,
+    std::optional<uint32_t> single_block_size_limit = std::nullopt) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid_size.x * grid_size.y;
-    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
-
-    // Adjust nblocks_per_core and determine the optimal block size.
-    auto [adjusted_nblocks_per_core, single_block_size] =
-        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
-    nblocks_per_core = adjusted_nblocks_per_core;
-
-    // Helper lambda for ceiling division.
-    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
-    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
+        compute_ncores_wh(grid_area, nblocks, width_tiles, height_tiles);
+    uint32_t single_sub_block_size = single_block_size;
+    if (single_block_size_limit.has_value() && single_block_size > single_block_size_limit.value()) {
+        auto result =
+            compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit.value());
+        ncores = result.ncores;
+        nblocks_per_core = result.nblocks_per_core;
+        total_blocks_width = result.total_blocks_width;
+        total_blocks_height = result.total_blocks_height;
+        single_block_size = result.single_block_size;
+        single_sub_block_size = result.single_sub_block_size;
+    }
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;
@@ -213,14 +321,20 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         has_cliff_row,
         has_cliff_col,
         full_cores_per_row,
-        full_cores_per_col};
+        full_cores_per_col,
+        single_sub_block_size};
+}
+
+inline std::tuple<uint32_t, uint32_t> compute_ncores(size_t grid_area, uint32_t nblocks) {
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    return {ncores, nblocks_per_core};
 }
 
 inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nblocks) {
     size_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
-    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
-    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_no_cliff = nblocks_per_core_cliff == 0 ? ncores : ncores - 1;
 
@@ -251,8 +365,7 @@ inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nbl
 
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
     size_t grid_area = grid_size.x * grid_size.y;
-    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
-    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
     const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
@@ -302,7 +415,7 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
 }
 
 // BlockRep represents a repeated sequence of data blocks, mixed blocks, and padding blocks.
-// It is convient to pass to the device kernels because a single data structure made of 4 ints
+// It is convenient to pass to the device kernels because a single data structure made of 4 ints
 // can represent pure data rows, pure padding rows or a mixture thereof.
 struct BlockRep {
     // number of data blocks
@@ -316,12 +429,12 @@ struct BlockRep {
 
     BlockRep(uint32_t n_data, uint32_t n_mixed, uint32_t n_pads, uint32_t times) :
         n_data(n_data), n_mixed(n_mixed), n_pads(n_pads), times(times) {
-        if (n_data == 0 && n_mixed == 0) {
-            n_pads *= times;
-            times = 1;
-        } else if (n_pads == 0 && n_mixed == 0) {
-            n_data *= times;
-            times = 1;
+        if (this->n_data == 0 && this->n_mixed == 0) {
+            this->n_pads *= this->times;
+            this->times = 1;
+        } else if (this->n_pads == 0 && this->n_mixed == 0) {
+            this->n_data *= this->times;
+            this->times = 1;
         }
     }
 
@@ -371,7 +484,7 @@ struct BlockRep {
 
 // FullRep is a repeated sequence of data rows followed by pure padding. It represents the row
 // pattern seen from the outer-most dimension of a 4D tensor when padding is added to the second
-// or the thrird dimension.
+// or the third dimension.
 struct FullRep {
     BlockRep rep;
     BlockRep pad;

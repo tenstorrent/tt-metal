@@ -11,6 +11,9 @@ Description:
     Checks that no command buffers (CB0..CB3) are currently active by reading
     NOC_CMD_CTRL_CB0..3 on both NoCs for tensix and eth blocks. If any is nonzero,
     it prints an error with the device, location, NoC, and CB index.
+
+Owner:
+    jbaumanTT
 """
 
 from ttexalens.coordinate import OnChipCoordinate

@@ -1,6 +1,9 @@
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(fabric)
+
 # These headers are for the device, not host; will require cross compiling to lint them (future work).
 set_target_properties(
     fabric
@@ -50,9 +53,16 @@ target_sources(
         builder/fabric_router_recipe.cpp
         builder/channel_to_pool_mapping.cpp
         builder/multi_pool_channel_allocator.cpp
+        builder/connection_registry.cpp
+        builder/router_connection_mapping.cpp
+        channel_trimming_export.cpp
+        channel_trimming_import.cpp
+        channel_trimming_io.cpp
+        channel_trimming_report.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_switch_manager.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_builder_context.cpp
@@ -70,6 +80,10 @@ target_sources(
         physical_system_descriptor.cpp
         topology_mapper.cpp
         topology_mapper_utils.cpp
+        topology_solver.cpp
+        physical_grouping_descriptor_core.cpp
+        physical_grouping_descriptor_graph_building.cpp
+        physical_grouping_descriptor_matching.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
@@ -80,6 +94,7 @@ set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/router_port_directions.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
 )
 
 # Collect all generated protobuf files
@@ -88,6 +103,22 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
+
+# Expose a custom target for the generated protobuf files so that external consumers
+# can depend on them directly without going through the fabric OBJECT library.
+add_custom_target(fabric_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
+add_dependencies(fabric fabric_generated_protos)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files fabric_generated_protos)
+endif()
+
+# Exclude protobuf generated files from unity builds (they have conflicting static symbols)
+set_source_files_properties(
+    ${GENERATED_PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
 
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})

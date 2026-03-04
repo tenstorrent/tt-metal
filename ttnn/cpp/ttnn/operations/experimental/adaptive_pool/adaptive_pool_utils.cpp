@@ -53,12 +53,12 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_
 // Helper function designed to generate the stride values for each output elements the same way it is
 // calculated in pytorch implementation
 std::vector<uint32_t> calculate_actual_stride_patterns(
-    uint32_t input_size,
+    uint32_t /*input_size*/,
     uint32_t output_size,
-    uint32_t kernel_size,
+    uint32_t /*kernel_size*/,
     uint32_t stride,
-    uint32_t pad_before,
-    uint32_t pad_after) {
+    uint32_t /*pad_before*/,
+    uint32_t /*pad_after*/) {
     std::vector<uint32_t> actual_strides;
 
     // Calculate the actual start positions in the padded input for each output
@@ -73,7 +73,7 @@ std::vector<uint32_t> calculate_actual_stride_patterns(
 
 // Adaptive pool params carry the information which is needed by pool2d but not given as arguments of the adaptive pool
 // op This function calculates the kernel sizes the same way they would be produced by pytorch, analyzes the possibility
-// to make them uniform with padding if possible and needed, padds the input tesnor and then for the padded tensor
+// to make them uniform with padding if possible and needed, pads the input tesnor and then for the padded tensor
 // calculates strides to check if those would be uniform as well
 AdaptivePoolingParams calculate_adaptive_pool_params(
     uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {

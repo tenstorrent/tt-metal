@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_utils.hpp"
@@ -35,8 +35,6 @@ constexpr uint32_t provider_device_idx = get_compile_time_arg_val(11);
  * Runtime args: for each reader: (noc_x, noc_y, dst_dev_id, dst_mesh_id)
  */
 void kernel_main() {
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
@@ -95,8 +93,6 @@ void kernel_main() {
             time_seed_init,
             req_notification_size_bytes);
     }
-
-    tt::tt_fabric::udm::close_fabric_connection();
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_filled;

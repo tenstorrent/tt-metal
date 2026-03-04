@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr std::uint32_t base_l1_address = get_compile_time_arg_val(0);
@@ -23,7 +23,8 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* read_value_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(intermediate_l1_addr);
-        *read_value_ptr = *read_value_ptr + 1;
+        uint32_t read_val = *read_value_ptr;
+        *read_value_ptr = read_val + 1;
 
         noc_async_write(intermediate_l1_addr, noc_addr, size_bytes);
         noc_async_write_barrier();

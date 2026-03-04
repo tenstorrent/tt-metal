@@ -19,8 +19,10 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
+    run_rms_fuse_impl_deepseek,
     run_rms_trace,
     run_rms_trace_qwen,
+    run_rms_trace_deepseek,
     run_rms_fuse_impl,
     run_rms_fuse_impl_qwen,
 )
@@ -375,8 +377,9 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_gather_only(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -393,7 +396,7 @@ def test_all_gather_only(
     use_barrier,
 ):
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -649,6 +652,70 @@ def test_tg_trace_rms_fuse_qwen(
     [
         # RMS NORM ALL GATHER FUSION
         (
+            8,
+            896 * 8,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_6u_trace_rms_fuse_deepseek(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+    use_noc1_only,
+    fused_add,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace_deepseek(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Ring,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION
+        (
             4,
             8192,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))}),
@@ -792,7 +859,74 @@ def test_6u_trace_rms_fuse_qwen(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
-@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION No Reshard
+        (
+            8,
+            896 * 8,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+            None,
+        ),
+        (
+            8,
+            896 * 8,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_rms_fuse_deepseek(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    fused_add,
+    use_noc1_only,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
+):
+    run_rms_fuse_impl_deepseek(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        topology,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        output_dtype=output_dtype,
+        num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_blackhole("This is a wormhole test")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [

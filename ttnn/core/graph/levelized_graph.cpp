@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/graph/levelized_graph.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include <nlohmann/json.hpp>
@@ -335,7 +336,7 @@ void LevelizedGraph::populate_output_info() {
             if (!consumer.arguments.empty()) {
                 const std::string& first_arg = consumer.arguments[0];
                 // Check if it's a Tensor argument (starts with "Tensor(")
-                if (first_arg.find("Tensor(") == 0) {
+                if (first_arg.starts_with("Tensor(")) {
                     // Add to output_info if not already present (avoid duplicates)
                     // Note: this is not scalable, but the only viable solution for now since graph capture does not
                     // store the output info of each vertex.

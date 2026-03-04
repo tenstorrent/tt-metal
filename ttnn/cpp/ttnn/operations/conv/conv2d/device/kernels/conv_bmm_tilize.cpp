@@ -4,16 +4,16 @@
 
 #include <cstdint>
 
-#include "mod_div_lib.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "internal/mod_div_lib.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
 
-// #include "debug/dprint.h"
+// #include "api/debug/dprint.h"
 
 #define DEBUG_PRINT 0
 
@@ -76,7 +76,7 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
     // with activation reuse, the activation buffers are sized to fit one output image width only,
     // so we need to interleave waits and pops on the two buffers to allow parallelization;
     // we reserve back tilized CB to store whole act block h - and then we update write pointers so that
-    // we fill in first row of the first hald (NCRISC), first row of the second half (BRISC) and so on
+    // we fill in first row of the first half (NCRISC), first row of the second half (BRISC) and so on
     cb_reserve_back(out_cb_id, out_cb_tiles);
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
 
@@ -166,8 +166,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
@@ -410,7 +409,7 @@ void MAIN {
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
-                            // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                            // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,
@@ -625,5 +624,4 @@ void MAIN {
             bias_block_offset += in1_block_w;
         }
     }  // for in1_num_blocks_w
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

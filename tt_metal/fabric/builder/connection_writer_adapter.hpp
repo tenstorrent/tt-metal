@@ -59,6 +59,7 @@ public:
     virtual void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
+        uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing) = 0;
@@ -69,6 +70,12 @@ public:
 
     // Add connection to local tensix (relay in UDM mode)
     virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, CoreCoord) = 0;
+
+    // Get the number of downstream EDMs connected for a specific VC
+    virtual uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const = 0;
+
+    // Get the connection mask for a specific VC
+    virtual uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const = 0;
 
 protected:
     ~ChannelConnectionWriterAdapter() = default;
@@ -96,6 +103,7 @@ public:
     void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
+        uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
         bool is_2D_routing) override;
@@ -109,6 +117,16 @@ public:
     void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const override;
 
     uint32_t get_downstream_edms_connected() const;
+
+    // Get the number of downstream EDMs connected for a specific VC
+    uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc.at(vc_idx).size();
+    }
+
+    // Get the connection mask for a specific VC
+    uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const override {
+        return downstream_edms_connected_by_vc_mask.at(vc_idx);
+    }
 
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
@@ -146,7 +164,8 @@ private:
         builder_config::num_max_receiver_channels>
         downstream_edm_buffer_base_addresses = {};
 
-    uint32_t downstream_edms_connected = 0;
+    // Per-VC connection mask: bitmask indicating which downstream EDMs are connected for each VC
+    std::array<uint32_t, builder_config::num_max_receiver_channels> downstream_edms_connected_by_vc_mask = {};
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,

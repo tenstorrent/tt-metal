@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "../common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
@@ -61,7 +61,7 @@ void kernel_main() {
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
-    // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
+    // clean up semaphore – needs to be done before the sender side semaphore increment if we're reusing the semaphore
     // in subsequent program cache hits
     noc_semaphore_set(local_semaphore_ptr, 0);
 

@@ -7,7 +7,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn::operations::pool::grid_sample {
+namespace ttnn::prim {
 
 bool should_use_split_reader(
     const Tensor& input_tensor, const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode) {
@@ -43,7 +43,7 @@ bool should_use_split_reader(
     }
 
     // On blackhole, for a lower number of channels, the bottleneck is the reading of the input image, so split reader
-    // is benefitial On higher number of channels, the bottleneck is on the unpacker side, where using split reader also
+    // is beneficial On higher number of channels, the bottleneck is on the unpacker side, where using split reader also
     // adds additional overhead, so it slows down the program
     if (arch == tt::ARCH::BLACKHOLE) {
         const uint32_t input_channels = input_tensor.padded_shape()[-1];
@@ -65,7 +65,7 @@ uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precompute
     return grid_tensor.logical_shape()[-1] / elements_per_point;
 }
 
-uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
+uint32_t get_aligned_stick_size(const Shape& shape, const Tensor& tensor) {
     const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
     const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                    ? tt::tt_metal::hal::get_dram_alignment()
@@ -73,4 +73,4 @@ uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) 
     return tt::round_up(stick_nbytes, alignment);
 }
 
-}  // namespace ttnn::operations::pool::grid_sample
+}  // namespace ttnn::prim

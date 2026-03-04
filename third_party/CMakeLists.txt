@@ -6,14 +6,22 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
-add_compile_options(-Wno-unused-variable)
+add_compile_options(-w)
 
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
+    message(FATAL_ERROR "NUMA library not found. Please install it in your system.")
+endif()
+
+############################################################################################################################
+# hwloc
+############################################################################################################################
+find_library(HWLOC_LIBRARY NAMES hwloc)
+if(NOT HWLOC_LIBRARY)
+    message(FATAL_ERROR "hwloc library not found. Please install it in your system.")
 endif()
 
 ############################################################################################################################
@@ -97,12 +105,7 @@ set_target_properties(
 # Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
 # Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
 target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
-target_compile_options(
-    libprotobuf
-    PRIVATE
-        -fno-semantic-interposition
-        -Wno-deprecated-declarations
-)
+target_compile_options(libprotobuf PRIVATE -fno-semantic-interposition)
 
 ############################################################################################################################
 # yaml-cpp
@@ -134,10 +137,6 @@ CPMAddPackage(
         "BUILD_SHARED_LIBS OFF"
 )
 
-if(googletest_ADDED)
-    target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
-endif()
-
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
 ############################################################################################################################
@@ -147,6 +146,9 @@ if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
     target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
+    # Disable reflect's built-in static_assert self-tests.  They use unqualified
+    # `detail::` which is ambiguous when fmt::detail is also in scope.
+    target_compile_definitions(reflect INTERFACE NTEST)
 
     target_sources(
         reflect
@@ -193,10 +195,18 @@ CPMAddPackage(
 )
 
 ############################################################################################################################
-# pybind11 : https://github.com/pybind/pybind11
+# nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG
+        c5a3a378aa61d104c82ca053cb1e367782cd3618 # v2.10.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
@@ -310,14 +320,8 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_FLATC ON"
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
-        "FLATBUFFERS_STRICT_MODE ON"
+        "FLATBUFFERS_STRICT_MODE OFF"
 )
-
-if(flatbuffers_ADDED)
-    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    target_compile_options(flatc PRIVATE -Wno-restrict)
-    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
-endif()
 
 ############################################################################################################################
 # simd-everywhere/simde : https://github.com/simd-everywhere/simde
@@ -343,6 +347,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "SPDLOG_FMT_EXTERNAL_HO ON"
         "SPDLOG_INSTALL ON"
+        "BUILD_SHARED_LIBS OFF"
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -352,7 +357,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.6
+    VERSION 1.1.8
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
@@ -373,4 +378,5 @@ CPMAddPackage(
         "CMAKE_CXX_EXTENSIONS ON"
     PATCHES
         capnproto_capture_this.patch
+        capnproto_pthread.patch
 )

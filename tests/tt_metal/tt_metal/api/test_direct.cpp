@@ -4,10 +4,11 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <iostream>
 #include <map>
@@ -33,6 +34,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 using std::vector;
 using namespace tt;
@@ -99,6 +101,7 @@ bool reader_only(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_core_data;
     // tt_metal::detail::ReadFromBuffer(l1_buffer, dest_core_data);
@@ -169,6 +172,7 @@ bool writer_only(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -268,6 +272,8 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -289,8 +295,6 @@ bool reader_datacopy_writer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
-    const uint32_t input0_cb_index = 0;
-    const uint32_t output_cb_index = 16;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -310,42 +314,104 @@ bool reader_datacopy_writer(
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    tt_metal::CircularBufferConfig l1_input_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
-            .set_page_size(input0_cb_index, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input_cb_config);
+    KernelHandle reader_kernel;
+    KernelHandle writer_kernel;
+    KernelHandle compute_kernel;
+    uint32_t l1_input_dfb = 0;
+    uint32_t l1_output_dfb = 0;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
+            .entry_size = test_config.tile_byte_size,
+            .num_entries = test_config.num_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = test_config.l1_input_data_format
+        };
 
-    tt_metal::CircularBufferConfig l1_output_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
-            .set_page_size(output_cb_index, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+            .entry_size = test_config.tile_byte_size,
+            .num_entries = test_config.num_tiles,
+            .producer_risc_mask = 0x100,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x2,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = test_config.l1_output_data_format
+        };
 
-    auto reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
-        test_config.core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {input0_cb_index}});
+        l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input_dfb_config);
+        l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
 
-    auto writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
-        test_config.core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {output_cb_index}});
+        reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+            test_config.core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb}});
 
-    vector<uint32_t> compute_kernel_args = {
-        uint(test_config.num_tiles)  // per_core_tile_cnt
-    };
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
-        test_config.core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+        writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+            test_config.core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb}});
+
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
+            test_config.core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1, .compile_args = {uint(test_config.num_tiles)}});
+    } else {
+        const uint32_t input0_cb_index = 0;
+        const uint32_t output_cb_index = 16;
+
+        tt_metal::CircularBufferConfig l1_input_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
+                .set_page_size(input0_cb_index, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input_cb_config);
+
+        tt_metal::CircularBufferConfig l1_output_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
+                .set_page_size(output_cb_index, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
+
+        reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+            test_config.core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = {input0_cb_index}});
+
+        writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+            test_config.core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = {output_cb_index}});
+
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
+            test_config.core,
+            tt_metal::ComputeConfig{.compile_args = {uint(test_config.num_tiles)}});
+    }
+
+    if (device->arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_input_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, l1_output_dfb, compute_kernel, writer_kernel);
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
@@ -377,7 +443,11 @@ bool reader_datacopy_writer(
             (uint32_t)test_config.num_tiles,
         });
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto blocking = device->arch() == ARCH::QUASAR;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
+    if (not blocking) {
+        distributed::Finish(cq);
+    }
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);

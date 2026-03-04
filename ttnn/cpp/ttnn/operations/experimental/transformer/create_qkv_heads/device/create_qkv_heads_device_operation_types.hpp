@@ -10,9 +10,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 
-namespace ttnn::operations::experimental::create_qkv_heads {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct CreateQKVHeadsParams {
     const uint32_t num_q_heads;
     const uint32_t num_kv_heads;
     const uint32_t head_dim;
@@ -20,12 +20,12 @@ struct operation_attributes_t {
     const tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct CreateQKVHeadsInputs {
     const Tensor input;
     const std::optional<std::tuple<Tensor, Tensor, Tensor>> preallocated_outputs;
 };
 
-using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
-using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
+using CreateQKVHeadsResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+using CreateQKVHeadsResult = std::tuple<Tensor, Tensor, Tensor>;
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads
+}  // namespace ttnn::experimental::prim

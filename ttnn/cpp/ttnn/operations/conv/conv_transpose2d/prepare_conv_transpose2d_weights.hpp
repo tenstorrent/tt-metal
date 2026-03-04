@@ -11,8 +11,12 @@
 #include <ttnn/types.hpp>
 
 #include <ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp>
+#include <ttnn/operations/sliding_window/op_slicing/op_slicing.hpp>
 
 namespace ttnn::operations::conv::conv_transpose2d {
+
+using ttnn::prim::Conv2dConfig;
+using ttnn::prim::Conv2dSliceConfig;
 
 // Struct to hold all computed dimensions for transposed conv2d
 // Transposed conv2d is implemented as conv2d with transformed parameters:
@@ -43,6 +47,19 @@ struct ConvTranspose2dDimensions {
     static constexpr std::array<uint32_t, 4> CONV2D_PADDING = {0, 0, 0, 0};
 };
 
+// Enum to represent the execution path for conv2d operations
+enum class ConvT2dExecutionPath {
+    L1,   // Execute conv2d using L1 memory
+    DRAM  // Execute conv2d using DRAM slicing
+};
+
+// Helper function to determine which conv2d execution path to take based on
+// slice configuration and input tensor properties
+ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
+    const tt::tt_metal::StorageType& storage_type,
+    const MemoryConfig& memory_config,
+    const std::optional<const op_slicing::Op2DSliceConfig>& slice_config);
+
 // Helper function to compute all transposed conv2d dimension transformations
 // This consolidates the logic that was previously duplicated across multiple files
 ConvTranspose2dDimensions compute_conv_transpose2d_dimensions(
@@ -58,7 +75,7 @@ ttnn::Tensor transform_weights_for_conv_transpose2d(const ttnn::Tensor& conv_wei
 
 ttnn::Tensor prepare_conv_transpose2d_weights(
     const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     const std::string& weights_format,
     uint32_t in_channels,
@@ -75,9 +92,9 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel = true);
 
 ttnn::Tensor prepare_conv_transpose2d_bias(
@@ -97,8 +114,8 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
+    const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_);
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
 }  // namespace ttnn::operations::conv::conv_transpose2d

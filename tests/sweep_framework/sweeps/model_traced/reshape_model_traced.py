@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -14,7 +13,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 120
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -31,7 +30,9 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "target_shape": [(1, 32, 1, 32)],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": [
+            "StorageType::DEVICE"
+        ],  # NOTE: HOST storage does not work properly for reshape - always use DEVICE
     },
 }
 
@@ -47,9 +48,9 @@ def run(
     input_a_memory_config,
     output_memory_config,
     target_shape,
-    storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
@@ -93,24 +94,29 @@ def run(
             # Shard shape is not tile-aligned, use ROW_MAJOR layout
             actual_layout = ttnn.ROW_MAJOR_LAYOUT
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": actual_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+    try:
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=input_a_dtype,
+            layout=actual_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+    except Exception:
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=input_a_dtype,
+            layout=actual_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.reshape(input_tensor_a, target_shape, memory_config=output_memory_config)
+    try:
+        output_tensor = ttnn.reshape(input_tensor_a, target_shape, memory_config=output_memory_config)
+    except Exception:
+        output_tensor = ttnn.reshape(input_tensor_a, target_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

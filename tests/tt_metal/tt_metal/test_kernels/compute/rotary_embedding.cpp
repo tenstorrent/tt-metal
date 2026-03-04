@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -63,8 +63,7 @@ ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32
     tilize_uninit(in0_cb, out_cb);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t in_cb = get_compile_time_arg_val(0);
@@ -144,4 +143,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

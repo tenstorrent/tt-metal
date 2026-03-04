@@ -6,7 +6,7 @@ The TTNN Manual Seed operation is a device-level utility designed to initialize 
 
 ### Parameters
 
-- **seeds**: Either a scalar `uint32_t` value or a `Tensor` of `uint32_t` values representing the seed(s) to initialize the random number generator(s)
+- **seeds**: Either a scalar `uint32_t` value or a `Tensor` of `uint32_t` values representing the seed(s) to initialize the random number generator(s). A scalar value of `UINT32_MAX` (0xFFFFFFFF) is a special value that skips `rand_tile_init`, leaving the PRNG state unchanged.
 - **device**: The target device on which to set the seed(s). Required when seeds is a scalar value. Can be a single device or multi-chip mesh device
 - **user_ids**: Optional parameter that specifies which core(s) should receive the seed(s). Can be:
   - A scalar `uint32_t` representing a single core ID (valid range: 0-31)
@@ -22,9 +22,9 @@ The following table shows all valid combinations of input parameters and their b
 
 | Seeds Type | User IDs Type | Device Type | Behavior |
 |------------|---------------|-------------|----------|
-| `uint32_t` | None | Single or Multi-chip | Push seed to all cores on all devices (single device or all devices in mesh_device) |
-| `uint32_t` | `uint32_t` (core ID) | Single or Multi-chip | Push seed to the same core_id on each device in mesh_device (or single device based on input) |
-| `uint32_t` | 1D Tensor (`uint32_t`) | Derived from tensor | Set same seed to all core IDs listed in user_ids tensor on the device(s) where the user_ids tensor is placed |
+| `uint32_t` | None | Single or Multi-chip | Push seed to all cores on all devices (single device or all devices in mesh_device). Pass `UINT32_MAX` to skip `rand_tile_init`. |
+| `uint32_t` | `uint32_t` (core ID) | Single or Multi-chip | Push seed to the same core_id on each device in mesh_device (or single device based on input). Pass `UINT32_MAX` to skip `rand_tile_init`. |
+| `uint32_t` | 1D Tensor (`uint32_t`) | Derived from tensor | Set same seed to all core IDs listed in user_ids tensor on the device(s) where the user_ids tensor is placed. Pass `UINT32_MAX` to skip `rand_tile_init`. |
 | 1D Tensor (`uint32_t`) | 1D Tensor (`uint32_t`) | Derived from tensors | Elements in seeds tensor correspond to user_ids elements at matching indices; seeds are pushed to the relevant device(s) where the user_ids tensor is placed |
 
 **Notes:**
@@ -87,6 +87,7 @@ This strategy sets the same seed value across all available compute cores on the
 3. **Seed Initialization**:
    * Each core executes the kernel, which calls `rand_tile_init(seed)`
    * This initializes the hardware random number generator with the specified seed
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
 
 4. **No Runtime Arguments**:
    * All configuration is done at compile time
@@ -118,6 +119,7 @@ This strategy sets a seed to one specific compute core, identified by a core ID 
 3. **Seed Initialization**:
    * Only the targeted core executes the kernel
    * Calls `rand_tile_init(seed)` to initialize RNG state
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
 
 4. **No Runtime Arguments**:
    * Similar to the all-cores strategy, everything is compile-time configured
@@ -148,11 +150,12 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
 3. **Data Movement and Processing**:
    * Each core's reader kernel loads the user_ids tensor from DRAM to L1
    * The reader kernel checks if its core_id (passed at runtime) matches any ID in the tensor
-   * The match result is communicated to the compute kernel via mailbox
+   * The match result is communicated to the compute kernel via circular buffer
 
 4. **Seed Initialization**:
-   * The compute kernel reads the match result from the mailbox
+   * The compute kernel reads the match result from the CB message
    * If matched, it calls `rand_tile_init(seed)` to initialize RNG
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
    * Non-matching cores skip initialization and remain unmodified
 
 5. **Runtime Arguments**:
@@ -170,13 +173,14 @@ The program factory creates a single reader kernel and a single compute kernel t
 Each core's reader kernel performs the following operations:
 1. Reads the user_ids tensor from DRAM into L1 memory using NoC operations
 2. Iterates through the user_ids array to check if its core ID (received as runtime argument) matches any entry
-3. Communicates the match result (boolean) to the compute kernel via mailbox writes to all compute threads
+3. Writes the match result (boolean) to a dedicated circular buffer for kernel communication
+4. Pushes the communication entry to make it available to the compute kernel
 
-The mailbox communication mechanism allows the reader kernel (running on the data movement processor) to pass information to the compute kernel threads without using circular buffers.
+The circular buffer communication mechanism provides a structured way for the reader kernel (running on the data movement processor) to pass information to the compute kernel.
 
 **Compute Kernel (`manual_seed_single_seed_receive_user_id.cpp`):**
 
-The compute kernel waits for the match result from the reader kernel via `mailbox_read()`. If the match is positive, it initializes the RNG by calling `rand_tile_init(seed)` with the seed value received as a compile-time argument. Non-matching cores skip initialization entirely.
+The compute kernel waits for data from the reader kernel via `cb_wait_front()` on the kernel communication circular buffer. It then reads the match result using `read_tile_value()`. If the match is positive, it initializes the RNG by calling `rand_tile_init(seed)` with the seed value received as a compile-time argument. After processing, it pops the communication entry with `cb_pop_front()`. Non-matching cores skip initialization entirely.
 
 ---
 
@@ -201,13 +205,14 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
    * Each core's reader kernel loads both user_ids and seeds tensors from DRAM to L1
    * The reader kernel checks if its core_id (passed at runtime) matches any ID in user_ids
    * If matched, it retrieves the corresponding seed from the seeds tensor at the same index
-   * Both the match result and the seed value are communicated to the compute kernel via mailbox
+   * Both the match result and the seed value are communicated to the compute kernel via circular buffer
    * Tensors must have identical shapes and volumes (1-dimensional)
 
 4. **Seed Initialization**:
-   * The compute kernel reads the match result from the mailbox
-   * If matched, it reads the seed value from the mailbox
+   * The compute kernel reads the match result from the CB message
+   * If matched, it reads the seed value from the CB message
    * Calls `rand_tile_init(seed)` with the matched seed value
+   * If the seed value is `UINT32_MAX` (0xFFFFFFFF), `rand_tile_init` is skipped and the PRNG state remains unchanged
    * Cores not listed in user_ids remain unmodified
 
 5. **Runtime Arguments**:
@@ -227,13 +232,14 @@ Each core's reader kernel executes a more complex workflow:
 1. Reads both the user_ids tensor and seeds tensor from DRAM into separate L1 memory regions using NoC operations
 2. Iterates through the user_ids array to find if its core ID matches any entry
 3. If a match is found, retrieves the corresponding seed value from the seeds tensor at the same index
-4. Sends both the match result (boolean) and the seed value (if matched) to the compute kernel via mailbox writes
+4. Writes both the match result (boolean at index 0) and the seed value (at index 1) to the kernel communication circular buffer
+5. Pushes the communication entry to make it available to the compute kernel
 
-The dual-mailbox communication pattern allows passing both control information (whether to initialize) and data (the seed value) from the reader to the compute kernel.
+The circular buffer communication pattern allows passing both control information (whether to initialize) and data (the seed value) from the reader to the compute kernel in a single structured message.
 
 **Compute Kernel (`manual_seed_receive_all_data.cpp`):**
 
-The compute kernel reads the match result from the mailbox via `mailbox_read()`. If positive, it reads the seed value from a second mailbox message and calls `rand_tile_init(seed)` to initialize the RNG with the core-specific seed. This allows each core to receive a unique seed value while using the same kernel code.
+The compute kernel waits for data from the reader kernel via `cb_wait_front()` on the kernel communication circular buffer. It reads the match result from index 0 using `read_tile_value()`. If positive, it reads the seed value from index 1 and calls `rand_tile_init(seed)` to initialize the RNG with the core-specific seed. After processing, it pops the communication entry with `cb_pop_front()`. This allows each core to receive a unique seed value while using the same kernel code.
 
 ---
 

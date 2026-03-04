@@ -64,6 +64,7 @@ def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         mesh_device,
         n_tensors=0,
         n_layers=model_args.n_layers,
+        is_qwen=True,
     )
 
     mesh_device.set_sub_device_stall_group(

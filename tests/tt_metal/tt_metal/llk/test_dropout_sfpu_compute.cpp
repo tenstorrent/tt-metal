@@ -4,9 +4,9 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <limits.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <climits>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
@@ -216,6 +216,7 @@ bool test_dropout_standalone(
              num_tiles});
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail

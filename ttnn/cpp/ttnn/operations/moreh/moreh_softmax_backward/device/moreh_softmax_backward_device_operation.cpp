@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_softmax_backward_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
@@ -90,11 +92,6 @@ void MorehSoftmaxBackwardOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void MorehSoftmaxBackwardOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {
@@ -117,27 +114,6 @@ MorehSoftmaxBackwardOperation::tensor_return_value_t MorehSoftmaxBackwardOperati
 
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.output_tensor.device());
-}
-
-std::tuple<MorehSoftmaxBackwardOperation::operation_attributes_t, MorehSoftmaxBackwardOperation::tensor_args_t>
-MorehSoftmaxBackwardOperation::invoke(
-    const Tensor& output_tensor,
-    const Tensor& output_grad_tensor,
-    uint32_t dim,
-    const std::optional<Tensor>& input_grad_tensor,
-    const MorehSoftmaxBackwardOp op,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            dim,
-            op,
-            strategy,
-            memory_config.value_or(output_tensor.memory_config()),
-            init_device_compute_kernel_config(
-                output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor}};
 }
 
 MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get_parallelization_strategy(
@@ -199,3 +175,27 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
 }
 
 }  // namespace ttnn::operations::moreh::moreh_softmax_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation::tensor_return_value_t
+moreh_softmax_backward(
+    const Tensor& output_tensor,
+    const Tensor& output_grad_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& input_grad_tensor,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp op,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    using OperationType = ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dim,
+        op,
+        strategy,
+        memory_config.value_or(output_tensor.memory_config()),
+        init_device_compute_kernel_config(
+            output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

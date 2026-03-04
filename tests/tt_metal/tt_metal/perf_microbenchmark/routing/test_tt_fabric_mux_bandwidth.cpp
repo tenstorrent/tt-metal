@@ -6,7 +6,7 @@
 #include <string>
 #include <optional>
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 #include <vector>
 #include <fstream>
 #include <map>
@@ -132,7 +132,7 @@ void create_kernel(
 }
 
 void create_mux_kernel(
-    const TestParams& test_params,
+    const TestParams& /*test_params*/,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
     tt::tt_metal::IDevice* device,
@@ -361,10 +361,6 @@ int main(int argc, char** argv) {
         test_params.num_buffers_header_only_channel = default_num_buffers_header_only_channel;
     }
 
-    test_params.buffer_size_bytes_full_size_channel =
-        sizeof(tt::tt_fabric::PacketHeader) + test_params.packet_payload_size_bytes;
-    test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
-
     tt::tt_fabric::SetFabricConfig(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -413,6 +409,10 @@ int main(int argc, char** argv) {
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
+    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    test_params.buffer_size_bytes_full_size_channel = packet_header_size + test_params.packet_payload_size_bytes;
+    test_params.buffer_size_bytes_header_only_channel = packet_header_size;
+
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         test_params.num_full_size_channels,
         test_params.num_header_only_channels,
@@ -427,11 +427,11 @@ int main(int argc, char** argv) {
     };
 
     auto drainer_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        1,                                          /* num_full_size_channels */
-        0,                                          /* num_header_only_channels */
-        16,                                         /* num_buffers_full_size_channel */
-        8,                                          /* num_buffers_header_only_channel */
-        sizeof(tt::tt_fabric::PacketHeader) + 4096, /* buffer_size_bytes_full_size_channel (4K packet) */
+        1,                         /* num_full_size_channels */
+        0,                         /* num_header_only_channels */
+        16,                        /* num_buffers_full_size_channel */
+        8,                         /* num_buffers_header_only_channel */
+        packet_header_size + 4096, /* buffer_size_bytes_full_size_channel (4K packet) */
         l1_unreserved_base_address);
     DrainerTestConfig drainer_test_config = {
         .drainer_kernel_config = &drainer_kernel_config,
@@ -502,12 +502,12 @@ int main(int argc, char** argv) {
     }
 
     log_info(tt::LogTest, "Workers done, terminating mux kernel");
-    std::vector<uint32_t> termiation_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    std::vector<uint32_t> termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termiation_signal);
+        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termination_signal);
 
     log_info(tt::LogTest, "Waiting for mux kernel to terminate");
-    // need to wait before terminating driner core otherwise the mux kernel will hang while closing connection
+    // need to wait before terminating driver core otherwise the mux kernel will hang while closing connection
     std::vector<uint32_t> mux_status(1, 0);
     while (mux_status[0] != tt::tt_fabric::EDMStatus::TERMINATED) {
         tt::tt_metal::detail::ReadFromDeviceL1(
@@ -516,7 +516,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Terminating drainer kernel");
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termiation_signal);
+        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termination_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
     tt::tt_metal::distributed::Finish(cq);

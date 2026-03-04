@@ -43,6 +43,9 @@ public:
     // Returns start and end addresses of allocated blocks; addresses are absolute addresses with offset added
     std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses() const override;
 
+    // Returns the size of the allocation at the given absolute address, or nullopt if not found
+    std::optional<DeviceAddr> get_allocation_size(DeviceAddr absolute_address) const override;
+
     // Address limit is used as a final check to see if selected address is > address limit.
     // The selected address is first converted to absolute address by adding offset_bytes_.
     // Based on usage, it seems like offset_bytes_ is used to offset by address limit so that
@@ -89,7 +92,7 @@ private:
 
     // Size segregated list of free blocks. Idea comes from the TLSF paper, but instead of aiming for realtime
     // the goal there is to not look at small blocks when allocating large blocks. Which the naive free list
-    // algorithm does not do. Confiugring these 2 parameters is needs real world data, but for now it's just
+    // algorithm does not do. Configuring these 2 parameters needs real world data, but for now it's just
     // number pulled out of thin air. Too low and it devolves into an array search, too high you pay cache misses
 
     // Size class index is calculated by taking the log2 of the block size divided by the base size
@@ -128,6 +131,7 @@ private:
     static size_t hash_device_address(DeviceAddr address);
     void insert_block_to_alloc_table(DeviceAddr address, size_t block_index);
     bool is_address_in_alloc_table(DeviceAddr address) const;
+    std::optional<size_t> get_block_index_from_alloc_table(DeviceAddr address) const;
     std::optional<size_t> get_and_remove_from_alloc_table(DeviceAddr address);
 
     void update_lowest_occupied_address(DeviceAddr address);

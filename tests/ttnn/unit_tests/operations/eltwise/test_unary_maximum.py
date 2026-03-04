@@ -5,8 +5,10 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(
@@ -20,21 +22,34 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "low, high",
     [
         (-2147483600, 2147483600),
-        (-2147483647, 2147483647),
+        (-2147483648, 2147483647),
     ],
 )
-@pytest.mark.parametrize("scalar", [-2, 0, 10, -16777216, 16777216, 2147483647, -2147483647])
-def test_unary_max_int32(input_shapes, low, high, scalar, device):
+@pytest.mark.parametrize("scalar", [-2, 0, 10, -16777216, 16777216, 2147483647, -2147483648])
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+def test_unary_max_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
 
+    if ttnn_dtype == ttnn.uint32:
+        # convert uint32 to int64 to make PyTorch happy
+        # everything is converted to int32 for the final equality check
+        torch_input = torch_input.to(torch.uint32).to(torch.int64)
+        scalar &= 0xFFFFFFFF
+
     golden_function = ttnn.get_golden_function(ttnn.maximum)
-    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device).to(torch.int32)
 
     tt_in = ttnn.from_torch(
         torch_input,
-        dtype=ttnn.int32,
+        dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

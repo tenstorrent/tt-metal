@@ -10,7 +10,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail {
+namespace ttnn::experimental::prim {
 
 /**
  * @brief High-level transfer representation with semantic information
@@ -58,12 +58,18 @@ struct GatherTransfer {
  *
  * Suitable for hardware implementation with raw memory addresses.
  * All offsets are absolute within the flattened shard arrays.
+ *
+ * Note: For blocked transfers (used in group_transfers_by_output_column_blocks),
+ * dst_offset and dst_offset_bytes are relative to the block start, not absolute.
+ * This semantic difference exists because the kernel expects block-relative offsets
+ * for blocked transfers.
  */
 struct LowLevelGatherTransfer {
     uint32_t src_shard_idx;        // Which input shard (0 to num_input_cores-1)
     uint32_t src_offset;           // Absolute offset within the source shard (in elements)
     uint32_t dst_shard_idx;        // Which output shard (0 to num_output_cores-1)
     uint32_t dst_offset;           // Absolute offset within the destination shard (in elements)
+                                   // For blocked transfers: relative to block start (see note above)
     uint32_t length;               // Number of elements to transfer
     uint32_t src_noc_x;            // Source NOC X coordinate
     uint32_t src_noc_y;            // Source NOC Y coordinate
@@ -328,29 +334,23 @@ inline std::vector<uint32_t> serialize_blocked_transfer_groups(
     return output;
 }
 
-}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail
+}  // namespace ttnn::experimental::prim
 
 // fmt formatter template specializations for pretty printing
 template <>
-struct fmt::formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer>
-    : formatter<string_view> {
-    auto format(
-        const ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer& t,
-        fmt::format_context& ctx) const -> format_context::iterator;
+struct fmt::formatter<ttnn::experimental::prim::GatherTransfer> : formatter<string_view> {
+    auto format(const ttnn::experimental::prim::GatherTransfer& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
 };
 
 template <>
-struct fmt::formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer>
-    : formatter<string_view> {
-    auto format(
-        const ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer& t,
-        fmt::format_context& ctx) const -> format_context::iterator;
+struct fmt::formatter<ttnn::experimental::prim::LowLevelGatherTransfer> : formatter<string_view> {
+    auto format(const ttnn::experimental::prim::LowLevelGatherTransfer& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
 };
 
 template <>
-struct fmt::formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup>
-    : formatter<string_view> {
-    auto format(
-        const ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup& t,
-        fmt::format_context& ctx) const -> format_context::iterator;
+struct fmt::formatter<ttnn::experimental::prim::BlockedTransferGroup> : formatter<string_view> {
+    auto format(const ttnn::experimental::prim::BlockedTransferGroup& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
 };

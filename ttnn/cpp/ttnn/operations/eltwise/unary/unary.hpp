@@ -79,6 +79,20 @@ struct LogSigmoid {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Sigmoid {
+    enum class SigmoidMode {
+        FAST_APPROXIMATE,
+        ACCURATE_FAST_EXP,
+        ACCURATE,
+    };
+    static Tensor invoke(
+        const Tensor& input,
+        int vector_mode = (int32_t)VecMode::RC,
+        SigmoidMode mode = SigmoidMode::ACCURATE,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Sigmoid_accurate {
     static Tensor invoke(
         const Tensor& input,
@@ -86,6 +100,7 @@ struct Sigmoid_accurate {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
+
 struct Unary_chain {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -120,6 +135,15 @@ struct Softplus {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Xielu {
+    static Tensor invoke(
+        const Tensor& input,
+        float alpha_p = 0.8f,
+        float alpha_n = 0.8f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Prelu {
     static Tensor invoke(
         const Tensor& input,
@@ -141,7 +165,7 @@ struct Abs {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static Tensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
+    static Tensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config);
 };
 
 struct Eqz {
@@ -277,6 +301,13 @@ struct Softshrink {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Logit {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        std::optional<float> eps = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
 struct Deg2Rad {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -328,7 +359,7 @@ struct Rdiv {
     static Tensor invoke(
         const Tensor& input_tensor,
         float value,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -338,6 +369,13 @@ struct Where {
         const Tensor& condition,
         const ScalarVariant& value_true,
         const ScalarVariant& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Swish {
+    static Tensor invoke(
+        const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -447,9 +485,6 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT);
 
-// Unaries with vector mode and fast and approximate mode
-REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
-
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
@@ -462,9 +497,6 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW);
 // Unaries with two float parameter
 REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(threshold, THRESHOLD);
 
-// Unaries with integer parameter
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
-
 // Unaries with optional integer parameter
 REGISTER_UNARY_OPERATION_WITH_OPTIONAL_INTEGER_PARAMETER(round, ROUND, int32_t);
 
@@ -475,6 +507,7 @@ constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::una
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto hardmish = ttnn::register_operation<"ttnn::hardmish", ttnn::operations::unary::Hardmish>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
+constexpr auto logit = ttnn::register_operation<"ttnn::logit", ttnn::operations::unary::Logit>();
 constexpr auto elu = ttnn::register_operation<"ttnn::elu", ttnn::operations::unary::Elu>();
 constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
 constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
@@ -482,6 +515,7 @@ constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operati
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto clamp_tss = ttnn::register_operation<"ttnn::clamp_tss", ttnn::operations::unary::Clamp>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
+constexpr auto xielu = ttnn::register_operation<"ttnn::xielu", ttnn::operations::unary::Xielu>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
@@ -489,9 +523,13 @@ constexpr auto where_tss = ttnn::register_operation<"ttnn::where_tss", ttnn::ope
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto bitcast = ttnn::register_operation<"ttnn::bitcast", ttnn::operations::unary::Bitcast>();
 constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", ttnn::operations::unary::Rdiv>();
+constexpr auto swish = ttnn::register_operation<"ttnn::swish", ttnn::operations::unary::Swish>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::FILL>>();
+constexpr auto power = ttnn::register_operation<
+    "ttnn::power",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>>();
 constexpr auto gt_unary = ttnn::register_operation<
     "ttnn::gt_unary",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_GT>>();
@@ -510,6 +548,7 @@ constexpr auto ge_unary = ttnn::register_operation<
 constexpr auto le_unary = ttnn::register_operation<
     "ttnn::le_unary",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_LE>>();
+constexpr auto sigmoid = ttnn::register_operation<"ttnn::sigmoid", ttnn::operations::unary::Sigmoid>();
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();

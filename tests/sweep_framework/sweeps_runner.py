@@ -5,59 +5,55 @@
 # standard
 import argparse
 import builtins
-from contextlib import contextmanager
-from dataclasses import dataclass
 import datetime as dt
 import importlib
-from multiprocessing import Process
 import os
-from pathlib import Path
 import subprocess
 import sys
+from contextlib import contextmanager
+from dataclasses import dataclass
+from multiprocessing import Process
+from pathlib import Path
 from queue import Empty
-from typing import Optional
 
 # third party
 import enlighten
+import framework.tt_smi_util as tt_smi_util
 from faster_fifo import Queue
 
 # tt
 from framework.device_fixtures import default_device
-from framework.elastic_config import *
-from framework.statuses import VectorValidity, TestStatus
-import framework.tt_smi_util as tt_smi_util
-from framework.sweeps_logger import sweeps_logger as logger
-from framework.vector_source import VectorSourceFactory
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from sweep_utils.perf_utils import run_with_cache_comparison, run_single
+from framework.statuses import TestStatus, VectorValidity
+from framework.sweeps_logger import sweeps_logger as logger
+from framework.vector_source import VectorSourceFactory
+from sweep_utils.perf_utils import run_single, run_with_cache_comparison
 
 
 @dataclass
 class SweepsConfig:
     """Configuration object for sweeps runner"""
 
-    module_name: Optional[str] = None
-    suite_name: Optional[str] = None
-    vector_source: str = "elastic"
-    file_path: Optional[str] = None
-    vector_id: Optional[str] = None
-    result_destination: str = "elastic"
+    module_name: str | None = None
+    suite_name: str | None = None
+    vector_source: str = "vectors_export"
+    file_path: str | None = None
+    vector_id: str | None = None
+    result_destination: str = "results_export"
     watcher: bool = False
     measure_perf: bool = False
     measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
+    measure_memory: bool = False
     dry_run: bool = False
-    sweeps_tag: Optional[str] = None
-    skip_modules: Optional[str] = None
+    sweeps_tag: str | None = None
+    skip_modules: str | None = None
     skip_on_timeout: bool = False
     keep_invalid: bool = False
-    elastic_connection_string: Optional[str] = None
-    elastic_username: Optional[str] = None
-    elastic_password: Optional[str] = None
     summary: bool = False
-    run_contents: str = None
-    arch_name: Optional[str] = None
+    run_contents: str | None = None
+    arch_name: str | None = None
     main_proc_verbose: bool = False
 
 
@@ -72,10 +68,10 @@ def create_config_from_args(args) -> SweepsConfig:
         vector_id=args.vector_id,
         result_destination=args.result_dest,
         watcher=args.watcher,
-        # E2E perf measurement disabled until kernel cache clearing is available
         measure_perf=args.perf,
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
+        measure_memory=args.measure_memory,
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
@@ -84,21 +80,6 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
     )
-
-    if args.vector_source == "elastic" or args.result_dest == "elastic":
-        from framework.elastic_config import get_elastic_url
-
-        elastic_connection_string = get_elastic_url("corp")
-
-        # Acquire once
-        elastic_username = os.getenv("ELASTIC_USERNAME")
-        elastic_password = os.getenv("ELASTIC_PASSWORD")
-        if not elastic_username or not elastic_password:
-            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
-            exit(1)
-        config.elastic_connection_string = elastic_connection_string
-        config.elastic_username = elastic_username
-        config.elastic_password = elastic_password
 
     # Validate and set ARCH_NAME
     allowed_arch = {"blackhole", "wormhole_b0"}
@@ -127,8 +108,8 @@ def validate_arguments(args, parser):
         ),
         # File path constraints
         (
-            args.file_path and args.vector_source in ["elastic", "vectors_export"],
-            "File path should not be specified when test vector source is 'elastic' or 'vectors_export'.",
+            args.file_path and args.vector_source == "vectors_export",
+            "File path should not be specified when test vector source is 'vectors_export'.",
         ),
     ]
 
@@ -137,15 +118,6 @@ def validate_arguments(args, parser):
         if condition:
             parser.print_help()
             logger.error(error_message)
-            exit(1)
-
-    # Environment variable validation for elastic database
-    if args.vector_source == "elastic" or args.result_dest == "elastic":
-        elastic_username = os.getenv("ELASTIC_USERNAME")
-        elastic_password = os.getenv("ELASTIC_PASSWORD")
-
-        if not elastic_username or not elastic_password:
-            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in the environment variables.")
             exit(1)
 
     # Validate that skip modules is only used when running all modules
@@ -199,7 +171,7 @@ def get_timeout(test_module_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "input_hash", "traced_source"]
+    info_field_names = ["sweep_name", "suite_name", "input_hash", "traced_source", "traced_machine_info"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -272,7 +244,7 @@ def get_initiated_by():
         return get_username()
 
 
-def get_github_pipeline_id() -> Optional[int]:
+def get_github_pipeline_id() -> int | None:
     """Get a CI pipeline identifier suitable for joining CICD metadata tables.
 
     Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
@@ -310,19 +282,250 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 if config.measure_perf_with_cache:
-                    status, message, e2e_perf, device_perf = run_with_cache_comparison(
+                    status, message, e2e_perf, device_perf, peak_memory = run_with_cache_comparison(
                         test_module, test_vector, device, config
                     )
-                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
+                    output_queue.put(
+                        [
+                            status,
+                            message,
+                            e2e_perf,
+                            device_perf if config.measure_device_perf else None,
+                            peak_memory if config.measure_memory else None,
+                        ]
+                    )
                 else:
-                    status, message, e2e_perf, device_perf = run_single(test_module, test_vector, device, config)
-                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
+                    status, message, e2e_perf, device_perf, peak_memory = run_single(
+                        test_module, test_vector, device, config
+                    )
+                    output_queue.put(
+                        [
+                            status,
+                            message,
+                            e2e_perf,
+                            device_perf if config.measure_device_perf else None,
+                            peak_memory if config.measure_memory else None,
+                        ]
+                    )
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
-                output_queue.put([status, message, e2e_perf, None])
+                output_queue.put([status, message, e2e_perf, None, None])
+
+
+MAX_RETRIES = 1
+
+
+def _kill_child(p, timeout_before_rejoin):
+    """Terminate/kill a child process gracefully then forcefully."""
+    if p is None:
+        return
+    logger.warning(f"Killing child process {p.pid}...")
+    p.terminate()
+    p.join(timeout_before_rejoin)
+    if p.is_alive():
+        logger.error(f"Child process {p.pid} did not terminate, killing it.")
+        p.kill()
+        p.join()
+
+
+def _attempt_vector(test_vector, module_name, input_queue, output_queue, config, timeout, child_mode, p):
+    """Send a single vector to the child process and collect the result.
+
+    Returns (response_tuple, p) on success.
+    Raises Empty on timeout.
+    """
+    if child_mode and (p is None or not p.is_alive()):
+        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+        p.start()
+    input_queue.put(test_vector)
+    if p is None:
+        logger.info(
+            "Executing test on parent process for debug purposes because there is only one test vector. "
+            "Hang detection and handling is disabled."
+        )
+        run(module_name, input_queue, output_queue, config)
+    response = output_queue.get(block=True, timeout=timeout)
+    return response, p
+
+
+def _populate_result_from_response(result, response, config, suite_name, input_hash):
+    """Parse a child-process response tuple into the result dict."""
+    status, message, e2e_perf, device_perf, peak_memory = (
+        response[0],
+        response[1],
+        response[2],
+        response[3],
+        response[4],
+    )
+    result["message"] = message
+
+    logger.info(f"Test status: {status}")
+    logger.info(f"Test message: {message}")
+    logger.info(f"Test e2e perf: {e2e_perf}")
+    logger.info(f"Test device perf: {device_perf}")
+
+    if status:
+        if config.measure_device_perf:
+            if device_perf is None:
+                result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+            else:
+                result["status"] = TestStatus.PASS
+                if config.measure_perf_with_cache and isinstance(device_perf, dict):
+                    result["device_perf_uncached"] = device_perf.get("uncached")
+                    result["device_perf_cached"] = device_perf.get("cached")
+                else:
+                    result["device_perf"] = device_perf
+        else:
+            result["status"] = TestStatus.PASS
+    else:
+        result["exception"] = message
+        if "DEVICE EXCEPTION" in str(message):
+            logger.error(
+                f"DEVICE EXCEPTION: Device could not be initialized. " f"The following assertion was thrown: {message}"
+            )
+            logger.info("Device error detected. The suite will be aborted after this test.")
+        if "Out of Memory: Not enough space to allocate" in str(message):
+            result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+        elif "Watcher" in str(message):
+            result["status"] = TestStatus.FAIL_WATCHER
+        else:
+            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+
+    if suite_name.lower().startswith("xfail"):
+        if result["status"] == TestStatus.PASS:
+            result["status"] = TestStatus.XPASS
+            logger.warning(f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {input_hash}")
+        elif result["status"] in [
+            TestStatus.FAIL_ASSERT_EXCEPTION,
+            TestStatus.FAIL_L1_OUT_OF_MEM,
+            TestStatus.FAIL_WATCHER,
+            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF,
+        ]:
+            result["status"] = TestStatus.XFAIL
+            logger.info(f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {input_hash}")
+
+    if config.measure_perf_with_cache and e2e_perf:
+        result["e2e_perf"] = e2e_perf
+        result["e2e_perf_uncached"] = e2e_perf.get("uncached") if isinstance(e2e_perf, dict) else None
+        result["e2e_perf_cached"] = e2e_perf.get("cached") if isinstance(e2e_perf, dict) else None
+    elif config.measure_perf and e2e_perf:
+        result["e2e_perf"] = e2e_perf
+    else:
+        result["e2e_perf"] = None
+
+    if config.measure_memory and peak_memory:
+        if isinstance(peak_memory, dict):
+            result["peak_l1_memory_per_core"] = peak_memory.get("peak_total_per_core")
+            result["peak_cb_per_core"] = peak_memory.get("peak_cb_per_core")
+            result["peak_l1_buffers_per_core"] = peak_memory.get("peak_l1_per_core")
+            result["num_cores"] = peak_memory.get("num_cores")
+            result["peak_l1_memory_aggregate"] = peak_memory.get("peak_total_aggregate")
+            result["peak_l1_memory_device"] = peak_memory.get("peak_l1_memory_device")
+    else:
+        result["peak_l1_memory_per_core"] = None
+        result["peak_cb_per_core"] = None
+        result["peak_l1_buffers_per_core"] = None
+        result["num_cores"] = None
+        result["peak_l1_memory_aggregate"] = None
+        result["peak_l1_memory_device"] = None
+
+
+def _set_crash_hang_defaults(result):
+    """Populate result fields for a FAIL_CRASH_HANG outcome."""
+    result["status"] = TestStatus.FAIL_CRASH_HANG
+    result["exception"] = "TEST TIMED OUT (CRASH / HANG)"
+    result["e2e_perf"] = None
+    result["peak_l1_memory_per_core"] = None
+    result["peak_cb_per_core"] = None
+    result["peak_l1_buffers_per_core"] = None
+    result["num_cores"] = None
+    result["peak_l1_memory_aggregate"] = None
+    result["peak_l1_memory_device"] = None
+
+
+def _execute_vector_with_retry(
+    test_vector,
+    module_name,
+    input_queue,
+    output_queue,
+    config,
+    suite_name,
+    input_hash,
+    timeout,
+    timeout_before_rejoin,
+    reset_util,
+    child_mode,
+    p,
+    result,
+):
+    """Execute a single test vector with up to MAX_RETRIES retries on timeout.
+
+    On timeout: kill child -> tt-smi reset -> spawn new child -> retry.
+    If the retry also times out: mark as FAIL_CRASH_HANG -> tt-smi reset.
+
+    Returns the result dict with two internal keys:
+      _child_process  – the (possibly new) child Process
+      _abort_suite    – True if skip_on_timeout should be honoured
+    """
+    for attempt in range(1 + MAX_RETRIES):
+        try:
+            response, p = _attempt_vector(
+                test_vector,
+                module_name,
+                input_queue,
+                output_queue,
+                config,
+                timeout,
+                child_mode,
+                p,
+            )
+            _populate_result_from_response(result, response, config, suite_name, input_hash)
+            result["_child_process"] = p
+            result["_abort_suite"] = False
+            return result
+
+        except Empty:
+            is_last_attempt = attempt == MAX_RETRIES
+            _kill_child(p, timeout_before_rejoin)
+            p = None
+
+            if not is_last_attempt:
+                logger.warning(
+                    f"TEST TIMED OUT (attempt {attempt + 1}/{1 + MAX_RETRIES}) for "
+                    f"input_hash='{input_hash}'. Resetting devices and retrying..."
+                )
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                continue
+
+            logger.warning(
+                f"TEST TIMED OUT after {1 + MAX_RETRIES} attempt(s) for "
+                f"input_hash='{input_hash}'. Marking as FAIL_CRASH_HANG."
+            )
+            _set_crash_hang_defaults(result)
+            result["original_vector_data"] = result.get("original_vector_data", test_vector)
+            result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+            result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+            result["host"] = get_hostname()
+            result["user"] = get_username()
+            reset_util.reset()
+
+            if child_mode:
+                p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                p.start()
+
+            result["_child_process"] = p
+            result["_abort_suite"] = config.skip_on_timeout
+            return result
+
+    result["_child_process"] = p
+    result["_abort_suite"] = False
+    return result
 
 
 def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
@@ -374,152 +577,50 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
-                if child_mode and (p is None or not p.is_alive()):
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                    p.start()
-                input_queue.put(test_vector)
-                if p is None:
-                    logger.info(
-                        "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
-                    )
-                    run(module_name, input_queue, output_queue, config)
-
-                response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = (
-                    response[0],
-                    response[1],
-                    response[2],
-                    response[3],
+                result = _execute_vector_with_retry(
+                    test_vector,
+                    module_name,
+                    input_queue,
+                    output_queue,
+                    config,
+                    suite_name,
+                    input_hash,
+                    timeout,
+                    timeout_before_rejoin,
+                    reset_util,
+                    child_mode,
+                    p,
+                    result,
                 )
-                # Set base result message
-                result["message"] = message
+                p = result.pop("_child_process", p)
+                abort_suite = result.pop("_abort_suite", False)
 
-                logger.info(f"Test status: {status}")
-                logger.info(f"Test message: {message}")
-                logger.info(f"Test e2e perf: {e2e_perf}")
-                logger.info(f"Test device perf: {device_perf}")
-
-                # Determine test status
-                if status:
-                    # Test passed - check device perf requirements
-                    if config.measure_device_perf:
-                        if device_perf is None:
-                            result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
-                        else:
-                            result["status"] = TestStatus.PASS
-                            # Handle both single run and cached/uncached device perf
-                            if config.measure_perf_with_cache and isinstance(device_perf, dict):
-                                # Store both cached and uncached device perf
-                                result["device_perf_uncached"] = device_perf.get("uncached")
-                                result["device_perf_cached"] = device_perf.get("cached")
-                            else:
-                                # Single run device perf
-                                result["device_perf"] = device_perf
-                    else:
-                        result["status"] = TestStatus.PASS
-                else:
-                    # Test failed - categorize the failure
-                    result["exception"] = message
-
-                    # Log device exceptions
-                    if "DEVICE EXCEPTION" in str(message):
-                        logger.error(
-                            f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
-                        )
-                        logger.info("Device error detected. The suite will be aborted after this test.")
-
-                    # Set failure status based on error type
-                    if "Out of Memory: Not enough space to allocate" in str(message):
-                        result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                    elif "Watcher" in str(message):
-                        result["status"] = TestStatus.FAIL_WATCHER
-                    else:
-                        result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
-
-                # Handle XFail suites - invert the logic for expected failures
-                if suite_name.lower().startswith("xfail"):
-                    if result["status"] == TestStatus.PASS:
-                        # Test passed but was expected to fail - this is unexpected
-                        result["status"] = TestStatus.XPASS
-                        logger.warning(
-                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {input_hash}"
-                        )
-                    elif result["status"] in [
-                        TestStatus.FAIL_ASSERT_EXCEPTION,
-                        TestStatus.FAIL_L1_OUT_OF_MEM,
-                        TestStatus.FAIL_WATCHER,
-                        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF,
-                    ]:
-                        # Test failed as expected in XFail suite
-                        result["status"] = TestStatus.XFAIL
-                        logger.info(
-                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {input_hash}"
-                        )
-                    # Note: FAIL_CRASH_HANG is still treated as a real failure even in XFail suites
-                    # since crashes/hangs are infrastructure issues, not test logic failures
-
-                # Set performance metrics if available
-                if config.measure_perf_with_cache and e2e_perf:
-                    # Handle cache performance measurement results
-                    result["e2e_perf"] = e2e_perf  # Dictionary with 'cached' and 'uncached' keys
-                    result["e2e_perf_uncached"] = e2e_perf.get("uncached") if isinstance(e2e_perf, dict) else None
-                    result["e2e_perf_cached"] = e2e_perf.get("cached") if isinstance(e2e_perf, dict) else None
-                elif config.measure_perf and e2e_perf:
-                    # Handle regular performance measurement
-                    result["e2e_perf"] = e2e_perf
-                else:
-                    result["e2e_perf"] = None
-            except Empty as e:
-                if p:
-                    logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-                    p.terminate()
-                    p.join(timeout_before_rejoin)  # Wait for graceful process termination
-                    if p.is_alive():
-                        logger.error(f"Child process {p.pid} did not terminate, killing it.")
-                        p.kill()
-                        p.join()
-                    p = None
-                    reset_util.reset()
-
-                result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
-                result["e2e_perf"] = None
-                result["original_vector_data"] = original_vector_data
-                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-                result["host"] = get_hostname()
-                result["user"] = get_username()
-
-                # Check if we should skip remaining tests in the suite
-                if config.skip_on_timeout:
-                    # Add the timed-out test result before skipping
-                    results.append(result)
-                    suite_pbar.update()
-
-                    # Skip all remaining tests in the suite
-                    logger.info("Skipping remaining tests in suite due to timeout.")
-                    for j in range(i + 1, len(test_vectors)):
-                        remaining_vector = test_vectors[j]
-                        skipped_result = dict()
-                        skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
-                        skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                        skipped_result["original_vector_data"] = remaining_vector.copy()
-                        skipped_result["status"] = TestStatus.NOT_RUN
-                        skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
-                        skipped_result["e2e_perf"] = None
-                        skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                        skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-                        skipped_result["host"] = get_hostname()
-                        skipped_result["user"] = get_username()
-                        results.append(skipped_result)
+                if abort_suite:
+                    if config.skip_on_timeout:
+                        results.append(result)
                         suite_pbar.update()
-
-                    # Abort the suite
-                    break
-                else:
-                    logger.info("Continuing with remaining tests in suite despite timeout.")
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                    p.start()
-                    # Continue to the next test vector without breaking
+                        logger.info("Skipping remaining tests in suite due to timeout.")
+                        for j in range(i + 1, len(test_vectors)):
+                            remaining_vector = test_vectors[j]
+                            skipped_result = dict()
+                            skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
+                            skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                            skipped_result["original_vector_data"] = remaining_vector.copy()
+                            skipped_result["status"] = TestStatus.NOT_RUN
+                            skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
+                            skipped_result["e2e_perf"] = None
+                            skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                            skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                            skipped_result["host"] = get_hostname()
+                            skipped_result["user"] = get_username()
+                            results.append(skipped_result)
+                            suite_pbar.update()
+                        break
+            except Exception as e:
+                logger.exception(f"Unexpected error executing vector: {e}")
+                result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+                result["exception"] = str(e)
+                result["e2e_perf"] = None
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
@@ -554,28 +655,16 @@ def run_sweeps(
 
     # Set up vector source based on config
     source_kwargs = {}
-    if config.vector_source == "elastic":
-        source_kwargs = {
-            "connection_string": config.elastic_connection_string,
-            "username": config.elastic_username,
-            "password": config.elastic_password,
-            "tag": config.sweeps_tag,
-        }
-    elif config.vector_source == "file":
+    if config.vector_source == "file":
         source_kwargs = {
             "file_path": config.file_path,
         }
+    # vectors_export uses default kwargs
     vector_source = VectorSourceFactory.create_source(config.vector_source, **source_kwargs)
 
     # Set up result destination based on config
     result_kwargs = {}
-    if config.result_destination == "elastic":
-        result_kwargs = {
-            "connection_string": config.elastic_connection_string,
-            "username": config.elastic_username,
-            "password": config.elastic_password,
-        }
-
+    # results_export and superset use default kwargs
     result_dest = ResultDestinationFactory.create_destination(config.result_destination, **result_kwargs)
 
     # Initialize run metadata and run record
@@ -587,6 +676,7 @@ def run_sweeps(
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
             "card_type": config.arch_name,
+            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LLMBox)
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -825,8 +915,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vector-source",
         required=True,
-        choices=["elastic", "file", "vectors_export"],
-        help="Test vector source. Available presets are ['elastic', 'file', 'vectors_export']",
+        choices=["file", "vectors_export"],
+        help="Test vector source. Available presets are ['file', 'vectors_export']",
     )
 
     parser.add_argument("--file-path", required=False, help="Read and execute test vectors from a specified file path.")
@@ -838,17 +928,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "results_export", "superset"],
-        help="Specify test result destination. Available presets are ['elastic', 'results_export', 'superset']",
+        choices=["results_export", "superset"],
+        help="Specify test result destination. Available presets are ['results_export', 'superset']",
     )
 
     parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
-    # E2E performance measurement is inaccurate due to default kernel caching
-    # The kernel compilation cache cannot be cleared from Python, leading to misleading results
-    # where initial tests show ~900ms compilation time but subsequent tests show ~4ms due to
-    # kernel cache hits. This will be re-enabled once something like ttnn.ClearKernelCache() is available.
     parser.add_argument(
         "--perf",
         action="store_true",
@@ -868,6 +954,13 @@ if __name__ == "__main__":
         required=False,
         action="store_true",
         help="Measure device perf using device profiler. REQUIRES PROFILER BUILD!",
+    )
+
+    parser.add_argument(
+        "--measure-memory",
+        required=False,
+        action="store_true",
+        help="Capture L1 memory usage per core using graph trace (NO_DISPATCH mode). Memory data will be included in test results.",
     )
 
     parser.add_argument(
@@ -948,6 +1041,12 @@ if __name__ == "__main__":
         logger.info("Performance measurement: Enabled (single run, uncached performance only)")
     else:
         logger.info("Performance measurement: Disabled")
+
+    # Log memory measurement configuration
+    if config.measure_memory:
+        logger.info("Memory measurement: Enabled (using graph trace NO_DISPATCH mode)")
+    else:
+        logger.info("Memory measurement: Disabled")
 
     if config.skip_on_timeout:
         logger.info("Timeout behavior: Skip remaining tests in suite when a test times out.")

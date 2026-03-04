@@ -45,9 +45,7 @@ Shape4D<uint32_t> to_4d_offset(tt_xy_pair const& offset) { return Shape4D<uint32
 size_t get_volume(tt_xy_pair const& shape) { return shape.x * shape.y; }
 
 template <cmd::CclCommandArgCode code>
-struct tensor_slice_command_arg_field {
-    using type = std::nullptr_t;
-};
+struct tensor_slice_command_arg_field {};
 template <>
 struct tensor_slice_command_arg_field<cmd::CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES> {
     static auto get_value(v2::TensorSlice const& s) { return s.tensor_shape; };
@@ -707,11 +705,11 @@ void generate_ccl_command_stream_to_kernel_args(
 
             case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
                 TT_THROW(
-                    "CCL command STREAM_EDM_TO_TENSOR is not useable, supported, or intended to be supported in CCL "
+                    "CCL command STREAM_EDM_TO_TENSOR is not usable, supported, or intended to be supported in CCL "
                     "v2. This command is deprecated.");
                 break;
                 TT_THROW(
-                    "CCL command STREAM_TENSOR_TO_EDM is not useable, supported, or intended to be supported in CCL "
+                    "CCL command STREAM_TENSOR_TO_EDM is not usable, supported, or intended to be supported in CCL "
                     "v2. This command is deprecated.");
                 break;
 
@@ -786,7 +784,7 @@ void generate_ccl_cb_to_tensor_slice_sequence_commands(
 
 tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     Program& program,
-    std::vector<uint32_t> const& cb_indices,  // TODO: move to RT arg
+    std::vector<uint32_t> const&  /*cb_indices*/,  // TODO: move to RT arg
     std::vector<Tensor const*> const& tensors,
     CoreRangeSet const& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
@@ -849,19 +847,19 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
-        for (size_t i = 0; i < tensors.size(); i++) {
+        for (const auto *tensor : tensors) {
             std::ranges::copy(
                 std::array<uint32_t, 4>{
                     static_cast<uint32_t>(
-                        tensors[i]->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
-                    static_cast<uint32_t>(tensors[i]->buffer()->buffer_type()),
-                    static_cast<uint32_t>(tensors[i]->layout()),
+                        tensor->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
+                    static_cast<uint32_t>(tensor->buffer()->buffer_type()),
+                    static_cast<uint32_t>(tensor->layout()),
                     static_cast<uint32_t>(0)},
                 std::back_inserter(ct_args));
         }
-        for (size_t i = 0; i < tensors.size(); i++) {
+        for (const auto *tensor : tensors) {
             std::ranges::copy(
-                ttnn::ccl::emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
+                ttnn::ccl::emit_address_generator_compile_time_args(*tensor), std::back_inserter(ct_args));
         }
 
         datamovement_kernel_config.compile_args = ct_args;
@@ -912,7 +910,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                     [&ss](CclCommandAddrCircularBufferId const& a) {
                         ss << fmt::format("(circular_buffer_id:{})", a.circular_buffer_id);
                     },
-                    [&ss](CclCommandAddrNone const& a) { ss << "none"; }},
+                    [&ss](CclCommandAddrNone const&  /*a*/) { ss << "none"; }},
                 args);
         };
         auto get_cmd_args_str = [](std::stringstream& ss, CclCommandArgs const& args) {
@@ -960,8 +958,8 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
         auto get_core_desc_args_str = [](std::stringstream& ss, CclCommandCoreDescriptorArgs const& args) {
             std::visit(
                 tt::stl::overloaded{
-                    [&ss](CclCommandCoreDescriptorTypeAddrgen const& a) { ss << fmt::format("(addrgen)"); },
-                    [&ss](CclCommandCoreDescriptorTypeLocal const& a) { ss << fmt::format("(local_core)"); },
+                    [&ss](CclCommandCoreDescriptorTypeAddrgen const&  /*a*/) { ss << fmt::format("(addrgen)"); },
+                    [&ss](CclCommandCoreDescriptorTypeLocal const&  /*a*/) { ss << fmt::format("(local_core)"); },
                     [&ss](CclCommandCoreDescriptorTypeNocXY const& a) { ss << fmt::format("(x:{}, y:{})", a.x, a.y); },
                     [&ss](CclCommandCoreDescriptorTypeMcast const& a) {
                         ss << fmt::format(
@@ -971,7 +969,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.noc0_end_x,
                             a.noc0_end_y);
                     },
-                    [&ss](CclCommandCoreDescriptorTypeNone const& a) { ss << fmt::format("(None)"); },
+                    [&ss](CclCommandCoreDescriptorTypeNone const&  /*a*/) { ss << fmt::format("(None)"); },
                 },
                 args);
         };
@@ -991,7 +989,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.num_targets_forward_direction,
                             a.num_targets_backward_direction);
                     },
-                    [&ss](LocalOnlyCommandDestArgs const& a) { ss << fmt::format("(None)"); },
+                    [&ss](LocalOnlyCommandDestArgs const&  /*a*/) { ss << fmt::format("(None)"); },
                 },
                 args);
         };
@@ -1093,7 +1091,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
             rt_args.push_back(tensors[i]->buffer()->address());
         } else {
             // take up the rt arg with filler value  in case user built a kernel across a core range
-            // set with multiple command streams/tensors, but this particular core doesn't actualy need/use
+            // set with multiple command streams/tensors, but this particular core doesn't actually need/use
             // both tensors/command streams
             rt_args.push_back(0xdeaddead);
         }
@@ -1118,7 +1116,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
             bool rt_args_enabled = true;
             rt_args.push_back(rt_args_enabled);
             if (tensor_device_override.has_value() and
-                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
+                tensor_device_override.value().contains(t)) {
                 std::ranges::copy(
                     ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
                     std::back_inserter(rt_args));

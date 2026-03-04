@@ -6,19 +6,11 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::cnn::to_chw {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct ConvertToCHWParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
 };
 
-struct tensor_args_t {
-    Tensor input;
-};
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::cnn::to_chw
+}  // namespace ttnn::experimental::prim

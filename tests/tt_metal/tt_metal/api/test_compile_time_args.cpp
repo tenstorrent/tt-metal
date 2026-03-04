@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -61,6 +61,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
                 .compile_args = compile_time_args,
                 .defines = defines});
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         const std::vector<uint32_t> compile_time_args_expected{
             std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0u)};

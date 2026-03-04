@@ -27,7 +27,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "mesh_dispatch_fixture.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -37,7 +38,7 @@ using namespace tt::test_utils;
 
 void build_and_run_program(
     const std::shared_ptr<distributed::MeshDevice>& device,
-    bool slow_dispatch,
+    bool /*slow_dispatch*/,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
     uint32_t page_size,
@@ -172,7 +173,7 @@ void build_and_run_program(
 
 void build_and_run_program_ethernet(
     const std::shared_ptr<distributed::MeshDevice>& device,
-    bool slow_dispatch,
+    bool /*slow_dispatch*/,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
     uint32_t page_size,

@@ -3,13 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "uniform_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::uniform {
-
-UniformDeviceOperation::program_factory_t UniformDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
-}
 
 void UniformDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -27,18 +23,13 @@ void UniformDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void UniformDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 TensorSpec UniformDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.input.tensor_spec();
 }
 
 UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Since this is an in-place operation, return the input tensor to be updated directly
     return tensor_args.input;
 }
@@ -49,22 +40,25 @@ tt::stl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operati
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
-std::tuple<UniformDeviceOperation::operation_attributes_t, UniformDeviceOperation::tensor_args_t>
-UniformDeviceOperation::invoke(
+}  // namespace ttnn::operations::uniform
+
+namespace ttnn::prim {
+ttnn::Tensor uniform(
     const Tensor& input,
     const float from,
     const float to,
     const uint32_t seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::uniform::UniformDeviceOperation;
+    TT_FATAL(input.device() != nullptr, "Uniform: Input tensor needs to be on device");
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             from,
             to,
             seed,
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{input}};
+        OperationType::tensor_args_t{input});
 }
-
-}  // namespace ttnn::operations::uniform
+}  // namespace ttnn::prim

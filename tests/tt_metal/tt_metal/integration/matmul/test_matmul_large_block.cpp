@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -21,7 +22,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -51,7 +51,6 @@ using namespace tt::test_utils;
 namespace unit_tests_common::matmul::test_matmul_large_block {
 
 void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
@@ -59,7 +58,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
         }
         case MathFidelity::HiFi2:
         case MathFidelity::LoFi: {
-            math_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            math_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -71,14 +70,14 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
     uint32_t M,
     uint32_t N,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h) {
+    uint32_t /*out_subblock_h*/) {
     uint32_t num_bytes_for_df = 2;
 
     uint32_t in0_cb = 0;
@@ -411,8 +410,8 @@ bool matmul_large_block(
     set_math_fid_masks(math_fid_mask, math_fidelity);
     // If we're testing LoFi/HiFi2 we generate matching golden (trunc LSB).
     // Note that this will work only for multiplying with identity matrix
-    for (auto i = 0; i < golden.size(); i++) {
-        golden[i] = std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(golden[i]) & math_fid_mask));
+    for (auto& val : golden) {
+        val = std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(val) & math_fid_mask));
     }
 
     if (output_rm) {
@@ -443,18 +442,18 @@ TEST_F(MeshDispatchFixture, TensixMatmulLargeBlock) {
             continue;
         };
         log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (unsigned int id = 0; id < devices_.size(); id++) {
+        for (const auto& device : devices_) {
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, devices_.at(id), false, false, MathFidelity(i)));
+                this, device, false, false, MathFidelity(i)));
             log_info(LogTest, "Tilized input, Tilized output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, devices_.at(id), true, false, MathFidelity(i)));
+                this, device, true, false, MathFidelity(i)));
             log_info(LogTest, "Row major input, Tilized output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, devices_.at(id), false, true, MathFidelity(i)));
+                this, device, false, true, MathFidelity(i)));
             log_info(LogTest, "Tilized input, Row major output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
-                this, devices_.at(id), true, true, MathFidelity(i)));
+                this, device, true, true, MathFidelity(i)));
             log_info(LogTest, "Row major input, Row major output Passed");
         }
     }
