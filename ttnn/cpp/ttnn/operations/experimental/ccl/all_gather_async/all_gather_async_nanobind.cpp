@@ -274,7 +274,7 @@ void bind_all_gather_async(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"all_gather_async">(
+    ttnn::bind_function<"all_gather_async", "ttnn.experimental.">(
         mod,
         all_gather_async_doc,
         ttnn::overload_t(
@@ -396,7 +396,7 @@ void bind_all_gather_async(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"all_gather_async_reversed">(
+    ttnn::bind_function<"all_gather_async_reversed", "ttnn.experimental.">(
         mod,
         all_gather_async_reversed_doc,
         ttnn::overload_t(
