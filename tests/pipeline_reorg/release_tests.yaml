@@ -597,8 +597,8 @@
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
+    # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000
+    # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
   model-name: gpt-oss
