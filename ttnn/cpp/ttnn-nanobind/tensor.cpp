@@ -634,6 +634,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                         .dtype = nb::cast<DataType>(obj.attr("dtype")),
                         .tile_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("tile_shape")),
                         .byte_offset = nb::cast<uint64_t>(obj.attr("byte_offset")),
+                        .total_size = nb::cast<uint64_t>(obj.attr("total_size")),
                     });
                 }
                 dump_overlapped_tensors(file_name, views);
@@ -664,7 +665,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                             nb::cast(v.core_range_set),
                             nb::cast(v.dtype),
                             nb::make_tuple(v.tile_shape[0], v.tile_shape[1]),
-                            nb::cast(v.byte_offset));
+                            nb::cast(v.byte_offset),
+                            nb::cast(v.total_size));
                 }
                 return result;
             },

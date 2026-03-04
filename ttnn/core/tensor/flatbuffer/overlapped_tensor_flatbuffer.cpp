@@ -39,7 +39,8 @@ flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuf
             ttnn::to_flatbuffer(v.dtype),
             v.tile_shape[0],
             v.tile_shape[1],
-            v.byte_offset));
+            v.byte_offset,
+            v.total_size));
     }
 
     auto views_vec = builder.CreateVector(view_offsets);
@@ -68,6 +69,7 @@ std::vector<tt::tt_metal::OverlappedTensorView> overlapped_tensors_from_flatbuff
             .dtype = ttnn::from_flatbuffer(fb_view->dtype()),
             .tile_shape = {fb_view->tile_h(), fb_view->tile_w()},
             .byte_offset = fb_view->byte_offset(),
+            .total_size = fb_view->total_size(),
         });
     }
     return result;

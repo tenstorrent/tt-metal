@@ -45,6 +45,9 @@ def _assert_overlapped_metadata_eq(original: OverlappedTensor, loaded: Overlappe
     assert (
         original.byte_offset == loaded.byte_offset
     ), f"view[{key}] byte_offset: {original.byte_offset} != {loaded.byte_offset}"
+    assert (
+        original.total_size == loaded.total_size
+    ), f"view[{key}] total_size: {original.total_size} != {loaded.total_size}"
 
 
 def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device):
