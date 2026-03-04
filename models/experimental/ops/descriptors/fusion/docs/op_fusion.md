@@ -409,20 +409,41 @@ _NOOP_OP = OpDescriptor(
 
 During the tree walk in `_compute_core_groups()`, each node's op is recorded
 for the cores in its kernel range. For cores in the node's
-`_effective_leaf_range()` but **not** in its kernel range, a `_NOOP_OP` entry
+`_all_descendant_coords()` but **not** in its kernel range, a `_NOOP_OP` entry
 is recorded instead:
 
 ```python
 def _walk(node):
-    eff_coords = self._effective_leaf_range(node)    # all descendant leaf cores
-    node_coords = _core_range_set_to_coords(...)     # this node's kernel cores
+    desc_coords = self._all_descendant_coords(node)  # ALL descendant cores (not just leaves)
+    scope = _coords_to_core_range_set(desc_coords)   # barrier scope for this transition
+    node_coords = _core_range_set_to_coords(...)      # this node's kernel cores
 
     for coord in node_coords:
-        per_core[coord].append((node.op, eff_range))       # real phase
+        per_core[coord].append((node.op, scope))           # real phase
 
-    for coord in eff_coords - node_coords:
-        per_core[coord].append((_NOOP_OP, eff_range))      # no-op phase
+    for coord in desc_coords - node_coords:
+        per_core[coord].append((_NOOP_OP, scope))          # no-op phase
 ```
+
+**Why all descendants, not just leaves?** The barrier scope after a node must
+cover every core that **continues past that node** — i.e., every core in any
+descendant's kernel range. For shrinking core ranges (e.g., matmul(16) →
+slice(8) → rms(4)), the leaf-only union would be 4 cores, but 10 cores
+actually continue past the matmul (8 slice cores + 2 noop-padded rms-only
+cores that aren't in slice's range). The barrier must cover all 10 so the
+coordinator waits for all of them before releasing.
+
+**Early-exit cores.** Cores in a node's range but not in any descendant's
+range have only one phase and no barrier. They run their op and exit. This is
+safe because: (a) the per-core dispatcher ensures local phase ordering, and
+(b) there is no cross-core data dependency from exiting cores to continuing
+cores in later phases.
+
+**Core ranges come from factories, not users.** `_get_node_core_range()`
+reads `kernel.core_ranges` from the `ProgramDescriptor` — these are the
+**actual** ranges the op factory chose, not the user's `core_range_set`.
+Factories can (and do) pick fewer cores than requested. The barrier scope
+is computed from these factory-chosen ranges.
 
 **Example**: Parent on cores 0-1, child on cores 0-3:
 
@@ -451,6 +472,32 @@ and 1 barrier transition, so barrier counts align.
   (`std::array<uint32_t, 0>`). `reset_cbs<0>(...)` is a valid no-op. The barrier
   `sync()` call still executes normally, incrementing counters to stay aligned.
 
+**Cycle cost tradeoff.**  No-op cores still participate in the barrier protocol:
+they execute `local::sync()` (3-RISC semaphore signaling) and spin on the
+release semaphore.  This burns some cycles on cores with no real work, but
+the cost is limited to a tight `while (*release < N) {}` poll.
+
+This is an inherent tradeoff of single-dispatch fusion on hardware without
+interrupts.  The extra cores must learn when the narrow phase completes before
+starting their real phase.  Without an interrupt or device-side dependent
+launch mechanism, polling a memory location (spinning on a semaphore) is the
+only option.  Not dispatching a kernel to those cores would eliminate the
+spinning, but would require a separate host-to-device dispatch for the wide
+phase — reintroducing the round-trip latency that fusion exists to eliminate.
+
+**Asymmetric barriers** reduce the overhead: no-op cores skip the arrive step
+(`noc_semaphore_inc`) and only spinwait on the release semaphore.  This
+removes the arrive serialization that scales linearly with extra cores (each
+arrive is an atomic NOC write serialized at core 0).  The barrier segment's
+`sync()` is templated on `SyncMode`:
+- `SyncMode::Full` — arrive + wait + release (cores that completed real work).
+- `SyncMode::WaitOnly` — skip arrive, only spinwait on release (no-op cores).
+
+The arrive threshold uses `num_arrive_cores` (only cores with real work), while
+the release unicast goes to all `num_release_cores`.  Each barrier segment has
+both counts as named compile-time args (`seg{N}_num_arrive_cores`,
+`seg{N}_num_release_cores`).
+
 ### Core Groups
 
 `_compute_core_groups()` walks the tree and records each core's **phase
@@ -474,16 +521,21 @@ on a 4×2 half):
 | A | left 4×2 (8 cores) | `[LN, GeLU_A, RMS_A]` |
 | B | right 4×2 (8 cores) | `[LN, GeLU_B, RMS_B]` |
 
-Each group also records its **barrier scopes** — the `_effective_leaf_range()`
-at each phase transition.  This function walks from a node down to all
-descendant leaves and unions their core coordinates.  The result determines
-which cores must synchronize at that transition — only cores with remaining
-work below the transition participate.  For Group A:
+Each group also records its **barrier scopes** — the `_all_descendant_coords()`
+at each phase transition.  This function unions the core coordinates of **all**
+descendant nodes (not just leaves).  The result determines which cores must
+synchronize at that transition — every core that continues past the current
+node participates.  For Group A:
 
-- Transition 0 (after LN): `_effective_leaf_range(LN)` = all 16 cores —
+- Transition 0 (after LN): `_all_descendant_coords(LN)` = all 16 cores —
   both branches must finish LN before either can proceed.
-- Transition 1 (after GeLU_A): `_effective_leaf_range(GeLU_A)` = left 8 cores —
+- Transition 1 (after GeLU_A): `_all_descendant_coords(GeLU_A)` = left 8 cores —
   only the left branch participates.
+
+For shrinking core ranges (e.g., stem(16) → mid(8) → leaf(4)), the barrier
+scope after the stem is 8+4=10 unique cores (all descendants), not just the
+4 leaf cores.  This ensures the barrier coordinator waits for all 10 cores
+that continue, and unicasts the release signal to all of them.
 
 These barrier scopes feed directly into the synchronization protocol's segment
 model (see next section).
@@ -581,7 +633,7 @@ leaf), so each kernel binary has just one segment. A deeper tree creates
 multiple segments per kernel.
 
 Continuing the deep branching example from Core Groups — Groups A and B each
-have two transitions with barrier scopes derived from `_effective_leaf_range()`:
+have two transitions with barrier scopes derived from `_all_descendant_coords()`:
 
 | Group | Transition | After | Barrier Scope | Cores |
 |-------|-----------|-------|---------------|-------|
@@ -611,7 +663,8 @@ class MultiBarrierSpec:
 ```
 
 Each `BarrierSegment` holds a `BarrierConfig` with the physical core geometry
-(`core0_phys_x/y`, `other_core_phys_coords`, `num_cores`) and the
+(`core0_phys_x/y`, `other_core_phys_coords`, `num_release_cores`,
+`num_arrive_cores`) and the
 `arrive`/`release` GlobalSemaphore L1 addresses for that scope.
 
 `_build_group_barriers()` (`graph.py`) converts a group's barrier scopes into
@@ -666,7 +719,7 @@ namespace barrier {
 }
 ```
 
-Each `seg_N` namespace contains its own `num_cores`, `core0_phys_x/y`,
+Each `seg_N` namespace contains its own `num_release_cores`, `num_arrive_cores`, `core0_phys_x/y`,
 `other_core_phys` array (all `constexpr` from named compile-time args), plus
 mutable `call_count`, `arrive`, and `release` pointers. The namespace provides
 compile-time isolation — the segment geometry is resolved to constants, not
@@ -843,10 +896,13 @@ namespace segment_N {
     volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
     volatile tt_l1_ptr uint32_t* release;   // L1, unicast to each core
 
+    template <SyncMode mode>
     void sync() {
-        noc_semaphore_inc(core0_arrive_noc_addr, 1);        // all cores increment arrive
-        if (is_core_0) {
-            noc_semaphore_wait_min(arrive, num_cores * (call_count + 1));
+        if constexpr (mode != SyncMode::WaitOnly) {
+            noc_semaphore_inc(core0_arrive_noc_addr, 1);    // arrive cores increment
+        }
+        if (is_core_0 && mode != SyncMode::WaitOnly) {
+            noc_semaphore_wait_min(arrive, num_arrive_cores * (call_count + 1));
             *release = call_count + 1;
             // Unicast release to each other core
             for (uint32_t i = 0; i < other_core_phys.size(); i += 2) {
@@ -1413,25 +1469,112 @@ between phases.
 
 #### Walk-Through: Why Padding Matters
 
-Imagine a variant where RMS_B uses a CB with a unique format that lands at
-slot 6 in the global pool:
+**Background: groups are not fully independent.** Each group compiles its
+own fused kernel binary and runs on disjoint cores, but groups can share a
+stem phase whose kernels **multicast across group boundaries**.  The
+canonical example is block-sharded LayerNorm: `_kernel_variant_key()` puts
+the mcast sender kernel (e.g. row 0) in Group A and the receiver kernel
+(e.g. row 1) in Group B.  The sender multicasts partial results to receiver
+cores using CB L1 addresses.  If the two groups compiled with different CB
+L1 layouts, the sender would write to the wrong address on receiver cores.
+
+**Concrete example.** Consider a tree where the stem (Op_S) and branches
+(Op_A, Op_B) produce different slot sets per group:
 
 ```
-Global pool slots: {0, 1, 2, 3, 4, 5, 6}
-Group A refs: {0,1,2,3,4,5}     (from LN + RMS_A)
-Group B refs: {0,1,2,3,4,5,6}   (from LN + RMS_B)
-Shared: {0,1,2,3,4,5}, M = 5
+Op_S (all cores)  →  Op_A (Group A: cores 0-1)
+                  →  Op_B (Group B: cores 2-3)
 ```
 
-Without padding, Group A's merged CBDescriptor list has 6 entries (slots
-0-5), and Group B's has 7 entries (slots 0-6). If slot 6 had been index 4
-instead (a non-shared slot between shared slots), Group A wouldn't have it
-and the L1 addresses for slot 5 would differ between groups.
+Global pool allocation:
 
-Padding prevents this: every slot ≤ M is included in every group, even if
-the group doesn't reference it. The padding slot gets a CBDescriptor with
-the global pool's `total_size`, ensuring the L1 layout through index M is
-identical across all groups.
+```
+Phase 0 (Op_S): cb0 → slot 0 (BF16/2048), cb1 → slot 1 (BF16/2048)
+Phase 1 (Op_A): cb0 → reuses slot 0, cb1 → slot 2 (INT32, new config)
+Phase 2 (Op_B): cb0 → reuses slot 0, cb1 → reuses slot 1 (same config as Op_S)
+```
+
+Per-group referenced slots:
+
+```
+Group A (phases 0,1): {0, 1, 2}   (Op_S uses 0,1; Op_A uses 0,2)
+Group B (phases 0,2): {0, 1}      (Op_S uses 0,1; Op_B uses 0,1)
+shared_slots = {0, 1},  M = 1
+```
+
+**Without padding**, Group A has slots {0, 1, 2} and Group B has slots
+{0, 1}.  Both groups have identical layout for slots 0 and 1, so L1
+addresses match for the shared stem.  Padding adds nothing here because no
+non-shared slot sits between shared slots.
+
+Now suppose Op_A's cb1 gets a compatible config and reuses slot 1 instead,
+but Op_A also has a cb2 that lands at a new **slot 2**, and Op_B has a cb2
+that also needs a new slot — but with a *different* config, landing at
+**slot 3**:
+
+```
+Phase 0 (Op_S): cb0 → slot 0, cb1 → slot 1, cb4 → slot 4 (FP32/4096)
+Phase 1 (Op_A): cb0 → slot 0, cb1 → slot 1, cb2 → slot 2 (new)
+Phase 2 (Op_B): cb0 → slot 0, cb1 → slot 1, cb2 → slot 3 (new, different config)
+```
+
+```
+Group A refs: {0, 1, 2, 4}    Group B refs: {0, 1, 3, 4}
+shared_slots = {0, 1, 4},  M = 4
+```
+
+**Without padding**, Group A's CB L1 layout is:
+
+```
+slot 0: offset 0x0000 (2048 bytes)
+slot 1: offset 0x0800 (2048 bytes)
+slot 2: offset 0x1000 (2048 bytes)   ← Group A only
+slot 4: offset 0x1800 (4096 bytes)
+```
+
+Group B's CB L1 layout (missing slot 2):
+
+```
+slot 0: offset 0x0000 (2048 bytes)
+slot 1: offset 0x0800 (2048 bytes)
+slot 3: offset 0x1000 (2048 bytes)   ← Group B only
+slot 4: offset 0x1800 (4096 bytes)   ← same offset by luck here
+```
+
+In this case the addresses happen to align because slots 2 and 3 have the
+same size.  But if slot 2 were larger (say 4096 bytes):
+
+```
+Group A:  slot 4 at offset 0x2000    (after 4096-byte slot 2)
+Group B:  slot 4 at offset 0x1800    (after 2048-byte slot 3)
+```
+
+During the stem phase, Op_S's sender kernel on a Group A core multicasts
+CB data for slot 4 targeting a Group B receiver core.  The sender uses its
+own L1 address (0x2000) — but the receiver's binary expects slot 4 at
+0x1800.  **The data lands at the wrong address → silent corruption.**
+
+**With padding** (all slots ≤ M=4 included in every group):
+
+```
+Group A: {0, 1, 2, 3, 4}   ← slot 3 added as padding
+Group B: {0, 1, 2, 3, 4}   ← slot 2 added as padding
+```
+
+Both groups now have identical slot sets through index 4.  The padding
+slots get CBDescriptors with the global pool's `total_size`, so the L1
+layout is identical on all cores:
+
+```
+slot 0: offset 0x0000
+slot 1: offset 0x0800
+slot 2: offset 0x1000   (padding in Group B — unused but reserves space)
+slot 3: offset 0x2000   (padding in Group A — unused but reserves space)
+slot 4: offset 0x2800   ← identical across groups ✓
+```
+
+Multicast addresses are now consistent regardless of which group compiled
+the kernel binary running on each core.
 
 #### Gotcha: CB State Save/Restore Scope
 

@@ -83,9 +83,13 @@ class CoreGroup:
         core_range: CoreRangeSet of cores in this group.
         phases: Ordered list of OpDescriptors these cores execute.
         barrier_scopes: CoreRangeSet per phase transition
-            (len = len(phases) - 1).  Each entry is the effective leaf
-            range of the tree node at that position, determining which
-            cores must synchronize at that transition.
+            (len = len(phases) - 1).  Each entry is the union of all
+            descendant core ranges at that position, determining which
+            cores must synchronize (release) at that transition.
+        barrier_arrive_scopes: CoreRangeSet per phase transition
+            (len = len(phases) - 1).  Subset of barrier_scopes — only
+            cores that did real work in the completed phase.  Used for
+            the arrive threshold in asymmetric barriers.
         phase_op_indices: Index into the ``unique_ops`` list for each
             phase.  Used by the global CB pool to map group-local phases
             to global allocation indices.
@@ -94,6 +98,7 @@ class CoreGroup:
     core_range: Any
     phases: List[OpDescriptor]
     barrier_scopes: List[Any]
+    barrier_arrive_scopes: List[Any] = field(default_factory=list)
     phase_op_indices: List[int] = field(default_factory=list)
 
 
@@ -358,17 +363,23 @@ class OpGraphBuilder:
         reset_done_addr = ttnn.get_global_semaphore_address(sem_reset_done)
         all_sem_refs = [sem_compute_done, sem_writer_done, sem_reset_done]
 
-        # Pre-allocate barrier configs for each unique barrier scope across
-        # all groups.  Groups sharing a scope MUST use the same arrive/release
-        # GlobalSemaphore L1 addresses so that cores running different kernel
-        # binaries synchronize at the same barrier.
-        segment_cache: Dict[frozenset, BarrierConfig] = {}
+        # Pre-allocate barrier configs for each unique (release, arrive) scope
+        # pair across all groups.  Groups sharing a release scope MUST use the
+        # same arrive/release GlobalSemaphore L1 addresses so that cores
+        # running different kernel binaries synchronize at the same barrier.
+        # Different arrive scopes need different arrive thresholds, so the
+        # cache key includes both release AND arrive scopes.
+        segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig] = {}
         for group in groups:
-            for scope in group.barrier_scopes:
-                key = _core_ranges_key(scope)
-                if key not in segment_cache:
-                    segment_cache[key] = _create_barrier_segment_config(device, scope)
-                    all_sem_refs.extend(segment_cache[key]._sem_refs)
+            for release_scope, arrive_scope in zip(group.barrier_scopes, group.barrier_arrive_scopes):
+                release_key = _core_ranges_key(release_scope)
+                arrive_key = _core_ranges_key(arrive_scope) if arrive_scope is not None else frozenset()
+                cache_key = (release_key, arrive_key)
+                if cache_key not in segment_cache:
+                    segment_cache[cache_key] = _create_barrier_segment_config(
+                        device, release_scope, arrive_ranges=arrive_scope
+                    )
+                    all_sem_refs.extend(segment_cache[cache_key]._sem_refs)
 
         # When there are multiple groups (branching tree), phases may have
         # different native core ranges than the group's range (e.g. stem
@@ -458,25 +469,33 @@ class OpGraphBuilder:
             unique_ops: Ordered list of unique OpDescriptors encountered
                 during the tree walk (deduped by ``id()``).
         """
-        # Per-core entries: coord -> [(OpDescriptor, barrier_scope_CoreRangeSet)]
-        per_core: Dict[Tuple[int, int], List[Tuple[OpDescriptor, Any]]] = defaultdict(list)
+        # Per-core entries: coord -> [(OpDescriptor, release_scope, arrive_scope)]
+        # release_scope = all descendant coords (all cores that receive release)
+        # arrive_scope = node_coords ∩ desc_coords (cores that did real work AND continue)
+        per_core: Dict[Tuple[int, int], List[Tuple[OpDescriptor, Any, Any]]] = defaultdict(list)
 
         # Track unique ops in first-encounter order
         unique_ops: List[OpDescriptor] = []
         op_id_to_index: Dict[int, int] = {}
 
         def _walk(node: OpNode):
-            eff_coords = self._effective_leaf_range(node)
-            eff_range = _coords_to_core_range_set(eff_coords)
+            desc_coords = self._all_descendant_coords(node)
+            release_scope = _coords_to_core_range_set(desc_coords) if desc_coords else None
             node_coords = _core_range_set_to_coords(_get_node_core_range(node))
+
+            # Arrive scope: cores that did real work (in node) AND continue
+            # to later phases (in descendants).  Without the intersection,
+            # early-exit cores would inflate the arrive threshold → deadlock.
+            arrive_coords = node_coords & desc_coords
+            arrive_scope = _coords_to_core_range_set(arrive_coords) if arrive_coords else None
 
             # Real phase entries for cores in this node
             for coord in node_coords:
-                per_core[coord].append((node.op, eff_range))
+                per_core[coord].append((node.op, release_scope, arrive_scope))
 
             # No-op entries for cores in descendants but not this node
-            for coord in eff_coords - node_coords:
-                per_core[coord].append((_NOOP_OP, eff_range))
+            for coord in desc_coords - node_coords:
+                per_core[coord].append((_NOOP_OP, release_scope, arrive_scope))
 
             # Register unique op (real ops only — noop is not a unique op)
             op_id = id(node.op)
@@ -492,7 +511,7 @@ class OpGraphBuilder:
         # Group cores by identical phase sequence (by op identity + kernel variant)
         groups_by_key: Dict[tuple, Set[Tuple[int, int]]] = defaultdict(set)
         for coord, entries in per_core.items():
-            key = tuple((id(op), self._kernel_variant_key(op, coord)) for op, _ in entries)
+            key = tuple((id(op), self._kernel_variant_key(op, coord)) for op, _, _ in entries)
             groups_by_key[key].add(coord)
 
         # Build CoreGroups
@@ -500,14 +519,16 @@ class OpGraphBuilder:
         for key, coords in groups_by_key.items():
             representative = per_core[next(iter(coords))]
             core_range = _coords_to_core_range_set(coords)
-            phases = [op for op, _ in representative]
-            barrier_scopes = [eff_range for _, eff_range in representative[:-1]]
+            phases = [op for op, _, _ in representative]
+            barrier_scopes = [release for _, release, _ in representative[:-1]]
+            barrier_arrive_scopes = [arrive for _, _, arrive in representative[:-1]]
             phase_op_indices = [op_id_to_index[id(op)] if op is not _NOOP_OP else NOOP_PHASE_INDEX for op in phases]
             result.append(
                 CoreGroup(
                     core_range=core_range,
                     phases=phases,
                     barrier_scopes=barrier_scopes,
+                    barrier_arrive_scopes=barrier_arrive_scopes,
                     phase_op_indices=phase_op_indices,
                 )
             )
@@ -522,7 +543,7 @@ class OpGraphBuilder:
         writer_done_addr: int,
         reset_done_addr: int,
         shared_sem_refs: List[Any],
-        segment_cache: Dict[frozenset, BarrierConfig],
+        segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig],
         needs_target_core_range: bool = False,
         cb_pool: Optional["CBPoolAllocator"] = None,
     ) -> _BuildResult:
@@ -546,6 +567,7 @@ class OpGraphBuilder:
         segments, transition_map = self._build_group_barriers(
             group.barrier_scopes,
             segment_cache,
+            barrier_arrive_scopes=group.barrier_arrive_scopes,
         )
 
         # Build MultiBarrierSpec
@@ -581,7 +603,8 @@ class OpGraphBuilder:
     @staticmethod
     def _build_group_barriers(
         barrier_scopes: List[Any],
-        segment_cache: Dict[frozenset, BarrierConfig],
+        segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig],
+        barrier_arrive_scopes: Optional[List[Any]] = None,
     ) -> Tuple[List[BarrierSegment], Dict[int, Tuple[int, int]]]:
         """Build barrier segments and transition map from barrier scopes.
 
@@ -589,20 +612,27 @@ class OpGraphBuilder:
         The ``segment_cache`` ensures groups sharing a scope (e.g. the stem)
         use the same GlobalSemaphore addresses for synchronization.
 
+        The cache key is ``(release_scope_key, arrive_scope_key)`` — different
+        arrive counts at the same release scope produce different segments
+        (they need different arrive thresholds).
+
         Returns (segments, transition_map).
         """
         segments: List[BarrierSegment] = []
         transition_map: Dict[int, Tuple[int, int]] = {}
 
-        prev_scope_key = None
+        prev_cache_key = None
         seg_idx = -1
         call_idx = 0
 
         for t_idx, scope in enumerate(barrier_scopes):
-            scope_key = _core_ranges_key(scope)
-            if scope_key != prev_scope_key:
+            release_key = _core_ranges_key(scope)
+            arrive_scope = barrier_arrive_scopes[t_idx] if barrier_arrive_scopes else None
+            arrive_key = _core_ranges_key(arrive_scope) if arrive_scope is not None else frozenset()
+            cache_key = (release_key, arrive_key)
+            if cache_key != prev_cache_key:
                 # New barrier segment
-                barrier_cfg = segment_cache[scope_key]
+                barrier_cfg = segment_cache[cache_key]
                 seg = BarrierSegment(
                     config=barrier_cfg,
                     arrive_addr=barrier_cfg.global_arrive_addr,
@@ -611,7 +641,7 @@ class OpGraphBuilder:
                 segments.append(seg)
                 seg_idx += 1
                 call_idx = 0
-                prev_scope_key = scope_key
+                prev_cache_key = cache_key
             transition_map[t_idx] = (seg_idx, call_idx)
             call_idx += 1
 
@@ -671,6 +701,24 @@ class OpGraphBuilder:
         coords: Set[Tuple[int, int]] = set()
         for child in node.children:
             coords |= OpGraphBuilder._effective_leaf_range(child)
+        return coords
+
+    @staticmethod
+    def _all_descendant_coords(node: OpNode) -> Set[Tuple[int, int]]:
+        """Union of ALL descendant core coords (not just leaves).
+
+        Used for barrier scope computation: the barrier after a node must
+        cover every core that continues past that node — i.e., every core
+        in any descendant's kernel range, not just leaves.  For shrinking
+        core ranges (e.g. matmul(16) → slice(8) → rms(4)), the leaf-only
+        union would be 4 cores, but 10 cores actually continue (8 + 2
+        noop-padded), so the barrier scope must be the full descendant
+        union (8 + 4 = 12 unique coords in this example).
+        """
+        coords: Set[Tuple[int, int]] = set()
+        for child in node.children:
+            coords |= _core_range_set_to_coords(_get_node_core_range(child))
+            coords |= OpGraphBuilder._all_descendant_coords(child)
         return coords
 
 

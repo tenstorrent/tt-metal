@@ -15,6 +15,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     BarrierConfig,
     MultiBarrierSpec,
     _BuildResult,
+    _NOOP_OP,
     _get_role_key,
     _kernel_overlaps_core_range,
 )
@@ -89,13 +90,23 @@ def _validate_and_get_compute_config_for_role(
 # =============================================================================
 
 
-def _create_barrier_segment_config(device: Any, core_ranges: Any) -> BarrierConfig:
+def _create_barrier_segment_config(
+    device: Any,
+    core_ranges: Any,
+    arrive_ranges: Any = None,
+) -> BarrierConfig:
     """Create a lightweight barrier config for OpGraph segments.
 
     Only allocates ``global_arrive`` and ``global_release`` GlobalSemaphores
     (2 instead of 4).  The per-core ``compute_done`` / ``writer_done`` flags
     are shared across all segments and allocated separately in
     ``OpGraphBuilder.build()``, so per-segment copies would waste L1.
+
+    Args:
+        core_ranges: CoreRangeSet of ALL cores that receive release (and
+            on which GlobalSemaphores are allocated).
+        arrive_ranges: CoreRangeSet of cores that arrive at the barrier.
+            If None, all release cores also arrive (symmetric barrier).
     """
     config = BarrierConfig()
 
@@ -106,14 +117,29 @@ def _create_barrier_segment_config(device: Any, core_ranges: Any) -> BarrierConf
     config.global_arrive_addr = ttnn.get_global_semaphore_address(sem_global_arrive)
     config.global_release_addr = ttnn.get_global_semaphore_address(sem_global_release)
 
-    logical_coords = _get_core_coords_from_ranges(core_ranges)
-    config.num_cores = len(logical_coords)
+    release_coords = _get_core_coords_from_ranges(core_ranges)
+    config.num_release_cores = len(release_coords)
 
-    if config.num_cores > 0:
-        phys_coords = [device.worker_core_from_logical_core(c) for c in logical_coords]
-        config.core0_phys_x = phys_coords[0].x
-        config.core0_phys_y = phys_coords[0].y
-        config.other_core_phys_coords = [(c.x, c.y) for c in phys_coords[1:]]
+    if config.num_release_cores > 0:
+        if arrive_ranges is not None:
+            arrive_coords = _get_core_coords_from_ranges(arrive_ranges)
+            config.num_arrive_cores = len(arrive_coords)
+            # Core0 must be an arrive core — use first arrive coord
+            arrive_phys = [device.worker_core_from_logical_core(c) for c in arrive_coords]
+            config.core0_phys_x = arrive_phys[0].x
+            config.core0_phys_y = arrive_phys[0].y
+            # Other cores = ALL release cores except core0
+            all_phys = [device.worker_core_from_logical_core(c) for c in release_coords]
+            config.other_core_phys_coords = [
+                (c.x, c.y) for c in all_phys if not (c.x == config.core0_phys_x and c.y == config.core0_phys_y)
+            ]
+        else:
+            # Symmetric: arrive = release (backward compat)
+            config.num_arrive_cores = config.num_release_cores
+            phys_coords = [device.worker_core_from_logical_core(c) for c in release_coords]
+            config.core0_phys_x = phys_coords[0].x
+            config.core0_phys_y = phys_coords[0].y
+            config.other_core_phys_coords = [(c.x, c.y) for c in phys_coords[1:]]
 
     return config
 
@@ -271,6 +297,9 @@ def _build_fused_descriptor(
         # even for phases where this role has no kernel).
         all_phase_indices = list(range(len(phases)))
 
+        # Identify no-op phases (for asymmetric barrier — skip arrive)
+        noop_phase_indices = frozenset(i for i, p in enumerate(phases) if p.op_descriptor is _NOOP_OP)
+
         fused_source = _generate_fused_source(
             phase_kernels,
             role_key,
@@ -287,6 +316,7 @@ def _build_fused_descriptor(
             all_phase_indices=all_phase_indices,
             has_compute=has_compute,
             has_writer=has_writer,
+            noop_phase_indices=noop_phase_indices,
         )
 
         # Determine barrier RT addresses per RISC type.
@@ -330,7 +360,8 @@ def _build_fused_descriptor(
         if multi_barrier is not None and is_coordinator:
             for seg_idx, seg in enumerate(multi_barrier.segments):
                 s = f"seg{seg_idx}"
-                named_ct_args.append((f"{s}_num_cores", seg.config.num_cores))
+                named_ct_args.append((f"{s}_num_release_cores", seg.config.num_release_cores))
+                named_ct_args.append((f"{s}_num_arrive_cores", seg.config.num_arrive_cores))
                 named_ct_args.append((f"{s}_core0_phys_x", seg.config.core0_phys_x))
                 named_ct_args.append((f"{s}_core0_phys_y", seg.config.core0_phys_y))
 
@@ -408,6 +439,7 @@ def _build_fused_descriptor(
                 core_ranges=coord_core_ranges,
                 has_compute=has_compute,
                 has_writer=has_writer,
+                noop_phase_indices=noop_phase_indices,
             )
             fused_kernels.append(coord_kernel)
             kernel_labels.append("")
@@ -496,6 +528,7 @@ def _build_coordinator_only_kernel(
     core_ranges: Any,
     has_compute: bool,
     has_writer: bool,
+    noop_phase_indices: frozenset = frozenset(),
 ) -> "ttnn.KernelDescriptor":
     """Build a barrier-only coordinator kernel for riscv_1.
 
@@ -515,6 +548,7 @@ def _build_coordinator_only_kernel(
         has_compute=has_compute,
         has_writer=has_writer,
         phase_names=phase_names,
+        noop_phase_indices=noop_phase_indices,
     )
 
     # Barrier RT args (coordinator layout)
@@ -535,7 +569,8 @@ def _build_coordinator_only_kernel(
     named_ct_args: List[Tuple[str, int]] = [("barrier_rt_offset", 0)]
     for seg_idx, seg in enumerate(multi_barrier.segments):
         s = f"seg{seg_idx}"
-        named_ct_args.append((f"{s}_num_cores", seg.config.num_cores))
+        named_ct_args.append((f"{s}_num_release_cores", seg.config.num_release_cores))
+        named_ct_args.append((f"{s}_num_arrive_cores", seg.config.num_arrive_cores))
         named_ct_args.append((f"{s}_core0_phys_x", seg.config.core0_phys_x))
         named_ct_args.append((f"{s}_core0_phys_y", seg.config.core0_phys_y))
 
