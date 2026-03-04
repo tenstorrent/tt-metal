@@ -1010,7 +1010,7 @@ Examples (Import existing traces):
         "--output-dir",
         "-o",
         default="./model_tracer/traced_operations",
-        help="Directory to save master JSON (default: ./model_tracer/traced_operations)",
+        help="Output path: directory (appends ttnn_operations_master.json) or full .json file path",
     )
     parser.add_argument(
         "--store", "--keep-traces", action="store_true", help="Keep individual trace files (default: delete them)"
@@ -1235,8 +1235,12 @@ Examples (Import existing traces):
                 print(f"   Fixed {fixed_count[0]} shard_spec entries in operations")
 
             # Update master JSON
-            os.makedirs(args.output_dir, exist_ok=True)
-            master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
+            if args.output_dir.endswith(".json"):
+                master_file = args.output_dir
+                os.makedirs(os.path.dirname(master_file) or ".", exist_ok=True)
+            else:
+                os.makedirs(args.output_dir, exist_ok=True)
+                master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
             new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
 
             print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")

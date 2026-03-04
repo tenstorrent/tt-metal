@@ -291,6 +291,15 @@ endforeach()
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
+# Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
+# Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
+target_compile_options(
+    ttml
+    PRIVATE
+        -Wdeprecated-declarations
+        -Wno-error=deprecated-declarations
+)
+
 target_link_libraries(
     ttml
     PUBLIC
@@ -390,13 +399,14 @@ target_precompile_headers(
 
 if(ENABLE_LIBCXX)
     target_link_libraries(
+        ttml
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
 endif()
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+target_compile_definitions(ttml PUBLIC TOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
 set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
 set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
