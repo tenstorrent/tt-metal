@@ -144,14 +144,15 @@ void kernel_main() {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
                     if constexpr (num_targets_in_direction) {
-                        scatter_fabric_write_unidir(
-                            tile_id,
-                            second_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
+                        // COMMENTED OUT FOR CCL PERF TESTING - Comment out fabric scatter write
+                        // scatter_fabric_write_unidir(
+                        //     tile_id,
+                        //     second_tile_id,
+                        //     output_addrgens[input_idx],
+                        //     pkt_hdr,
+                        //     *fabric_direction_connection,
+                        //     l1_read_addr,
+                        //     output_page_size);
                     }
 
                     pages_read_in_row++;
@@ -164,13 +165,14 @@ void kernel_main() {
 
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to
-                        fabric_write_unidir(
-                            tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
+                        // COMMENTED OUT FOR CCL PERF TESTING - Comment out fabric write
+                        // fabric_write_unidir(
+                        //     tile_id,
+                        //     output_addrgens[input_idx],
+                        //     pkt_hdr,
+                        //     *fabric_direction_connection,
+                        //     l1_read_addr,
+                        //     output_page_size);
                     }
                 }
 
@@ -185,7 +187,7 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
+    // noc_async_write_barrier();
     // increment locally
     if constexpr (fuse_op && direction == 1) {
         /**
@@ -206,10 +208,11 @@ void kernel_main() {
 
     // Write the unicast packet
     if constexpr (num_targets_in_direction) {
-        fabric_direction_connection->wait_for_empty_write_slot();
+        // COMMENTED OUT FOR CCL PERF TESTING - Comment out fabric slot waiting and data transmission
+        // fabric_direction_connection->wait_for_empty_write_slot();
         fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
-        fabric_direction_connection->send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        // fabric_direction_connection->send_payload_flush_blocking_from_address(
+        //     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
 
     uint32_t writes_expected = 0;
@@ -283,23 +286,25 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        scatter_fabric_write_unidir(
-                            first_tile_id,
-                            second_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
+                        // COMMENTED OUT FOR CCL PERF TESTING - Comment out fabric scatter write
+                        // scatter_fabric_write_unidir(
+                        //     first_tile_id,
+                        //     second_tile_id,
+                        //     output_addrgens[input_idx],
+                        //     pkt_hdr,
+                        //     *fabric_direction_connection,
+                        //     l1_read_addr,
+                        //     output_page_size);
                     } else {
                         ASSERT(num_pages_to_read == 1);
-                        fabric_write_unidir(
-                            first_tile_id,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            l1_read_addr,
-                            output_page_size);
+                        // COMMENTED OUT FOR CCL PERF TESTING - Comment out fabric write
+                        // fabric_write_unidir(
+                        //     first_tile_id,
+                        //     output_addrgens[input_idx],
+                        //     pkt_hdr,
+                        //     *fabric_direction_connection,
+                        //     l1_read_addr,
+                        //     output_page_size);
                     }
 
                     tiles_read += num_pages_to_read;
@@ -315,15 +320,16 @@ void kernel_main() {
         }
 
         // 2. unicast output ready semaphore forward
-        fabric_direction_connection->wait_for_empty_write_slot();
+        // COMMENTED OUT FOR CCL PERF TESTING - Comment out fabric slot waiting and data transmission
+        // fabric_direction_connection->wait_for_empty_write_slot();
         fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
-        fabric_direction_connection->send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        // fabric_direction_connection->send_payload_flush_blocking_from_address(
+        //     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 
         slice_writes++;
     }
     fabric_connection.close();
 
-    noc_async_atomic_barrier();
-    noc_async_write_barrier();
+    // noc_async_atomic_barrier();
+    // noc_async_write_barrier();
 }
