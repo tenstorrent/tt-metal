@@ -615,7 +615,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
     m_tensor
         .def(
             "dump_overlapped_tensors",
-            [](const std::string& file_name, nb::list py_views) {
+            [](const std::string& file_name, nb::dict py_views) {
                 constexpr std::string_view kExt = ".overlappedtensorbin";
                 if (file_name.size() < kExt.size() ||
                     file_name.compare(file_name.size() - kExt.size(), kExt.size(), kExt) != 0) {
@@ -623,9 +623,10 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 }
                 std::vector<OverlappedTensorView> views;
                 views.reserve(nb::len(py_views));
-                for (auto item : py_views) {
-                    nb::object obj = nb::borrow(item);
+                for (auto [key, value] : py_views) {
+                    nb::object obj = nb::borrow(value);
                     views.push_back(OverlappedTensorView{
+                        .name = nb::cast<std::string>(key),
                         .fused_tensor = nb::cast<Tensor>(obj.attr("fused_tensor")),
                         .tensor_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("tensor_shape")),
                         .shard_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("shard_shape")),
@@ -640,12 +641,12 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("file_name"),
             nb::arg("views"),
             R"doc(
-                Dump a list of OverlappedTensor to a single file using FlatBuffer format.
+                Dump a dict of OverlappedTensor to a single file using FlatBuffer format.
                 All views must reference the same fused tensor.
             )doc")
         .def(
             "load_overlapped_tensors",
-            [](const std::string& file_name, MeshDevice* device) -> nb::list {
+            [](const std::string& file_name, MeshDevice* device) -> nb::dict {
                 constexpr std::string_view kExt = ".overlappedtensorbin";
                 if (file_name.size() < kExt.size() ||
                     file_name.compare(file_name.size() - kExt.size(), kExt.size(), kExt) != 0) {
@@ -654,23 +655,23 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 auto views = load_overlapped_tensors(file_name, device);
                 nb::module_ mod = nb::module_::import_("models.demos.deepseek_v3_b1.blitz_overlap_tensors");
                 nb::object cls = mod.attr("OverlappedTensor");
-                nb::list result;
+                nb::dict result;
                 for (const auto& v : views) {
-                    result.append(
+                    result[nb::cast(v.name)] =
                         cls(nb::cast(v.fused_tensor),
                             nb::make_tuple(v.tensor_shape[0], v.tensor_shape[1]),
                             nb::make_tuple(v.shard_shape[0], v.shard_shape[1]),
                             nb::cast(v.core_range_set),
                             nb::cast(v.dtype),
                             nb::make_tuple(v.tile_shape[0], v.tile_shape[1]),
-                            nb::cast(v.byte_offset)));
+                            nb::cast(v.byte_offset));
                 }
                 return result;
             },
             nb::arg("file_name"),
             nb::arg("device") = nullptr,
             R"doc(
-                Load a list of OverlappedTensor from a file serialized with dump_overlapped_tensors.
+                Load a dict of OverlappedTensor from a file serialized with dump_overlapped_tensors.
             )doc");
 }
 
