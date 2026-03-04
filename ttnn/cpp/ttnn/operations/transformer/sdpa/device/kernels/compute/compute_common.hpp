@@ -1863,6 +1863,8 @@ void sdpa_inner_loop_step(
     constexpr uint32_t kt_num_full_subblocks = Sk_chunk_t / qkt_subblock_w;
     constexpr uint32_t kt_remainder = Sk_chunk_t % qkt_subblock_w;
     constexpr bool has_partial_subblock = (kt_remainder > 0);
+    constexpr uint32_t total_kt_iterations = kt_num_full_subblocks + (has_partial_subblock ? 1 : 0);
+    constexpr bool reduce_trigger = (total_kt_iterations > 1) && (Sk_chunk_t % 2 == 0);
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
     constexpr uint32_t row_tiles = sbh * KT_stride;  // Use KT_stride for cb_qkt_im row width
 
@@ -1994,7 +1996,9 @@ void sdpa_inner_loop_step(
                     in0_block_w,
                     KT_stride,
                     KT_stride,
-                    true /*blocked_pack*/>(
+                    true /*blocked_pack*/,
+                    in0_block_w,
+                    reduce_trigger>(
                     cb_q_in,
                     cb_kt_in,
                     cb_qkt_im,
@@ -2015,7 +2019,6 @@ void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
             cb_reserve_back(cur_max, sbh);
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
-            constexpr bool reduce_trigger = (kt_num_subblocks > 1);
             reduce_c_row_group<
                 PoolType::MAX,
                 ReduceDim::REDUCE_ROW,
