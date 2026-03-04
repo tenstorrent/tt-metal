@@ -26,9 +26,11 @@ flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuf
     std::vector<flatbuffers::Offset<flatbuffer::OverlappedView>> view_offsets;
     view_offsets.reserve(views.size());
     for (const auto& v : views) {
+        auto name_offset = builder.CreateString(v.name);
         auto crs_offset = ttnn::to_flatbuffer(builder, v.core_range_set);
         view_offsets.push_back(flatbuffer::CreateOverlappedView(
             builder,
+            name_offset,
             v.tensor_shape[0],
             v.tensor_shape[1],
             v.shard_shape[0],
@@ -58,6 +60,7 @@ std::vector<tt::tt_metal::OverlappedTensorView> overlapped_tensors_from_flatbuff
     result.reserve(fb->views()->size());
     for (const auto* fb_view : *fb->views()) {
         result.push_back(tt::tt_metal::OverlappedTensorView{
+            .name = fb_view->name() ? fb_view->name()->str() : std::string{},
             .fused_tensor = fused,
             .tensor_shape = {fb_view->tensor_shape_h(), fb_view->tensor_shape_w()},
             .shard_shape = {fb_view->shard_shape_h(), fb_view->shard_shape_w()},
