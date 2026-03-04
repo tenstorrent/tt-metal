@@ -290,8 +290,9 @@ void kernel_main() {
 #ifdef TILIZE_IN
             // Tilize one block from cb_in_rm → cb_in per loop iteration (Pass 2).
             // Reader supplies this second pass of data after the variance data.
-            DPRINT_MATH(DPRINT << "[lt normalize] tilize block_size =" << block_size << " block.start=" << block.start()
-                               << ENDL();)
+            // DPRINT_MATH(DPRINT << "[lt normalize] tilize block_size =" << block_size << " block.start=" <<
+            // block.start()
+            //                    << ENDL();)
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
 
             binary_op_init_common(cb_in, cb_scaler, cb_ex);

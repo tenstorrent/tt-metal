@@ -150,14 +150,14 @@ void kernel_main() {
             uint32_t l1_base = get_write_ptr(cb_id_in_rm);
 
             // Zero-fill padding rows so tilize_block sees 0 instead of stale L1 data.
-            if (num_valid_rows_pass2 < TILE_H) {
-                volatile tt_l1_ptr uint32_t* p =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + num_valid_rows_pass2 * full_row_stride);
-                const uint32_t pad_words = (TILE_H - num_valid_rows_pass2) * full_row_stride / sizeof(uint32_t);
-                for (uint32_t i = 0; i < pad_words; ++i) {
-                    p[i] = 0;
-                }
-            }
+            // if (num_valid_rows_pass2 < TILE_H) {
+            //     volatile tt_l1_ptr uint32_t* p =
+            //         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + num_valid_rows_pass2 * full_row_stride);
+            //     const uint32_t pad_words = (TILE_H - num_valid_rows_pass2) * full_row_stride / sizeof(uint32_t);
+            //     for (uint32_t i = 0; i < pad_words; ++i) {
+            //         p[i] = 0;
+            //     }
+            // }
 
             uint32_t l1_ptr = l1_base;
             for (uint32_t row = 0; row < num_valid_rows_pass2; ++row) {
