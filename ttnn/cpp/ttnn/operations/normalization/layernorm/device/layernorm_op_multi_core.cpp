@@ -149,9 +149,19 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const auto& logical_shape = a.logical_shape();
     const auto& padded_shape = a.padded_shape();
     uint32_t W = logical_shape[-1];
+    const bool input_is_row_major = operation_attributes.allow_row_major_input && (a.layout() == Layout::ROW_MAJOR);
     uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
     uint32_t HWp = Hp * Wp;
     uint32_t NC = a.physical_volume() / HWp;
+    // For ROW_MAJOR inputs the tensor height is not padded to tile boundaries.
+    // Round Hp up to the next TILE_HEIGHT multiple so that Ht >= 1 for any H < TILE_HEIGHT.
+    // HWp and NC are computed above from the original (unpadded) Hp, so they remain correct.
+    if (input_is_row_major) {
+        Hp = tt::round_up(Hp, TILE_HEIGHT);
+    }
+    // Total logical (non-padded) row count. Used by RM reader/writer kernels to
+    // avoid OOB DRAM reads/writes when H is not a multiple of TILE_HEIGHT.
+    const uint32_t H_logical = static_cast<uint32_t>(NC) * static_cast<uint32_t>(logical_shape[-2]);
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
@@ -243,7 +253,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     ////////////////////////////////////////////////////////////////////////////
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    const bool input_is_row_major = operation_attributes.allow_row_major_input && (a.layout() == Layout::ROW_MAJOR);
     // Size the small-kernel CBs to be a multiple of the block size
     uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
     uint32_t in0_t =
@@ -597,13 +606,19 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         if (!(use_welford && large_tensor_needed)) {
             reader_args.push_back(W);
         }
+        if (input_is_row_major) {
+            reader_args.push_back(H_logical);  // arg[10]
+        }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
         // For the RM output writer arg[3] is the starting tile-row index (curr_row),
         // not the flat tile offset, because the RM writer computes row addresses directly.
         const uint32_t writer_arg3 = input_is_row_major ? curr_row : tile_offset;
-        writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_addr, Wt, num_tile_rows_per_core, writer_arg3});
+        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_arg3};
+        if (input_is_row_major) {
+            writer_args.push_back(H_logical);  // arg[4]
+        }
+        writer_runtime_args.emplace_back(core, std::move(writer_args));
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
 
         curr_row += num_tile_rows_per_core;
