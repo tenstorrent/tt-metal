@@ -636,7 +636,7 @@ def test_wan_transformer_model_action_mode(
         spatial=spatial_input,
         prompt=prompt_input,
         timestep=timestep_input,
-        # grid_id=grid_id,
+        grid_id=grid_id,
         action_mode=True,
     )
     del tt_model
