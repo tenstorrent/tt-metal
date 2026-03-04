@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.groupnorm import TTGroupNorm1D
+from models.demos.rvc.tt_impl.groupnorm import GroupNorm1D
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -24,7 +24,7 @@ def test_groupnorm(device):
     torch_input = torch.randn(batch_size, input_length, channels, dtype=torch.float32)
     torch_output = torch_groupnorm(torch_input.permute(0, 2, 1)).permute(0, 2, 1)
 
-    tt_groupnorm = TTGroupNorm1D(
+    tt_groupnorm = GroupNorm1D(
         device=device,
         num_channels=channels,
         num_groups=num_groups,

@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.conv1d import TTConv1d
+from models.demos.rvc.tt_impl.conv1d import Conv1d
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -60,7 +60,7 @@ def test_conv1d(device):
     )
     torch_output = torch_conv(torch_input)
 
-    tt_conv = TTConv1d(
+    tt_conv = Conv1d(
         device,
         in_channels=in_channels,
         out_channels=out_channels,

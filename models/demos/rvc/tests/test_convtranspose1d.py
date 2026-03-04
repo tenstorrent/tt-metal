@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.convtranspose1d import TTConvTranspose1d
+from models.demos.rvc.tt_impl.convtranspose1d import ConvTranspose1d
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -40,7 +40,7 @@ def test_convtranspose1d(device):
     torch_input = torch.randn(batch_size, in_channels, input_length, dtype=torch.float32)
     torch_output = torch_deconv(torch_input)
 
-    tt_deconv = TTConvTranspose1d(
+    tt_deconv = ConvTranspose1d(
         device=device,
         in_channels=in_channels,
         out_channels=out_channels,

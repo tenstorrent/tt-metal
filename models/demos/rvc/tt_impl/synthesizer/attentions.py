@@ -9,7 +9,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.conv1d import TTConv1d
+from models.demos.rvc.tt_impl.conv1d import Conv1d
 
 
 class MultiHeadAttention:
@@ -32,25 +32,25 @@ class MultiHeadAttention:
         self.window_size = window_size
         self.k_channels = channels // n_heads
 
-        self.conv_q = TTConv1d(
+        self.conv_q = Conv1d(
             device=device,
             in_channels=channels,
             out_channels=channels,
             kernel_size=1,
         )
-        self.conv_k = TTConv1d(
+        self.conv_k = Conv1d(
             device=device,
             in_channels=channels,
             out_channels=channels,
             kernel_size=1,
         )
-        self.conv_v = TTConv1d(
+        self.conv_v = Conv1d(
             device=device,
             in_channels=channels,
             out_channels=channels,
             kernel_size=1,
         )
-        self.conv_o = TTConv1d(
+        self.conv_o = Conv1d(
             device=device,
             in_channels=channels,
             out_channels=out_channels,
@@ -212,14 +212,14 @@ class FFN:
         conv_config: ttnn.Conv1dConfig | None = None,
         compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
-        self.conv_1 = TTConv1d(
+        self.conv_1 = Conv1d(
             device=device,
             in_channels=in_channels,
             out_channels=filter_channels,
             kernel_size=kernel_size,
             padding=kernel_size // 2,
         )
-        self.conv_2 = TTConv1d(
+        self.conv_2 = Conv1d(
             device=device,
             in_channels=filter_channels,
             out_channels=out_channels,
