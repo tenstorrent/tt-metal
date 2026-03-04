@@ -1,0 +1,137 @@
+{
+  "op_name": "layer_norm",
+  "op_path": "ttnn/ttnn/operations/layer_norm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader tilize + writer untilize with compute passthrough (identity). Validates the full data path: RM input -> tilize -> tile copy -> untilize -> RM output.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "x",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(32, 32)",
+        "(64, 128)",
+        "(32, 256)",
+        "(128, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "subtract_mean",
+      "description": "Compute mean via reduce SUM with scaler=1/W, then subtract mean from input using broadcast COL. Output is zero-centered.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_subtract_mean.py",
+      "reference_body": "x - x.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(32, 32)",
+        "(64, 128)",
+        "(32, 256)",
+        "(128, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "full_normalize",
+      "description": "Full normalization without affine: subtract mean, square, compute variance, add eps, rsqrt, multiply to normalize.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_full_normalize.py",
+      "reference_body": "(x - x.mean(dim=-1, keepdim=True)) / torch.sqrt(x.var(dim=-1, keepdim=True, correction=0) + 1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(32, 32)",
+        "(64, 128)",
+        "(32, 256)",
+        "(128, 64)"
+      ],
+      "extra_imports": "import torch",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "affine_transform",
+      "description": "Full layer_norm with optional gamma (weight) and beta (bias) affine parameters.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_affine_transform.py",
+      "reference_body": "torch.nn.functional.layer_norm(x, [x.shape[-1]], weight=weight, bias=bias, eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(32, 32)",
+        "(64, 128)",
+        "(32, 256)",
+        "(128, 64)"
+      ],
+      "extra_imports": "import torch\nimport torch.nn.functional",
+      "extra_args": "weight=weight_t, bias=bias_t",
+      "extra_setup": "weight = torch.randn(x.shape[-1])\nbias = torch.randn(x.shape[-1])",
+      "extra_ttnn_setup": "weight_t = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)\nbias_t = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
