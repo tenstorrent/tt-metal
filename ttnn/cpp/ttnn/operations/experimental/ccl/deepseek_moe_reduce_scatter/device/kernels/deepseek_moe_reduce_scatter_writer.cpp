@@ -41,6 +41,9 @@ constexpr uint32_t input_slice_cb_ids[8] = {
     input_slice_7_cb_id};
 
 void kernel_main() {
+    // Reset packet header pool for trace replay compatibility (statics persist in L1)
+    PacketHeaderPool::reset();
+
     uint32_t arg_idx = 0;
 
     uint32_t intermediate_slice_0_address = get_arg_val<uint32_t>(arg_idx++);
