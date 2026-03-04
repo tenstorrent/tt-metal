@@ -2735,6 +2735,7 @@ class TestRecordPythonOperation:
         import ttnn.graph as g
 
         g._python_io_data = []
+        g.enable_python_stack_traces()
 
     def test_records_kwargs(self):
         import ttnn.graph as g
@@ -2786,6 +2787,50 @@ class TestRecordPythonOperation:
         g.record_python_operation("ttnn.deallocate", (), {})
         entry = g._python_io_data[0]
         assert entry["arguments"] == {}
+
+    def test_python_stack_trace_captured_when_enabled(self):
+        import ttnn.graph as g
+
+        g.enable_python_stack_traces()
+        try:
+            g.record_python_operation("ttnn.relu", (), {"x": "val"})
+            entry = g._python_io_data[0]
+            assert "python_stack_trace" in entry
+            assert len(entry["python_stack_trace"]) > 0
+            joined = "\n".join(entry["python_stack_trace"])
+            assert "test_graph_report.py" in joined
+        finally:
+            g.disable_python_stack_traces()
+
+    def test_python_stack_trace_absent_when_disabled(self):
+        import ttnn.graph as g
+
+        g.disable_python_stack_traces()
+        g.record_python_operation("ttnn.relu", (), {})
+        entry = g._python_io_data[0]
+        assert "python_stack_trace" not in entry
+
+    def test_python_stack_trace_filters_internals(self):
+        import ttnn.graph as g
+
+        g.enable_python_stack_traces()
+        try:
+            g.record_python_operation("ttnn.add", (1,), {})
+            entry = g._python_io_data[0]
+            joined = "\n".join(entry["python_stack_trace"])
+            assert "graph.py" not in joined, "Internal graph.py frames should be filtered"
+            assert "decorators.py" not in joined, "Internal decorators.py frames should be filtered"
+        finally:
+            g.disable_python_stack_traces()
+
+    def test_enable_disable_toggle(self):
+        import ttnn.graph as g
+
+        assert g.is_python_stack_trace_enabled()
+        g.disable_python_stack_traces()
+        assert not g.is_python_stack_trace_enabled()
+        g.enable_python_stack_traces()
+        assert g.is_python_stack_trace_enabled()
 
 
 class TestStoreCapturedGraph:
@@ -3708,4 +3753,179 @@ class TestPyIdToCppTensorReconciliation:
         c.execute("SELECT tensor_id FROM tensors WHERE tensor_id = 999")
         row = c.fetchone()
         assert row is not None, "Reconciliation should create a tensor entry for Python-assigned ID 999"
+        conn.close()
+
+
+class TestPythonStackTraceImport:
+    """Tests that Python stack traces from python_io are stored in the stack_traces table."""
+
+    def test_python_stack_trace_stored_alone(self, tmp_path):
+        """Python stack trace stored when no C++ stack trace exists."""
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {
+                "name": "ttnn::add",
+                "arguments": {"a": "tensor_a", "b": "tensor_b"},
+                "input_tensor_ids": [],
+                "python_stack_trace": [
+                    '  File "my_model.py", line 42, in forward\n    out = ttnn.add(x, y)',
+                    '  File "train.py", line 10, in main\n    model.forward(batch)',
+                ],
+            }
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+        c.execute("SELECT stack_trace FROM stack_traces WHERE operation_id = 1")
+        row = c.fetchone()
+        assert row is not None, "Stack trace should be stored"
+        assert "my_model.py" in row[0]
+        assert "train.py" in row[0]
+        assert "--- C++ ---" not in row[0], "No C++ separator when only Python trace"
+        conn.close()
+
+    def test_python_stack_trace_replaces_cpp(self, tmp_path):
+        """Python stack trace replaces C++ trace for Python-level ops."""
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+                "stack_trace": ["lib.so(ttnn::add+0x123) [0x7f]", "lib.so(caller+0x456) [0x7f]"],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [
+            {
+                "name": "ttnn::add",
+                "arguments": {},
+                "input_tensor_ids": [],
+                "python_stack_trace": ['  File "model.py", line 5, in run\n    ttnn.add(a, b)'],
+            }
+        ]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+        c.execute("SELECT stack_trace FROM stack_traces WHERE operation_id = 1")
+        row = c.fetchone()
+        assert row is not None
+        trace = row[0]
+        assert "model.py" in trace, "Python trace should be stored"
+        assert "lib.so" not in trace, "C++ trace should be replaced, not kept"
+        conn.close()
+
+    def test_no_python_stack_trace_uses_cpp_only(self, tmp_path):
+        """When python_io has no stack trace, C++ trace used as-is."""
+        graph = [
+            {
+                "counter": 0,
+                "node_type": "capture_start",
+                "params": {},
+                "connections": [1],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add", "inputs": 2},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+                "stack_trace": ["lib.so(ttnn::add+0x123) [0x7f]"],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+            {
+                "counter": 3,
+                "node_type": "capture_end",
+                "params": {},
+                "connections": [],
+                "arguments": [],
+                "input_tensors": [],
+                "stacking_level": 0,
+            },
+        ]
+        python_io = [{"name": "ttnn::add", "arguments": {}, "input_tensor_ids": []}]
+        report = _make_report(graph, python_io=python_io)
+        conn, c = _import_to_db(report, tmp_path)
+        c.execute("SELECT stack_trace FROM stack_traces WHERE operation_id = 1")
+        row = c.fetchone()
+        assert row is not None
+        assert "lib.so" in row[0]
+        assert "--- C++ ---" not in row[0]
         conn.close()
