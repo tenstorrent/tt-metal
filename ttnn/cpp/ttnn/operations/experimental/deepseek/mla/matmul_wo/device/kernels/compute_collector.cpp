@@ -2,19 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP (PoolType::SUM)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-
 #include "matmul_wo_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/reduce.h"
+#include "api/compute/eltwise_binary.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
-    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t reduce_semaphore_id = get_named_compile_time_arg_val("reduce_semaphore_id");
 
     // Run-time arguments
@@ -33,21 +29,24 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_s2c_in, cb_s2c_in, cb_c2w_out);
-
+    cb_reserve_back(cb_c2w_out, 4);
     for (uint32_t iter_id = 0; iter_id < 4; ++iter_id) {
-        cb_wait_front(cb_c2w_out, 1);
-        cb_pop_front(cb_c2w_out, 1);
-    }
+        cb_wait_front(cb_r2c_w, 1);
 
-    tile_regs_acquire();
-    // Reduce 12 partial sums into 1 tile
-    for (uint32_t k = 0; k < 12; ++k) {
-        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_c2w_out, cb_c2w_out, 0, 0, 0);
+        tile_regs_acquire();
+        // Seed accumulator in dst[0] with the first tile, then add remaining tiles.
+        // copy_tile_init(cb_s2c_in);
+        // copy_tile(cb_s2c_in, 0, 0);
+        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in);
+        for (uint32_t k = 0; k < num_cores; ++k) {
+            binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in, k, 0);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_c2w_out);
+        tile_regs_release();
+
+        cb_pop_front(cb_r2c_w, 1);
     }
-    tile_regs_commit();
-    tile_regs_wait();
-    // pack_tile(0, cb_c2w_out);
-    tile_regs_release();
-    reduce_uninit();
+    cb_push_back(cb_c2w_out, 4);
 }

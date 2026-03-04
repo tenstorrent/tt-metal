@@ -9,8 +9,7 @@
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
-    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t reduce_semaphore_id = get_named_compile_time_arg_val("reduce_semaphore_id");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
@@ -32,12 +31,12 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     uint32_t semaphore_addr = get_semaphore(reduce_semaphore_id);
     volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-    uint32_t semaphore_value = 12;
+    uint32_t semaphore_value = num_cores;
 
     for (uint32_t iter_id = 0; iter_id < 4; ++iter_id) {
-        cb_reserve_back(cb_c2w_out, 1);
+        cb_reserve_back(cb_r2c_w, 1);
         noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
-        cb_push_back(cb_c2w_out, 1);
-        semaphore_value += 12;
+        cb_push_back(cb_r2c_w, 1);
+        semaphore_value += num_cores;
     }
 }

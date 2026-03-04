@@ -8,14 +8,35 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 #include <numeric>
+#include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 namespace ttnn::operations::experimental::deepseek::mla::program {
+
+static std::vector<CoreCoord> find_collector_core_coords(
+    const CoreCoord& full_grid_size, const std::set<CoreCoord>& dram_cores_set, size_t num_collectors) {
+    std::vector<CoreCoord> collector_core_coords;
+    for (int32_t y = full_grid_size.y - 1; y >= 0; --y) {
+        for (int32_t x = full_grid_size.x - 1; x >= 0; --x) {
+            const auto core_coord = CoreCoord(x, y);
+            if (dram_cores_set.find(core_coord) == dram_cores_set.end()) {
+                collector_core_coords.push_back(core_coord);
+                if (collector_core_coords.size() == num_collectors) {
+                    return collector_core_coords;
+                }
+            }
+        }
+    }
+
+    // We come here if we did not find enough collector cores
+    TT_FATAL(false, "Failed to find {} cores", num_collectors);
+}
 
 MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     const deepseek::mla::operation_attributes_t& operation_attributes,
@@ -31,20 +52,29 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto dram_cores = CoreRangeSet(dram_bank2core_coords);
 
-    // If (4,2) is taken, use (4,3) as collector core
-    auto collector_core_coord = CoreCoord(4, 2);
-    if (std::find(dram_bank2core_coords.begin(), dram_bank2core_coords.end(), collector_core_coord) !=
-        dram_bank2core_coords.end()) {
-        collector_core_coord = CoreCoord(4, 3);
+    // Let us find 7 cores that are not taken by the DRAM reader/writer kernels
+    const auto full_grid_size = tensor_args.input_tensor.device()->compute_with_storage_grid_size();
+
+    // Let us create a set of DRAM cores so we can do an easy find operation
+    const auto dram_cores_set = std::set<CoreCoord>(dram_bank2core_coords.begin(), dram_bank2core_coords.end());
+
+    const auto collector_core_coords = find_collector_core_coords(full_grid_size, dram_cores_set, 7);
+    const auto collector_cores_set = CoreRangeSet(collector_core_coords);
+
+    // Convert the collector core coordinates to physical coordinates
+    std::vector<uint32_t> collector_core_physical_coords;
+    collector_core_physical_coords.reserve(2 * collector_core_coords.size());
+    for (const auto& core_coord : collector_core_coords) {
+        const auto physical_core_coord = tensor_args.input_tensor.device()->worker_core_from_logical_core(core_coord);
+        collector_core_physical_coords.push_back(physical_core_coord.x);
+        collector_core_physical_coords.push_back(physical_core_coord.y);
     }
 
-    // If that is taken as well, complain loudly
-    if (std::find(dram_bank2core_coords.begin(), dram_bank2core_coords.end(), collector_core_coord) !=
-        dram_bank2core_coords.end()) {
-        TT_FATAL(false, "Collector core (4,2) and (4,3) are both taken, this Op is not supported on this device");
-    }
+    // Put them in defines for kernel to access
+    const std::map<std::string, std::string> kernel_defines = {
+        {"COLLECTOR_CORE_COORDS", ttnn::operations::ccl::common::stringify(collector_core_physical_coords)}};
 
-    auto all_cores = dram_cores.merge(CoreRangeSet(collector_core_coord));
+    auto all_cores = dram_cores.merge(collector_cores_set);
 
     // CBs used in the Matmul WO operation
     /*
@@ -53,7 +83,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         ------------------------------------------------------------------------------------
         | cb_r2c_w0      | CBIndex::c_0  | Bfp8_b     | true  |    7*3*2 |      45696      |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    512   |      1048576    |
-        | cb_c2w_out     | CBIndex::c_2  | Float16_b  | true  |    28     |      57344      |
+        | cb_c2w_out     | CBIndex::c_2  | Float16_b  | true  |    28    |      57344      |
         ------------------------------------------------------------------------------------
     */
 
@@ -99,15 +129,11 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     }
 
     // Create semaphores for reducing the partials at the end
-    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, collector_core_coord, 0);
-    const auto collector_coord_phy =
-        tensor_args.input_tensor.device()->worker_core_from_logical_core(collector_core_coord);
+    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, collector_cores_set, 0);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
-        {"collector_physical_x", static_cast<uint32_t>(collector_coord_phy.x)},
-        {"collector_physical_y", static_cast<uint32_t>(collector_coord_phy.y)},
         {"reduce_semaphore_id", reduce_semaphore_id},
     };
 
@@ -120,6 +146,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = compile_args,
+            .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
@@ -130,6 +157,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = compile_args,
+            .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
@@ -143,25 +171,27 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             .bfp8_pack_precise = false,
             .math_approx_mode = true,
             .compile_args = compile_args,
+            .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
     //-------------------------------------------------------------------------
-    // Collector core - this one collects all data and reduces them.
+    // Collector cores - these collect all data and reduce them.
     //-------------------------------------------------------------------------
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1_collector.cpp",
-        collector_core_coord,
+        collector_cores_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = compile_args,
+            .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp",
-        collector_core_coord,
+        collector_cores_set,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,
@@ -169,6 +199,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             .bfp8_pack_precise = false,
             .math_approx_mode = true,
             .compile_args = compile_args,
+            .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
     // Set the runtime arguments for the kernels

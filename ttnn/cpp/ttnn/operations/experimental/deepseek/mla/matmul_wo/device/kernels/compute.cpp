@@ -9,8 +9,7 @@
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
-    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t reduce_semaphore_id = get_named_compile_time_arg_val("reduce_semaphore_id");
 
     // Run-time arguments

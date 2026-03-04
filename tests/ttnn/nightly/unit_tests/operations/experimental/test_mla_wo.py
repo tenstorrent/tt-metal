@@ -145,7 +145,7 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 16384, 896, 1): 90.0,
+    (32, 16384, 896, 1): 65.0,
 }
 
 

@@ -9,8 +9,7 @@
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
-    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t reduce_semaphore_id = get_named_compile_time_arg_val("reduce_semaphore_id");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
@@ -44,17 +43,24 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
+    constexpr uint32_t num_collectors = 7;
+    constexpr uint8_t collector_core_coords[num_collectors][2] = COLLECTOR_CORE_COORDS;
+
     // Get src address
-    constexpr uint32_t collector_src_stride = num_n_tiles_per_iter * out_tile_size;
-    uint32_t local_collector_src_addr = get_write_ptr(cb_c2w_out);
+    constexpr uint32_t collector_src_stride = out_tile_size;
 
     // Get dst address
-    constexpr uint32_t packet_size = num_n_tiles_per_iter * out_tile_size;
     const uint32_t local_collector_base_addr = get_write_ptr(cb_s2c_in);
-    const uint64_t collector_dst_base_addr =
-        get_noc_addr(collector_physical_x, collector_physical_y, local_collector_base_addr);
-    constexpr uint32_t collector_dst_stride = 12 * num_n_tiles_per_iter * out_tile_size;
-    const uint32_t collector_offset = dram_bank_id * num_n_tiles_per_iter * out_tile_size;
+    uint64_t collector_dst_base_addr[num_collectors];
+    for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
+        collector_dst_base_addr[collector_idx] = get_noc_addr(
+            collector_core_coords[collector_idx][0],
+            collector_core_coords[collector_idx][1],
+            local_collector_base_addr);
+    }
+
+    constexpr uint32_t collector_dst_stride = 12 * out_tile_size;
+    const uint32_t collector_offset = dram_bank_id * out_tile_size;
     uint32_t local_collector_dst_addr = local_collector_base_addr + collector_offset;
 
     //-------------------------------------------------------------------------
@@ -72,23 +78,36 @@ void kernel_main() {
     // Reduction transactions
     //-------------------------------------------------------------------------
     uint32_t semaphore_addr = get_semaphore(reduce_semaphore_id);
-    const uint64_t partial_semaphore_noc_addr =
-        get_noc_addr(collector_physical_x, collector_physical_y, semaphore_addr);
+    uint64_t partial_semaphore_noc_addr[num_collectors];
+    for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
+        partial_semaphore_noc_addr[collector_idx] = get_noc_addr(
+            collector_core_coords[collector_idx][0], collector_core_coords[collector_idx][1], semaphore_addr);
+    }
 
-    // noc_async_write_one_packet_set_state</*posted=*/true>(collector_dst_base_addr, packet_size, /*noc=*/1, vchannel);
+    // Use semaphore_inc<posted=true> with 1 transaction ID and flush barrier for trids
+    constexpr uint32_t semaphore_trid = 0x4;
+
+    noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
         cb_wait_front(cb_c2w_out, num_n_tiles_per_iter);
+        uint32_t local_collector_src_addr = get_read_ptr(cb_c2w_out);
 
-        // noc_async_write_one_packet_with_state</*posted=*/false>(local_collector_src_addr, local_collector_dst_addr);
-        noc_semaphore_inc</*posted=*/true>(partial_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+        for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
+            noc_async_write_one_packet_set_state</*posted=*/true>(
+                collector_dst_base_addr[collector_idx], out_tile_size, /*noc=*/1, vchannel);
+            noc_async_write_one_packet_with_state</*posted=*/true>(local_collector_src_addr, local_collector_dst_addr);
+            noc_semaphore_inc</*posted=*/true>(
+                partial_semaphore_noc_addr[collector_idx], /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+
+            local_collector_src_addr += collector_src_stride;
+        }
 
         cb_pop_front(cb_c2w_out, num_n_tiles_per_iter);
 
-        // local_collector_src_addr += collector_src_stride;
-        // local_collector_dst_addr += collector_dst_stride;
+        local_collector_dst_addr += collector_dst_stride;
     }
 
     // Ensure write and semaphore have left the core before continuing
-    // noc_async_posted_atomic_barrier();
+    noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
 }
