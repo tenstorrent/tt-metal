@@ -21,6 +21,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 using namespace ckernel;
+#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_compressed.h"
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -44,8 +45,6 @@ void kernel_main() {
     // BRISC: no-op
 
 #elif defined(COMPILE_FOR_TRISC)
-    constexpr uint32_t assign_l1_addr = get_named_compile_time_arg_val("assign_l1_addr");
-
     deepseek_compute_kernel_init();
 
     // Initial HW config (in1→srcA bfp8, in0→srcB bf16)
@@ -73,15 +72,19 @@ void kernel_main() {
         in0_face_r_dim = get_operand_face_r_dim(in0_id);
     }));
 
-    volatile uint8_t* assign_ptr = reinterpret_cast<volatile uint8_t*>(assign_l1_addr);
-
     // Reserve output tiles
     cb_reserve_back(cb_out, out_w);
 
     tile_regs_acquire();
 
-    // Custom MM with per-tile format reconfig
-    compressed::custom_mm_compressed_block(assign_ptr, addr_in0, addr_in1, in0_face_r_dim, num_tiles_k, out_w, 0);
+    // Build constexpr format array from positional CTAs (all K*N tiles, row-major)
+    constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
+    constexpr uint32_t total_tiles = num_tiles_k * out_w;
+    constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
+    static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
+
+    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
+        addr_in0, addr_in1, in0_face_r_dim, 0);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -92,7 +95,7 @@ void kernel_main() {
 
     custom_mm_block_uninit<dense_packing>();
 
-    cb_push_back(cb_out, 1);
+    cb_push_back(cb_out, out_w);
     cb_pop_front(cb_in0, num_tiles_k);
 
 #endif
