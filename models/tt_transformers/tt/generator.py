@@ -1226,7 +1226,10 @@ class Generator(WarmupForwardMixin):
         read_events = []
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
-                outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
+                outputs = (
+                    tt_out[i][0].cpu(blocking=False),
+                    tt_out[i][1].cpu(blocking=False) if tt_out[i][1] is not None else None,
+                )  # logits  # log-probs
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
                 outputs = tt_out[i].cpu(blocking=False)
