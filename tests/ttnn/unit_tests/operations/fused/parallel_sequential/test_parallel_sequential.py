@@ -127,7 +127,7 @@ def multi_tensors(device):
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestInfrastructure:
     """Build-time infrastructure tests (CB extraction, source structure, named args)."""
 
@@ -197,7 +197,7 @@ class TestInfrastructure:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
@@ -339,7 +339,7 @@ class TestSequentialExecution:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestShardedExecution:
     """Sharded (L1) execution tests."""
 
@@ -510,7 +510,7 @@ class TestShardedExecution:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestMatmulFusion:
     """Matmul fusion tests — orderings, multicore, N-RMS tail, fp32 mismatch."""
 
@@ -728,7 +728,7 @@ class TestMatmulFusion:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestBranchingTopology:
     """Branching (tree) topology tests, including slice ops."""
 
@@ -950,7 +950,7 @@ class TestBranchingTopology:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestParallelExecution:
     """Independent parallel execution tests."""
 
@@ -1239,7 +1239,7 @@ class TestParallelExecution:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestSequentialParallelAPI:
     """API surface tests for Sequential/Parallel."""
 
@@ -1444,7 +1444,7 @@ class TestCrossOpCompilation:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestDocExample:
     """Integration test matching the example in op_fusion.md."""
 
@@ -1453,12 +1453,12 @@ class TestDocExample:
 
         Matches the tree topology from the overview image in op_fusion.md,
         using the full 8x8 grid (64 cores) split left/right then top/bottom:
-            op1: matmul [1,1,256,256]x[1,1,256,256]        on (0,0)-(7,7)  64 cores
-            +- op2: slice left half -> [1,1,256,128]        on (0,0)-(3,7)  32 cores
-            |  +- op4: matmul [1,1,256,128]x[1,1,128,128]  on (0,0)-(1,7)  16 cores
-            |  +- op5: layer_norm [1,1,256,128]             on (2,0)-(3,7)  16 cores
-            +- op3: slice right half -> [1,1,256,128]       on (4,0)-(7,7)  32 cores
-               +- op6: rms_norm [1,1,256,128]               on (4,0)-(7,7)  32 cores
+            op1: matmul [1,1,1024,256]x[1,1,256,256]        on (0,0)-(7,7)  64 cores
+            +- op2: slice left half -> [1,1,1024,128]        on (0,0)-(3,7)  32 cores
+            |  +- op4: matmul [1,1,1024,128]x[1,1,128,128]  on (0,0)-(1,7)  16 cores
+            |  +- op5: layer_norm [1,1,1024,128]             on (2,0)-(3,7)  16 cores
+            +- op3: slice right half -> [1,1,1024,128]       on (4,0)-(7,7)  32 cores
+               +- op6: rms_norm [1,1,1024,128]               on (4,0)-(7,7)  32 cores
         """
         import models.experimental.ops.descriptors as descriptors
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
@@ -1477,7 +1477,7 @@ class TestDocExample:
         left_top = cores(0, 0, 1, 7)  # 2x8 = 16 cores
         left_bot = cores(2, 0, 3, 7)  # 2x8 = 16 cores
 
-        torch_a = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+        torch_a = torch.randn(1, 1, 1024, 256, dtype=torch.bfloat16)
         torch_b1 = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
         torch_b4 = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
         torch_ln_w = torch.ones(1, 1, 1, 128, dtype=torch.bfloat16)
@@ -1487,8 +1487,8 @@ class TestDocExample:
         op1 = descriptors.matmul(
             tt(torch_a, device), tt(torch_b1, device), core_range_set=full, compute_kernel_config=compute_cfg
         )
-        op2 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, 256, 128], core_range_set=left)
-        op3 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 128], [1, 1, 256, 256], core_range_set=right)
+        op2 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, 1024, 128], core_range_set=left)
+        op3 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 128], [1, 1, 1024, 256], core_range_set=right)
         op4 = descriptors.matmul(
             op2.output_tensors[0], tt(torch_b4, device), core_range_set=left_top, compute_kernel_config=compute_cfg
         )
@@ -1539,7 +1539,7 @@ class TestDocExample:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestDeepSeekV3:
     """DeepSeek V3 MLA block patterns using Parallel fusion."""
 
@@ -1647,7 +1647,7 @@ class TestDeepSeekV3:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestAsymmetricBarrier:
     """Tests for asymmetric barrier (narrow→wide) topologies.
 
@@ -1883,3 +1883,93 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(torch_input.float(), torch_w0.float())
         check_pcc(g_stem[:, :, :, :64], branch_a.output_tensors[0], pcc=0.97, label="A (slice)")
         check_pcc(torch_rms_norm(g_stem, torch_w1.float()), branch_b.output_tensors[0], label="B (RMS)")
+
+    def test_fully_disjoint_parent_children(self, device, multi_tensors):
+        """Fully disjoint: parent {0,1} → children {2-3, 4-7}.
+
+        Parent cores share zero overlap with any child core.  Parent
+        cores get _NOOP_OP exit phase, arrive at barrier, then exit.
+        Child cores get _NOOP_OP wait phase, then run real work.
+        This would deadlock without the exit-phase fix.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        stem = rms_norm.rms_norm(
+            t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
+        )
+        a = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(2, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(a, b)).build(device)
+        fused.launch()
+
+        g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
+
+    def test_partial_disjoint_one_core_exits(self, device, multi_tensors):
+        """Partial disjoint: parent {0,1} → child {1-7}.
+
+        Core 0 does real work in parent but isn't in any child — it gets
+        an exit phase.  Core 1 overlaps and continues normally.  Cores
+        2-7 get noop for parent.
+        """
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        stem = rms_norm.rms_norm(
+            t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
+        )
+        a = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(1, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(a, b)).build(device)
+        fused.launch()
+
+        g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][1].float()), fused.output_tensors[0], label="branch A")
+        check_pcc(torch_rms_norm(g_stem, t["torch_weights"][2].float()), fused.output_tensors[1], label="branch B")
+
+    def test_disjoint_repeated_execution(self, device, multi_tensors):
+        """Fully disjoint with repeated execution to catch stale semaphores."""
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = multi_tensors
+        stem = rms_norm.rms_norm(
+            t["tt_input"], core_range_set=cores(0, 0, 1, 0), weight=t["tt_weights"][0], epsilon=1e-5
+        )
+        a = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(2, 0, 3, 0), weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        b = rms_norm.rms_norm(
+            stem.output_tensors[0], core_range_set=cores(4, 0, 7, 0), weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem, Parallel(a, b)).build(device)
+
+        g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
+
+        for run in range(5):
+            fused.launch()
+            check_pcc(
+                torch_rms_norm(g_stem, t["torch_weights"][1].float()),
+                fused.output_tensors[0],
+                label=f"branch A run {run}",
+            )
+            check_pcc(
+                torch_rms_norm(g_stem, t["torch_weights"][2].float()),
+                fused.output_tensors[1],
+                label=f"branch B run {run}",
+            )

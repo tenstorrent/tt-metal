@@ -815,6 +815,95 @@ class TestNarrowWideTopology:
         groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
         assert len({len(g.phases) for g in groups}) == 1
 
+    def test_disjoint_parent_child_exit_phases(self):
+        """Parent {0,1} → children {2,3}, {4,5}: completely disjoint.
+
+        Cores 0,1 should get an exit _NOOP_OP phase so they have a barrier
+        transition to arrive at.  All groups should have 2 phases.
+        """
+        parent = _make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))]))
+        child_a = _make_op_with_cores(_make_core_ranges([((2, 0), (3, 0))]))
+        child_b = _make_op_with_cores(_make_core_ranges([((4, 0), (5, 0))]))
+        root = _graph.OpNode(parent, children=[_graph.OpNode(child_a), _graph.OpNode(child_b)])
+        groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
+
+        # All groups must have aligned phase counts (2 phases each)
+        assert len({len(g.phases) for g in groups}) == 1
+        assert all(len(g.phases) == 2 for g in groups)
+
+        # Parent cores (0,1) should have [real_op, _NOOP_OP]
+        parent_group = None
+        for g in groups:
+            coords = _common._core_range_set_to_coords(g.core_range)
+            if (0, 0) in coords:
+                parent_group = g
+                break
+        assert parent_group is not None
+        assert parent_group.phases[0] is not _common._NOOP_OP  # real work
+        assert parent_group.phases[1] is _common._NOOP_OP  # exit noop
+
+        # Child cores should have [_NOOP_OP, real_op]
+        for g in groups:
+            coords = _common._core_range_set_to_coords(g.core_range)
+            if (2, 0) in coords or (4, 0) in coords:
+                assert g.phases[0] is _common._NOOP_OP  # noop while parent runs
+                assert g.phases[1] is not _common._NOOP_OP  # real child work
+
+    def test_disjoint_barrier_scope_includes_parent(self):
+        """Disjoint parent-child: barrier scope must include parent cores."""
+        parent = _make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))]))
+        child = _make_op_with_cores(_make_core_ranges([((2, 0), (3, 0))]))
+        root = _graph.OpNode(parent, children=[_graph.OpNode(child)])
+        groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
+
+        # The barrier scope at transition 0 should include ALL 4 cores
+        for g in groups:
+            if g.barrier_scopes:
+                scope_coords = _common._core_range_set_to_coords(g.barrier_scopes[0])
+                assert (0, 0) in scope_coords, "Parent core must be in barrier scope"
+                assert (1, 0) in scope_coords, "Parent core must be in barrier scope"
+                assert (2, 0) in scope_coords, "Child core must be in barrier scope"
+                assert (3, 0) in scope_coords, "Child core must be in barrier scope"
+
+    def test_disjoint_arrive_scope_is_parent_cores(self):
+        """Disjoint parent-child: arrive scope should be parent cores only."""
+        parent = _make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))]))
+        child = _make_op_with_cores(_make_core_ranges([((2, 0), (3, 0))]))
+        root = _graph.OpNode(parent, children=[_graph.OpNode(child)])
+        groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
+
+        # Find a group with a barrier arrive scope and check it
+        for g in groups:
+            if g.barrier_arrive_scopes:
+                arrive_coords = _common._core_range_set_to_coords(g.barrier_arrive_scopes[0])
+                # Parent cores should be arrive cores
+                assert (0, 0) in arrive_coords
+                assert (1, 0) in arrive_coords
+                # Child cores should NOT be arrive cores (they had _NOOP_OP)
+                assert (2, 0) not in arrive_coords
+                assert (3, 0) not in arrive_coords
+
+    def test_partial_disjoint_no_exit_for_overlapping(self):
+        """Parent {0,1} → child {1,2,3}: core 0 exits, core 1 continues.
+
+        Core 0 gets an exit _NOOP_OP.  Core 1 does NOT get an exit phase
+        because it's in the descendant set.
+        """
+        parent = _make_op_with_cores(_make_core_ranges([((0, 0), (1, 0))]))
+        child = _make_op_with_cores(_make_core_ranges([((1, 0), (3, 0))]))
+        root = _graph.OpNode(parent, children=[_graph.OpNode(child)])
+        groups, _ = _graph.OpGraphBuilder(root)._compute_core_groups()
+
+        # All groups should have 2 phases
+        assert all(len(g.phases) == 2 for g in groups)
+
+        # Core 0 should be in its own group with [real, exit_noop]
+        for g in groups:
+            coords = _common._core_range_set_to_coords(g.core_range)
+            if (0, 0) in coords and (1, 0) not in coords:
+                assert g.phases[0] is not _common._NOOP_OP
+                assert g.phases[1] is _common._NOOP_OP
+
 
 class TestEffectiveLeafRange:
     """Tests for OpGraphBuilder._effective_leaf_range."""
