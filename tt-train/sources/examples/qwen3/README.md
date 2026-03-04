@@ -197,3 +197,18 @@ qwen3/
     ├── sharded_loss.py          # Distributed cross-entropy (vocab-sharded)
     └── tensor_utils.py          # Tensor creation, padding, mesh gather helpers
 ```
+
+## Nice-to-Have TODOs
+
+- **Slow generation** — decode-step attention masks and KV cache updates
+  involve host-to-device communication every token. Same applies to
+  sampling/generation with sharded loss / scattered last block.
+
+- **VocabParallelEmbedding & sharded loss** — `_vocab_parallel_embedding`
+  (`utils/distributed_ops.py`) and `sharded_cross_entropy_loss`
+  (`utils/sharded_loss.py`) are composite ops with NumPy host-side logic.
+  Implement as proper device kernels.
+
+- **AllGatherFwdScatterBwd** — (`utils/distributed_ops.py`) is a workaround
+  custom autograd op (all_gather forward, scatter backward). Replace with the
+  appropriate built-in op when one becomes available.
