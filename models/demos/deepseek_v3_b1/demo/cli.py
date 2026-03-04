@@ -250,7 +250,7 @@ def load_weights_from_cache(
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN (pod pipeline)")
-    parser.add_argument("--prompt", type=str, default="", help="Prompt text (for future real decode loop)")
+    parser.add_argument("--prompt", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)")
     parser.add_argument(
         "--max-new-tokens",
         type=int,
@@ -352,6 +352,9 @@ def run_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
+        assert (
+            config.num_stages == num_procs
+        ), f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes"
 
         logger.info(f"Building pipeline")
         pipeline = config.build_pipeline(mesh_device)
@@ -363,6 +366,7 @@ def run_demo(
             # Prefill + decode pattern per model.py: prefill(prompt) -> sample y0; decode_step(y_t) -> sample y_{t+1}.
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
+            logger.debug(f"Encoded prompt: {prompt_ids}")
             if not prompt_ids:
                 prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
             page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
@@ -380,6 +384,7 @@ def run_demo(
                 batch_size=1,
             )
             # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
+            logger.debug(f"Prefilling...")
             last_output = model.prefill(prompt_token_tensors)
             next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
             generated = [next_token_id]
