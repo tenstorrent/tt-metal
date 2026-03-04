@@ -169,7 +169,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-    const std::vector<Tensor>& mm_output_tensors,
+    const std::vector<ttnn::Tensor>& mm_output_tensors,
     const ttnn::Tensor& ag_output_tensor,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const ttnn::MeshCoordinate& sender_device_coord,
@@ -509,7 +509,7 @@ all_gather_minimal_matmul_async_factory_helper(
         // Workaround for LLK bug (https://github.com/tenstorrent/tt-llk/issues/1338)
         // - If ternary_b / gate is float32 then use unary_bcast (row broadcast) + mul_binary_tile (accurate)
         // - If ternary_b / gate is bfloat16 then use mul_tiles_bcast (row broadcast) (workaround)
-        if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
+        if (fused_ternary_input_b.value().dtype() == ttnn::DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
     }
