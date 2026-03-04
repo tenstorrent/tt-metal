@@ -68,7 +68,10 @@ def create_program_descriptor(
     has_beta = beta is not None
 
     # For ROW_MAJOR input: page = one stick = W * element_size bytes
-    stick_size = W * input_tensor.element_size()  # W * 2 for bfloat16
+    # bfloat16 = 2 bytes per element
+    _dtype_to_bytes = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.bfloat8_b: 1, ttnn.bfloat4_b: 1}
+    element_size = _dtype_to_bytes.get(input_tensor.dtype, 2)
+    stick_size = W * element_size
 
     # Tile size for bfloat16 (32x32 tile)
     tile_size = ttnn.tile_size(input_tensor.dtype)
@@ -289,10 +292,8 @@ def create_program_descriptor(
         int(has_beta),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    if has_gamma:
-        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
-    if has_beta:
-        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
+    # NOTE: gamma/beta use InterleavedAddrGen in the kernel (not TensorAccessor),
+    # so no TensorAccessorArgs needed for them in compile-time args.
 
     # Runtime args: src_addr, num_sticks, Wt, start_stick_id, gamma_addr, beta_addr, eps_value
     gamma_addr = gamma.buffer_address() if has_gamma else 0
