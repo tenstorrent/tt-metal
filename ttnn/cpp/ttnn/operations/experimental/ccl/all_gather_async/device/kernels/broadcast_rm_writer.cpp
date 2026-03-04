@@ -58,10 +58,10 @@ public:
     }
 
     void send(uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
+        auto packet_read_addr = cb_out_page_start;
+        auto dest_addr = tensor_page_addr;
         constexpr uint32_t packets_per_outpage = out_page_size / packet_size;
         for (uint32_t packet = 0; packet < packets_per_outpage; packet++) {
-            auto packet_read_addr = cb_out_page_start + packet * packet_size;
-            auto dest_addr = tensor_page_addr + packet * packet_size;
             noc_async_writes_flushed();
             fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                 fabric_connection,
@@ -69,6 +69,8 @@ public:
                 packet_read_addr,
                 tt::tt_fabric::NocUnicastCommandHeader{dest_addr},
                 static_cast<uint16_t>(0u) /*packet_size*/);
+            packet_read_addr += packet_size;
+            dest_addr += packet_size;
         }
     }
 
