@@ -7,7 +7,6 @@
 #include <cstdint>
 
 // Result slot layout: one slot per DM core, shared by test and kernels.
-// Layout: 9 x uint32_t (36 bytes) per slot.
 enum TlsCheckResultIndex : uint32_t {
     TLS_CHECK_KERNEL_ID = 0,
     TLS_CHECK_NUM_THREADS = 1,

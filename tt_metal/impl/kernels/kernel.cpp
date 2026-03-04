@@ -838,7 +838,7 @@ namespace experimental::quasar {
 
 // Returns the DM processor type (DM0-DM7) for the binary at the given index.
 uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
-    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    TT_ASSERT(0 <= index && index < this->dm_processors_.size(), "index out of bounds");
     return enchantum::to_underlying(this->dm_processors_[index]);
 }
 
@@ -971,7 +971,7 @@ uint8_t QuasarDataMovementKernel::expected_num_binaries() const {
 }
 
 uint32_t QuasarComputeKernel::get_kernel_processor_type(int index) const {
-    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    TT_ASSERT(0 <= index && index < this->compute_processors_.size(), "index out of bounds");
     return enchantum::to_underlying(this->compute_processors_[index]);
 }
 
