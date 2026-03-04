@@ -13,11 +13,12 @@
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
-//  - for Quasar, multiple DMs share assert_status area and we're fine of just getiting info for one of the asserts.
-//    To be multi-thread safe, CAS is used; address is remapped from uncached to
-//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
-inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
-    // Write the line number into the memory mailbox for host to read.
+// assert_and_hang captures its return address (the call site inside the ASSERT macro) via
+// __builtin_return_address(0) and stores it in the mailbox pc field.  The host resolves
+// file, line, function, and message from that PC using DWARF — no file hash needed.
+// For Quasar, multiple DMs share assert_status; CAS is used for thread safety; address is
+// remapped from uncached to cached L1 (LR/SC requires cache coherence), then flushed to host.
+inline void assert_and_hang(debug_assert_type_t assert_type = DebugAssertTripped) {
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
 #if defined(ARCH_QUASAR)
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
@@ -25,24 +26,24 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     if (addr >= MEM_L1_UNCACHED_BASE) {
         v = reinterpret_cast<debug_assert_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
     }
-    uint16_t expected = DebugAssertOK;
+    uint8_t expected = DebugAssertOK;
     if (__atomic_compare_exchange_n(
             &v->tripped, &expected, DebugAssertWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
 #else
     if (v->tripped == DebugAssertOK)
 #endif
     {
-        v->line_num = line_num;
+        v->pc = (uint32_t)__builtin_return_address(0);
         v->which = internal_::get_hw_thread_idx();
-        if (assert_type == DebugAssertHwFault) {  // only vslid on Quasar
+        if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
             uint64_t mcause;
             uint64_t mtval;
             uint64_t mepc;
             asm volatile("csrr %0, mepc" : "=r"(mepc));
             asm volatile("csrr %0, mcause" : "=r"(mcause));
             asm volatile("csrr %0, mtval" : "=r"(mtval));
-            v->line_num = mepc;  // mepc is the instruction address that caused the fault
-            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
+            v->pc = (uint32_t)mepc;  // mepc is the instruction address that caused the fault
+            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);
         }
         v->tripped = assert_type;
 #if defined(ARCH_QUASAR)
@@ -74,12 +75,19 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     }
 }
 
-// The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
-// without {}s.
-#define ASSERT(condition, ...)                        \
-    do {                                              \
-        if (not(condition))                           \
-            assert_and_hang(__LINE__, ##__VA_ARGS__); \
+// Overload for ASSERT(condition, "message") — the string is developer documentation only;
+// the host reads it from source at the resolved file:line, nothing needs to be stored.
+inline void assert_and_hang(const char*) {
+    assert_and_hang();
+}
+
+// The do...while(0) allows flexible use in if-else without braces.
+// Optional second argument: enum assert type (e.g. DebugAssertRtaOutOfBounds)
+//                        or string message (developer documentation, ignored at runtime).
+#define ASSERT(condition, ...) \
+    do { \
+        if (not(condition)) \
+            assert_and_hang(##__VA_ARGS__); \
     } while (0)
 
 #define ASSERT_ENABLED 1
