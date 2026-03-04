@@ -15,7 +15,7 @@ import os
 from PIL import Image
 
 import ttnn
-from models.demos.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
+from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 
 
 def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=None):
