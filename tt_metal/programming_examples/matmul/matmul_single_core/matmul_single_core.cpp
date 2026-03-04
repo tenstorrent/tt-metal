@@ -146,7 +146,7 @@ void matmul_single_core(
             .compile_args = writer_compile_time_args});
 
     // Compile time arguments for the kernels
-    // Note that these take effect at the kernel's compile time. Chaning these values will require recompilation of the
+    // Note that these take effect at the kernel's compile time. Changing these values will require recompilation of the
     // kernel. Having arguments at compile time allows the compiler to optimize the kernel for the specific use case.
     // Like applying loop unrolling, constant folding, etc.. resulting in a more efficient kernel.
     std::vector<uint32_t> compute_compile_time_args = {

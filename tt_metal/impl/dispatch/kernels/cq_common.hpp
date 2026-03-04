@@ -111,8 +111,8 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
     }
 }
 
-// More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
-// (dst_noc, VC..) have been specified.
+// More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
+// config (dst_noc, VC..) have been specified.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
