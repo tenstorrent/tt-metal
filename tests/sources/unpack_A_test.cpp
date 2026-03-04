@@ -28,6 +28,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
+    const int num_tiles_in_block = params->NUM_TILES_IN_BLOCK;
+    const int num_blocks         = params->NUM_BLOCKS;
+
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -45,7 +48,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
         params->num_faces,
         formats.unpack_A_src,
         formats.unpack_A_dst);
-    for (int i = 0; i < params->TILE_CNT; ++i)
+
+    for (int i = 0; i < num_tiles_in_block * num_blocks; ++i)
     {
         _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
             L1_ADDRESS(params->buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
@@ -74,6 +78,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
+    const int num_tiles_in_block = params->NUM_TILES_IN_BLOCK;
+    const int num_blocks         = params->NUM_BLOCKS;
+
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
 
@@ -87,13 +94,19 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #endif
     _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_wait_for_dest_available_<sync_mode>();
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (int block = 0; block < num_blocks; ++block)
     {
-        LLK_ASSERT((i < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
-        _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(i, formats.math, formats.math);
+        _llk_math_wait_for_dest_available_<sync_mode>();
+        for (int tile_in_block = 0; tile_in_block < num_tiles_in_block; ++tile_in_block)
+        {
+            LLK_ASSERT(
+                (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                "Block tile index exceeds maximum destination tiles");
+            _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                tile_in_block, formats.math, formats.math);
+        }
+        _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
     }
-    _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
     _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 }
 
@@ -110,6 +123,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
+    const int num_tiles_in_block = params->NUM_TILES_IN_BLOCK;
+    const int num_blocks         = params->NUM_BLOCKS;
+
     // Test configuration constants
     constexpr DstSync sync_mode = DstSync::SyncHalf;
 #ifdef ARCH_BLACKHOLE
@@ -128,12 +144,17 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_pack_dest_init_<sync_mode, false, false>();
 #endif
 
-    _llk_packer_wait_for_math_done_();
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (int block = 0; block < num_blocks; ++block)
     {
-        LLK_ASSERT((i < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
-        _llk_pack_<sync_mode, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(params->buffer_Res[i]));
+        _llk_packer_wait_for_math_done_();
+        for (int tile_in_block = 0; tile_in_block < num_tiles_in_block; ++tile_in_block)
+        {
+            LLK_ASSERT(
+                (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                "Block tile index exceeds maximum destination tiles");
+            _llk_pack_<sync_mode, is_fp32_dest_acc_en, false>(tile_in_block, L1_ADDRESS(params->buffer_Res[(block * num_tiles_in_block) + tile_in_block]));
+        }
+        _llk_pack_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
     }
-    _llk_pack_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
 }
 #endif
