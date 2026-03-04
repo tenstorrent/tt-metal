@@ -35,18 +35,36 @@ void kernel_main() {
     const uint32_t eps_bits = get_arg_val<uint32_t>(6);
     const uint32_t scaler_bits = get_arg_val<uint32_t>(7);
 
-    // Compile-time args: TensorAccessor for input
+    // Compile-time args: TensorAccessor for input (and optionally gamma, beta)
     constexpr auto input_args = TensorAccessorArgs<0>();
 
     // CB indices
     constexpr uint32_t cb_input = 0;   // c_0
     constexpr uint32_t cb_scaler = 1;  // c_1
     constexpr uint32_t cb_eps = 2;     // c_2
+    constexpr uint32_t cb_gamma = 3;   // c_3
+    constexpr uint32_t cb_beta = 4;    // c_4
 
     const uint32_t tile_bytes = get_local_cb_interface(cb_input).fifo_page_size;
 
     // Create TensorAccessor for input
     const auto input_accessor = TensorAccessor(input_args, input_addr, tile_bytes);
+
+#ifdef HAS_GAMMA
+    // Gamma TensorAccessorArgs follows input's compile-time args
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, tile_bytes);
+#endif
+
+#ifdef HAS_BETA
+    // Beta TensorAccessorArgs follows gamma's (if present) or input's compile-time args
+#ifdef HAS_GAMMA
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto beta_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+#endif
+    const auto beta_accessor = TensorAccessor(beta_args, beta_addr, tile_bytes);
+#endif
 
     // ======================================================================
     // Startup: Fill scaler CB (c_1) with 1/W packed value
@@ -96,8 +114,7 @@ void kernel_main() {
             cb_push_back(cb_input, 1);
         }
 
-        // Pass 3: re-stream same Wt tiles to c_0
-        // (gamma/beta reads will be added in Stage 4)
+        // Pass 3: re-stream same Wt tiles to c_0, plus gamma/beta
         for (uint32_t col = 0; col < Wt; ++col) {
             uint32_t tile_idx = tile_offset + row * Wt + col;
             cb_reserve_back(cb_input, 1);
@@ -105,6 +122,24 @@ void kernel_main() {
             noc_async_read_page(tile_idx, input_accessor, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_input, 1);
+
+#ifdef HAS_GAMMA
+            // Read gamma tile indexed by col (same tile for every row)
+            cb_reserve_back(cb_gamma, 1);
+            uint32_t gamma_l1_addr = get_write_ptr(cb_gamma);
+            noc_async_read_page(col, gamma_accessor, gamma_l1_addr);
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma, 1);
+#endif
+
+#ifdef HAS_BETA
+            // Read beta tile indexed by col (same tile for every row)
+            cb_reserve_back(cb_beta, 1);
+            uint32_t beta_l1_addr = get_write_ptr(cb_beta);
+            noc_async_read_page(col, beta_accessor, beta_l1_addr);
+            noc_async_read_barrier();
+            cb_push_back(cb_beta, 1);
+#endif
         }
     }
 }

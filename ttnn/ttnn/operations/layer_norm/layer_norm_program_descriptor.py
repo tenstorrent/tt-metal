@@ -237,10 +237,17 @@ def create_program_descriptor(
     # ======================================================================
     # 7. Kernel descriptors
     # ======================================================================
+    reader_defines = []
+    if gamma is not None:
+        reader_defines.append(("HAS_GAMMA", "1"))
+    if beta is not None:
+        reader_defines.append(("HAS_BETA", "1"))
+
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "reader_layer_norm.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
+        defines=reader_defines,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )

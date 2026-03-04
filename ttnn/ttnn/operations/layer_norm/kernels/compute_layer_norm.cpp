@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// LayerNorm - Compute Kernel (Stage 3: Variance)
+// LayerNorm - Compute Kernel (Stage 4: Full Normalize)
 //
 // Pass 1: Cross-tile accumulation (sum across Wt tiles), then reduce_row to get mean.
 // Pass 2: Compute variance: (x-mean)^2 accumulated, reduce_row, add eps, rsqrt -> cb_var.
-// Pass 3: Output (x - mean) * rsqrt(var + eps) to c_16.
+// Pass 3: Output (x - mean) * rsqrt(var + eps) * gamma + beta to c_16.
 //
 // Compile-time args:
 //   [0] num_rows_per_core : uint32  Tile-rows assigned to this core
@@ -27,9 +27,14 @@ void kernel_main() {
     constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
+    constexpr uint32_t has_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t has_beta = get_compile_time_arg_val(3);
+
     constexpr uint32_t cb_input = 0;    // c_0: streaming input tiles
     constexpr uint32_t cb_scaler = 1;   // c_1: 1/W scaler for reduce
     constexpr uint32_t cb_eps = 2;      // c_2: epsilon tile
+    constexpr uint32_t cb_gamma = 3;    // c_3: gamma tile (pass 3, if present)
+    constexpr uint32_t cb_beta = 4;     // c_4: beta tile (pass 3, if present)
     constexpr uint32_t cb_output = 16;  // c_16: output tiles
     constexpr uint32_t cb_mean = 24;    // c_24: mean result (persists within row)
     constexpr uint32_t cb_accum = 25;   // c_25: cross-tile accumulator
@@ -181,7 +186,7 @@ void kernel_main() {
         // NOTE: cb_eps persists across rows (don't pop)
 
         // =====================================================================
-        // Pass 3: Output (x - mean) * rsqrt(var + eps)
+        // Pass 3: Output (x - mean) * rsqrt(var + eps) [* gamma] [+ beta]
         // =====================================================================
         // cb_mean and cb_var persist from previous passes
         cb_wait_front(cb_var, onetile);
@@ -189,7 +194,7 @@ void kernel_main() {
         for (uint32_t col = 0; col < Wt; ++col) {
             cb_wait_front(cb_input, onetile);
 
-            // (x - mean) -> cb_tmp
+            // Step 1: (x - mean) -> cb_tmp
             tile_regs_acquire();
             cb_reserve_back(cb_tmp, onetile);
             sub_bcast_cols_init_short_with_dt(cb_input, cb_mean);
@@ -202,12 +207,65 @@ void kernel_main() {
 
             cb_push_back(cb_tmp, onetile);
 
-            // (x - mean) * rsqrt(var + eps) -> cb_output (COL broadcast from cb_var)
+            // Step 2: (x - mean) * rsqrt(var + eps) -> cb_tmp (COL broadcast from cb_var)
+            cb_wait_front(cb_tmp, onetile);
+            tile_regs_acquire();
+            cb_reserve_back(cb_tmp, onetile);
+            mul_bcast_cols_init_short_with_dt(cb_tmp, cb_var);
+            mul_tiles_bcast_cols(cb_tmp, cb_var, 0, 0, dst0);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_tmp);
+            tile_regs_release();
+
+            cb_pop_front(cb_tmp, onetile);
+            cb_push_back(cb_tmp, onetile);
+
+            // Step 3: multiply by gamma (ROW broadcast: gamma is [1,1,1,W], row 0 broadcast across all rows)
+            if constexpr (has_gamma) {
+                cb_wait_front(cb_tmp, onetile);
+                cb_wait_front(cb_gamma, onetile);
+                tile_regs_acquire();
+                cb_reserve_back(cb_tmp, onetile);
+                mul_bcast_rows_init_short_with_dt(cb_tmp, cb_gamma);
+                mul_tiles_bcast_rows(cb_tmp, cb_gamma, 0, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_tmp);
+                tile_regs_release();
+
+                cb_pop_front(cb_tmp, onetile);
+                cb_pop_front(cb_gamma, onetile);
+                cb_push_back(cb_tmp, onetile);
+            }
+
+            // Step 4: add beta (ROW broadcast: beta is [1,1,1,W], row 0 broadcast across all rows)
+            if constexpr (has_beta) {
+                cb_wait_front(cb_tmp, onetile);
+                cb_wait_front(cb_beta, onetile);
+                tile_regs_acquire();
+                cb_reserve_back(cb_tmp, onetile);
+                add_bcast_rows_init_short_with_dt(cb_tmp, cb_beta);
+                add_tiles_bcast<BroadcastType::ROW>(cb_tmp, cb_beta, 0, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_tmp);
+                tile_regs_release();
+
+                cb_pop_front(cb_tmp, onetile);
+                cb_pop_front(cb_beta, onetile);
+                cb_push_back(cb_tmp, onetile);
+            }
+
+            // Step 5: copy cb_tmp -> cb_output
             cb_wait_front(cb_tmp, onetile);
             cb_reserve_back(cb_output, onetile);
             tile_regs_acquire();
-            mul_bcast_cols_init_short_with_dt(cb_tmp, cb_var);
-            mul_tiles_bcast_cols(cb_tmp, cb_var, 0, 0, dst0);
+            copy_tile_init_with_dt(cb_tmp);
+            copy_tile(cb_tmp, 0, dst0);
             tile_regs_commit();
 
             tile_regs_wait();
