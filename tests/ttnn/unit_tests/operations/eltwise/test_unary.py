@@ -1812,7 +1812,7 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
 
 
 def test_hardmish_bfloat16_ulp(device):
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
@@ -1843,7 +1843,7 @@ def test_hardmish_bfloat16_ulp(device):
 
 
 def test_hardmish_bfloat16_allclose(device):
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit patterns for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)

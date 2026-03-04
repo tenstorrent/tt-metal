@@ -141,7 +141,7 @@ void kernel_main() {
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
-        // by now we already did a umulative wait for Wt tiles in cb_exps
+        // by now we already did a cumulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
