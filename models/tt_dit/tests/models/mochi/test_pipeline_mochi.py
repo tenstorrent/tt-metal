@@ -191,6 +191,7 @@ def test_tt_mochi_pipeline(
         num_links=num_links,
         use_reference_vae=False,
         model_name="genmo/mochi-1-preview",
+        reload_dit_model=mesh_device.get_num_devices() <= 8,
     )
 
     # Define test prompt (same as the diffusers test)
