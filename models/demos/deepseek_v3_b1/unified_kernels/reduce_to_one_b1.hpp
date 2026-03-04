@@ -392,6 +392,7 @@ struct ReduceToOneB1 {
                         socket_barrier(sender_socket);
                         noc_async_write_barrier();
                         update_socket_config(sender_socket);
+                        DPRINT << "root1 before sending semaphore\n";
                         send_persistent_next_iter_inc_via_fabric(args);
                     } else if (args.agg_sem_l1_addr != 0) {
                         // Non-aggregator worker: signal the aggregator that our shard is ready.
