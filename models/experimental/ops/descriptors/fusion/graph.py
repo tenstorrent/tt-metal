@@ -470,8 +470,8 @@ class OpGraphBuilder:
                 during the tree walk (deduped by ``id()``).
         """
         # Per-core entries: coord -> [(OpDescriptor, release_scope, arrive_scope)]
-        # release_scope = all descendant coords (all cores that receive release)
-        # arrive_scope = node_coords ∩ desc_coords (cores that did real work AND continue)
+        # release_scope = node_coords ∪ desc_coords (all cores in the barrier)
+        # arrive_scope = node_coords (cores that did real work in this phase)
         per_core: Dict[Tuple[int, int], List[Tuple[OpDescriptor, Any, Any]]] = defaultdict(list)
 
         # Track unique ops in first-encounter order
@@ -480,14 +480,15 @@ class OpGraphBuilder:
 
         def _walk(node: OpNode):
             desc_coords = self._all_descendant_coords(node)
-            release_scope = _coords_to_core_range_set(desc_coords) if desc_coords else None
             node_coords = _core_range_set_to_coords(_get_node_core_range(node))
 
-            # Arrive scope: cores that did real work (in node) AND continue
-            # to later phases (in descendants).  Without the intersection,
-            # early-exit cores would inflate the arrive threshold → deadlock.
-            arrive_coords = node_coords & desc_coords
-            arrive_scope = _coords_to_core_range_set(arrive_coords) if arrive_coords else None
+            # Barrier scope = everyone who participates: node cores + descendant cores.
+            # Arrive scope = cores that did real work (node cores).
+            # Early-exit cores (in node but not descendants) arrive and exit.
+            # No-op cores (in descendants but not node) wait only.
+            barrier_coords = desc_coords | node_coords
+            release_scope = _coords_to_core_range_set(barrier_coords) if barrier_coords else None
+            arrive_scope = _coords_to_core_range_set(node_coords) if node_coords else None
 
             # Real phase entries for cores in this node
             for coord in node_coords:
@@ -502,6 +503,15 @@ class OpGraphBuilder:
             if op_id not in op_id_to_index:
                 op_id_to_index[op_id] = len(unique_ops)
                 unique_ops.append(node.op)
+
+            # Exit phase for early-exit cores (in node but not in any descendant).
+            # These cores did real work and need to arrive at the barrier, but have
+            # no subsequent phase.  A _NOOP_OP exit phase gives them a barrier
+            # transition to arrive at.
+            exit_coords = node_coords - desc_coords
+            if exit_coords and desc_coords:
+                for coord in exit_coords:
+                    per_core[coord].append((_NOOP_OP, None, None))
 
             for child in node.children:
                 _walk(child)
@@ -648,17 +658,20 @@ class OpGraphBuilder:
         return segments, transition_map
 
     def _compute_union_ranges(self) -> Any:
-        """Compute the union CoreRangeSet of all leaf core ranges."""
+        """Compute the union CoreRangeSet of ALL node core ranges.
+
+        Includes every node in the tree — not just leaves — so that
+        early-exit parent cores (in disjoint topologies) also get
+        GlobalSemaphore allocations for compute_done/writer_done/reset_done.
+        """
         all_coords: Set[Tuple[int, int]] = set()
 
-        def _collect_leaves(node: OpNode):
-            if not node.children:
-                all_coords.update(_core_range_set_to_coords(_get_node_core_range(node)))
-            else:
-                for child in node.children:
-                    _collect_leaves(child)
+        def _collect_all(node: OpNode):
+            all_coords.update(_core_range_set_to_coords(_get_node_core_range(node)))
+            for child in node.children:
+                _collect_all(child)
 
-        _collect_leaves(self._root)
+        _collect_all(self._root)
         return _coords_to_core_range_set(all_coords)
 
     def _validate_topology(self) -> None:
@@ -666,7 +679,9 @@ class OpGraphBuilder:
 
         Checks sibling disjointness: siblings' actual core ranges must be
         pairwise disjoint.  Child ranges may be wider or narrower than their
-        parent (narrow→wide is supported via no-op phase entries).
+        parent, and may be fully disjoint from the parent (narrow→wide and
+        disjoint topologies are supported via no-op phase entries and exit
+        phases).
 
         Raises:
             ValueError: On any topology violation.
