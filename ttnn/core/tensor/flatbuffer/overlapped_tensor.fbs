@@ -4,6 +4,7 @@ include "tensor.fbs";
 namespace ttnn.flatbuffer;
 
 table OverlappedView {
+    name:           string;
     tensor_shape_h: uint32;
     tensor_shape_w: uint32;
     shard_shape_h:  uint32;
