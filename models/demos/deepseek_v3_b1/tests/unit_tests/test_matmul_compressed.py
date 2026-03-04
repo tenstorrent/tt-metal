@@ -141,5 +141,4 @@ def test_matmul_compressed_single_core(device, M, K, N, formats):
 )
 def test_matmul_compressed_all_formats(device, M, K, N, formats):
     """Single-core matmul with all compressed formats."""
-    bfp0_mae = 1e-3 if "bfp0" in formats else 0.01
     _run_matmul_compressed(device, M, K, N, formats, threshold=0.994, pcc_threshold=0.97)
