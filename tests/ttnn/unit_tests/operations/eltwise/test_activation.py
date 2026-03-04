@@ -7,7 +7,13 @@ import torch
 import ttnn
 import numpy as np
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_allclose,
+    generate_all_bfloat16_bitpatterns,
+    flush_subnormal_values_to_zero,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -494,16 +500,15 @@ def test_xielu(alpha_p, alpha_n, dtype, device):
 def test_lgamma_bfloat16(device):
     high = 1000
     low = -1000
-    min_abs = torch.finfo(torch.bfloat16).tiny
 
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    # All 2^16 bfloat16 bit patterns (256x256), flattened for masking
+    input_tensor = generate_all_bfloat16_bitpatterns(torch.bfloat16).flatten()
+    input_tensor = flush_subnormal_values_to_zero(input_tensor)
     input_tensor_f32 = input_tensor.to(torch.float32)
 
     in_range = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
-    not_tiny = torch.abs(input_tensor_f32) >= min_abs  # exclude subnormals
     is_non_positive_int = (input_tensor_f32 <= 0) & (input_tensor_f32 == torch.floor(input_tensor_f32))
-    mask = in_range & not_tiny & ~is_non_positive_int  # exclude lgamma poles at 0,-1,-2,...
+    mask = in_range & ~is_non_positive_int  # exclude lgamma poles at 0,-1,-2,...
 
     input_tensor = input_tensor[mask]
 
