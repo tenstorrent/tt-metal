@@ -98,7 +98,8 @@ def run_ring_joint_sdpa(
     head_dim_v,
     q_chunk_size,
     k_chunk_size,
-    dtype,
+    q_dtype,
+    kv_dtype,
     n_iters,
     trace_enabled,
     num_links,
@@ -154,7 +155,7 @@ def run_ring_joint_sdpa(
                 torch.zeros(ag_output_shape_k),
                 device=submesh,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
+                dtype=kv_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     submesh, mesh_shape=tuple(submesh.shape), dims=persistent_k_output_shard_dims
@@ -164,7 +165,7 @@ def run_ring_joint_sdpa(
                 torch.zeros(ag_output_shape_v),
                 device=submesh,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
+                dtype=kv_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
             ),
@@ -239,28 +240,28 @@ def run_ring_joint_sdpa(
 
     tt_Q = ttnn.from_torch(
         padded_Q,
-        dtype=dtype,
+        dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_K = ttnn.from_torch(
         padded_K,
-        dtype=dtype,
+        dtype=kv_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
     )
     tt_V = ttnn.from_torch(
         padded_V,
-        dtype=dtype,
+        dtype=kv_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_joint_Q = ttnn.from_torch(
         joint_Q,
-        dtype=dtype,
+        dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
@@ -273,7 +274,7 @@ def run_ring_joint_sdpa(
     )
     tt_joint_K = ttnn.from_torch(
         joint_K,
-        dtype=dtype,
+        dtype=kv_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=joint_k_mesh_mapper,
@@ -281,7 +282,7 @@ def run_ring_joint_sdpa(
     print("tt_joint_K shape = ", tt_joint_K.shape)
     tt_joint_V = ttnn.from_torch(
         joint_V,
-        dtype=dtype,
+        dtype=kv_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
@@ -292,9 +293,8 @@ def run_ring_joint_sdpa(
     logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
 
     tt_out_list = []
-    tt_joint_out_list = []
 
-    def run_iters(tt_out_list, tt_joint_out_list):
+    def run_iters(tt_out_list):
         for i in range(n_iters):
             print("Running ring-joint sdpa with the following shapes:")
             print("tt_Q: ", tt_Q.shape)
@@ -305,7 +305,7 @@ def run_ring_joint_sdpa(
             print("tt_joint_V: ", tt_joint_V.shape)
             print("base seq_len is: ", base_seq_len)
             print("cluster axis is: ", rp_axis)
-            tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
                 tt_V,
@@ -330,14 +330,13 @@ def run_ring_joint_sdpa(
                 is_balanced=is_balanced,
             )
             tt_out_list.append(tt_out)
-            # tt_joint_out_list.append(tt_joint_out)
 
     if trace_enabled:
         logger.info("Compile run")
-        run_iters([], [])
+        run_iters([])
         logger.info("Capture trace")
         trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
-        run_iters(tt_out_list, tt_joint_out_list)
+        run_iters(tt_out_list)
         ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
         ttnn.synchronize_device(submesh)
         logger.info("Execute trace")
@@ -347,18 +346,14 @@ def run_ring_joint_sdpa(
 
     else:
         logger.info("Run without trace")
-        run_iters(tt_out_list, tt_joint_out_list)
+        run_iters(tt_out_list)
 
     if not skip_check:
-        pt_Q = torch.cat([Q, joint_Q], dim=2)
-        pt_K = torch.cat([K, joint_K], dim=2)
-        pt_V = torch.cat([V, joint_V], dim=2)
+        # Only use main tensors for host reference (no joint tensors since joint_seq_len=0)
         print("Running on host...")
-        gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=is_causal)
+        gt_out = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
         print("Done running on host...")
-        print("Host output shape: ", gt.shape)
-        gt_out = gt[:, :, :base_seq_len, :]
-        gt_joint_out = gt[:, :, base_seq_len:, :]
+        print("Host output shape: ", gt_out.shape)
 
         for i in range(n_iters):
             print("Synchronize call...")
@@ -371,15 +366,6 @@ def run_ring_joint_sdpa(
                 ),
             )
             print("Started doing to_torch stuff...")
-            joint_shard_dims = [None, None]
-            joint_shard_dims[up_axis] = 1
-            joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
-            # tt_joint_out = ttnn.to_torch(
-            #     tt_joint_out_list[i],
-            #     mesh_composer=ttnn.ConcatMesh2dToTensor(
-            #         submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims
-            #     ),
-            # )
             print("Done to torch stuff...")
 
             # Reverse reordering for TT output if balanced reordering was applied
@@ -393,9 +379,7 @@ def run_ring_joint_sdpa(
                 # Slice out any tile-padding
                 tt_out = tt_out[:, :, :base_seq_len, :]
 
-            tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
             logger.debug(f"tt_out: {tt_out.shape}")
-            # logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
             passing = True
             out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
@@ -407,22 +391,10 @@ def run_ring_joint_sdpa(
                 passing = False
             passing = passing and out_pass
 
-            # if joint_seq_len > 0:
-            #     logger.debug("prompt")
-            #     for joint_replica_id in range(tt_joint_out.shape[0]):
-            #         joint_replica_out = tt_joint_out[joint_replica_id, :, :, :]
-            #         out_pass, out_pcc = comp_pcc(joint_replica_out, gt_joint_out, pcc_threshold)
-            #         logger.debug(f"{out_pcc}")
-            #         mse = ((gt_joint_out - joint_replica_out) ** 2).mean()
-            #         logger.debug(f"mse: {mse}")
-            #         if max_mse is not None and mse > max_mse:
-            #             passing = False
-            #         passing = passing and out_pass
-
             assert passing
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
     "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
     [
@@ -483,7 +455,8 @@ def test_mla_sdpa(
     head_dim_v,
     q_chunk_size,
     k_chunk_size,
-    dtype,
+    q_dtype,
+    kv_dtype,
     n_iters,
     trace_enabled,
     num_links,
@@ -522,7 +495,8 @@ def test_mla_sdpa(
         head_dim_v,
         q_chunk_size,
         k_chunk_size,
-        dtype,
+        q_dtype,
+        kv_dtype,
         n_iters,
         trace_enabled,
         num_links,

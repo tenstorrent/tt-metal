@@ -1588,11 +1588,9 @@ void sdpa_inner_loop(
 
             bool apply_mask = false;
             if (sdpa_type == RING && !is_causal) {
-                apply_mask =
-                    (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
-                    (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
-                    (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);  // ||
-                // is_causal;
+                apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
+                             (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
+                             (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
             } else if (is_causal || sliding_window_size > 0) {
                 // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                 // Q-range = [q_low, q_high)
@@ -1617,9 +1615,7 @@ void sdpa_inner_loop(
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-            }  // else if (sdpa_type == RING && is_causal) {
-            //     cb_pop_front(cb_mask_in, qk_chunk_tiles);
-            // }
+            }
 
             /**
              * reduce_c can perform both reduce_max and eltwise max with previous result.

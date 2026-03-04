@@ -63,14 +63,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
     // Validate all tensors have the same dtype
-    // fix this
     const auto dtype = input_tensor_q.dtype();
-    for (const auto& tensor : sdpa_input_tensors) {
-        TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
+    if (!args.is_causal) {
+        for (const auto& tensor : sdpa_input_tensors) {
+            TT_FATAL(
+                tensor.dtype() == dtype,
+                "All tensors must have the same dtype. Expected {}, got {}",
+                dtype,
+                tensor.dtype());
+        }
     }
 
     // Get shapes
@@ -103,7 +104,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
-    // const auto DH = q_shape[3];
+    const auto DH = q_shape[3];
 
     auto q_chunk_size = args.get_q_chunk_size();
     auto k_chunk_size = args.get_k_chunk_size();
@@ -125,16 +126,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_v_shape[0]);
 
     // Validate head dimensions match
-    // TT_FATAL(
-    //     k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-    //         joint_v_shape[3] == DH,
-    //     "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-    //     DH,
-    //     k_shape[3],
-    //     v_shape[3],
-    //     joint_q_shape[3],
-    //     joint_k_shape[3],
-    //     joint_v_shape[3]);
+    if (!args.is_causal) {
+        TT_FATAL(
+            k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
+                joint_v_shape[3] == DH,
+            "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            DH,
+            k_shape[3],
+            v_shape[3],
+            joint_q_shape[3],
+            joint_k_shape[3],
+            joint_v_shape[3]);
+    } else {
+        TT_FATAL(k_shape[3] == DH, "Q/K head dimensions must match. Got Q: {}, K: {}", DH, k_shape[3]);
+    }
 
     TT_FATAL(
         joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NVH,

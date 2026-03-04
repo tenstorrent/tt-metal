@@ -124,14 +124,9 @@ void kernel_main() {
 
         bool causality = (ring_iter == 0 ? is_causal : false);
 
-        uint32_t iter_global_q_start = global_q_start;
         uint32_t iter_num_kv_chunks = num_kv_chunks;
-        if (is_causal && is_balanced && ring_index != ring_id) {
-            if (ring_index < ring_id) {
-                iter_global_q_start += half_sequence;
-            } else {
-                iter_num_kv_chunks /= 2;
-            }
+        if (is_causal && is_balanced && ring_index > ring_id) {
+            iter_num_kv_chunks /= 2;
         }
         bool balancing = (ring_index >= ring_id ? false : is_balanced);
 
