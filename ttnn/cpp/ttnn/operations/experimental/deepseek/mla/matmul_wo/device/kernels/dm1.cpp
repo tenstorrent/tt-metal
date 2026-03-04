@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out = tt::CBIndex::c_2;
+    constexpr auto cb_s2c_out = tt::CBIndex::c_3;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -43,7 +44,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
-    constexpr uint32_t num_collectors = 7;
+    constexpr uint32_t num_collectors = matmul_wo_ring::N_TILES_PER_ITER;
     constexpr uint8_t collector_core_coords[num_collectors][2] = COLLECTOR_CORE_COORDS;
 
     // Get src address

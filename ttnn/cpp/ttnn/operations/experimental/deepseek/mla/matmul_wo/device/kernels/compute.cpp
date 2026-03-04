@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "matmul_wo_ring_common.h"
+#include "tt-metalium/constants.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
@@ -24,6 +25,7 @@ void kernel_main() {
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out = tt::CBIndex::c_2;
+    constexpr auto cb_s2c_out = tt::CBIndex::c_3;
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -61,6 +63,11 @@ void kernel_main() {
     // Compute in @ W
     //---------------------------------------------------------------------
     uint32_t in0_index = 0;
+
+    // We should read in0 at an offset that corresponds to the range of K that this core uses.
+    for (uint32_t core_id = 0; core_id < dram_bank_id; ++core_id) {
+        in0_index += matmul_wo_ring::K_TILES_PER_CORE_A[core_id] * tt::constants::TILE_WIDTH;
+    }
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
         tile_regs_acquire();

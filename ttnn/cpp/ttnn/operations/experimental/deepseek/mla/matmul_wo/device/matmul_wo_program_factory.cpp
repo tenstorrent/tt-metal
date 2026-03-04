@@ -63,7 +63,6 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
 
     // Convert the collector core coordinates to physical coordinates
     std::vector<uint32_t> collector_core_physical_coords;
-    collector_core_physical_coords.reserve(2 * collector_core_coords.size());
     for (const auto& core_coord : collector_core_coords) {
         const auto physical_core_coord = tensor_args.input_tensor.device()->worker_core_from_logical_core(core_coord);
         collector_core_physical_coords.push_back(physical_core_coord.x);
@@ -84,6 +83,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         | cb_r2c_w0      | CBIndex::c_0  | Bfp8_b     | true  |    7*3*2 |      45696      |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    512   |      1048576    |
         | cb_c2w_out     | CBIndex::c_2  | Float16_b  | true  |    28    |      57344      |
+        | cb_s2c_out     | CBIndex::c_3  | Float16_b  | true  |    4     |      8192       |
         ------------------------------------------------------------------------------------
     */
 
@@ -107,16 +107,30 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
 
     // Create sharded CBs
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb, Buffer*
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*>>
+    const std::vector<
+        std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, tt::tt_metal::Buffer*, CoreRangeSet>>
         sharded_cb_specs = {
-            {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, 512, tensor_args.input_tensor.buffer()}};
+            {"cb_s2c_in",
+             tt::CBIndex::c_1,
+             tt::DataFormat::Float16_b,
+             true,
+             512,
+             tensor_args.input_tensor.buffer(),
+             all_cores},
+            {"cb_s2c_out",
+             tt::CBIndex::c_3,
+             tt::DataFormat::Float16_b,
+             true,
+             4,
+             tensor_args.output_tensor.buffer(),
+             collector_cores_set}};
 
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer] : sharded_cb_specs) {
+    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer, core_range_set] : sharded_cb_specs) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile)
                                    .set_globally_allocated_address(*p_buffer);
-        cb_handles_sharded[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        cb_handles_sharded[name] = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_config);
     }
 
     // Create compile args for the program
