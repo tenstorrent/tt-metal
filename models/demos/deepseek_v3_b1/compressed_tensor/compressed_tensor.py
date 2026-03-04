@@ -109,84 +109,35 @@ class CompressedTensor:
                 If None, uses interleaved with same buffer type as memory_config.
             tile_hw: Tile dimension (default 32).
         """
-        self.shape = tensor.shape
-        self.tile_hw = tile_hw
         # Fold batch dims into height: (B1, B2, ..., H, W) → tiles_h covers all dims except W
         h = 1
         for d in tensor.shape[:-1]:
             h *= d
+        # --- Initialize all instance attributes ---
+        self.shape = tensor.shape
+        self.tile_hw = tile_hw
         self.tiles_h = h // tile_hw
         self.tiles_w = tensor.shape[-1] // tile_hw
+        self.max_shard_size = 0  # bytes per shard (0 if not sharded)
+        self.spec = None  # ttnn.TensorSpec for logical shape
+        self.data = None  # ttnn.Tensor (uint8, packed tile data)
+        self.assignment = None  # ttnn.Tensor (uint8, 2-bit packed assignment)
+        self._assignment_numpy = None  # np.ndarray (tiles_h, tiles_w) int8
+        self._tile_mant_bits = []  # list of mant_bits per tile (for unpack)
+        self._shard_tile_coords = []  # list of list of (tr, tc) per shard
+        self._core_to_shard_idx = {}  # {(x, y): shard_idx}
+        self._per_shard_assignment = []  # list of np.ndarray per shard
 
         assert assignment.shape == (
             self.tiles_h,
             self.tiles_w,
         ), f"Assignment shape {assignment.shape} doesn't match tile grid ({self.tiles_h}, {self.tiles_w})"
 
+        # Store assignment numpy (avoids device round-trip)
+        self._assignment_numpy = assignment.astype(np.int8).reshape(self.tiles_h, self.tiles_w).copy()
+
         is_sharded = memory_config is not None and memory_config.is_sharded()
-
-        if is_sharded:
-            data_bytes, self._tile_mant_bits, data_memory_config, self.max_shard_size = self._pack_sharded(
-                tensor, assignment, memory_config
-            )
-            # Assignment must shard on the same grid/layout as data so each core
-            # gets matching tiles. User can override buffer_type via assignment_memory_config.
-            if assignment_memory_config is not None:
-                assert (
-                    assignment_memory_config.is_sharded()
-                ), "assignment_memory_config must be sharded when data memory_config is sharded"
-                assert assignment_memory_config.memory_layout == memory_config.memory_layout, (
-                    f"Assignment shard layout {assignment_memory_config.memory_layout} must match "
-                    f"data shard layout {memory_config.memory_layout}"
-                )
-                a_grid = assignment_memory_config.shard_spec.grid
-                d_grid = memory_config.shard_spec.grid
-                assert a_grid == d_grid, f"Assignment shard grid {a_grid} must match data shard grid {d_grid}"
-                assert (
-                    assignment_memory_config.shard_spec.orientation == memory_config.shard_spec.orientation
-                ), "Assignment shard orientation must match data shard orientation"
-                assign_buffer_type = assignment_memory_config.buffer_type
-            else:
-                assign_buffer_type = memory_config.buffer_type
-
-            assign_bytes, assign_memory_config = self._shard_assignment(assignment, memory_config, assign_buffer_type)
-        else:
-            data_bytes, self._tile_mant_bits = self._pack(tensor, assignment)
-            data_memory_config = memory_config
-            self.max_shard_size = 0
-            packed_assign = _pack_assignment(assignment.astype(np.uint8).ravel())
-            assign_bytes = torch.from_numpy(packed_assign).unsqueeze(0)
-            assign_memory_config = assignment_memory_config or memory_config
-
-        # Store the original tensor's spec (shape + layout + memory config).
-        # Preserves the logical view for downstream use (e.g., shard mapping, reshape).
-        # For sharded configs, we compute the correct shard spec for the original float32 shape
-        # (not the user's dummy shard spec which is for the packed byte layout).
-        logical_shape = ttnn.Shape(list(tensor.shape))
-        buffer_type = memory_config.buffer_type if memory_config is not None else ttnn.BufferType.DRAM
-        self.spec = ttnn.TensorSpec(
-            logical_shape,
-            ttnn.float32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            buffer_type,
-        )
-
-        # Store packed data as ttnn uint8 row-major tensors
-        self.data = ttnn.from_torch(
-            data_bytes if is_sharded else data_bytes.unsqueeze(0),
-            dtype=ttnn.uint8,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=data_memory_config,
-        )
-
-        self.assignment = ttnn.from_torch(
-            assign_bytes,
-            dtype=ttnn.uint8,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=assign_memory_config,
-        )
+        self._pack_data_and_assignment(tensor, assignment, memory_config, assignment_memory_config, is_sharded, device)
 
     @classmethod
     def from_torch(
@@ -219,29 +170,40 @@ class CompressedTensor:
             return self._unpack_sharded(flat_np)
         return self._unpack_flat(flat_np)
 
-    def get_assignment_numpy(self) -> np.ndarray:
-        """Get assignment as (tiles_h, tiles_w) numpy array. Unpacks 2-bit encoding."""
-        assign_tensor = self.assignment
-        if ttnn.is_tensor_storage_on_device(assign_tensor):
-            assign_tensor = ttnn.from_device(assign_tensor)
-        raw = ttnn.to_torch(assign_tensor).numpy().astype(np.uint8)
+    def _build_per_shard_assignment(self, assignment: np.ndarray) -> list[np.ndarray]:
+        """Build per-shard assignment arrays from the full assignment and shard tile coords.
 
-        if self.max_shard_size > 0:
-            # Sharded: flatten and split by shard byte size, unpack each shard
-            flat = raw.ravel()
-            num_shards = len(self._shard_tile_coords)
-            shard_bytes = len(flat) // num_shards
-            result = np.zeros(self.tiles_h * self.tiles_w, dtype=np.int8)
-            for shard_idx, tile_coords in enumerate(self._shard_tile_coords):
-                shard_start = shard_idx * shard_bytes
-                shard_packed = flat[shard_start : shard_start + shard_bytes]
-                shard_unpacked = _unpack_assignment(shard_packed, len(tile_coords))
-                for i, (tr, tc) in enumerate(tile_coords):
-                    result[tr * self.tiles_w + tc] = shard_unpacked[i]
-            return result.reshape(self.tiles_h, self.tiles_w)
-        else:
-            num_tiles = self.tiles_h * self.tiles_w
-            return _unpack_assignment(raw.ravel(), num_tiles).astype(np.int8).reshape(self.tiles_h, self.tiles_w)
+        Returns list of (shard_tiles_h, shard_tiles_w) numpy arrays, one per shard.
+        """
+        result = []
+        for tile_coords in self._shard_tile_coords:
+            if len(tile_coords) == 0:
+                result.append(np.array([], dtype=np.int8).reshape(0, 0))
+                continue
+            rows = sorted(set(tr for tr, tc in tile_coords))
+            cols = sorted(set(tc for tr, tc in tile_coords))
+            shard_arr = np.zeros((len(rows), len(cols)), dtype=np.int8)
+            row_map = {r: i for i, r in enumerate(rows)}
+            col_map = {c: i for i, c in enumerate(cols)}
+            for tr, tc in tile_coords:
+                shard_arr[row_map[tr], col_map[tc]] = assignment[tr, tc]
+            result.append(shard_arr)
+        return result
+
+    def get_assignment_numpy_per_shard(self, core_coord) -> np.ndarray:
+        """Get assignment for a specific core's shard as (shard_tiles_h, shard_tiles_w) numpy array.
+
+        Args:
+            core_coord: ttnn.CoreCoord identifying the core.
+        """
+        assert self.max_shard_size > 0, "Per-shard assignment only for sharded tensors"
+        core_key = (core_coord.x, core_coord.y)
+        assert core_key in self._core_to_shard_idx, f"Core {core_coord} not found in shard grid"
+        return self._per_shard_assignment[self._core_to_shard_idx[core_key]]
+
+    def get_assignment_numpy(self) -> np.ndarray:
+        """Get assignment as (tiles_h, tiles_w) numpy array."""
+        return self._assignment_numpy
 
     @property
     def data_bytes(self) -> int:
@@ -299,6 +261,60 @@ class CompressedTensor:
         ]
         return pack_bfp_tile(tile, mant_bits), mant_bits
 
+    def _pack_data_and_assignment(
+        self, tensor, assignment, memory_config, assignment_memory_config, is_sharded, device
+    ):
+        """Pack data and assignment, create ttnn tensors, set self.data/assignment/spec."""
+        if is_sharded:
+            data_bytes, self._tile_mant_bits, data_memory_config, self.max_shard_size = self._pack_sharded(
+                tensor, assignment, memory_config
+            )
+            # Validate assignment memory config matches data sharding
+            if assignment_memory_config is not None:
+                assert (
+                    assignment_memory_config.is_sharded()
+                ), "assignment_memory_config must be sharded when data memory_config is sharded"
+                assert (
+                    assignment_memory_config.memory_layout == memory_config.memory_layout
+                ), f"Assignment shard layout {assignment_memory_config.memory_layout} must match data shard layout {memory_config.memory_layout}"
+                a_grid = assignment_memory_config.shard_spec.grid
+                d_grid = memory_config.shard_spec.grid
+                assert a_grid == d_grid, f"Assignment shard grid {a_grid} must match data shard grid {d_grid}"
+                assert (
+                    assignment_memory_config.shard_spec.orientation == memory_config.shard_spec.orientation
+                ), "Assignment shard orientation must match data shard orientation"
+                assign_buffer_type = assignment_memory_config.buffer_type
+            else:
+                assign_buffer_type = memory_config.buffer_type
+            assign_bytes, assign_mem = self._shard_assignment(assignment, memory_config, assign_buffer_type)
+        else:
+            data_bytes, self._tile_mant_bits = self._pack(tensor, assignment)
+            data_memory_config = memory_config
+            packed_assign = _pack_assignment(assignment.astype(np.uint8).ravel())
+            assign_bytes = torch.from_numpy(packed_assign).unsqueeze(0)
+            assign_mem = assignment_memory_config or memory_config
+
+        # Logical tensor spec
+        logical_shape = ttnn.Shape(list(tensor.shape))
+        buffer_type = memory_config.buffer_type if memory_config is not None else ttnn.BufferType.DRAM
+        self.spec = ttnn.TensorSpec(logical_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, buffer_type)
+
+        # Store packed data and assignment as ttnn uint8 tensors
+        self.data = ttnn.from_torch(
+            data_bytes,
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=data_memory_config,
+        )
+        self.assignment = ttnn.from_torch(
+            assign_bytes,
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=assign_mem,
+        )
+
     def _pack(self, tensor: torch.Tensor, assignment: np.ndarray) -> tuple[torch.Tensor, list[int]]:
         """Pack tiles into flat uint8 buffer (no shard padding)."""
         data_np = self._to_2d(tensor)
@@ -310,7 +326,7 @@ class CompressedTensor:
                 tile_mant_bits.append(mant_bits)
                 chunks.append(packed)
         flat_np = np.concatenate(chunks)
-        return torch.from_numpy(flat_np.copy()), tile_mant_bits
+        return torch.from_numpy(flat_np.copy()).unsqueeze(0), tile_mant_bits
 
     def _pack_sharded(
         self, tensor: torch.Tensor, assignment: np.ndarray, memory_config
@@ -350,6 +366,12 @@ class CompressedTensor:
         alignment = _get_alignment(memory_config.buffer_type)
         max_shard_bytes = _align(max(shard_raw_sizes), alignment)
         self._shard_tile_coords = shard_tile_coords
+
+        # Build per-shard assignment arrays and core coord → shard map.
+        # Use row-wise enumeration to match from_torch's shard distribution order.
+        all_cores = ttnn.corerange_to_cores(shard_spec.grid, row_wise=True)
+        self._core_to_shard_idx = {(c.x, c.y): i for i, c in enumerate(all_cores)}
+        self._per_shard_assignment = self._build_per_shard_assignment(assignment)
 
         # Concatenate shards with padding, each shard is max_shard_bytes
         all_bytes = []
