@@ -56,6 +56,67 @@ struct CoreChainInfo {
     uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
 };
 
+namespace {
+
+// Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
+// or Bfp4_b for legacy path.
+tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bool use_streaming_compute) {
+    if (attn_mask.has_value()) {
+        return tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype());
+    }
+    return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
+}
+
+// Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
+// Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
+// fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
+// Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
+// Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
+bool can_use_streaming_compute(
+    bool is_causal,
+    bool use_provided_mask,
+    bool use_attention_sink,
+    const std::optional<uint32_t>& sliding_window_size,
+    bool is_chunked,
+    bool fp32_dest_acc_en,
+    uint32_t qk_out_subblock_h,
+    uint32_t Sk_chunk_t,
+    uint32_t padded_Sk,
+    uint32_t Sk,
+    uint32_t Sq_chunk_t) {
+    if (is_causal || use_provided_mask || use_attention_sink) {
+        return false;
+    }
+    if (sliding_window_size.value_or(0) != 0 || is_chunked || fp32_dest_acc_en) {
+        return false;
+    }
+    if (qk_out_subblock_h > 2 || Sk_chunk_t % (8 / qk_out_subblock_h) != 0) {
+        return false;
+    }
+    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
+    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
+    return !streaming_mask_unsupported;
+}
+
+// Check whether all data formats used by the compute kernel are uniform (allows skipping reconfigs).
+bool check_uniform_dataformat(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const Tensor& out,
+    const std::optional<Tensor>& attn_mask,
+    bool use_streaming_compute) {
+    const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
+    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
+    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(v.dtype());
+    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(out.dtype());
+    const tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
+    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
+    return (q_df == k_df && q_df == v_df && q_df == out_df && q_df == mask_df && q_df == im_df);
+}
+
+}  // namespace
+
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
@@ -284,16 +345,18 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    // Streaming compute v2: no row buffers (cb_push_back_hold_wr_ptr).
-    // Mask uses Float16_b for the streaming path to avoid Bfp4_b→Float16_b L1 accumulate artifacts.
-    // fp32_dest_acc_en is not functional with the streaming path — skip it in that case.
-    // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
-    // Sq_chunk_t==1 with K padding has L1 acc write-back issues after cb_push_back_hold_wr_ptr.
-    const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
-    const bool use_streaming_compute = !is_causal && !use_provided_mask && !use_attention_sink &&
-                                       sliding_window_size.value_or(0) == 0 && !is_chunked && !fp32_dest_acc_en &&
-                                       qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0 &&
-                                       !streaming_mask_unsupported;
+    const bool use_streaming_compute = can_use_streaming_compute(
+        is_causal,
+        use_provided_mask,
+        use_attention_sink,
+        sliding_window_size,
+        is_chunked,
+        fp32_dest_acc_en,
+        qk_out_subblock_h,
+        Sk_chunk_t,
+        padded_Sk,
+        Sk,
+        Sq_chunk_t);
 
     const bool lightweight_mask = use_streaming_compute && use_padded_mask;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
@@ -477,18 +540,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // Early format check for uniform_dataformat compile-time arg.
-    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    const tt::DataFormat mask_df_early =
-        attn_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
-                              : (use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b);
-    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const bool uniform_dataformat =
-        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
-         q_df_early == mask_df_early && q_df_early == im_df_early);
+    const bool uniform_dataformat = check_uniform_dataformat(
+        input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -552,12 +605,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df =
-        attn_mask.has_value()
-            ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
-            : (use_streaming_compute ? tt::DataFormat::Float16_b  // streaming path L1-accumulates -inf; Float16_b
-                                                                  // avoids Bfp4_b precision loss
-                                     : tt::DataFormat::Bfp4_b);
+    tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
