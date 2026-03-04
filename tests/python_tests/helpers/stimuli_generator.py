@@ -27,21 +27,26 @@ def flatten_list(sublists):
 
 
 def _mask_tile(
-    tile: torch.Tensor, num_faces: int, is_matrix_B: bool, face_r_dim: int = 16
+    tile: torch.Tensor,
+    num_faces: int,
+    is_matrix_B: bool,
+    face_r_dim: int = MAX_FACE_R_DIM,
 ) -> torch.Tensor:
     masked = tile.clone()
     if num_faces == 1:
         # Keep only f0
-        masked[:16, 16:] = 0  # Zero f1
+        masked[:MAX_FACE_R_DIM, FACE_C_DIM:] = 0  # Zero f1
         masked[face_r_dim:, :] = 0  # Zero f2, f3 and part of f0
     elif num_faces == 2:
         if is_matrix_B:
             # matrix B (In1/SrcA): keep partial f0, f2
-            if face_r_dim < 16:
-                masked[face_r_dim:16, :16] = 0  # Zero part of f0
-                masked[16 + face_r_dim :, :16] = 0  # Zero part of f2
-            masked[:16, 16:] = 0  # Zero f1
-            masked[16:, 16:] = 0  # Zero f3
+            if face_r_dim < MAX_FACE_R_DIM:
+                masked[face_r_dim:MAX_FACE_R_DIM, :FACE_C_DIM] = 0  # Zero part of f0
+                masked[MAX_FACE_R_DIM + face_r_dim :, :FACE_C_DIM] = (
+                    0  # Zero part of f2
+                )
+            masked[:MAX_FACE_R_DIM, FACE_C_DIM:] = 0  # Zero f1
+            masked[MAX_FACE_R_DIM:, FACE_C_DIM:] = 0  # Zero f3
         else:
             # matrix A (In0/SrcB): keep f0, f1
             masked[face_r_dim:, :] = 0  # Zero part of f0 and f1
@@ -147,7 +152,7 @@ def generate_identity_face_tensor(
 
 
 def generate_incrementing_face_tensor(
-    stimuli_format: DataFormat, rows: int, cols: int
+    stimuli_format: DataFormat, rows: int, cols: int, offset: int = 0
 ) -> torch.Tensor:
     assert rows % 16 == 0 and cols % 16 == 0, "Matrix size must be divisible by 16"
 
@@ -161,7 +166,7 @@ def generate_incrementing_face_tensor(
     # Fill each face with its index
     for face_r in range(num_faces_row):
         for face_c in range(num_faces_col):
-            face_val = float(face_r * num_faces_col + face_c + 1)
+            face_val = float(face_r * num_faces_col + face_c + 1 + offset)
             r_start = face_r * face_height
             c_start = face_c * face_width
             matrix[r_start : r_start + face_height, c_start : c_start + face_width] = (
@@ -174,40 +179,37 @@ def generate_incrementing_face_tensor(
 def generate_face_matmul_data(
     num_faces: int,
     stimuli_format: DataFormat,
-    input_dimensions=[32, 32],  # Add input_dimensions parameter
+    input_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
     is_matrix_A=True,  # True for matrix A (SrcB), False for matrix B (SrcA)
-    face_r_dim=16,
+    face_r_dim=MAX_FACE_R_DIM,
 ) -> torch.Tensor:
 
     # Validate num_faces
-    if num_faces not in [1, 2, 4]:
-        raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
+    if num_faces not in [1, 2, MAX_NUM_FACES]:
+        raise ValueError(f"num_faces must be 1, 2, or {MAX_NUM_FACES}, got {num_faces}")
 
     # Validate input_dimensions
     rows, cols = input_dimensions
-    if rows % 32 != 0 or cols % 32 != 0:
+    if rows % DEFAULT_TILE_R_DIM != 0 or cols % DEFAULT_TILE_C_DIM != 0:
         raise ValueError(
-            f"Input dimensions must be multiples of 32, got {input_dimensions}"
+            f"Input dimensions must be multiples of {DEFAULT_TILE_R_DIM}, "
+            f"got {input_dimensions}"
         )
 
-    # Calculate number of tiles needed
-    tile_cnt = input_dimensions[0] // 32 * input_dimensions[1] // 32
+    rt, ct = rows // DEFAULT_TILE_R_DIM, cols // DEFAULT_TILE_C_DIM
+    dtype = format_dict[stimuli_format]
 
-    # Create list to store tiles --> generate each tile with the right faces zeroed out
-    tiles = [
-        _mask_tile(
-            torch.rand(32, 32, dtype=format_dict[stimuli_format]),
-            num_faces,
-            not is_matrix_A,
-            face_r_dim,
-        ).flatten()
-        for _ in range(tile_cnt)
-    ]
+    out = torch.rand(rt, ct, DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM, dtype=dtype)
+    mask = _mask_tile(
+        torch.ones(DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM, dtype=dtype),
+        num_faces,
+        not is_matrix_A,
+        face_r_dim,
+    )
+    out *= mask
+    out = out.permute(0, 2, 1, 3).reshape(rows, cols)
 
-    # Concatenate all tiles
-    src = torch.cat(tiles)
-
-    return src
+    return out
 
 
 def calculate_tile_and_face_counts(

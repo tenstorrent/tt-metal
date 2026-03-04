@@ -34,8 +34,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
         params->in0_tile_r_dim < FACE_R_DIM ? params->in0_tile_r_dim : FACE_R_DIM,
         params->num_faces_B, // in1
         params->num_faces_A, // in0
-        params->TILE_SIZE_UNPACK_A,
-        params->TILE_SIZE_UNPACK_B);
+        params->TILE_SIZE_UNPACK_B,
+        params->TILE_SIZE_UNPACK_A);
     _llk_unpack_AB_matmul_init_<>(
         params->UNPACK_TRANSPOSE_FACES,
         params->CT_DIM,
@@ -54,8 +54,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
             L1_ADDRESS(params->buffer_B[0]),
             j,
             j * params->CT_DIM,
-            params->TILE_SIZE_UNPACK_A,
             params->TILE_SIZE_UNPACK_B,
+            params->TILE_SIZE_UNPACK_A,
             params->PARTIAL_FACE_B, // in1
             params->PARTIAL_FACE_A, // in0
             params->CT_DIM,
