@@ -110,9 +110,6 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     torch.manual_seed(0)
     rank = len(tensor_shape)
 
-    if dim is not None and (dim < -rank or dim > rank - 1):
-        pytest.skip("Dimension not applicable for input shape")
-
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device)
 
@@ -127,6 +124,8 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
         ttnn_result = ttnn.topk(ttnn_tensor, k, dim=dim)
     except (IndexError, TypeError, RuntimeError):
         ttnn_errored = True
+        if ttnn_errored and not torch_errored:
+            raise
 
     if torch_errored and ttnn_errored:
         logger.info(f"Both PyTorch and TTNN errored")
@@ -196,9 +195,6 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
     """
     torch.manual_seed(0)
     rank = len(tensor_shape)
-
-    if dim is not None and (dim < -rank or dim > rank - 1):
-        pytest.skip("Dimension not applicable for input shape")
 
     # Skip known ttnn.argmax limitations, but only for non-zero-volume tensors.
     # 0-volume tensors take a separate early-return path in ttnn and should be
@@ -285,3 +281,61 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
         assert torch.allclose(
             ttnn_value.float(), torch_value.float(), atol=atol, rtol=rtol
         ), f"Value at ttnn index {ttnn_result_i64.item()} is {ttnn_value}, expected {torch_value} (at torch index {torch_result_i64.item()})"
+
+
+@pytest.mark.parametrize("tensor_shape", [(), (2,), (3, 6, 40, 63, 20), (6, 0, 32)])
+@pytest.mark.parametrize("dim", [0])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("op", ["cumsum", "cumprod"])
+def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
+    """
+    Test the compatibility of the torch and ttnn output for cumsum/cumprod and different
+    tensor shapes and dim values.
+    Unlike standard reductions, cumsum/cumprod produce same-shape outputs (accumulations).
+    Checks that resulting tensors are within a certain tolerance of PyTorch outputs.
+    Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
+    Note: We do not enforce the same exception type or message.
+    """
+    torch.manual_seed(0)
+    rank = len(tensor_shape)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=dtype)
+    pad_value = 1.0 if op == "cumprod" else None
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
+
+    torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
+
+    # Run on both and flag exceptions
+    torch_errored = False
+    try:
+        torch_result = torch_op(torch_tensor, dim)
+    except (IndexError, TypeError, RuntimeError):
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        ttnn_result = ttnn_op(ttnn_tensor, dim)
+    except (IndexError, TypeError, RuntimeError):
+        ttnn_errored = True
+
+    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
+
+    # Skip the rest of the test if an exception was raised in both
+    if torch_errored:
+        return
+
+    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    # For 0-volume results, verify shapes match
+    if torch_result.numel() == 0 and ttnn_result.numel() == 0:
+        assert (
+            torch_result.shape == ttnn_result.shape
+        ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result.shape}"
+        # Other checks are not meaningful for empty tensors.
+        return
+
+    atol = rtol = 0.1
+    pcc = 0.999
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
