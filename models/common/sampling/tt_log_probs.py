@@ -279,12 +279,17 @@ class LogProbsCalculator:
     ):
         """
         Calculate log-probs for a given logits tensor and indices tensor.
+        Returns None if log-probs are not requested, not supported, or the device count is not 8 or 32.
         """
         if not self.enable_log_probs:
-            return self.output_tensor
+            return None
+
+        num_devices = self.mesh_device.get_num_devices()
+        if num_devices not in (8, 32):
+            return None
 
         if self.num_devices_for_sharding < 2:
-            return self.output_tensor
+            return None
 
         # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
         if logits_tensor.dtype == ttnn.bfloat8_b:
