@@ -38,6 +38,8 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "metal_device_id_mapping"],
 )
 
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+
 
 @dataclass
 class DumpWaitGlobalsData:
@@ -346,21 +348,31 @@ def run(args, context: Context):
         locations_to_check.add(location)
 
     def get_dispatch_core_pair(
-        location: OnChipCoordinate, risc_name: str, locations_to_check: set[OnChipCoordinate]
+        location: OnChipCoordinate, locations_to_check: set[OnChipCoordinate]
     ) -> tuple[OnChipCoordinate, str] | None:
         # Check RISC core with risc_name at this location for dispatcher kernels
         if location not in locations_to_check:
             return None
-        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-        if dispatcher_core_data.kernel_name is not None and dispatcher_core_data.kernel_name in dispatcher_kernel_names:
-            return (location, risc_name)
-        return None
+        noc_block = location._device.get_block(location)
+        dispatch_core_pairs = []
+        for risc_name in noc_block.risc_names:
+            dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+            if (
+                dispatcher_core_data.kernel_name is not None
+                and dispatcher_core_data.kernel_name in dispatcher_kernel_names
+            ):
+                dispatch_core_pairs.append((location, risc_name))
+        return dispatch_core_pairs
 
-    results = run_checks.run_per_core_check(
-        lambda location, risc_name: get_dispatch_core_pair(location, risc_name, locations_to_check),
+    results = run_checks.run_per_block_check(
+        lambda location: get_dispatch_core_pair(location, locations_to_check),
+        block_filter=BLOCK_TYPES_TO_CHECK,
     )
     # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
-    dispatch_core_pairs = [result.result for result in results] if results else []
+    dispatch_core_pairs = []
+    if results:
+        for result in results:
+            dispatch_core_pairs.extend(result.result)
 
     # Convert to set for fast lookup
     dispatch_cores_set = set(dispatch_core_pairs)
@@ -373,7 +385,6 @@ def run(args, context: Context):
             return None
         return read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, core_lookup)
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     return run_checks.run_per_core_check(
         filtered_read_wait_globals,
         block_filter=BLOCK_TYPES_TO_CHECK,
