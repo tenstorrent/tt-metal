@@ -363,6 +363,19 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+
+        self.wo_bias = None
+        if f"{wo_str}.bias" in state_dict:
+            wo_bias = state_dict[f"{wo_str}.bias"].view(1, 1, 1, -1)
+            self.wo_bias = ttnn.as_tensor(
+                wo_bias,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                cache_file_name=cache_name("wo_bias_sharded"),
+            )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -378,8 +391,15 @@ class Attention(LightweightModule):
             def register_weights():
                 self.prefetcher.insert_tensor(self.wqkv)
                 self.prefetcher.insert_tensor(self.wo_sharded_ring)
+                if self.wo_bias is not None:
+                    self.prefetcher.insert_tensor(self.wo_bias)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _add_wo_bias(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.wo_bias is None:
+            return x
+        return ttnn.add(x, self.wo_bias, memory_config=x.memory_config(), dtype=ttnn.bfloat16)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -816,7 +836,7 @@ class Attention(LightweightModule):
                 dense_out_sharded,
                 self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
             )
-            return dense_out_sharded
+            return self._add_wo_bias(dense_out_sharded)
 
         else:
             attn_output = tt_all_gather(
@@ -881,7 +901,7 @@ class Attention(LightweightModule):
                     dense_out_reduced, self.args.get_attn_dense_output_mem_config(Mode.DECODE, None)
                 )
 
-            return dense_out_reduced
+            return self._add_wo_bias(dense_out_reduced)
 
     def forward_prefill(
         self,
@@ -1175,7 +1195,7 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
-        return output_11SH
+        return self._add_wo_bias(output_11SH)
 
     def forward(
         self,

@@ -339,12 +339,33 @@ def compute_freqs_cis(
 
 
 def compute_gather_cos_sin(
-    dhead: int, end: int, theta: float, rope_scaling: Optional[RopeScaling]
+    dhead: int,
+    end: int,
+    theta: float,
+    rope_scaling: Optional[RopeScaling],
+    rotary_dim: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    if rotary_dim is None:
+        rotary_dim = dhead
+    if rotary_dim <= 0 or rotary_dim > dhead:
+        raise ValueError(f"Invalid rotary_dim={rotary_dim} for head_dim={dhead}")
+
     rotary_embedding = rotary_embedding_factory(
-        dim=dhead, max_position_embeddings=end // 2, base=theta, rope_scaling=rope_scaling
+        dim=rotary_dim,
+        max_position_embeddings=end // 2,
+        base=theta,
+        rope_scaling=rope_scaling,
     )
-    return rotary_embedding.cos_cached, rotary_embedding.sin_cached
+    cos_cached = rotary_embedding.cos_cached
+    sin_cached = rotary_embedding.sin_cached
+
+    # Phi-1 uses partial rotary. Pad remaining dimensions so RoPE op leaves them unchanged.
+    if rotary_dim < dhead:
+        pad = dhead - rotary_dim
+        cos_cached = torch.nn.functional.pad(cos_cached, (0, pad), value=1.0)
+        sin_cached = torch.nn.functional.pad(sin_cached, (0, pad), value=0.0)
+
+    return cos_cached, sin_cached
 
 
 def get_rot_mats(
@@ -353,6 +374,7 @@ def get_rot_mats(
     seq_len: int,
     theta: float,
     rope_scaling: Optional[RopeScaling],
+    rotary_dim: Optional[int] = None,
     datatype: Any = ttnn.bfloat16,
     rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
 ) -> List[ttnn.Tensor]:
@@ -361,6 +383,7 @@ def get_rot_mats(
         end=2 * seq_len,
         theta=theta,
         rope_scaling=rope_scaling,
+        rotary_dim=rotary_dim,
     )
 
     cos_matrix = ttnn.from_torch(
@@ -447,6 +470,7 @@ class RotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
+        rotary_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -458,6 +482,7 @@ class RotarySetup(LightweightModule):
         # we need to double the batch size in order to replicate the transformation matrix on double the batch size number of cores
         self.doubled_batch_size = self.original_batch_size * 2 if use_qk_fused else self.original_batch_size
         self.head_dim = head_dim
+        self.rotary_dim = rotary_dim if rotary_dim is not None else head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
@@ -480,6 +505,7 @@ class RotarySetup(LightweightModule):
             seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
+            rotary_dim=self.rotary_dim,
             datatype=datatype,
             rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -490,6 +516,7 @@ class RotarySetup(LightweightModule):
             seq_len=max_seq_len,
             theta=rope_theta,
             rope_scaling=rope_scaling,
+            rotary_dim=self.rotary_dim,
             datatype=datatype,
             rot_mats_layout=ttnn.TILE_LAYOUT,
         )

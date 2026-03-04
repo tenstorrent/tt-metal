@@ -104,6 +104,7 @@ class ModelOptimizations:
         70B+ models still use bfp4 MLPs and BFP8 attention in this configuration
         """
         base_model_name = get_base_model_name(model_name)
+        base_model_name_lower = base_model_name.lower()
         if base_model_name in ["Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             logger.info(
                 f"{model_name} is >70B and large models test insensitive precision, using BFP4 MLPs and BFP8 attention even in accuracy mode"
@@ -120,6 +121,7 @@ class ModelOptimizations:
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
+                or base_model_name_lower.startswith("phi-1")
             ):
                 if model_name.startswith("phi-4"):
                     logger.info(
@@ -142,6 +144,11 @@ class ModelOptimizations:
                 if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                     logger.info(
                         f"Model {model_name} is running out of L1 memory under standard accuracy settings, using FP16 accumulate in attention prefill QKV Matmul"
+                    )
+                    settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+                if base_model_name_lower.startswith("phi-1"):
+                    logger.info(
+                        f"Model {model_name} uses Phi-1 topology, keeping BFP8 attention and FP16 MLP accumulation for memory/perf balance"
                     )
                     settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
                 inst = cls(settings)
@@ -172,6 +179,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
+        base_model_name_lower = base_model_name.lower()
         if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
@@ -201,6 +209,11 @@ class ModelOptimizations:
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
+                )
+                settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+            if base_model_name_lower.startswith("phi-1"):
+                logger.info(
+                    f"Model {model_name} uses Phi-1 topology, forcing FP16 accumulate in attention prefill QKV Matmul"
                 )
                 settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
             inst = cls(settings)
@@ -2282,6 +2295,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "phi-1": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2507,6 +2521,7 @@ class ModelArgs:
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
             "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+            "gelu_new": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
@@ -2536,9 +2551,13 @@ class ModelArgs:
         layer_types = text_config["layer_types"] if "layer_types" in text_config else None
 
         # Common params with different names between Meta and HF
+        self.model_type = text_config.get("model_type", config.get("model_type"))
+        self.is_phi_model = self.model_type == "phi"
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
-        self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
+        self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads", self.n_heads))
+        if self.n_kv_heads is None:
+            self.n_kv_heads = self.n_heads
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
         # multimodal llama additionally adds cross attention layers
         # they are calculated in HF but not calculated in Meta
@@ -2550,13 +2569,19 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps")))
         self.vocab_size = text_config["vocab_size"]
         if self.is_galaxy:
             self.padded_vocab_size = 128 * 1024
         else:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.partial_rotary_factor = text_config.get("partial_rotary_factor", 1.0)
+        self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
+        if self.rotary_dim % 2 != 0:
+            self.rotary_dim -= 1
+        if self.rotary_dim <= 0:
+            self.rotary_dim = self.head_dim
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
 
@@ -2648,6 +2673,9 @@ class ModelArgs:
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
         # Configurable MLP activation type
+        self.mlp_activation_name = (
+            text_config.get("hidden_act") or text_config.get("hidden_activation") or "silu"
+        ).lower()
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         self._set_vision_params(config)
@@ -2980,7 +3008,14 @@ class ModelArgs:
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 # Standard: convert to Meta format
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+                state_dict = convert_hf_to_meta(
+                    state_dict,
+                    self.head_dim,
+                    self.n_heads,
+                    self.n_kv_heads,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -3369,6 +3404,7 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "phi-1": "microsoft/phi-1",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -3424,6 +3460,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+                elif "phi-1" in model_name_lower:
+                    fallback_tokenizer_path = "microsoft/phi-1"
 
             if fallback_tokenizer_path:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
@@ -3475,7 +3513,9 @@ class ModelArgs:
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
         else:
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            )
         return layer
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
@@ -3570,7 +3610,14 @@ class ModelArgs:
             # We keep language_model because transformers don't let us change or delete it
         model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
-            wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
+            wrapper = HfModelWrapper(
+                model,
+                self.head_dim,
+                config=self.hf_config,
+                rotary_dim=self.rotary_dim,
+                model_type=self.model_type,
+                use_hf_rope=self.use_hf_rope,
+            )
             return wrapper
         else:
             return model
@@ -3596,7 +3643,9 @@ class ModelArgs:
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
         else:
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            )
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
@@ -3636,7 +3685,13 @@ class ModelArgs:
                 model = self.cached_hf_model
             model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
-            wrapper = HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
+            wrapper = HfModelWrapper(
+                model,
+                self.head_dim,
+                rotary_dim=self.rotary_dim,
+                model_type=self.model_type,
+                use_hf_rope=self.use_hf_rope,
+            )
             return wrapper
         else:
             return model
@@ -3741,7 +3796,13 @@ class ModelArgs:
             )
         else:
             layer.load_state_dict = lambda x: layer._load_state_dict(
-                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+                convert_meta_to_hf(
+                    x,
+                    self.head_dim,
+                    fuse_mlp=self.fuse_mlp,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
             )
         return layer
 
@@ -3756,7 +3817,9 @@ class ModelArgs:
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
         else:
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, rotary_dim=self.rotary_dim, model_type=self.model_type)
+            )
         return layer
 
     def reference_decoder(self, load_checkpoint=False):
@@ -3772,7 +3835,9 @@ class ModelArgs:
             self.head_dim,
             model.model.rotary_emb if use_position_embeddings else None,
             rotary_emb_local,
-            self.use_hf_rope,
+            rotary_dim=self.rotary_dim,
+            model_type=self.model_type,
+            use_hf_rope=self.use_hf_rope,
         )
         return wrapper
 
@@ -3784,6 +3849,8 @@ class ModelArgs:
             layer,
             self.head_dim,
             model.model.rotary_emb if use_position_embeddings else None,
+            rotary_dim=self.rotary_dim,
+            model_type=self.model_type,
             use_hf_rope=self.use_hf_rope,
         )
         return wrapper
@@ -3870,7 +3937,7 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False):
+    def __init__(self, attention, head_dim, rotary_emb, rotary_dim=None, model_type=None, use_hf_rope=False):
         from transformers import DynamicCache
 
         super().__init__()
@@ -3878,6 +3945,8 @@ class HfAttentionWrapper:
         self.past_key_value = DynamicCache()
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self.rotary_dim = rotary_dim
+        self.model_type = model_type
         self.use_hf_rope = use_hf_rope
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
@@ -3910,8 +3979,6 @@ class HfAttentionWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        if self.use_hf_rope:
-            raise NotImplementedError("Not supported if `use_hf_rope` is True")
         try:  # Checking for fused qkv layer
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
@@ -3919,7 +3986,15 @@ class HfAttentionWrapper:
         if self.use_hf_rope:
             return self.attention.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv))
         else:
-            return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
+            return self.attention.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
+            )
 
     @property
     def cache_k(self):
@@ -3932,15 +4007,20 @@ class HfAttentionWrapper:
 
         # Llama-style: apply reverse_permute transformation
         batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        rotary_dim = self.rotary_dim or head_dim
         meta_k = torch.zeros_like(hf_k)
         for b in range(batch_size):
             for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                if rotary_dim == head_dim:
+                    flat = hf_k[b, s].flatten()
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                else:
+                    per_head = hf_k[b, s].clone()
+                    rotary = per_head[:, :rotary_dim].reshape(n_heads * rotary_dim)
+                    rotary = reverse_permute(rotary.unsqueeze(-1), n_heads, rotary.shape[0], 1).squeeze(-1)
+                    per_head[:, :rotary_dim] = rotary.reshape(n_heads, rotary_dim)
+                    meta_k[b, s] = per_head
 
         return meta_k
 
@@ -3951,13 +4031,17 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None, use_hf_rope=False):
+    def __init__(
+        self, decoder, head_dim, rotary_emb, rotary_emb_local=None, rotary_dim=None, model_type=None, use_hf_rope=False
+    ):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
         self.rotary_emb_local = rotary_emb_local
+        self.rotary_dim = rotary_dim
+        self.model_type = model_type
         self.past_key_values = DynamicCache()
         self.use_hf_rope = use_hf_rope
 
@@ -4007,7 +4091,16 @@ class HfDecoderWrapper:
         if self.use_hf_rope:
             return self.decoder.load_state_dict(convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv, fuse_mlp))
         else:
-            return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+            return self.decoder.load_state_dict(
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    fuse_mlp,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
+            )
 
     @property
     def cache_k(self):
@@ -4020,15 +4113,20 @@ class HfDecoderWrapper:
 
         # Llama-style: apply reverse_permute transformation
         batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        rotary_dim = self.rotary_dim or head_dim
         meta_k = torch.zeros_like(hf_k)
         for b in range(batch_size):
             for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                if rotary_dim == head_dim:
+                    flat = hf_k[b, s].flatten()
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                else:
+                    per_head = hf_k[b, s].clone()
+                    rotary = per_head[:, :rotary_dim].reshape(n_heads * rotary_dim)
+                    rotary = reverse_permute(rotary.unsqueeze(-1), n_heads, rotary.shape[0], 1).squeeze(-1)
+                    per_head[:, :rotary_dim] = rotary.reshape(n_heads, rotary_dim)
+                    meta_k[b, s] = per_head
 
         return meta_k
 
@@ -4039,12 +4137,14 @@ class HfDecoderWrapper:
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim, config=None, use_hf_rope=False):
+    def __init__(self, model, head_dim, config=None, rotary_dim=None, model_type=None, use_hf_rope=False):
         from transformers import DynamicCache
 
         self.model = model
         self.head_dim = head_dim
         self.config = config
+        self.rotary_dim = rotary_dim
+        self.model_type = model_type
         self.past_key_values = DynamicCache()
         self.use_hf_rope = use_hf_rope
 
@@ -4078,7 +4178,15 @@ class HfModelWrapper:
             )
         else:
             return self.model.load_state_dict(
-                convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+                convert_meta_to_hf(
+                    state_dict,
+                    self.head_dim,
+                    fuse_qkv,
+                    fuse_mlp,
+                    self.config,
+                    rotary_dim=self.rotary_dim,
+                    model_type=self.model_type,
+                )
             )
 
     def eval(self):
@@ -4088,6 +4196,7 @@ class HfModelWrapper:
     def cache_k(self):
         kvs = self.past_key_values.to_legacy_cache()
         meta_ks = []
+        rotary_dim = self.rotary_dim
         for k, v in kvs:
             hf_k = k.permute(
                 0, 2, 1, 3
@@ -4100,15 +4209,20 @@ class HfModelWrapper:
 
             # Llama-style: apply reverse_permute transformation
             batch_size, seq_len, n_heads, head_dim = hf_k.shape
+            effective_rotary_dim = rotary_dim or head_dim
             meta_k = torch.zeros_like(hf_k)
             for b in range(batch_size):
                 for s in range(seq_len):
-                    # Flatten just heads and head_dim
-                    flat = hf_k[b, s].flatten()
-                    # Apply reverse_permute
-                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                    # Restore heads and head_dim shape
-                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                    if effective_rotary_dim == head_dim:
+                        flat = hf_k[b, s].flatten()
+                        transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                        meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+                    else:
+                        per_head = hf_k[b, s].clone()
+                        rotary = per_head[:, :effective_rotary_dim].reshape(n_heads * effective_rotary_dim)
+                        rotary = reverse_permute(rotary.unsqueeze(-1), n_heads, rotary.shape[0], 1).squeeze(-1)
+                        per_head[:, :effective_rotary_dim] = rotary.reshape(n_heads, effective_rotary_dim)
+                        meta_k[b, s] = per_head
 
             meta_ks.append(meta_k)
 
