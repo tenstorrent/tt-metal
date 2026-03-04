@@ -88,6 +88,8 @@ class PipelineBlock:
 
         token_size_bytes = 64
 
+        token_size_bytes = 64  # Hardcode for now - don't expect this to change
+
         if self.is_pipeline_start:
             self._init_first_stage(
                 mesh_device,

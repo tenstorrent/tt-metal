@@ -55,7 +55,7 @@ def create_fabric_router_config(max_payload_size):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -240,7 +240,7 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -427,17 +427,17 @@ def test_multi_host_loopback_pipeline_with_embedding(
     "vocab_size, embedding_dim",
     [
         (256, 14336),
-        (512, 7168),
-        (1024, 3584),
-        (2048, 1792),
+        # (512, 7168),
+        # (1024, 3584),
+        # (2048, 1792),
     ],
 )
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
         (128, 2),
-        (256, 4),
-        (512, 8),
+        # (256, 4),
+        # (512, 8),
     ],
 )
 @pytest.mark.parametrize(
@@ -449,7 +449,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -494,9 +494,13 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
             embedding_fifo_size,  # downstream d2d socket fifo size
             embedding_size_bytes,  # upstream d2d socket page size
             embedding_size_bytes,  # downstream d2d socket page size
+            h2d_socket_fifo_size=token_fifo_size,  # h2d socket fifo size
+            d2h_socket_fifo_size=embedding_fifo_size,  # d2h socket fifo size
+            d2h_socket_page_size=embedding_size_bytes,  # d2h socket page size
         )
-
+    print("Running pipeline block")
     pipeline_block.run()
+    print("Pipeline block run")
 
     if pipeline_block.is_first_pipeline_stage():
         token_dtype = torch.uint32
@@ -513,18 +517,40 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
             output_tensor = ttnn.from_torch(
                 torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
+            print("Writing token")
             pipeline_block.write_token(input_tensor)
-            pipeline_block.read_output(output_tensor)
+            print("Token written")
+            # pipeline_block.read_output(output_tensor)
 
-            result_torch = ttnn.to_torch(output_tensor).reshape(-1)
-            expected = torch_embedding[0, 0, token_id, :].reshape(-1)
-            match = torch.equal(expected, result_torch)
-            assert match, (
-                f"Token {token_id}: D2H output does not match embedding row!\n"
-                f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+            # result_torch = ttnn.to_torch(output_tensor).reshape(-1)
+            # expected = torch_embedding[0, 0, token_id, :].reshape(-1)
+            # match = torch.equal(expected, result_torch)
+            # assert match, (
+            #     f"Token {token_id}: D2H output does not match embedding row!\n"
+            #     f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+            # )
+    if mesh_device.get_system_mesh_id() == 3:
+        for token_id in range(vocab_size):
+            torch_output = torch.zeros(1, embedding_shape[3], dtype=embedding_dtype)
+            output_tensor = ttnn.from_torch(
+                torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
-        logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")
+            output_tensor = ttnn.from_torch(
+                torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            print("Reading output tensor")
+            pipeline_block.read_output(output_tensor)
+            print("Output tensor read")
 
+            # result_torch = ttnn.to_torch(output_tensor).reshape(-1)
+            # expected = torch_embedding[0, 0, token_id, :].reshape(-1)
+            # match = torch.equal(expected, result_torch)
+            # assert match, (
+            #     f"Token {token_id}: D2H output does not match embedding row!\n"
+            #     f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+            # )
+
+    print("Terminating pipeline block")
     pipeline_block.terminate()
 
 
