@@ -127,8 +127,8 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
 
         // 1. Check that each set is running the correct kernel by verifying the hard-coded kernel ID number.
         // This check assumes that the threaded kernels are assigned sequentially to the DMs, which is how they
-        // are currently assigned by CreateKernel(). If this assumption is violated in the future, update this 
-        // check to find the shared kernel ID and just verify counts. Follow on checks will have to be updated 
+        // are currently assigned by CreateKernel(). If this assumption is violated in the future, update this
+        // check to find the shared kernel ID and just verify counts. Follow on checks will have to be updated
         // as well as this assumption was made for all the checks for simplicity.
         // Kernel ID: DM 0-3 → 1, DM 4-6 → 2, DM 7 → 3
         uint32_t expected_kernel_id = (dm <= 3) ? 1u : (dm <= 6) ? 2u : 3u;
