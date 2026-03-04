@@ -77,19 +77,10 @@ void kernel_main() {
         auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_); 
         const uint32_t num_packets = traffic_config->metadata.num_packets; 
         const uint32_t num_warmup = conn->num_buffers_per_channel;
-        
-        const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
-        for(uint32_t pkt = 0; pkt < warmup_end; ++pkt){
-            traffic_config->template send_one_packet<BENCHMARK_MODE, false, false>();
-        } 
 
-        conn->setup_credit_update_noc_state(); 
+        traffic_config->template send_packets_stateful<BENCHMARK_MODE>(traffic_config, conn, num_packets, num_warmup);
 
-        for(uint32_t pkt = warmup_end; pkt < num_packets; ++pkt){
-            traffic_config->template send_one_packet<BENCHMARK_MODE, true, false>();            
-        } 
-    }
-    else{
+    } else {
         while (packets_left_to_send) {
             packets_left_to_send = false;
 
