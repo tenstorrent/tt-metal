@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 KV-cache implementation for Qwen3-TTS decode mode.
+
+Provides pre-allocated KV caches for efficient autoregressive decoding.
 """
+
+from typing import List, Tuple
 
 import torch
 
@@ -89,10 +93,9 @@ class KVCache:
         seq_len = k.shape[2]
 
         # Fill cache at the specified position
-        # For now, we use a simple slice update approach
-        # In production, use ttnn.experimental.paged_fill_cache for efficiency
-        self.k_cache[layer_idx] = ttnn.experimental.tensor.fill_cache(self.k_cache[layer_idx], k, start_pos)
-        self.v_cache[layer_idx] = ttnn.experimental.tensor.fill_cache(self.v_cache[layer_idx], v, start_pos)
+        # Use update_cache with update_idx for positional updates
+        ttnn.update_cache(self.k_cache[layer_idx], k, update_idx=start_pos)
+        ttnn.update_cache(self.v_cache[layer_idx], v, update_idx=start_pos)
 
         self.seq_len = start_pos + seq_len
 
@@ -145,3 +148,50 @@ def create_kv_cache(
         num_kv_heads=config.num_key_value_heads,
         head_dim=config.head_dim,
     )
+
+
+def create_kv_cache_list(
+    device,
+    config,
+    max_batch_size: int = 1,
+    max_seq_len: int = 2048,
+    dtype=ttnn.bfloat16,
+) -> List[Tuple[ttnn.Tensor, ttnn.Tensor]]:
+    """
+    Create KV caches as a list of (k_cache, v_cache) tuples for each layer.
+
+    This format is compatible with the updated attention module.
+
+    Args:
+        device: TTNN device
+        config: Model configuration (Talker or CodePredictor config)
+        max_batch_size: Maximum batch size
+        max_seq_len: Maximum sequence length
+        dtype: Data type for cache tensors
+
+    Returns:
+        List of (k_cache, v_cache) tuples, one per layer
+    """
+    num_layers = config.num_hidden_layers
+    num_kv_heads = config.num_key_value_heads
+    head_dim = config.head_dim
+
+    kv_caches = []
+    for _ in range(num_layers):
+        k = ttnn.from_torch(
+            torch.zeros(max_batch_size, num_kv_heads, max_seq_len, head_dim, dtype=torch.bfloat16),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v = ttnn.from_torch(
+            torch.zeros(max_batch_size, num_kv_heads, max_seq_len, head_dim, dtype=torch.bfloat16),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        kv_caches.append((k, v))
+
+    return kv_caches
