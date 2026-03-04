@@ -330,6 +330,7 @@ void kernel_main() {
                 .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+                .rta_offset = per_core_rta_arg_idx,
             };
 
             unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
@@ -429,6 +430,7 @@ void kernel_main() {
                 .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
                 .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+                .rta_offset = per_core_rta_arg_idx,
             };
             Fwd::Op<FwdCTArgs> sdpa_forwarder;
             sdpa_forwarder(fwd_args);

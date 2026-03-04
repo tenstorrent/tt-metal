@@ -44,12 +44,16 @@ void kernel_main() {
             get_named_compile_time_arg_val("position_enabled"),
             get_named_compile_time_arg_val("per_device_chunk_size")>;
 
+        unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
+        unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_ms, 1);
+
         uint32_t per_core_rta_arg_idx = 0;
         Worker::ReaderArgs reader_args{
             .r1_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .rta_offset = per_core_rta_arg_idx,
         };
         Worker::Op<ReaderCTArgs> op;
         op(reader_args);
@@ -67,6 +71,7 @@ void kernel_main() {
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
         };
         Fwd::Op<FwdCTArgs> op;
         op(fwd_args);
@@ -141,6 +146,7 @@ void kernel_main() {
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
         };
         Fwd::Op<FwdCTArgs> op;
         op(fwd_args);

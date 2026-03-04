@@ -338,6 +338,7 @@ void kernel_main() {
             .r2_neighbor_sem_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
+            .rta_offset = per_core_rta_arg_idx,
         };
     }
 
@@ -353,11 +354,12 @@ void kernel_main() {
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
         };
     }
 
     // Matmul4 CTArgs
-    /*using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
 
     // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
@@ -446,7 +448,7 @@ void kernel_main() {
         ccl_receiver_args = {
             .sender_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
-    }*/
+    }
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -726,9 +728,10 @@ void kernel_main() {
             .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+            .rta_offset = per_core_rta_arg_idx,
         };
     }
-    /*
+
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul5CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
@@ -801,7 +804,7 @@ void kernel_main() {
             .receive_semaphore_addr = get_common_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .fabric_args_start_index = per_core_rta_arg_idx,
         };
-    }*/
+    }
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -1040,13 +1043,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("sdpa_position_enabled"),
         get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
         1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
-    deepseek_b1_ops::SdpaReduceWorker::ComputeArgs sdpa_reduce_worker_args;
+    deepseek_b1_ops::SdpaReduceWorker::ComputeArgs sdpa_reduce_worker_args{.rta_offset = per_core_rta_arg_idx};
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<0, 0, 0>;
     deepseek_b1_ops::SdpaReduceForwarder::ForwarderArgs sdpa_reduce_forwarder_args;
 
     // Matmul4 CTArgs
-    /*using Matmul4CTArgs =
+    using Matmul4CTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul4_out_w_per_core")>;
     deepseek_b1_ops::Matmul::ComputeArgs matmul4_args{
         get_named_compile_time_arg_val("matmul4_in0"),
@@ -1087,7 +1090,7 @@ void kernel_main() {
 
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
     // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};*/
+    deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     deepseek_compute_kernel_init();
 #endif
@@ -1411,11 +1414,11 @@ void kernel_main() {
             // ========================================================================
             // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
             // ========================================================================
-            /* {
-                 DeviceZoneScopedN("MATMUL4");
-                 deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
-                 matmul4(matmul4_args);
-             }
+            {
+                DeviceZoneScopedN("MATMUL4");
+                deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
+                matmul4(matmul4_args);
+            }
 
              // ========================================================================
              // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
@@ -1531,6 +1534,6 @@ void kernel_main() {
                  ccl_receiver_compute(ccl_receiver_args);
              }
              // CCL Sender TRISC is no-op
- #endif*/
+#endif
     }
 }

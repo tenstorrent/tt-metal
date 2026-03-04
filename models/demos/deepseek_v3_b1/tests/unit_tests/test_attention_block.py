@@ -46,7 +46,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize(
-    "position_id", [127]
+    "position_id", [127, 511]
 )  # Must test 128 chunk aligned decode postions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
     "device_params",
@@ -649,12 +649,6 @@ def test_attention_block(
             ttnn.CoreRange(sdpa_forwarder_cores[1], sdpa_forwarder_cores[1]),
         ]
     )
-
-    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
-    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
-    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
-    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
-    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
 
     # SDPA input tensors per device: L [8, 4096], MS [8, 256]
     # MS tensor layout: for each worker core c (0..7), within columns [c*32, (c+1)*32]:
