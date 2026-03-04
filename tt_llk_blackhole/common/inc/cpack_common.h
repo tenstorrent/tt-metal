@@ -236,22 +236,24 @@ inline void set_packer_config(
     config.f.out_data_format = pack_output_dst_format;
     config.f.in_data_format  = pack_output_src_format;
 
+    std::uint32_t exp_threshold_en  = 0;
+    std::uint32_t exp_threshold_val = 0;
+
     // Workaround for bug in HW: tenstorrent/budabackend#1394
     if constexpr (is_fp32_dest_acc_en)
     {
-        std::uint32_t exp_threshold_en  = 0;
-        std::uint32_t exp_threshold_val = 0;
         if (IS_BFP_A_FORMAT(pack_output_dst_format))
         {
             exp_threshold_en  = 1;
             exp_threshold_val = 113;
         }
-        // EXP threshold is updated in the config word 3 which has a bit programmed by the unpacker as well
-        constexpr std::uint32_t exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
-        std::uint32_t exp_threshold_rmw_data =
-            (exp_threshold_val << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (exp_threshold_en << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, exp_threshold_rmw_mask>(exp_threshold_rmw_data);
     }
+
+    // EXP threshold is updated in the config word 3 which has a bit programmed by the unpacker as well
+    constexpr std::uint32_t exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
+    std::uint32_t exp_threshold_rmw_data =
+        (exp_threshold_val << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (exp_threshold_en << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, exp_threshold_rmw_mask>(exp_threshold_rmw_data);
 
     // Program:
     // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
@@ -383,22 +385,24 @@ inline void reconfig_packer_data_format(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
+    std::uint32_t exp_threshold_en  = 0;
+    std::uint32_t exp_threshold_val = 0;
+
     // Workaround for HW bug: tenstorrent/budabackend#1394
     if constexpr (is_fp32_dest_acc_en)
     {
-        std::uint32_t exp_threshold_en  = 0;
-        std::uint32_t exp_threshold_val = 0;
         if (IS_BFP_A_FORMAT(pack_output_dst_format))
         {
             exp_threshold_en  = 1;
             exp_threshold_val = 113;
         }
-        // EXP threshold is updated in the config word 3 which has a bit programmed by the unpacker as well
-        constexpr std::uint32_t exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
-        std::uint32_t exp_threshold_rmw_data =
-            (exp_threshold_val << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (exp_threshold_en << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, exp_threshold_rmw_mask>(exp_threshold_rmw_data);
     }
+
+    // EXP threshold is updated in the config word 3 which has a bit programmed by the unpacker as well
+    constexpr std::uint32_t exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
+    std::uint32_t exp_threshold_rmw_data =
+        (exp_threshold_val << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (exp_threshold_en << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, exp_threshold_rmw_mask>(exp_threshold_rmw_data);
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
 
