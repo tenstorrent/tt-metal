@@ -8,14 +8,14 @@ Full normalization without affine: subtract mean, square, compute variance, add 
 import pytest
 import torch
 import ttnn
-import torch
 
 from .layer_norm import layer_norm
 
 
 def pytorch_reference(input_tensor):
     """PyTorch reference for this stage."""
-    (x - x.mean(dim=-1, keepdim=True)) / torch.sqrt(x.var(dim=-1, keepdim=True, correction=0) + 1e-5)
+    x = input_tensor.float()
+    return (x - x.mean(dim=-1, keepdim=True)) / torch.sqrt(x.var(dim=-1, keepdim=True, correction=0) + 1e-5)
 
 
 @pytest.mark.parametrize(

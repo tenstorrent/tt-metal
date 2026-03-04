@@ -336,7 +336,7 @@ from ttnn.core import (
     get_current_command_queue_id_for_thread,
 )
 
-tile_size = ttnn._ttnn.tensor.tile_size
+tile_size = getattr(ttnn._ttnn.tensor, "tile_size", None)
 
 import ttnn.reflection
 import ttnn.database

@@ -15,7 +15,7 @@ from .layer_norm import layer_norm
 
 def pytorch_reference(input_tensor):
     """PyTorch reference for this stage."""
-    x
+    return input_tensor
 
 
 @pytest.mark.parametrize(

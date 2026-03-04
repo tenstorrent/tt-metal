@@ -17,10 +17,10 @@ from ttnn.types import (
 )
 
 split_work_to_cores = ttnn._ttnn.operations.core.split_work_to_cores
-round_up = ttnn._ttnn.operations.core.round_up
-div_up = ttnn._ttnn.operations.core.div_up
-find_max_divisor = ttnn._ttnn.operations.core.find_max_divisor
-grid_to_cores = ttnn._ttnn.operations.core.grid_to_cores
+round_up = getattr(ttnn._ttnn.operations.core, "round_up", None)
+div_up = getattr(ttnn._ttnn.operations.core, "div_up", None)
+find_max_divisor = getattr(ttnn._ttnn.operations.core, "find_max_divisor", None)
+grid_to_cores = getattr(ttnn._ttnn.operations.core, "grid_to_cores", None)
 
 set_printoptions = ttnn._ttnn.core.set_printoptions
 
