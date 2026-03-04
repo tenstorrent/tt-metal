@@ -17,21 +17,25 @@ namespace ckernel {
  * For x < 0.5, the reflection formula (1 - x) is used before Stirling approximation.
  * The final reflection formula correction for (inputs < 0.5) is not part of this kernel.
  *
+ *  lgamma_stirling_tile(idst); computes lgamma(x) for x >= 0.5 and computes lgamma(1-x) for x < 0.5.
+ *
  * | Argument | Description                                                | Type     | Valid Range                                           | Required |
  * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst     | Destination index                                          | uint32_t | 0 to (num_dests-1)                                    | Yes      |
  */
 
 // clang-format on
-ALWI void lgamma_stirling_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst)));
+ALWI void lgamma_stirling_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
+    // MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst)));
+    MATH((llk_math_eltwise_binary_sfpu_lgamma_stirling<APPROX, DST_ACCUM_MODE>(idst0, idst1, idst2)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void lgamma_stirling_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
+    // MATH((llk_math_eltwise_unary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
+    MATH((llk_math_eltwise_binary_sfpu_lgamma_stirling_init<APPROX, DST_ACCUM_MODE>()));
 }
 
 /**

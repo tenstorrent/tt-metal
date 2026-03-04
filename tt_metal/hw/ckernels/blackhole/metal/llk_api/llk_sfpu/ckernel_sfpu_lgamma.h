@@ -92,10 +92,10 @@ void lgamma_stirling_init() {
     _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-void lgamma_adjusted_init() {
-    log_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
-}
+// template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+// void lgamma_adjusted_init() {
+//     log_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+// }
 
 }  // namespace sfpu
 }  // namespace ckernel

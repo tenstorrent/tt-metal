@@ -26,7 +26,7 @@ inline void llk_math_eltwise_unary_sfpu_lgamma_stirling(uint dst_index, int vect
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_ternary_sfpu_lgamma_adjusted_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::lgamma>();
-    ckernel::sfpu::lgamma_adjusted_init<APPROXIMATE, is_fp32_dest_acc_en>();
+    // ckernel::sfpu::lgamma_adjusted_init<APPROXIMATE, is_fp32_dest_acc_en>();
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>

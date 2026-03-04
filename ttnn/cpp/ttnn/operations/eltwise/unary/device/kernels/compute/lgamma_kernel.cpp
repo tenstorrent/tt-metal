@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/rounding.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
 #include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/compute_kernel_api.h"
 
 void kernel_main() {
@@ -38,13 +39,42 @@ void kernel_main() {
             copy_tile(cb_input, 0, 0);  // x
             copy_tile(cb_input, 0, 1);  // x
 
+            fill_tile_init();
+            fill_tile(2, 0.5f);
+
+            // x - 0.5
+            sub_binary_tile_init();
+            sub_binary_tile(1, 2, 1);
+
+            // (x - 0.5) < 0
+            ltz_tile_init();
+            ltz_tile(1);
+
+            fill_tile_init();
+            fill_tile(2, 1.0f);
+
+            // 1 - x
+            sub_binary_tile_init();
+            sub_binary_tile(2, 0, 2);
+
+            // tile 1 = z = (x < 0.5) ? 1-x : x
+            where_tile_init();
+            where_tile<DataFormat::Float16_b>(1, 2, 0, 1);
+
+            // log z
+            log_tile_init();
+            log_tile(1);
+
             // tile 0 = res_stirling
             lgamma_stirling_tile_init();
-            lgamma_stirling_tile(0);
+            lgamma_stirling_tile(0, 1, 0);  // x, log_z
 
             // fill tile 2 with M_PI
             fill_tile_init();
             fill_tile(2, M_PI);
+
+            copy_tile_to_dst_init_short(cb_input);
+            copy_tile(cb_input, 0, 1);  // x
 
             // tile 1 = frac (x)
             rounding_op_tile_init();
