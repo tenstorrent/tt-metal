@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Union
 
@@ -42,6 +42,21 @@ class MeshDeviceStub:
 class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 is resolved
     path: Path
     memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class DeepseekSamplingArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    max_batch_size: int
+    sampling_dp: int
+    cluster_shape: tuple[int, int]
+    sampling_all_gather_axis: int = 1
+    sub_core_grids: ttnn.CoreRangeSet | None = None
+    sub_core_grid_topk: ttnn.CoreRangeSet | None = None
+    start_core: ttnn.CoreCoord = field(default_factory=lambda: ttnn.CoreCoord(0, 0))
+    model_config: dict = field(default_factory=dict)
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub

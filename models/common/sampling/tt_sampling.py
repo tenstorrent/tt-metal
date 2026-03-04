@@ -458,6 +458,11 @@ class TTSampling(LightweightModule):
                 )
             # Perform local top-k on each device
             # breakpoint()
+            # logger.info(f"x_bf16.shape before topk: {x_bf16.shape}")
+            # logger.info(f"self.max_top_k: {self.max_top_k}")
+            # logger.info(f"self.sub_core_grid_topk: {self.sub_core_grid_topk}")
+            # logger.info(f"self.tt_indices_tensor.shape: {self.tt_indices_tensor.shape}")
+            # logger.info(f"self.tt_indices_tensor: {self.tt_indices_tensor}")
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,
                 k=self.max_top_k,
@@ -468,6 +473,8 @@ class TTSampling(LightweightModule):
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
             sampling_cluster_axis = None if 1 in self.cluster_shape else self.sampling_all_gather_axis
+
+            # logger.info(f"sampling_cluster_axis: {sampling_cluster_axis}")
 
             # Gather top-k values across all devices
             topk_values_gathered = self._perform_all_gather(

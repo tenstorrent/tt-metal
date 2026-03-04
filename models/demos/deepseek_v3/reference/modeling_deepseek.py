@@ -1124,7 +1124,13 @@ class DeepseekV3DecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
+        attn_impl = getattr(config, "_attn_implementation", None) or "eager"
+        if attn_impl not in ATTENTION_CLASSES:
+            raise ValueError(
+                f"Unsupported attention implementation '{attn_impl}'. "
+                f"Expected one of: {', '.join(ATTENTION_CLASSES.keys())}"
+            )
+        self.self_attn = ATTENTION_CLASSES[attn_impl](config=config, layer_idx=layer_idx)
 
         self.mlp = (
             DeepseekV3MoE(config)

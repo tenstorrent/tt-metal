@@ -164,6 +164,10 @@ def hf_config(model_path):
     """Load DeepSeek config for testing"""
     # model_path is already resolved in the fixture
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    # Newer transformers may leave this unset; DeepSeek reference expects
+    # a concrete key in ATTENTION_CLASSES.
+    if getattr(config, "_attn_implementation", None) is None:
+        config._attn_implementation = "eager"
     return config
 
 
