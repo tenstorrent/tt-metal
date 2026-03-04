@@ -29,3 +29,9 @@ def pytest_addoption(parser):
         type=str,
         help="Provide a JSON file defining per-decoder precision and fidelity settings",
     )
+    parser.addoption(
+        "--use_hf_rope",
+        action="store_true",
+        default=False,
+        help="Whether to use HF-style rope, if not passed, the default mllama will be used",
+    )
