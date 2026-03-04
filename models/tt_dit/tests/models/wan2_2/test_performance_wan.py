@@ -230,6 +230,9 @@ def test_pipeline_performance(
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
