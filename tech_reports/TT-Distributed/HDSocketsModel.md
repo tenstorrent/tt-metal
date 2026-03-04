@@ -1,5 +1,7 @@
 # H2D / D2H PCIe Socket  -  Technical Report
 
+> **Scope:** This report covers Host-to-Device (`H2DSocket`) and Device-to-Host (`D2HSocket`) PCIe sockets only. Device-to-Device communication via `MeshSocket` is out of scope (see the `MeshSocket` paragraph in S.1).
+>
 > **Hardware scope: Blackhole Galaxy  -  Rev A and Rev B only.**
 > The PCIe link topology, chip count, bandwidth figures, and ASIC location assignments described in this document have been validated on Blackhole Galaxy Rev A and Rev B systems. Results may differ on later revisions or other Blackhole form factors.
 
@@ -7,10 +9,9 @@
 
 ## Table of Contents
 
-1. [Background  -  What Is a Socket?](#1-background--what-is-a-socket)
-   - 1.1 System Topology and PCIe Link Asymmetry
-   - 1.2 Blackhole Hardware Facts Relevant to This Guide
-   - 1.3 Training & Inference Use Cases for PCIe Sockets
+1. [Background  -  H2D / D2H PCIe Sockets](#1-background---h2d--d2h-pcie-sockets)
+   - 1.1 Blackhole Hardware Facts Relevant to This Guide
+   - 1.2 Training & Inference Use Cases for PCIe Sockets
 2. [Transfer Modes and Flow Control](#2-transfer-modes-and-flow-control)
    - 2.1 H2D  -  HOST\_PUSH
    - 2.2 H2D  -  DEVICE\_PULL
@@ -35,83 +36,58 @@
 
 ---
 
-## 1. Background  -  What Is a Socket?
+## 1. Background  -  H2D / D2H PCIe Sockets
 
-A **socket** is a streaming FIFO abstraction for moving data across the PCIe link between a host CPU and a Tenstorrent AI core. It hides the low-level details of PCIe TLB mapping, NOC address encoding, and flow-control signaling behind a simple `write` / `read` + `barrier` API.
+Tenstorrent uses the word "socket" for several distinct streaming-FIFO abstractions. This section defines each type so the scope of this document is unambiguous.
+
+**PCIe sockets (this document)** are a streaming FIFO abstraction for moving data across the PCIe link between a host CPU and a Tenstorrent AI core. They hide the low-level details of PCIe TLB mapping, NOC address encoding, and flow-control signaling behind a simple `write` / `read` + `barrier` API. Two directions exist: `H2DSocket` (Host-to-Device) and `D2HSocket` (Device-to-Host). Both are implemented in `tt_metal/api/tt-metalium/experimental/sockets/`.
+
+**Device-to-Device sockets (`MeshSocket`)** are an entirely different class of socket that move data between AI cores on the same or different MeshDevices over TT-Fabric (Ethernet links), with no host CPU involvement in the data path. The host configures sender/receiver core pairs via `SocketConfig` and `MeshSocket::create_socket_pair()`; `MeshSocket` then handles all flow control and data movement on-device over TT-Fabric. `MeshSocket` is implemented in `tt_metal/api/tt-metalium/experimental/sockets/mesh_socket.hpp` and documented separately. **Nothing in this report applies to `MeshSocket`.**
 
 > **Naming note  -  "socket" here does not mean a POSIX/network socket.**
-> The term is used in the Tenstorrent-specific sense of a hardware-level streaming channel between host and device over PCIe. It has nothing to do with TCP/UDP sockets, Berkeley sockets, or any OS networking API.
+> The term is used in the Tenstorrent-specific sense of a hardware-level streaming channel. It has nothing to do with TCP/UDP sockets, Berkeley sockets, or any OS networking API.
 >
-> There are also two distinct flavours of Tenstorrent socket to be aware of:
+> Summary of Tenstorrent socket types:
 >
-> - **H2D/D2H PCIe sockets** (this document)  -  move data between the host CPU and a device core over PCIe. Implemented in `tt_metal/api/tt-metalium/experimental/sockets/`.
-> - **TT-Fabric / Ethernet sockets**  -  move tensor data between AI cores across chips via Ethernet links. Documented in [`tech_reports/TT-Fabric/TT-Fabric-Architecture.md`](../../../tech_reports/TT-Fabric/TT-Fabric-Architecture.md) and [`tech_reports/Programming_Multiple_Meshes/`](../../../tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md).
->
-> These are completely independent mechanisms. This document covers only the PCIe variant.
+> - **H2DSocket / D2HSocket** (this document)  -  PCIe, host <-> device.
+> - **MeshSocket**  -  TT-Fabric (Ethernet), device <-> device. Out of scope here.
+> - **TT-Fabric / Ethernet sockets (lower-level)**  -  the underlying fabric used by `MeshSocket`. See [`tech_reports/TT-Fabric/TT-Fabric-Architecture.md`](../../../tech_reports/TT-Fabric/TT-Fabric-Architecture.md) and [`tech_reports/Programming_Multiple_Meshes/`](../../../tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md).
 
-Two socket types are relevant here:
+Two PCIe socket types are covered in this report:
 
 | Type | Direction | Host-side API | Device-side API |
 |------|-----------|---------------|-----------------|
 | `H2DSocket` | Host -> Device | `write()`, `barrier()` | `SocketReceiverInterface` |
 | `D2HSocket` | Device -> Host | `read()`, `barrier()` | `SocketSenderInterface` |
 
-Both types use a **circular FIFO** backed by **pinned host memory**  -  memory locked in physical RAM and mapped through the vIOMMU so the device can address it directly via PCIe. This is a hard system requirement: **vIOMMU must be enabled** for socket transfers to work.
+Depending on the mode of usage, both socket types use a **circular FIFO** to stage in-flight data, but the location of that FIFO differs:
+
+- **D2H and H2D DEVICE\_PULL** use a FIFO backed by **pinned host memory**  -  memory locked in physical RAM and mapped through the vIOMMU so the device can address it directly via PCIe.
+- **H2D HOST\_PUSH** uses a FIFO backed by **Tensix SRAM (L1)** on the device side; the host writes directly into device L1 over PCIe rather than through a host-side ring buffer.
+
+In all modes, **vIOMMU must be enabled**: even HOST\_PUSH requires vIOMMU-mapped host buffers for control-path signaling (flow-control credits and barrier pages).
 
 The FIFO is parameterised by two quantities that directly control performance:
 
-- **Page size**  -  the unit of transfer, in bytes. On Blackhole, the NOC word width is 512 bits (64 B), which sets the natural PCIe read alignment. The minimum page size is therefore **64 B**, which is why the benchmark sweep starts there. Larger pages amortise per-page overhead but require bigger L1 allocations on the device.
+- **Page size**  -  the unit of transfer, in bytes. On Blackhole, the NOC word width is 512 bits (64 B), which sets the PCIe read alignment; SRAM write alignment is **16 B**. The minimum practical page size is therefore **64 B**, which is why the benchmark sweep starts there. Larger pages amortise per-page handshake overhead and can yield higher throughput, but they also increase per-transfer latency and require bigger L1 allocations on the device.
 - **FIFO (socket buffer) size**  -  the total capacity of the ring buffer, in bytes. A larger FIFO allows the sender to get further ahead of the receiver before back-pressure kicks in, which is critical for high throughput over high-latency PCIe.
 
 ---
 
-### 1.1 System Topology and PCIe Link Asymmetry
-
-Not all chips on a Tenstorrent tray are equal from a host-connectivity standpoint. In a 32-chip Blackhole Galaxy system, **all 32 chips are directly MMIO-mapped**  -  each has its own physical PCIe connection to the host root complex. However, chips fall into two classes based on the **bandwidth** of that connection:
-
-| Class | Count | PCIe Generation & Width | Measured D2H Peak |
-|-------|-------|------------------------|-------------------|
-| High-bandwidth (ASIC 6 per tray) | 4 | **Gen 4 x 8** | **~15.1 GB/s** |
-| Low-bandwidth (all others) | 28 | **Gen 4 x 1** (~2 GB/s peak) | see S.4.6  -  requires KMD >= 2.7 |
-
-> **KMD >= 2.7 required for correct PCIe link speeds on low-bandwidth chips.**
-> Linux kernels 6.5 through 6.12 contain a quirk that can force all PCIe links to **Gen 1 (2.5 GT/s, ~250 MB/s)** during hot-plug enumeration on Blackhole Galaxy systems. KMD 2.7 detects this condition and retrains each link to its full speed. Linux 6.13+ does not have this quirk. Benchmark results for the 28 low-bandwidth chips in this report are only valid when running KMD >= 2.7; numbers collected on earlier KMD versions reflect Gen 1 performance (~250 MB/s) rather than the true Gen 4 x1 ceiling (~2 GB/s). See [ttkmd-2.7.0 release notes](https://github.com/tenstorrent/tt-kmd/releases/tag/ttkmd-2.7.0) for details.
-
-The **4 high-bandwidth chips** (one per tray, ASIC Location 6) have a full Gen 4 x8 link to the host PCIe root complex. Data written by the device kernel over NOC reaches host RAM in a single PCIe hop at full link bandwidth.
-
-The **28 low-bandwidth chips** each have their own direct (not tunnelled) PCIe link to the host  -  there is no chip-to-chip relay. Their peak host-facing bandwidth is significantly lower than the high-bandwidth chips regardless of page size, FIFO size, or transfer mode (see S.4.6 for measured values).
-
-> **This asymmetry is the single most important architectural fact for training job placement.**
-> Any workload that requires high-bandwidth streaming to or from the host  -  gradient checkpointing, activation offloading, weight streaming  -  must target one of the 4 high-bandwidth chips (ASIC 6 per tray). The 28 low-bandwidth chips are significantly bandwidth-constrained for host-facing socket I/O regardless of tuning (see S.4.6 for measured values).
-
-Due to this asymmetry, the benchmarks in this report show two distinct performance regimes: high-bandwidth chips saturate the PCIe link with low latency, while low-bandwidth chips hit a hard throughput ceiling orders of magnitude lower and incur significantly higher round-trip latency, regardless of page size or FIFO tuning.
-
-### Related documentation in this repo
-
-| Document | Relevance |
-|----------|-----------|
-| [`tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md`](../../../tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) | Blackhole chip specs: Tensix grid (13x10 compute), L1 (1464 KB + data cache), DRAM (~4 GB x 8 banks), NOC alignment constraints. |
-| [`tech_reports/EthernetMultichip/BasicEthernetGuide.md`](../../../tech_reports/EthernetMultichip/BasicEthernetGuide.md) | Multi-chip topology and MMIO concepts (Wormhole-era). Note: in Wormhole only a subset of chips were MMIO-mapped; in Blackhole **all 32 chips** have direct PCIe connections. The relevant Blackhole asymmetry is PCIe link bandwidth (high-bandwidth vs low-bandwidth chips), not MMIO vs non-MMIO. |
-| [`tech_reports/TT-Fabric/TT-Fabric-Architecture.md`](../../../tech_reports/TT-Fabric/TT-Fabric-Architecture.md) | TT-Fabric Ethernet sockets (chip-to-chip via Ethernet, **not** PCIe). Do not confuse with H2D/D2H PCIe sockets. |
-| [`tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md`](../../../tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md) | Multi-mesh pipeline parallelism using Ethernet sockets (not PCIe sockets). Relevant context for where H2D/D2H fits in a broader multi-mesh system: H2D/D2H handles host<->device ingestion/egress, while inter-mesh data flow uses Ethernet sockets. |
-| [`tech_reports/memory/allocator.md`](../../../tech_reports/memory/allocator.md) | L1 and DRAM allocation, alignment constraints. |
-
----
-
-### 1.2 Blackhole Hardware Facts Relevant to This Guide
+### 1.1 Blackhole Hardware Facts Relevant to This Guide
 
 | Parameter | Value |
 |-----------|-------|
 | AI clock | **1.35 GHz** (used throughout for cycles -> us conversion) |
 | L1 per core | **1464 KB** (governs maximum socket page size and buffer allocation) |
-| PCIe link  -  high-bandwidth chips (ASIC 6 per tray, 4 total) | **Gen 4 x8 -> ~16 GB/s** unidirectional theoretical; ~15.1 GB/s measured D2H |
-| PCIe link  -  low-bandwidth chips (all others, 28 total) | **Gen 4 x1 -> ~2 GB/s** unidirectional (requires KMD >= 2.7  -  see S.1.1 note) |
+| PCIe link  -  high-bandwidth chips (ASIC 6 per tray, 4 total) | **Gen 4 x8** (~16 GB/s unidirectional theoretical; measured values in S.4) |
+| PCIe link  -  low-bandwidth chips (all others, 28 total) | **Gen 4 x1** (requires KMD >= 2.7  -  see S.4 hardware overview; measured values in S.4.6) |
 
 Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`](../../../tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md); AI clock (1.35 GHz) from [`GEMM_FLOPS.md`](../../../tech_reports/GEMM_FLOPS/GEMM_FLOPS.md); PCIe link bandwidth from benchmark measurements in this report.
 
 ---
 
-### 1.3 Training & Inference Use Cases for PCIe Sockets
+### 1.2 Training & Inference Use Cases for PCIe Sockets
 
 | Scenario | Direction | Driver | Bottleneck |
 |----------|-----------|--------|------------|
@@ -138,14 +114,14 @@ Host CPU  --[TLB PCIe write]--->  Device L1 FIFO  --->  Device kernel
 
 ### 2.2 H2D  -  DEVICE\_PULL
 
-The host writes data to a pinned host buffer and updates `bytes_sent`. The device kernel detects the notification, then issues a **NOC read** (non-posted; requires PCIe completion TLPs) to pull the data from host RAM into its own L1.
+The host writes data to a pinned host buffer and updates `bytes_sent` in worker SRAM. The device kernel detects the notification, then issues a **NOC read** (non-posted; requires PCIe completion TLPs - Transaction Layer Packets that carry the read response back from host RAM) to pull the data from host RAM into its own L1.
 
 ```text
 Host CPU  --[writes to pinned RAM, updates bytes_sent]--->  device detects
 Device kernel  --[NOC read <--- PCIe <--- pinned host RAM]--->  data in L1
 ```
 
-This mode frees the host CPU from driving the bulk DMA, at the cost of PCIe read completion overhead which caps throughput below the posted-write ceiling of HOST\_PUSH and D2H.
+This mode frees the host CPU from driving the bulk DMA. PCIe read completions add per-page overhead compared to posted writes, but DEVICE\_PULL can still achieve higher throughput than HOST\_PUSH in practice because the device can pipeline multiple outstanding NOC reads without waiting for the host CPU to schedule each write.
 
 ### 2.3 D2H
 
@@ -157,7 +133,10 @@ Device kernel  --[NOC write ---> PCIe ---> pinned host FIFO]--->  Host CPU reads
 
 ### 2.4 Flow control (shared)
 
-All three modes share the same **`bytes_sent` / `bytes_acked`** credit protocol. Both fields live in host-pinned memory and are accessible to both sides via PCIe.
+All three modes share the same **`bytes_sent` / `bytes_acked`** credit protocol, but the memory location of the fields differs by direction:
+
+- **D2H:** both fields live in **host-pinned memory**. The device writes `bytes_sent` into host RAM via a PCIe posted write; the host writes `bytes_acked` back into host RAM; the device reads `bytes_acked` from host RAM via L1 cache invalidation.
+- **H2D (both modes):** both fields live in **worker SRAM (device L1)**. The host writes `bytes_sent` into device L1 via a TLB-mapped PCIe write; the device writes `bytes_acked` into device L1 locally; the host reads `bytes_acked` from device L1 via a TLB-mapped PCIe read.
 
 ```text
 Sender                                          Receiver
@@ -167,10 +146,10 @@ write data into FIFO
 bytes_sent += page_size
 notify_receiver() ------------------------------>  detects new data, consumes page
                                                    bytes_acked += page_size
-<----------------------------- notify_sender()      written to host-pinned memory
+<----------------------------- notify_sender()
 ```
 
-The sender blocks when the FIFO is full (`bytes_sent - bytes_acked == fifo_size`); the receiver spins when it is empty. Both counters are written via NOC + PCIe and require `invalidate_l1_cache()` before reading on the device side.
+The sender blocks when the FIFO is full (`bytes_sent - bytes_acked == fifo_size`); the receiver spins when it is empty. For D2H, both counter writes cross PCIe (device writes `bytes_sent` into host RAM; device reads `bytes_acked` from host RAM via L1 cache invalidation). For H2D, both counters live in device SRAM: the host writes `bytes_sent` via TLB-mapped PCIe write and the device reads it directly from L1 without a cache invalidation.
 
 See **S.3** for fully annotated kernel code showing exactly how each call maps to the protocol.
 
@@ -186,7 +165,7 @@ This section walks through the benchmark kernels and their host-side counterpart
 
 The host side is identical for all socket directions and modes. The workflow is:
 
-1. **Construct the socket**  -  allocates pinned host memory for the FIFO and the flow-control fields, creates the L1 config buffer on the device, and (for HOST\_PUSH) opens a TLB window into the device L1 FIFO region.
+1. **Construct the socket**  -  allocates pinned host memory for the FIFO and the flow-control fields, creates the L1 config buffer on the device, and (for HOST\_PUSH) creates an internal handle to a TLB window into the device L1 FIFO region.
 2. **Set the page size**  -  aligns the internal write/read pointer to the new page granularity.
 3. **Pass the config buffer address to the device kernel**  -  the device needs to know where in L1 to find the socket metadata.
 4. **Dispatch the device kernel**  -  enqueue the workload before (or concurrently with) the host's write/read loop.
@@ -231,7 +210,7 @@ EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
 // 6. Host transfer loop: write one page at a time.
 //    write() blocks if the FIFO is full (FIFO size - (bytes_sent - bytes_acked) < page_size).
-//    After writing, it updates bytes_sent in pinned memory and notifies the device.
+//    After writing, it updates bytes_sent in device L1 (worker SRAM) via TLB write and notifies the device.
 for (uint32_t j = 0; j < num_writes; j++) {
     input_socket.write(src_vec.data() + j * page_size_words, 1);
 }
@@ -279,59 +258,46 @@ Full kernel, annotated:
 ```cpp
 // pcie_socket_sender.cpp
 
+// Load socket metadata from the L1 config buffer onto the kernel stack.
 SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
 uint32_t pcie_xy_enc  = sender_socket.d2h.pcie_xy_enc;   // NOC encoding of the PCIe endpoint
 uint32_t data_addr_hi = sender_socket.d2h.data_addr_hi;  // high 32 bits of host FIFO PCIe address
+uint32_t data_addr    = local_l1_buffer_addr;             // source L1 buffer to send from
 set_sender_socket_page_size(sender_socket, page_size);
 
-uint64_t start_timestamp = get_timestamp();
+uint32_t outstanding_data_size = data_size;
+while (outstanding_data_size) {
 
-for (uint32_t i = 0; i < num_iterations; i++) {
-    uint32_t outstanding_data_size = data_size;
-    while (outstanding_data_size) {
+    // Spin until the host has freed at least one page of FIFO space.
+    // Reads bytes_acked from host-pinned memory via L1 cache invalidation.
+    socket_reserve_pages(sender_socket, 1);
 
-        // Spin until the host has freed at least one page of FIFO space.
-        // Reads bytes_acked from host-pinned memory via L1 cache invalidation.
-        socket_reserve_pages(sender_socket, 1);
+    // Compute the destination PCIe address for this page.
+    // write_ptr is a relative offset into the ring buffer; combine with the
+    // FIFO base address and the high 32-bit word to form the full 64-bit host RAM address.
+    uint64_t pcie_data_addr =
+        ((static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr)
+        + sender_socket.write_ptr;
 
-        // Compute the destination PCIe address for this page.
-        // write_ptr is a relative offset; add the FIFO base and high address word
-        // to form the full 64-bit host RAM address.
-        uint64_t pcie_data_addr =
-            ((uint64_t)data_addr_hi << 32 | sender_socket.downstream_fifo_addr)
-            + sender_socket.write_ptr;
+    // Issue a chunked NOC write from device L1 into host RAM (PCIe posted write, no completion needed).
+    noc_write_page_chunked(pcie_xy_enc, data_addr, pcie_data_addr, page_size);
 
-        // Issue chunked NOC writes into host RAM (PCIe posted write).
-        // Each chunk is at most NOC_MAX_BURST_SIZE bytes.
-        uint32_t page_bytes_remaining = page_size;
-        while (page_bytes_remaining) {
-            uint32_t chunk = std::min(page_bytes_remaining, max_noc_burst_bytes);
-            noc_wwrite_with_state<...>(noc_index, src_addr, pcie_xy_enc,
-                                      pcie_data_addr, chunk, 1);
-            src_addr      += chunk;
-            pcie_data_addr += chunk;
-            page_bytes_remaining -= chunk;
-        }
+    data_addr += page_size;
+    outstanding_data_size -= page_size;
 
-        // Advance write_ptr and increment bytes_sent in the local struct.
-        socket_push_pages(sender_socket, 1);
+    // Wait for the NOC write to retire before advancing the FIFO pointer.
+    noc_async_write_barrier();
 
-        // NOC write of bytes_sent to host-pinned memory so the host's read()
-        // call can detect that new data has arrived.
-        socket_notify_receiver(sender_socket);
+    // Advance write_ptr and increment bytes_sent in the local struct.
+    socket_push_pages(sender_socket, 1);
 
-        outstanding_data_size -= page_size;
-    }
+    // NOC write of bytes_sent to host-pinned memory so the host's read()
+    // call can detect that new data has arrived.
+    socket_notify_receiver(sender_socket);
 }
 
-// Spin until all bytes_acked == bytes_sent (host has consumed and freed all pages).
+// Spin until bytes_acked == bytes_sent (host has consumed and freed all pages).
 socket_barrier(sender_socket);
-noc_async_write_barrier();
-
-uint64_t end_timestamp = get_timestamp();
-// Store elapsed cycles for the host to read back.
-*reinterpret_cast<volatile uint64_t*>(measurement_buffer_addr)
-    = end_timestamp - start_timestamp;
 
 // Write the updated write_ptr and bytes_sent back to the L1 config buffer
 // so the state is preserved across kernel invocations.
@@ -359,8 +325,8 @@ for (uint32_t i = 0; i < num_iterations; i++) {
     while (outstanding_data_size) {
 
         // Spin until bytes_sent - bytes_acked >= page_size.
-        // bytes_sent is updated by the host's write() call via a TLB write to
-        // host-pinned memory; the device reads it via cache invalidation.
+        // bytes_sent is updated by the host's write() call via a TLB write into
+        // device L1 (worker SRAM); the device reads it directly from L1.
         socket_wait_for_pages(receiver_socket, 1);
 
         // The page is already sitting in the L1 FIFO at receiver_socket.read_ptr.
@@ -374,8 +340,8 @@ for (uint32_t i = 0; i < num_iterations; i++) {
         // Advance read_ptr and increment bytes_acked locally.
         socket_pop_pages(receiver_socket, 1);
 
-        // NOC write of bytes_acked to host-pinned memory. This unblocks the
-        // host's write() call when the FIFO was full.
+        // Write bytes_acked back to device L1 (worker SRAM) and notify the host
+        // via PCIe so it can unblock if the FIFO was full.
         socket_notify_sender(receiver_socket);
     }
 }
@@ -465,6 +431,25 @@ noc_async_write_barrier();
 
 ## 4. Performance Results
 
+### Hardware Overview: PCIe Link Asymmetry
+
+Not all chips on a Tenstorrent tray are equal from a host-connectivity standpoint. In a 32-chip Blackhole Galaxy system, **all 32 chips are directly MMIO-mapped**  -  each has its own physical PCIe connection to the host root complex. However, chips fall into two classes based on the **bandwidth** of that connection:
+
+- **High-bandwidth chips (ASIC 6 per tray, 4 total):** Gen 4 x8 PCIe link to the host root complex.
+- **Low-bandwidth chips (all others, 28 total):** Gen 4 x1 PCIe link (requires KMD >= 2.7 for correct link speed; see note below). Measured peak throughput values for these chips are presented in S.4.6.
+
+> **KMD >= 2.7 required for correct PCIe link speeds on low-bandwidth chips.**
+> Linux kernels 6.5 through 6.12 contain a quirk that can force all PCIe links to **Gen 1 (2.5 GT/s, ~250 MB/s)** during hot-plug enumeration on Blackhole Galaxy systems. KMD 2.7 detects this condition and retrains each link to its full speed. Linux 6.13+ does not have this quirk. Benchmark results for the 28 low-bandwidth chips in this report are only valid when running KMD >= 2.7; numbers collected on earlier KMD versions reflect Gen 1 performance (~250 MB/s) rather than the true Gen 4 x1 ceiling (~2 GB/s). See [ttkmd-2.7.0 release notes](https://github.com/tenstorrent/tt-kmd/releases/tag/ttkmd-2.7.0) for details.
+
+The **4 high-bandwidth chips** (one per tray, ASIC Location 6) have a full Gen 4 x8 link to the host PCIe root complex. Data written by the device kernel over NOC reaches host RAM in a single PCIe hop at full link bandwidth.
+
+The **28 low-bandwidth chips** each have their own direct (not tunnelled) PCIe link to the host  -  there is no chip-to-chip relay. Their peak host-facing bandwidth is significantly lower than the high-bandwidth chips regardless of page size, FIFO size, or transfer mode (see S.4.6 for measured values).
+
+> **This asymmetry is the single most important architectural fact for workload layout.**
+> Any workload that requires high-bandwidth streaming to or from the host  -  gradient checkpointing, activation offloading, weight streaming  -  must target one of the 4 high-bandwidth chips (ASIC 6 per tray). The 28 low-bandwidth chips are significantly bandwidth-constrained for host-facing socket I/O regardless of tuning (see S.4.6 for measured values).
+
+Due to this asymmetry, the benchmarks in this report show two distinct performance regimes: high-bandwidth chips saturate the PCIe link with low latency, while low-bandwidth chips hit a hard throughput ceiling orders of magnitude lower and incur significantly higher round-trip latency, regardless of page size or FIFO tuning.
+
 > Charts are generated by `analyze_hd_sockets.py`  -  see [S.6 Running the Benchmarks](#6-running-the-benchmarks).
 
 ---
@@ -529,9 +514,9 @@ noc_async_write_barrier();
 
 ### 4.6 Multi-Chip Throughput
 
-> **Charts pending re-run with KMD >= 2.7.** Initial measurements for the 28 low-bandwidth chips were collected while those links were running at **Gen 1 (2.5 GT/s)** due to a Linux kernel 6.5-6.12 quirk (see S.1.1). KMD 2.7 retrains all links to Gen 4 speed; results will be updated once benchmarks are re-run on a KMD 2.7 system.
+> **Charts pending re-run with KMD >= 2.7.** Initial measurements for the 28 low-bandwidth chips were collected while those links were running at **Gen 1 (2.5 GT/s)** due to a Linux kernel 6.5-6.12 quirk (see S.4 hardware overview). KMD 2.7 retrains all links to Gen 4 speed; results will be updated once benchmarks are re-run on a KMD 2.7 system.
 
-**`mc_d2h_throughput_heatmap.png`**  -  Heatmap of D2H peak throughput (GB/s) across every chip on the system. Rows = chips (identified by Tray ID / ASIC Location), columns = FIFO sizes (1 MB -> 256 MB), fixed at 64 KB pages and 1 GB total transfer. Reveals per-chip performance variation across the tray.
+**`mc_d2h_throughput_heatmap.png`**  -  Heatmap of D2H peak throughput (GB/s) across every chip on the system. Rows = chips (identified by Tray ID / ASIC Location), columns = FIFO sizes (1 MB -> 256 MB), fixed at 256 KB pages and 1 GB total transfer. Reveals per-chip performance variation across the tray.
 
 <!-- FIXME: shelved  -  re-run after PCIe link config is validated
 ![D2H Multi-Chip Throughput Heatmap  -  All Chips x FIFO Size](charts/mc_d2h_throughput_heatmap.png)
@@ -590,7 +575,7 @@ Latency grows with page size because more data must traverse PCIe. For small pag
 ### HOST\_PUSH vs. DEVICE\_PULL (H2D)
 
 - **HOST\_PUSH** generally has lower latency because the host can write directly into device L1 with a single TLB write, avoiding the device issuing a separate NOC read.
-- **DEVICE\_PULL** frees the host CPU  -  the host only updates `bytes_sent`, while the device issues the bulk PCIe read. The trade-off is throughput: non-posted reads require PCIe completion TLPs, which cap DEVICE\_PULL below the posted-write ceiling of HOST\_PUSH and D2H.
+- **DEVICE\_PULL** frees the host CPU  -  the host only updates `bytes_sent` in worker SRAM, while the device issues the bulk PCIe read. Non-posted reads require PCIe completion TLPs (Transaction Layer Packets carrying the read response), adding per-page overhead compared to posted writes, but DEVICE\_PULL can achieve higher throughput than HOST\_PUSH in practice because the device can pipeline multiple outstanding NOC reads without waiting for the host CPU to schedule each write.
 
 ### Tail latency (p99 vs. avg)
 
@@ -600,7 +585,7 @@ The per-iteration ping plots (**S.4.5**) expose this jitter directly  -  any ite
 
 ### Per-chip throughput variation
 
-As described in **S.1.1**, the throughput gap between high-bandwidth and low-bandwidth chips does not improve with larger pages or larger FIFOs  -  it is a PCIe physical-layer constraint (see S.4.6 for measured values).
+As described in **S.4** (hardware overview), the throughput gap between high-bandwidth and low-bandwidth chips does not improve with larger pages or larger FIFOs  -  it is a PCIe physical-layer constraint (see S.4.6 for measured values).
 
 Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  see **S.4.6** (`mc_d2h_throughput_heatmap.png`) for the measured spread across your specific system.
 
@@ -608,7 +593,7 @@ Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  s
 
 ## 6. Running the Benchmarks
 
-All tests require a system with vIOMMU enabled. They will `GTEST_SKIP` automatically on unsupported systems via the `GetMemoryPinningParameters` check.
+All benchmarks require a system with vIOMMU enabled. They will skip automatically on unsupported systems via the `GetMemoryPinningParameters` check (`state.SkipWithMessage`).
 
 > **Prerequisite  -  KMD >= 2.7:** Linux kernels 6.5-6.12 force all Blackhole Galaxy PCIe links to Gen 1 during hot-plug enumeration. KMD 2.7 retrains them to full Gen 4 speed. Results collected on earlier KMD versions will show ~250 MB/s for the 28 low-bandwidth chips instead of the true ~2 GB/s Gen 4 x1 ceiling. Verify with `cat /sys/bus/pci/devices/<bdf>/current_link_speed` before benchmarking.
 
@@ -623,9 +608,10 @@ Build the test binary:
 Run a specific benchmark (e.g., D2H latency):
 
 ```bash
-./build/test/tt_metal/distributed/test_hd_sockets \
-    --gtest_filter="HDSocketFixture.D2HSocketLatencyBenchmark" \
-    2>&1 | tee d2h_latency_results.csv
+./build/test/tt_metal/distributed/distributed_benchmarks \
+    --benchmark_filter="BM_D2HSocketLatency" \
+    --benchmark_format=csv \
+    --benchmark_out=d2h_latency_results.csv
 ```
 
 Analyse and plot results:
@@ -648,51 +634,51 @@ python3 tests/tt_metal/distributed/analyze_hd_sockets.py \
 
 ## 7. Benchmark Suite Reference
 
-All benchmarks live in `tests/tt_metal/distributed/test_hd_sockets.cpp` and run under the `HDSocketFixture` Google Test fixture.
+All benchmarks live in `tests/tt_metal/distributed/benchmark_hd_sockets.cpp` and are compiled into the `distributed_benchmarks` binary using the **Google Benchmark** framework.
 
-**Device targeting:** All single-chip benchmarks run on a standardised target: **Tray 1, ASIC Location 6**, selected using `get_target_benchmark_worker_core()`. ASIC 6 is one of the 4 Gen 4 x8 chips (one per tray, see **S.1.1**); any of the 4 would give similar results  -  Tray 1 ASIC 6 is used as a fixed reference. The multi-chip benchmark additionally sweeps every chip on the system to give a system-wide picture.
+**Device targeting:** All single-chip benchmarks run on a fixed reference chip defined by `kHighBwChip = {tray_id=1, asic_location=6}` and `kLowBwChip = {tray_id=1, asic_location=1}`, resolved at runtime via `find_benchmark_core()`. ASIC 6 is one of the 4 Gen 4 x8 chips (one per tray, see **S.4**); Tray 1 ASIC 6 is used as the fixed high-bandwidth reference. The multi-chip benchmarks additionally sweep every chip (indices 0-31) on the system to give a system-wide picture.
 
-| Test Name | Direction | What It Measures |
-|-----------|-----------|-----------------|
-| `D2HSocketThroughputBenchmark` | D2H | Steady-state bulk throughput |
-| `D2HSocketLatencyBenchmark` | D2H | Per-iteration round-trip latency (with data DMA) |
-| `D2HSocketPingBenchmark` | D2H | Pure signalling round-trip (no data DMA) |
-| `D2HSocketMultiChipMaxThroughputBenchmark` | D2H | Peak throughput across all chips on system |
-| `H2DSocketThroughputBenchmark` | H2D | Steady-state bulk throughput (both modes) |
-| `H2DSocketMultiChipMaxThroughputBenchmark` | H2D | Peak DEVICE_PULL throughput across all chips (256 KB pages, FIFO 256 KB-1 MB) |
-| `H2DSocketLatencyBenchmark` | H2D | Per-iteration round-trip latency (both modes) |
-| `H2DSocketPingBenchmark` | H2D | Pure signalling round-trip (both modes) |
+| Benchmark Name | Direction | What It Measures |
+|----------------|-----------|-----------------|
+| `BM_D2HSocketThroughput` | D2H | Steady-state bulk throughput |
+| `BM_D2HSocketLatency` | D2H | Per-iteration round-trip latency (with data DMA) |
+| `BM_D2HSocketPing` | D2H | Pure signalling round-trip (no data DMA) |
+| `BM_D2HSocketMultiChipThroughput` | D2H | Peak throughput across all chips on system |
+| `BM_H2DSocketThroughput` | H2D | Steady-state bulk throughput (both modes) |
+| `BM_H2DSocketMultiChipThroughput` | H2D | DEVICE\_PULL throughput across all chips (256 KB pages, FIFO 256 KB-1 MB) |
+| `BM_H2DSocketLatency` | H2D | Per-iteration round-trip latency (both modes) |
+| `BM_H2DSocketPing` | H2D | Pure signalling round-trip (both modes) |
 
-### D2HSocketThroughputBenchmark
+### BM_D2HSocketThroughput
 
-The baseline D2H throughput test. The device kernel (`pcie_socket_sender.cpp`) writes `data_size` bytes per iteration using chunked NOC writes across PCIe into a host-pinned FIFO. A single pair of device-side timestamps brackets the full multi-iteration run; the host computes average per-page cycles and GB/s. Sweeps page sizes up to 256 KB and FIFO sizes up to 512 MB.
+The baseline D2H throughput test. The device kernel (`pcie_socket_sender.cpp`) writes `data_size` bytes per iteration using `noc_write_page_chunked` NOC writes across PCIe into a host-pinned FIFO. The host measures aggregate cycles and reports average per-page throughput in GB/s. Sweeps page sizes 64 B to 256 KB and FIFO sizes 1 KB to 512 MB. Run on both the high-bandwidth (`kHighBwChip`) and low-bandwidth (`kLowBwChip`) reference chips.
 
-### D2HSocketLatencyBenchmark
+### BM_D2HSocketLatency
 
-Measures per-iteration round-trip latency on the D2H path with actual data DMA. Uses `pcie_socket_data_ping.cpp` on the device: each iteration sends one page to the host, then calls `socket_barrier` to wait for the host's acknowledgement. Five warmup iterations precede 100 timed iterations; each timed delta is stored in the L1 measurement buffer and read back for percentile reporting. Sweeps page sizes and a subset of FIFO sizes chosen to cover latency-sensitive operating points (1 KB to 512 MB FIFO).
+Measures per-iteration round-trip latency on the D2H path with actual data DMA. Uses `pcie_socket_data_ping.cpp` on the device: each iteration sends one page to the host, then calls `socket_barrier` to wait for the host's acknowledgement. 5 warmup iterations precede 100 timed iterations (`kWarmupIters=5`, `kLatencyIters=100`); latency statistics (min, p50, avg, p99, max) are computed from the per-iteration cycle deltas. Sweeps page sizes 64 B to 256 KB and FIFO sizes 1 KB to 512 MB.
 
-### D2HSocketPingBenchmark
+### BM_D2HSocketPing
 
-Measures **pure signalling overhead** on the D2H path  -  no data DMA occurs. Uses `pcie_socket_ping.cpp`: the device calls `socket_reserve_pages` / `socket_push_pages` / `socket_notify_receiver` / `socket_barrier` with no actual payload write. The host calls `output_socket.read()` to consume the page slot and send the ack. This isolates the flow-control protocol overhead from the data transfer cost. The first config also dumps raw per-iteration data to `tests/tt_metal/distributed/ping_iterations.csv` for jitter analysis.
+Measures **pure signalling overhead** on the D2H path  -  no data DMA occurs. Uses `pcie_socket_ping.cpp`: the device calls `socket_reserve_pages` / `socket_push_pages` / `socket_notify_receiver` / `socket_barrier` with no actual payload write. The host calls `output_socket.read()` to consume the page slot and send the ack. This isolates the flow-control protocol overhead from the data transfer cost. Fixed at 64 B page size and 4 KB FIFO.
 
-### D2HSocketMultiChipMaxThroughputBenchmark
+### BM_D2HSocketMultiChipThroughput
 
-Sweeps **every chip** on the system (identified via `PhysicalSystemDescriptor` + tray/ASIC location metadata) and measures D2H throughput at 64 KB pages  -  safely above the ~4 KB throughput knee  -  across five FIFO sizes (1 MB, 4 MB, 16 MB, 64 MB, 256 MB). Produces a CSV with tray ID, ASIC location, and mesh coordinate columns so per-chip variation across the tray can be compared. Total data transferred per configuration: 1 GB.
+Sweeps **every chip** on the system (chip indices 0-31, enumerated via `PhysicalSystemDescriptor`) and measures D2H throughput at **256 KB pages** across five FIFO sizes (1 MB, 4 MB, 16 MB, 64 MB, 256 MB). Produces counters with tray ID and ASIC location so per-chip variation across the tray can be compared. Total data transferred per configuration: 1 GB.
 
-### H2DSocketMultiChipMaxThroughputBenchmark
+### BM_H2DSocketMultiChipThroughput
 
-Sweeps **every chip** on the system (all 32 chips in a Blackhole Galaxy) and measures H2D throughput using **DEVICE\_PULL** at 256 KB pages  -  the empirically highest-throughput page size for this mode  -  across three FIFO sizes: 256 KB, 512 KB, and 1 MB. Total data transferred per configuration: 1 GB. Analogous to `D2HSocketMultiChipMaxThroughputBenchmark` on the H2D path (same CSV format, same chip enumeration).
+Sweeps **every chip** on the system (all 32 chips in a Blackhole Galaxy) and measures H2D throughput using **DEVICE\_PULL** at **256 KB pages** across three FIFO sizes (256 KB, 512 KB, 1 MB). Total data transferred per configuration: 1 GB. Analogous to `BM_D2HSocketMultiChipThroughput` on the H2D path (same chip enumeration, same CSV-compatible counter format).
 
-### H2DSocketThroughputBenchmark
+### BM_H2DSocketThroughput
 
-Measures H2D steady-state throughput for both `HOST_PUSH` and `DEVICE_PULL` modes in a single test. For HOST\_PUSH, the device kernel is `h2d_throughput_host_push.cpp`; for DEVICE\_PULL, it is `h2d_throughput_device_pull.cpp`. Same single-aggregate-timestamp methodology as `D2HSocketThroughputBenchmark`. Sweeps FIFO sizes up to 1 MB, page sizes up to 256 KB.
+Measures H2D steady-state throughput for both `HOST_PUSH` and `DEVICE_PULL` modes. The `mode_index` argument selects the mode; both are registered in a single `ArgsProduct` sweep. For HOST\_PUSH the device kernel is `h2d_throughput_host_push.cpp`; for DEVICE\_PULL it is `h2d_throughput_device_pull.cpp`. Sweeps FIFO sizes 1 KB to 1 MB (L1-constrained) and page sizes 64 B to 256 KB.
 
-### H2DSocketLatencyBenchmark
+### BM_H2DSocketLatency
 
-Measures per-iteration round-trip latency on the H2D path for both `HOST_PUSH` and `DEVICE_PULL`. Uses `h2d_socket_data_ping_host_push.cpp` and `h2d_socket_data_ping_device_pull.cpp` respectively. Both kernels follow the same 5-warmup + 100-timed-iteration pattern with per-iteration L1 measurement buffers.
+Measures per-iteration round-trip latency on the H2D path for both `HOST_PUSH` and `DEVICE_PULL`. Uses `h2d_socket_data_ping_host_push.cpp` and `h2d_socket_data_ping_device_pull.cpp` respectively. Both run 5 warmup + 100 timed iterations, reporting the same latency percentiles as `BM_D2HSocketLatency`.
 
-**What the device timer captures:** Each iteration records `start = get_timestamp()` *before* calling `socket_wait_for_pages`, then `end = get_timestamp()` after `socket_notify_sender` completes. The measured cycles therefore cover the full round-trip: (a) spin-wait for the host write to arrive over PCIe, (b) device-side copy to local buffer, and (c) the acknowledgement NOC write back to host-pinned memory.
+**What the device timer captures:** Each iteration records `start = get_timestamp()` *before* calling `socket_wait_for_pages`, then `end = get_timestamp()` after `socket_notify_sender` completes. The measured cycles therefore cover the full round-trip: (a) spin-wait for the host write to arrive over PCIe, (b) device-side copy to local buffer, and (c) the acknowledgement NOC write back to device SRAM.
 
-### H2DSocketPingBenchmark
+### BM_H2DSocketPing
 
-Measures **pure signalling overhead** on the H2D path for both modes. Uses `h2d_socket_ping.cpp` on the device (no DMA in device kernel). The host issues `write + barrier` per iteration (5 warmup + 100 timed). Each iteration's cycle delta is stored per-iteration and also dumped to `h2d_ping_iterations_HOST_PUSH.csv` / `h2d_ping_iterations_DEVICE_PULL.csv` for jitter analysis. Compares mode overhead directly since the kernel path is identical for both modes.
+Measures **pure signalling overhead** on the H2D path for both modes. Uses `h2d_socket_ping.cpp` on the device (no DMA in device kernel). Fixed at 64 B page size and 4 KB FIFO. The host issues `write + barrier` per iteration (5 warmup + 100 timed). Compares mode overhead directly since the kernel path is identical for both modes.
