@@ -7,13 +7,67 @@ Attention implementation for Qwen3-TTS.
 Note: Qwen3-TTS uses non-interleaved RoPE (pairs dims i and i+64),
 while TTNN rotary_embedding_llama uses interleaved format (pairs dims 2i and 2i+1).
 This module handles the necessary dimension rearrangement.
+
+Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
+
+IMPORTANT: Decode mode uses PyTorch-based RoPE computation because TTNN's
+rotary_embedding_llama requires HEIGHT_SHARDED memory layout for decode mode,
+which conflicts with the dimension rearrangement operations needed for
+Qwen3's non-interleaved RoPE format.
 """
+
+from typing import Optional, Tuple
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_tts.tt.rope import rearrange_to_interleaved, rearrange_to_noninterleaved
+from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved, ttnn_rearrange_to_noninterleaved
+
+
+def apply_rope_pytorch(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply RoPE to Q and K tensors using PyTorch (for decode mode).
+
+    Handles Qwen3's non-interleaved RoPE format.
+
+    Args:
+        q: Query tensor [batch, num_heads, seq_len, head_dim]
+        k: Key tensor [batch, num_kv_heads, seq_len, head_dim]
+        cos: Cosine tensor [1, 1, seq_len, head_dim] (interleaved format)
+        sin: Sine tensor [1, 1, seq_len, head_dim] (interleaved format)
+
+    Returns:
+        Tuple of (q_rotated, k_rotated) tensors
+    """
+    head_dim = q.shape[-1]
+    half_dim = head_dim // 2
+
+    def rotate_half_noninterleaved(x):
+        """Rotate using non-interleaved format (pairs i, i+64)."""
+        x1 = x[..., :half_dim]
+        x2 = x[..., half_dim:]
+        return torch.cat([-x2, x1], dim=-1)
+
+    # Convert cos/sin from interleaved [c0,c0,c1,c1,...] to non-interleaved [c0,c1,...,c0,c1,...]
+    # cos/sin in TTNN format: [c0, c0, c1, c1, ...] - need unique values
+    cos_unique = cos[..., 0::2]  # [c0, c1, c2, ...]
+    sin_unique = sin[..., 0::2]  # [s0, s1, s2, ...]
+
+    # Non-interleaved format: first half applies to dims 0-63, second half to dims 64-127
+    cos_ni = torch.cat([cos_unique, cos_unique], dim=-1)
+    sin_ni = torch.cat([sin_unique, sin_unique], dim=-1)
+
+    # Apply rotation: x * cos + rotate_half(x) * sin
+    q_rotated = q * cos_ni + rotate_half_noninterleaved(q) * sin_ni
+    k_rotated = k * cos_ni + rotate_half_noninterleaved(k) * sin_ni
+
+    return q_rotated, k_rotated
 
 
 class Attention(LightweightModule):
@@ -140,9 +194,14 @@ class Attention(LightweightModule):
         sin: ttnn.Tensor,
         transformation_mat: ttnn.Tensor,
         attention_mask: ttnn.Tensor = None,
-    ) -> ttnn.Tensor:
+        kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
+        start_pos: int = 0,
+        mode: str = "prefill",
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Apply multi-head attention with QK-norm and RoPE.
+
+        Supports both prefill (full sequence) and decode (single token) modes.
 
         Args:
             x: Input tensor of shape [batch, 1, seq_len, hidden_size]
@@ -150,12 +209,19 @@ class Attention(LightweightModule):
             sin: Sine frequencies for RoPE [1, 1, seq_len, head_dim]
             transformation_mat: Transformation matrix for RoPE
             attention_mask: Optional attention mask
+            kv_cache: Optional tuple of (k_cache, v_cache) tensors for decode mode
+                      Each has shape [batch, num_kv_heads, max_seq_len, head_dim]
+            start_pos: Starting position in sequence (for KV cache indexing)
+            mode: "prefill" for full sequence or "decode" for single token generation
 
         Returns:
-            Output tensor of shape [batch, 1, seq_len, hidden_size]
+            Tuple of (output, updated_kv_cache) where:
+            - output: tensor of shape [batch, 1, seq_len, hidden_size]
+            - updated_kv_cache: tuple of (k_cache, v_cache) or None if not using cache
         """
         batch_size = x.shape[0]
         seq_len = x.shape[-2]
+        is_decode = mode == "decode"
 
         # Project QKV
         xqkv = ttnn.linear(
@@ -193,74 +259,83 @@ class Attention(LightweightModule):
         # Apply RoPE with dimension rearrangement
         # Qwen3-TTS uses non-interleaved RoPE (pairs i, i+64)
         # TTNN rotary_embedding_llama uses interleaved (pairs 2i, 2i+1)
-        # We rearrange Q/K before RoPE and back after
 
         if q.dtype != ttnn.bfloat16:
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        # Rearrange to interleaved format for TTNN RoPE
-        # Convert to PyTorch, rearrange, convert back (TODO: optimize with TTNN ops)
-        q_torch = ttnn.to_torch(q)
-        k_torch = ttnn.to_torch(k)
+        if is_decode:
+            # Decode mode: Use PyTorch-based RoPE
+            # TTNN's rotary_embedding_llama requires HEIGHT_SHARDED for decode,
+            # but our dimension rearrangement ops don't work well with sharded tensors.
+            # So we compute RoPE on CPU and transfer back.
+            q_torch = ttnn.to_torch(q).float()
+            k_torch = ttnn.to_torch(k).float()
+            cos_torch = ttnn.to_torch(cos).float()
+            sin_torch = ttnn.to_torch(sin).float()
 
-        q_interleaved = rearrange_to_interleaved(q_torch)
-        k_interleaved = rearrange_to_interleaved(k_torch)
+            q_rotated, k_rotated = apply_rope_pytorch(q_torch, k_torch, cos_torch, sin_torch)
 
-        q = ttnn.from_torch(
-            q_interleaved.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        k = ttnn.from_torch(
-            k_interleaved.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            q = ttnn.from_torch(
+                q_rotated.to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            k = ttnn.from_torch(
+                k_rotated.to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            # Prefill mode: Use TTNN RoPE (works with DRAM_MEMORY_CONFIG)
+            # Rearrange to interleaved format for TTNN RoPE (pure TTNN - trace compatible)
+            q = ttnn_rearrange_to_interleaved(q)
+            k = ttnn_rearrange_to_interleaved(k)
 
-        # Apply TTNN RoPE
-        q = ttnn.experimental.rotary_embedding_llama(
-            q,
-            cos,
-            sin,
-            transformation_mat,
-            is_decode_mode=False,
-        )
+            # Apply TTNN RoPE
+            q = ttnn.experimental.rotary_embedding_llama(
+                q,
+                cos,
+                sin,
+                transformation_mat,
+                is_decode_mode=False,
+            )
 
-        k = ttnn.experimental.rotary_embedding_llama(
-            k,
-            cos,
-            sin,
-            transformation_mat,
-            is_decode_mode=False,
-        )
+            k = ttnn.experimental.rotary_embedding_llama(
+                k,
+                cos,
+                sin,
+                transformation_mat,
+                is_decode_mode=False,
+            )
 
-        # Rearrange back to non-interleaved format
-        q_torch = ttnn.to_torch(q)
-        k_torch = ttnn.to_torch(k)
+            # Rearrange back to non-interleaved format (pure TTNN - trace compatible)
+            q = ttnn_rearrange_to_noninterleaved(q)
+            k = ttnn_rearrange_to_noninterleaved(k)
 
-        q_final = rearrange_to_noninterleaved(q_torch)
-        k_final = rearrange_to_noninterleaved(k_torch)
+        # Handle KV cache for decode mode
+        updated_kv_cache = None
+        if kv_cache is not None:
+            k_cache, v_cache = kv_cache
+            # Update cache with new K, V at position start_pos
+            # K, V shape: [batch, num_kv_heads, seq_len, head_dim]
+            # Cache shape: [batch, num_kv_heads, max_seq_len, head_dim]
+            # Use update_cache with update_idx for positional updates
+            ttnn.update_cache(k_cache, k, update_idx=start_pos)
+            ttnn.update_cache(v_cache, v, update_idx=start_pos)
+            updated_kv_cache = (k_cache, v_cache)
 
-        q = ttnn.from_torch(
-            q_final.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        k = ttnn.from_torch(
-            k_final.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            # For decode mode, use the full cached K, V
+            # Slice the cache up to current position for attention
+            cache_len = start_pos + seq_len
+            # Use the cached values for attention computation
+            k = ttnn.slice(k_cache, [0, 0, 0, 0], [batch_size, self.num_kv_heads, cache_len, self.head_dim])
+            v = ttnn.slice(v_cache, [0, 0, 0, 0], [batch_size, self.num_kv_heads, cache_len, self.head_dim])
 
         # Keep bfloat16 for better precision (bfloat8_b can lose accuracy)
         # Note: For production, consider bfloat8_b for performance if PCC is acceptable
@@ -276,8 +351,10 @@ class Attention(LightweightModule):
         )
 
         ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        if kv_cache is None:
+            # Only deallocate if not using cache (cache owns the memory)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
 
         # Reshape: [batch, num_heads, seq_len, head_dim] -> [batch, 1, seq_len, hidden_size]
         attn_output = ttnn.experimental.nlp_concat_heads(
@@ -295,4 +372,4 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(attn_output)
 
-        return output
+        return output, updated_kv_cache

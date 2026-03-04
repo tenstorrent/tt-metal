@@ -177,7 +177,7 @@ def run_prefill(
 
     # Time only the forward pass
     start_time = time.time()
-    logits_list = model.forward(
+    codec_logits, cp_logits_list, _, _ = model.forward(
         input_ids_ttnn,
         talker_cos,
         talker_sin,
@@ -190,6 +190,8 @@ def run_prefill(
     ttnn.synchronize_device(device)
     inference_time = time.time() - start_time
 
+    # Combine logits for compatibility
+    logits_list = [codec_logits] + cp_logits_list
     return logits_list, inference_time
 
 
@@ -234,7 +236,7 @@ def run_decode_step(
     )
 
     start_time = time.time()
-    logits_list = model.forward(
+    logits_list, _, _ = model.forward(
         input_ids_ttnn,
         talker_cos,
         talker_sin,
@@ -280,10 +282,13 @@ def run_demo(
         num_inference_runs: Number of inference runs for averaging (excluding compile/warmup)
         generate_audio: Generate audio output using speech tokenizer decoder
         audio_output: Output path for generated audio WAV file
-        text: Text to synthesize (enables real TTS mode). If None, uses random tokens.
+        text: Text to synthesize (required for TTS mode).
     """
+    if text is None:
+        raise ValueError("--text is required. Please provide text to synthesize.")
+
     print("=" * 80)
-    print("Qwen3-TTS TTNN Demo - Performance Benchmark")
+    print("Qwen3-TTS TTNN Demo")
     print("=" * 80)
 
     # Load HuggingFace weights
@@ -326,29 +331,20 @@ def run_demo(
         talker_trans_mat = get_transformation_mat(talker_config.head_dim, device)
         cp_trans_mat = get_transformation_mat(code_predictor_config.head_dim, device)
 
-        # Create input based on mode
-        use_text_embedding = False
-        if text is not None:
-            # Real TTS mode - tokenize text input
-            print(f"\n*** REAL TTS MODE ***")
-            print(f"Text: {text}")
-            from transformers import AutoProcessor
+        # Tokenize text input
+        print(f"\nText: {text}")
+        from transformers import AutoProcessor
 
-            print("Loading tokenizer...")
-            processor = AutoProcessor.from_pretrained(model_id)
+        print("Loading tokenizer...")
+        processor = AutoProcessor.from_pretrained(model_id)
 
-            # Format text with special tokens (Qwen3-TTS format)
-            formatted_text = f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"
-            inputs = processor(text=formatted_text, return_tensors="pt", padding=True)
-            input_ids = inputs["input_ids"]
-            seq_len = input_ids.shape[1]
-            use_text_embedding = True
-            print(f"Tokenized to {seq_len} tokens")
-        else:
-            # Benchmark mode - use random codec tokens
-            print(f"\nCreating test input (batch={batch_size}, seq_len={seq_len})...")
-            torch.manual_seed(42)
-            input_ids = torch.randint(0, talker_config.audio_vocab_size, (batch_size, seq_len))
+        # Format text with special tokens (Qwen3-TTS format)
+        formatted_text = f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"
+        inputs = processor(text=formatted_text, return_tensors="pt", padding=True)
+        input_ids = inputs["input_ids"]
+        seq_len = input_ids.shape[1]
+        use_text_embedding = True
+        print(f"Tokenized to {seq_len} tokens")
 
         # ============================================================
         # COMPILE / WARMUP PHASE (not included in perf numbers)
@@ -451,36 +447,8 @@ def run_demo(
             prefill_times.append(prefill_time)
             print(f"  Prefill (TTFT): {prefill_time*1000:.2f} ms")
 
-            # DECODE (tokens/sec measurement)
-            if num_decode_steps > 0:
-                run_decode_times = []
-                for step in range(num_decode_steps):
-                    # Simulate decode with single token input
-                    decode_input = torch.randint(0, talker_config.audio_vocab_size, (batch_size, 1))
-                    position = seq_len + step
-
-                    if use_decode_trace and use_trace:
-                        start_time = time.time()
-                        logits = generator.decode_step(decode_input, position, use_trace=True)
-                        ttnn.synchronize_device(device)
-                        decode_time = time.time() - start_time
-                    else:
-                        logits, decode_time = run_decode_step(
-                            model,
-                            decode_input,
-                            position,
-                            device,
-                            talker_config,
-                            code_predictor_config,
-                            talker_trans_mat,
-                            cp_trans_mat,
-                        )
-                    run_decode_times.append(decode_time)
-
-                avg_decode_time = sum(run_decode_times) / len(run_decode_times)
-                decode_times.append(avg_decode_time)
-                tokens_per_sec = 1.0 / avg_decode_time if avg_decode_time > 0 else 0
-                print(f"  Decode: {avg_decode_time*1000:.2f} ms/token ({tokens_per_sec:.2f} tokens/sec)")
+            # Note: Decode step measurement removed - requires proper autoregressive generation
+            # with voice clone preprocessing. See demo_voice_clone_ttnn.py for full pipeline.
 
         # Cleanup traces
         if use_trace:
@@ -662,8 +630,8 @@ def main():
     parser.add_argument(
         "--text",
         type=str,
-        default=None,
-        help="Text to synthesize (enables real TTS mode). If not provided, uses random tokens for benchmarking.",
+        required=True,
+        help="Text to synthesize (required)",
     )
 
     args = parser.parse_args()

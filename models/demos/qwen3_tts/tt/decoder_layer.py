@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 Decoder layer implementation for Qwen3-TTS.
+
+Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
+
+from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -98,9 +102,14 @@ class DecoderLayer(LightweightModule):
         sin: ttnn.Tensor,
         transformation_mat: ttnn.Tensor,
         attention_mask: ttnn.Tensor = None,
-    ) -> ttnn.Tensor:
+        kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
+        start_pos: int = 0,
+        mode: str = "prefill",
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Apply decoder layer.
+
+        Supports both prefill (full sequence) and decode (single token) modes.
 
         Args:
             x: Input tensor of shape [batch, 1, seq_len, hidden_size]
@@ -108,14 +117,28 @@ class DecoderLayer(LightweightModule):
             sin: Sine frequencies for RoPE
             transformation_mat: Transformation matrix for RoPE
             attention_mask: Optional attention mask
+            kv_cache: Optional tuple of (k_cache, v_cache) for this layer
+            start_pos: Starting position in sequence (for KV cache)
+            mode: "prefill" for full sequence or "decode" for single token
 
         Returns:
-            Output tensor of shape [batch, 1, seq_len, hidden_size]
+            Tuple of (output, updated_kv_cache) where:
+            - output: tensor of shape [batch, 1, seq_len, hidden_size]
+            - updated_kv_cache: tuple of (k_cache, v_cache) or None
         """
         # Pre-norm attention
         residual = x
         x = self.input_layernorm(x)
-        x = self.attention(x, cos, sin, transformation_mat, attention_mask)
+        x, updated_kv_cache = self.attention(
+            x,
+            cos,
+            sin,
+            transformation_mat,
+            attention_mask,
+            kv_cache=kv_cache,
+            start_pos=start_pos,
+            mode=mode,
+        )
         x = ttnn.add(residual, x)
 
         # Pre-norm MLP
@@ -124,4 +147,4 @@ class DecoderLayer(LightweightModule):
         x = self.mlp(x)
         x = ttnn.add(residual, x)
 
-        return x
+        return x, updated_kv_cache

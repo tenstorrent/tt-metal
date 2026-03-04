@@ -10,7 +10,7 @@ This module provides:
 - KV-cache management
 """
 
-from typing import List
+from typing import List, Tuple
 
 import torch
 from loguru import logger
@@ -224,7 +224,7 @@ class Qwen3TTSGenerator:
         ttnn.synchronize_device(self.device)
         logger.info("Prefill trace captured")
 
-    def execute_prefill_trace(self, input_ids: torch.Tensor) -> List[ttnn.Tensor]:
+    def execute_prefill_trace(self, input_ids: torch.Tensor) -> Tuple[ttnn.Tensor, List[ttnn.Tensor], None, None]:
         """
         Execute prefill trace with new input.
 
@@ -232,7 +232,9 @@ class Qwen3TTSGenerator:
             input_ids: Input token IDs [batch, seq_len]
 
         Returns:
-            List of logits tensors, one per code group
+            Tuple of (codec_logits, cp_logits_list, None, None) where:
+            - codec_logits: Logits for code 0 from Talker's codec_head
+            - cp_logits_list: List of logits for codes 1-15 from CodePredictor
         """
         if not self.prefill_trace_captured:
             raise RuntimeError("Prefill trace not captured. Call capture_prefill_trace first.")
@@ -371,7 +373,7 @@ class Qwen3TTSGenerator:
         self,
         input_ids: torch.Tensor,
         position: int,
-    ) -> List[ttnn.Tensor]:
+    ) -> Tuple[ttnn.Tensor, List[ttnn.Tensor], None, None]:
         """
         Execute decode trace with new input and position.
 
@@ -380,7 +382,9 @@ class Qwen3TTSGenerator:
             position: Current sequence position
 
         Returns:
-            List of logits tensors, one per code group
+            Tuple of (codec_logits, cp_logits_list, None, None) where:
+            - codec_logits: Logits for code 0 from Talker's codec_head
+            - cp_logits_list: List of logits for codes 1-15 from CodePredictor
         """
         if not self.decode_trace_captured:
             raise RuntimeError("Decode trace not captured. Call capture_decode_trace first.")
@@ -415,7 +419,7 @@ class Qwen3TTSGenerator:
         self,
         input_ids: torch.Tensor,
         use_trace: bool = True,
-    ) -> List[ttnn.Tensor]:
+    ) -> Tuple[ttnn.Tensor, List[ttnn.Tensor], None, None]:
         """
         Run prefill with optional tracing.
 
@@ -424,7 +428,7 @@ class Qwen3TTSGenerator:
             use_trace: Whether to use traced execution
 
         Returns:
-            List of logits tensors
+            Tuple of (codec_logits, cp_logits_list, None, None)
         """
         if use_trace and self.prefill_trace_captured:
             return self.execute_prefill_trace(input_ids)
@@ -470,7 +474,7 @@ class Qwen3TTSGenerator:
         input_ids: torch.Tensor,
         position: int,
         use_trace: bool = True,
-    ) -> List[ttnn.Tensor]:
+    ) -> Tuple[ttnn.Tensor, List[ttnn.Tensor], None, None]:
         """
         Run single decode step with optional tracing.
 
@@ -480,7 +484,7 @@ class Qwen3TTSGenerator:
             use_trace: Whether to use traced execution
 
         Returns:
-            List of logits tensors
+            Tuple of (codec_logits, cp_logits_list, None, None)
         """
         if use_trace and self.decode_trace_captured:
             return self.execute_decode_trace(input_ids, position)
@@ -519,6 +523,58 @@ class Qwen3TTSGenerator:
                 cp_sin,
                 self.cp_trans_mat,
             )
+
+    def sample_tokens(
+        self,
+        output: Tuple[ttnn.Tensor, List[ttnn.Tensor], None, None],
+        temperature: float = 1.0,
+        top_k: int = 0,
+    ) -> torch.Tensor:
+        """
+        Sample tokens from model output.
+
+        Args:
+            output: Tuple of (codec_logits, cp_logits_list, _, _)
+            temperature: Sampling temperature (1.0 = no change, <1.0 = more deterministic)
+            top_k: If > 0, only sample from top k tokens
+
+        Returns:
+            Token IDs [batch, 16] for all code groups
+        """
+        codec_logits, cp_logits_list, _, _ = output
+
+        tokens_per_group = []
+
+        # Code 0 from Talker's codec_head
+        codec_logits_torch = ttnn.to_torch(codec_logits)
+        if temperature != 1.0:
+            codec_logits_torch = codec_logits_torch / temperature
+        if top_k > 0:
+            v, _ = torch.topk(codec_logits_torch, min(top_k, codec_logits_torch.size(-1)))
+            codec_logits_torch[codec_logits_torch < v[:, :, [-1]]] = float("-inf")
+            probs = torch.softmax(codec_logits_torch, dim=-1)
+            token_0 = torch.multinomial(probs.squeeze(1), num_samples=1).squeeze(-1)
+        else:
+            token_0 = torch.argmax(codec_logits_torch, dim=-1).squeeze(-1)  # [batch]
+        tokens_per_group.append(token_0)
+
+        # Codes 1-15 from CodePredictor
+        for logits in cp_logits_list:
+            logits_torch = ttnn.to_torch(logits)
+            if temperature != 1.0:
+                logits_torch = logits_torch / temperature
+            if top_k > 0:
+                v, _ = torch.topk(logits_torch, min(top_k, logits_torch.size(-1)))
+                logits_torch[logits_torch < v[:, :, [-1]]] = float("-inf")
+                probs = torch.softmax(logits_torch, dim=-1)
+                token = torch.multinomial(probs.squeeze(1), num_samples=1).squeeze(-1)
+            else:
+                token = torch.argmax(logits_torch, dim=-1).squeeze(-1)  # [batch]
+            tokens_per_group.append(token)
+
+        # Stack all 16 codes: [batch, 16]
+        generated_tokens = torch.stack(tokens_per_group, dim=-1)
+        return generated_tokens
 
     def release_traces(self):
         """Release all captured traces."""
