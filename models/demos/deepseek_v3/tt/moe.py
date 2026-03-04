@@ -316,20 +316,17 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # MOE
-
-        try:
-            post_combine_output_tensor = cls._fwd_moe(
-                x,
-                topk_experts_indices,
-                topk_experts_weights,
-                cfg,
-                batch_size_per_device,
-                batch_size,
-                seq_len,
-            )
-        finally:
-            ttnn.deallocate(topk_experts_weights)
-            ttnn.deallocate(topk_experts_indices)
+        post_combine_output_tensor = cls._fwd_moe(
+            x,
+            topk_experts_indices,
+            topk_experts_weights,
+            cfg,
+            batch_size_per_device,
+            batch_size,
+            seq_len,
+        )
+        ttnn.deallocate(topk_experts_weights)
+        ttnn.deallocate(topk_experts_indices)
 
         # Note: reduce_scatter is handled by the caller (decoder block or test)
 
