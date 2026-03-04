@@ -103,20 +103,53 @@ def end_graph_capture_to_file(report_path):
     return result
 
 
-def _safe_arg_str(v):
-    """Stringify an argument without triggering graph-tracked operations.
+def _ttnn_tensor_summary(t) -> str:
+    """Build a rich one-line summary of a ttnn.Tensor.
 
-    For ttnn.Tensor and torch.Tensor objects, produce a compact summary
-    (shape + dtype) instead of calling str() which would read device data
-    and pollute the graph capture with spurious operations.
+    All properties accessed here are always present on ttnn.Tensor and never
+    trigger device data reads:
+      - shape, dtype, layout, tensor_id: plain attributes on every tensor
+      - memory_config(): stored in TensorSpec, available for host and device tensors
+      - storage_type(), is_allocated(): always safe
+      - device(): returns None for host tensors, MeshDevice* otherwise
+      - tensor_topology(): always returns a TensorTopology reference
     """
+    info: dict = {}
+
+    info["shape"] = t.shape
+    info["dtype"] = t.dtype
+    info["layout"] = t.layout
+    info["memory_config"] = t.memory_config()
+    info["storage_type"] = t.storage_type()
+    info["tensor_id"] = t.tensor_id
+    info["is_allocated"] = t.is_allocated()
+
+    device = t.device()
+    if device is not None:
+        info["device_id"] = device.id()
+        info["mesh_shape"] = str(device.shape)
+
+    topology = t.tensor_topology()
+    mesh_coords = topology.mesh_coords()
+    if mesh_coords:
+        info["mesh_coords"] = [str(c) for c in mesh_coords]
+    dist_shape = topology.distribution_shape()
+    if dist_shape is not None:
+        info["distribution_shape"] = str(dist_shape)
+    placements = topology.placements()
+    if placements:
+        info["placements"] = [str(p) for p in placements]
+
+    parts = [f"{k}={v}" for k, v in info.items() if v is not None]
+    return f"ttnn.Tensor({', '.join(parts)})"
+
+
+def _safe_arg_str(v):
+    """Stringify a function argument without triggering graph-tracked operations."""
     import ttnn
 
     if isinstance(v, ttnn.Tensor):
-        try:
-            return f"ttnn.Tensor(shape={v.shape}, dtype={v.dtype})"
-        except Exception:
-            return "<ttnn.Tensor>"
+        return _ttnn_tensor_summary(v)
     try:
         import torch
 
