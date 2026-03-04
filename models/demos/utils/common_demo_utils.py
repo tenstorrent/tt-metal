@@ -14,7 +14,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
-from datasets import load_dataset
 from loguru import logger
 from PIL import Image
 from torchvision import transforms
@@ -524,6 +523,8 @@ def get_data_loader(input_loc, batch_size, iterations, download_entire_dataset=F
                 yield examples
                 del examples
                 examples = []
+
+    from datasets import load_dataset
 
     if len(files) == 0:
         files_raw = iter(

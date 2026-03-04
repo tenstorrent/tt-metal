@@ -57,9 +57,21 @@ class TtDyReLU:
     per channel from the global feature via squeeze-and-excitation.
     """
 
-    def __init__(self, device, conv1_weight, conv1_bias, conv2_weight, conv2_bias, channels=256):
+    def __init__(
+        self,
+        device,
+        conv1_weight,
+        conv1_bias,
+        conv2_weight,
+        conv2_bias,
+        channels=256,
+        inputs_mesh_mapper=None,
+        output_mesh_composer=None,
+    ):
         self.device = device
         self.channels = channels
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.output_mesh_composer = output_mesh_composer
 
         ratio_ch = conv1_weight.shape[0]
         exp_ch = conv2_weight.shape[0]
@@ -89,12 +101,13 @@ class TtDyReLU:
         coeffs = ttnn.hardsigmoid(coeffs, memory_config=ttnn.L1_MEMORY_CONFIG)
         coeffs = ttnn.add(coeffs, -0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        coeffs_cpu = ttnn.to_torch(ttnn.from_device(coeffs)).float()
+        coeffs_cpu = ttnn.to_torch(ttnn.from_device(coeffs), mesh_composer=self.output_mesh_composer).float()
+        total_B = coeffs_cpu.shape[0]
         a1_t, b1_t, a2_t, b2_t = torch.split(coeffs_cpu, C, dim=1)
-        a1_t = (a1_t * 2.0 + 1.0).reshape(B, C, 1, 1).contiguous()
-        b1_t = b1_t.reshape(B, C, 1, 1).contiguous()
-        a2_t = (a2_t * 2.0).reshape(B, C, 1, 1).contiguous()
-        b2_t = b2_t.reshape(B, C, 1, 1).contiguous()
+        a1_t = (a1_t * 2.0 + 1.0).reshape(total_B, C, 1, 1).contiguous()
+        b1_t = b1_t.reshape(total_B, C, 1, 1).contiguous()
+        a2_t = (a2_t * 2.0).reshape(total_B, C, 1, 1).contiguous()
+        b2_t = b2_t.reshape(total_B, C, 1, 1).contiguous()
 
         def _to_dev(t):
             return ttnn.from_torch(
@@ -103,6 +116,7 @@ class TtDyReLU:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=self.inputs_mesh_mapper,
             )
 
         a1, b1, a2, b2 = _to_dev(a1_t), _to_dev(b1_t), _to_dev(a2_t), _to_dev(b2_t)
@@ -124,10 +138,12 @@ class TtHybridDyHead:
     and task_attn_module forward paths with TTNN equivalents.
     """
 
-    def __init__(self, device, pt_dyhead):
+    def __init__(self, device, pt_dyhead, inputs_mesh_mapper=None, output_mesh_composer=None):
         self.device = device
         self.pt_dyhead = pt_dyhead
         self.num_blocks = pt_dyhead.num_blocks
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.output_mesh_composer = output_mesh_composer
 
         self.scale_attns: List[TtScaleAttn] = []
         self.task_attns: List[TtDyReLU] = []
@@ -147,6 +163,8 @@ class TtHybridDyHead:
                     dyrelu.conv2[0].weight.data,
                     dyrelu.conv2[0].bias.data,
                     channels=dyrelu.channels,
+                    inputs_mesh_mapper=inputs_mesh_mapper,
+                    output_mesh_composer=output_mesh_composer,
                 )
             )
 
@@ -168,10 +186,11 @@ class TtHybridDyHead:
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=self.inputs_mesh_mapper,
         )
 
     def _to_host(self, feat_ttnn) -> Tensor:
-        return ttnn.to_torch(ttnn.from_device(feat_ttnn)).float()
+        return ttnn.to_torch(ttnn.from_device(feat_ttnn), mesh_composer=self.output_mesh_composer).float()
 
     def _forward_block(self, block_idx: int, x: List[Tensor]) -> List[Tensor]:
         block = self.pt_dyhead.dyhead_blocks[block_idx]
