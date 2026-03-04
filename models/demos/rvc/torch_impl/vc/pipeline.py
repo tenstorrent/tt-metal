@@ -346,8 +346,9 @@ class Pipeline:
                 f0_method,
             )
         for idx_s, idx_e in idx_list:
-            pitch_slice = pitch[:, idx_s:idx_e] if pitch is not None else None
-            pitchf_slice = pitchf[:, idx_s:idx_e] if pitchf is not None else None
+            chunk_end = min(idx_e + self.t_pad2 // self.window, pitch.shape[1]) if pitch is not None else idx_e
+            pitch_slice = pitch[:, idx_s:chunk_end] if pitch is not None else None
+            pitchf_slice = pitchf[:, idx_s:chunk_end] if pitchf is not None else None
             audio_output.append(
                 self._vc(
                     audio_padded[idx_s * self.window : (idx_e + self.t_pad2 // self.window) * self.window],
