@@ -265,8 +265,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     assert_subblock_compute_config_compatible(dst_full_sync_en, fp32_dest_acc_en, subblock_wt);
 
-    auto [out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format, reciprocal_cb_data_format] =
-        get_cb_data_formats(output, gamma, beta, fp32_dest_acc_en);
+    auto
+        [out_data_format,
+         cb_data_format,
+         gamma_cb_data_format,
+         beta_cb_data_format,
+         stats_cb_data_format,
+         reciprocal_cb_data_format] = get_cb_data_formats(output, gamma, beta, stats, fp32_dest_acc_en);
 
     // tile sizes
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
@@ -274,6 +279,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
+    uint32_t stats_single_tile_size = tt::tile_size(stats_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     // tensor shape
@@ -337,6 +343,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .out_single_tile_size = out_single_tile_size,
         .gamma_single_tile_size = gamma_single_tile_size,
         .beta_single_tile_size = beta_single_tile_size,
+        .stats_single_tile_size = stats_single_tile_size,
         .bfloat16_tile_size = bfloat16_tile_size,
         .reciprocal_CB_size_bytes = reciprocal_CB_size_bytes,
         .num_rows_per_all_to_all_worker = workers.num_rows_per_all_to_all_worker,
@@ -571,12 +578,14 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.out_data_format = out_data_format;
     cb_config.gamma_cb_data_format = gamma_cb_data_format;
     cb_config.beta_cb_data_format = beta_cb_data_format;
+    cb_config.stats_cb_data_format = stats_cb_data_format;
     cb_config.reciprocal_cb_data_format = reciprocal_cb_data_format;
     cb_config.in_single_tile_size = in_single_tile_size;
     cb_config.single_tile_size = single_tile_size;
     cb_config.out_single_tile_size = out_single_tile_size;
     cb_config.gamma_single_tile_size = gamma_single_tile_size;
     cb_config.beta_single_tile_size = beta_single_tile_size;
+    cb_config.stats_single_tile_size = stats_single_tile_size;
     cb_config.bfloat16_tile_size = bfloat16_tile_size;
     cb_config.a_buffer = a.buffer();
     cb_config.b_buffer = b.has_value() ? b.value().buffer() : nullptr;
