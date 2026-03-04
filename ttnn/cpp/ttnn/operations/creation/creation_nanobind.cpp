@@ -141,6 +141,7 @@ void bind_zeros(nb::module_& mod) {
         ================= =============== ========
         BFLOAT16, FLOAT32 ROW_MAJOR, TILE  2, 3, 4
         ================= =============== ========
+
         )doc";
 
     ttnn::bind_function<"zeros">(
@@ -293,6 +294,7 @@ void bind_zeros_like(nb::module_& mod) {
         ================ =============== ========
         FLOAT16, FLOAT32 ROW_MAJOR, TILE  2, 3, 4
         ================ =============== ========
+
         )doc";
 
     ttnn::bind_function<"zeros_like">(
@@ -438,9 +440,9 @@ void bind_empty(nb::module_& mod) {
          Dtypes             Layouts       Ranks
         ================= =============== ========
         BFLOAT16, FLOAT32 ROW_MAJOR, TILE  2, 3, 4
-        ================= =============== ========
         BFLOAT_8             TILE          2, 3, 4
         ================= =============== ========
+
         )doc";
 
     ttnn::bind_function<"empty">(
