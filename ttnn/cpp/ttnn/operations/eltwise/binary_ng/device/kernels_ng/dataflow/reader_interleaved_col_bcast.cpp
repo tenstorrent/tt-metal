@@ -102,7 +102,9 @@ void kernel_main() {
                         noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
+#if !BCAST_LLK
                         FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
+#endif
                         cb_src.push_back(onetile);
 #endif
 #if SRC_BCAST_B
@@ -112,7 +114,9 @@ void kernel_main() {
                             src_b, cb_src_b, src_tile_bytes_b, {.page_id = tile_offset_b + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
+#if !BCAST_LLK
                         FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
+#endif
                         cb_src_b.push_back(onetile);
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;

@@ -33,6 +33,8 @@ enum class KernelName {
     ReaderRmScalarOpNg,
     WriterRmNoBcastNg,
     ComputeRowBcastNg,
+    ComputeColBcastNg,
+    ComputeScalarBcastNg,
     ComputeRowColBcastNg,
 };
 
