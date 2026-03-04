@@ -133,6 +133,7 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
+                        DPRINT << "start of socket-reader broadcast op\n";
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
@@ -155,6 +156,7 @@ struct Broadcast {
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
 #if defined(ENABLE_SOCKET_READER)
                     }
+                    DPRINT << "end of broadcast op\n";
 #endif
                 }
             }
@@ -164,6 +166,7 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
+                DPRINT << "start of broadcast op\n";
                 PacketHeaderPool::reset();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
@@ -331,6 +334,7 @@ struct Broadcast {
                 }
 
                 noc_async_write_barrier();
+                DPRINT << "end of broadcast op\n";
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
