@@ -671,8 +671,10 @@ def chunk_gated_delta_rule_ttnn(
             qk = ttnn.matmul(q_i, k_i_t, program_config=prog_config_qk, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             qk = ttnn.matmul(q_i, k_i_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-        intra_attn = ttnn.multiply(qk, L_mask_i, memory_config=ttnn.L1_MEMORY_CONFIG)
-        intra_attn = ttnn.multiply(intra_attn, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Combine two multiplies into one by pre-multiplying masks
+        # This reduces one BinaryNgDeviceOperation (reduces from 46 to fewer ops)
+        combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
+        intra_attn = ttnn.multiply(qk, combined_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Cross-chunk: read from state
         # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)

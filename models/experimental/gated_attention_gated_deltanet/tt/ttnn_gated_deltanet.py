@@ -125,6 +125,9 @@ def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
         shard_layout=None,
         deallocate_activation=True,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        # Optimization: Store config tensors in DRAM to reduce L1_SMALL pressure
+        # This can help with L1 memory management and reduce fragmentation
+        config_tensors_in_dram=True,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
