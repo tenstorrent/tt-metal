@@ -213,20 +213,24 @@ def create_program_descriptor(
         _set_rt_args_for_group(core_group_2, rows_per_core_g2)
 
     # ======================================================================
-    # 6. Compute compile-time args
+    # 6. Compute compile-time args (per core group, since num_rows differs)
     # ======================================================================
-    # Compute gets the maximum rows_per_core for group 1 (group 2 gets fewer).
-    # We pass per-group values via two compile-time args and handle in kernel.
-    # Simpler approach: use runtime args for num_rows_per_core.
-    # But the design says compile-time. We use group 1's value as the
-    # compile-time arg, and handle the two-group difference in runtime args.
-    # For stub kernels, pass both groups' row counts plus Wt, has_gamma, has_beta.
-    compute_ct_args = [
-        rows_per_core_g1,  # index 0: num_rows_per_core (group 1)
+    compute_ct_args_g1 = [
+        rows_per_core_g1,  # index 0: num_rows_per_core
         Wt,  # index 1: width in tiles
         has_gamma,  # index 2: 1 if gamma present
         has_beta,  # index 3: 1 if beta present
     ]
+
+    has_group_2 = len(core_group_2.ranges()) > 0 and rows_per_core_g2 > 0
+
+    if has_group_2:
+        compute_ct_args_g2 = [
+            rows_per_core_g2,  # index 0: num_rows_per_core (fewer for group 2)
+            Wt,
+            has_gamma,
+            has_beta,
+        ]
 
     writer_ct_args = list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -249,23 +253,37 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    compute_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "compute_layer_norm.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=compute_ct_args,
-        runtime_args=compute_rt_args,
-        config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=False,
-            math_approx_mode=False,
-        ),
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        math_approx_mode=False,
     )
+
+    compute_kernel_g1 = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "compute_layer_norm.cpp"),
+        core_ranges=core_group_1,
+        compile_time_args=compute_ct_args_g1,
+        runtime_args=compute_rt_args,
+        config=compute_config,
+    )
+
+    kernels = [reader_kernel, writer_kernel, compute_kernel_g1]
+
+    if has_group_2:
+        compute_kernel_g2 = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "compute_layer_norm.cpp"),
+            core_ranges=core_group_2,
+            compile_time_args=compute_ct_args_g2,
+            runtime_args=compute_rt_args,
+            config=compute_config,
+        )
+        kernels.append(compute_kernel_g2)
 
     # ======================================================================
     # 8. Assemble and return
     # ======================================================================
     return ttnn.ProgramDescriptor(
-        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        kernels=kernels,
         semaphores=[],
         cbs=cbs,
     )
