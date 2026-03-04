@@ -97,16 +97,73 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
+// Host-side copy of debug_file_hash for resolving file hashes.
+// Must match the device-side constexpr version in dev_msgs.h.
+inline uint16_t host_debug_file_hash(const char* str) {
+    uint32_t hash = 2166136261u;
+    while (*str) {
+        hash ^= static_cast<uint32_t>(*str++);
+        hash *= 16777619u;
+    }
+    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
+}
+
+// Resolve a file_id hash back to a filename by scanning known source directories.
+// Searches kernel source files and well-known LLK include paths for a matching hash.
+inline std::string resolve_file_from_hash(uint16_t file_id) {
+    // Well-known include paths to search for source files that could contain asserts.
+    static const std::vector<std::string> search_dirs = {
+        "tt_metal/hw/inc/",
+        "tt_metal/hw/inc/api/debug/",
+        "tt_metal/hw/inc/internal/debug/",
+        "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/",
+        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/",
+        "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/",
+        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/",
+        "tt_metal/hw/inc/hostdev/",
+        "tt_metal/hw/ckernels/",
+    };
+
+    for (const auto& dir : search_dirs) {
+        if (!std::filesystem::exists(dir)) {
+            continue;
+        }
+        try {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                     dir, std::filesystem::directory_options::skip_permission_denied)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const auto& path = entry.path();
+                auto ext = path.extension().string();
+                if (ext != ".h" && ext != ".hpp" && ext != ".cpp") {
+                    continue;
+                }
+                std::string path_str = path.string();
+                if (host_debug_file_hash(path_str.c_str()) == file_id) {
+                    return path_str;
+                }
+            }
+        } catch (const std::filesystem::filesystem_error&) {
+            continue;
+        }
+    }
+    return fmt::format("unknown file (hash=0x{:04x})", file_id);
+}
+
 // Returns the assert message portion for a given assert type
 // Returns empty string for unknown types (callers must handle this)
-// For DebugAssertTripped, line_num is used in the message
-inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
+// For DebugAssertTripped, line_num and file_id are used in the message
+inline std::string get_debug_assert_message(
+    dev_msgs::debug_assert_type_t type,
+    uint16_t line_num = 0,
+    uint16_t file_id = 0,
+    [[maybe_unused]] uint8_t extra_info = 0) {
     switch (type) {
-        case dev_msgs::DebugAssertTripped:
-            return fmt::format(
-                "tripped an assert on line {}. Note that file name reporting is not yet "
-                "implemented, and the reported line number for the assert may be from a different file.",
-                line_num);
+        case dev_msgs::DebugAssertTripped: {
+            std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id) : "unknown file";
+            return fmt::format("tripped an assert in {} on line {}.", file_str, line_num);
+        }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
                    "transactions (missing NOC reads flushed barrier).";

@@ -9,11 +9,14 @@
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
-inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
-    // Write the line number into the memory mailbox for host to read.
+inline void assert_and_hang(
+    uint32_t line_num, uint16_t file_id, uint8_t extra_info, debug_assert_type_t assert_type = DebugAssertTripped) {
+    // Write the assert info into the memory mailbox for host to read.
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
+        v->file_id = file_id;
+        v->extra_info = extra_info;
         v->tripped = assert_type;
         v->which = internal_::get_hw_thread_idx();
     }
@@ -38,12 +41,17 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     }
 }
 
+// Backward-compatible overload for existing direct callers.
+inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
+    assert_and_hang(line_num, 0, 0, assert_type);
+}
+
 // The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
 // without {}s.
-#define ASSERT(condition, ...)                        \
-    do {                                              \
-        if (not(condition))                           \
-            assert_and_hang(__LINE__, ##__VA_ARGS__); \
+#define ASSERT(condition, ...)                                                      \
+    do {                                                                            \
+        if (not(condition))                                                         \
+            assert_and_hang(__LINE__, debug_file_hash(__FILE__), 0, ##__VA_ARGS__); \
     } while (0)
 
 #define ASSERT_ENABLED 1

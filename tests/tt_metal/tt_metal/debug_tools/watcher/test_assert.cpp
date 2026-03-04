@@ -178,9 +178,8 @@ static void RunTest(
         default: core_str = "worker";
     }
 
-    // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
-    // can shift as code changes. Use regex to match any line number for DebugAssertTripped
-    // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
+    // Don't hardcode line number or file name, as these depend on the kernel source.
+    // Use regex to match the dynamic parts for DebugAssertTripped.
     const std::string msg = get_debug_assert_message(assert_type);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
@@ -197,13 +196,14 @@ static void RunTest(
         kernel);
 
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        // Build regex pattern from string expected, replacing "on line 0" with "on line \d+"
+        // Build regex pattern, replacing the file and line placeholders with regex wildcards.
+        // get_debug_assert_message with defaults returns "tripped an assert in unknown file on line 0."
         std::string pattern = regex_escape(expected);
-        const std::string placeholder = "on line 0";
-        size_t pos = pattern.find(placeholder);
+        const std::string file_placeholder = "in unknown file on line 0";
+        size_t pos = pattern.find(file_placeholder);
         ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << placeholder << "' not found in escaped pattern: " << pattern;
-        pattern.replace(pos, placeholder.length(), "on line \\d+");
+            << "Expected placeholder '" << file_placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(pos, file_placeholder.length(), "in .+ on line \\d+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
