@@ -145,6 +145,77 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
+MeshBuffer::MeshBuffer(
+    const MeshBufferConfig& config,
+    const DeviceLocalBufferConfig& device_local_config,
+    DeviceAddr address,
+    DeviceAddr device_local_size,
+    MeshDevice* mesh_device,
+    std::shared_ptr<MeshBuffer> parent,
+    DistributedMeshContainer<std::shared_ptr<Buffer>> view_buffers) :
+    config_(config),
+    device_local_config_(device_local_config),
+    mesh_device_(mesh_device->shared_from_this()),
+    address_(address),
+    device_local_size_(device_local_size),
+    buffers_(std::move(view_buffers)),
+    state_(ViewState{std::move(parent)}) {}
+
+std::shared_ptr<MeshBuffer> MeshBuffer::view(const BufferRegion& region) {
+    TT_FATAL(region.offset % page_size() == 0, "Region offset must be a multiple of page size");
+    TT_FATAL(region.size % page_size() == 0, "Region size must be a multiple of page size");
+    TT_FATAL(region.offset + region.size <= device_local_size_, "Region must be within buffer");
+
+    if (region.offset == 0 && region.size == device_local_size_) {
+        return shared_from_this();
+    }
+
+    // Create view buffers for each device
+    auto mesh_device = mesh_device_.lock();
+    TT_FATAL(mesh_device != nullptr, "MeshDevice is deallocated");
+
+    // Build vector of view buffers in the same order as the parent
+    std::vector<MaybeRemote<std::shared_ptr<Buffer>>> view_buffer_values;
+    view_buffer_values.reserve(buffers_.values().size());
+
+    for (auto& [coord, device_buffer] : buffers_) {
+        if (mesh_device->impl().is_local(coord) && device_buffer.is_local()) {
+            auto parent_buffer = device_buffer.value();
+            auto buffer_view = parent_buffer->view(region);
+            view_buffer_values.push_back(MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer_view)));
+        } else {
+            view_buffer_values.push_back(MaybeRemote<std::shared_ptr<Buffer>>::remote());
+        }
+    }
+
+    DistributedMeshContainer<std::shared_ptr<Buffer>> view_buffers(
+        MeshShape(mesh_device->shape()), std::move(view_buffer_values));
+
+    // Create new config with adjusted size
+    MeshBufferConfig new_config;
+    if (std::holds_alternative<ReplicatedBufferConfig>(config_)) {
+        new_config = ReplicatedBufferConfig{region.size};
+    } else {
+        // For sharded config, we need to adjust sizes proportionally
+        auto& sharded = std::get<ShardedBufferConfig>(config_);
+        auto size_ratio = static_cast<double>(region.size) / device_local_size_;
+        ShardedBufferConfig new_sharded = sharded;
+        new_sharded.global_size = static_cast<DeviceAddr>(sharded.global_size * size_ratio);
+        new_config = new_sharded;
+    }
+
+    DeviceLocalBufferConfig new_device_local_config = device_local_config_;
+
+    return std::shared_ptr<MeshBuffer>(new MeshBuffer(
+        new_config,
+        new_device_local_config,
+        address_,  // Same address - the offset is handled by Buffer::view's root_buffer_offset
+        region.size,
+        mesh_device.get(),
+        shared_from_this(),
+        std::move(view_buffers)));
+}
+
 bool MeshBuffer::is_allocated() const {
     if (std::holds_alternative<DeallocatedState>(state_)) {
         return false;

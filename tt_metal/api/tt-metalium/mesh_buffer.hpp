@@ -74,7 +74,7 @@ using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfi
 
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
 // replication, or 2D sharding. The allocation is done in lock-step across all devices in the mesh.
-class MeshBuffer {
+class MeshBuffer : public std::enable_shared_from_this<MeshBuffer> {
 public:
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
@@ -122,6 +122,11 @@ public:
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
+    // Creates a view of a sub-region of this MeshBuffer.
+    // The region offset and size must be page-aligned.
+    // The returned MeshBuffer shares the same underlying memory as the parent.
+    std::shared_ptr<MeshBuffer> view(const BufferRegion& region);
+
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
@@ -162,16 +167,30 @@ private:
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
 
+    // Creates a view `MeshBuffer` backed by view buffers from a parent MeshBuffer.
+    MeshBuffer(
+        const MeshBufferConfig& config,
+        const DeviceLocalBufferConfig& device_local_config,
+        DeviceAddr address,
+        DeviceAddr device_local_size,
+        MeshDevice* mesh_device,
+        std::shared_ptr<MeshBuffer> parent,
+        DistributedMeshContainer<std::shared_ptr<Buffer>> view_buffers);
+
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
     // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
-    // 3. Deallocated - the MeshBuffer is in the deallocated state.
+    // 3. View - the MeshBuffer is a view over a parent MeshBuffer.
+    // 4. Deallocated - the MeshBuffer is in the deallocated state.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
     struct ExternallyOwnedState {};
+    struct ViewState {
+        std::shared_ptr<MeshBuffer> parent;
+    };
     struct DeallocatedState {};
-    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, ViewState, DeallocatedState>;
     MeshBufferState state_;
 };
 
