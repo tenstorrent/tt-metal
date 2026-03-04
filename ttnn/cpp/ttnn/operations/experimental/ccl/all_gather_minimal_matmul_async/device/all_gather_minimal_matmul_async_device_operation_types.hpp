@@ -31,6 +31,9 @@ struct AllGatherMinimalMatmulAsyncParams {
     // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
     std::optional<float> fused_ternary_scalar;
 
+    int32_t chunks = 1;  // Number of output tensors to split into (default 1 for backward compat)
+    int32_t dim = -1;    // Dimension to split along (default -1)
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -47,7 +50,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool force_transpose,
         uint32_t num_workers_per_link,
         uint32_t num_buffers_per_channel,
-        std::optional<float> fused_ternary_scalar) :
+        std::optional<float> fused_ternary_scalar,
+        int32_t chunks,
+        int32_t dim) :
         config(config),
         fused_activation(fused_activation),
         output_mem_config(output_mem_config),
@@ -63,7 +68,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         force_transpose(force_transpose),
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel),
-        fused_ternary_scalar(fused_ternary_scalar) {}
+        fused_ternary_scalar(fused_ternary_scalar),
+        chunks(chunks),
+        dim(dim) {}
 
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
@@ -75,7 +82,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         "semaphore",
         "force_transpose",
         "num_workers_per_link",
-        "num_buffers_per_channel");
+        "num_buffers_per_channel",
+        "chunks",
+        "dim");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -88,7 +97,9 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->semaphore,
             this->force_transpose,
             this->num_workers_per_link,
-            this->num_buffers_per_channel);
+            this->num_buffers_per_channel,
+            this->chunks,
+            this->dim);
     }
 };
 
