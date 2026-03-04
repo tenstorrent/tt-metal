@@ -4,9 +4,8 @@
 
 from loguru import logger
 import torch
-import os
 
-from models.common.utility_functions import comp_pcc, is_blackhole
+from models.common.utility_functions import comp_pcc
 import ttnn
 
 
@@ -142,25 +141,25 @@ class OpTestBase:
 
         logger.info("Activations and inputs pushed to devices!")
 
+        reference_out = None
         if self.determinism_check_enabled:
-            # Run op once to populate reference output to use for determinism checks
+            # One reference run per activation; we then cycle through them and compare output to
+            # reference_out[act]. Deallocate only for L1 due to memory constraints.
+            # For DRAM we keep all a_t[act] live; we still switch self.activations each time, so
+            # determinism checking is unchanged (different inputs, match reference per activation).
             num_nd_outputs = [0] * num_devices
             reference_out = [None for _ in range(num_activation_tensors)]
-
             for act in range(num_activation_tensors):
-                # First, load activations from DRAM to required memory config
                 self.activations = self.convert_activations_to_memory_config(a_t[act])
                 output = self.run_device_operation()
                 reference_out[act] = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output.cpu())]
-
                 output.deallocate(True)
-                self.deallocate_activations()
+                if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
+                    self.deallocate_activations()
 
         current_act_tensor = 0
-        self.activations = [None] * num_devices
         out = [None] * num_devices
-
-        self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
+        self.activations = self.convert_activations_to_memory_config(a_t[0])
 
         logger.info("Starting iterations")
         for i in range(self.loop_count):
@@ -192,9 +191,8 @@ class OpTestBase:
 
                 current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
                 logger.info("Switching activation tensor for new determinism iterations...")
-                self.deallocate_activations()
-
-                # Load next round of activations from DRAM to required memory config
+                if self.activation.mem_config.buffer_type == ttnn.BufferType.L1:
+                    self.deallocate_activations()
                 self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
 
             out.deallocate(True)
