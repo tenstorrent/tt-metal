@@ -32,8 +32,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t num_programs,
     CoreCoord worker_grid_size,
     uint32_t seed,
-    const std::unordered_set<CoreCoord>& active_eth_cores = {},
-    uint32_t device_id = 0);
+    const std::unordered_set<CoreCoord>& active_eth_cores = {});
 
 // RAII guard for managing a single environment variable
 class ScopedEnvVar {
