@@ -476,6 +476,31 @@ This section documents areas of complexity, redundancy, and over-engineering in 
 
 **Recommendation:** Consolidate into a single loader with format detection, or deprecate V1.
 
+#### Sweep Module Split: Which JSON File Each Sweep Uses
+
+As of the current codebase, the 99 sweep modules in `tests/sweep_framework/sweeps/model_traced/` are split between the two loaders:
+
+**V2 format — `ttnn_operations_master_v2_reconstructed.json`** (6 sweeps, use `master_config_loader_v2`):
+
+| Sweep Module |
+|-------------|
+| `add_model_traced.py` |
+| `add__model_traced.py` |
+| `all_gather_async_model_traced.py` |
+| `argmax_model_traced.py` |
+| `clamp_model_traced.py` |
+| `clone_model_traced.py` |
+
+The V2 format provides per-tensor placement data and an explicit `mesh_device_shape` field in `machine_info`, enabling deterministic mesh routing during vector generation.
+
+**V1 format — `ttnn_operations_master_reconstructed.json`** (93 sweeps, use `master_config_loader`):
+
+All remaining sweeps use the V1 loader, including all operations that have confirmed DeepSeek V3 configs in the V1 JSON: `concat`, `div`, `embedding`, `exp`, `fast_reduce_nc`, `interleaved_to_sharded`, `linear`, `moreh_full`, `multiply`, `neg`, `ones_like`, `pad`, `paged_fill_cache`, `paged_update_cache`, `permute`, `repeat`, `reshape`, `rms_norm`, `rms_norm_post_all_gather`, `rms_norm_pre_all_gather`, `rotary_embedding_llama`, `scatter`, `sigmoid`, `slice`, `split`, `squeeze`, `sum`, `tilize`, `tilize_with_val_padding`, `topk`, `transpose`, `typecast`, `unsqueeze`, `untilize`, `untilize_with_unpadding`.
+
+**Why this matters for the empty-jobs bug:**
+
+The V1 JSON `machine_info` uses a list format that lacks an explicit `mesh_device_shape` field for some Galaxy configs. The fallback inference in `sweeps_parameter_generator.py` (`_DEVICE_SERIES_MESH_MAP`) only covers the V1/list code path. The V2 JSON `machine_info` uses a dict format where `mesh_device_shape` is usually present; however, 5 entries (`ttnn.concat` configs 82-85 and `ttnn.zeros` config 0) also lack `mesh_device_shape`, and the V2/dict code path has no fallback inference — meaning those configs export without a mesh suffix and end up routed to N150 as unmatched modules.
+
 ### 2. Workflow Conditional Complexity
 
 The workflow file contains:
