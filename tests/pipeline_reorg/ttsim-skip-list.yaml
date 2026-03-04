@@ -106,6 +106,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
@@ -117,6 +118,7 @@ wormhole_b0:
   # Reduce tests
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
@@ -241,6 +243,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
+  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
@@ -254,6 +257,7 @@ blackhole:
   # Reduce tests (same as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py

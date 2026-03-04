@@ -353,6 +353,22 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
 
 tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // When a mask is present, its dtype and memory_config influence the compiled program:
+    //   - mask dtype        → mask_cb_data_format → CB c_in4/c_in5 data format (compile-time)
+    //   - mask memory_config → TensorAccessorArgs IsDram flag (compile-time arg)
+    //
+    // mask padded_shape is NOT included, even though num_tiles_causal_mask (compile-time arg,
+    // is_causal_mask=True only) is derived from it. It is provably redundant: scale_mask_softmax
+    // enforces mask.padded_shape()[-1] == input.padded_shape()[-1] and mask.padded_shape()[-2]
+    // is always the tile height at the device op level (either already equal to the tile height or
+    // padded to it by tilize_with_val_padding). Therefore, using tile_height and tile_width from
+    // input_tensor.tensor_spec().tile():
+    //   num_tiles_causal_mask = input.padded_shape()[-1] * tile_height / (tile_height * tile_width) = Wt_of_input
+    // which is fully determined by input.logical_shape()[-1] already present in the hash.
+    std::optional<MemoryConfig> default_memory_config =
+        !tensor_args.mask.has_value() ? std::make_optional<MemoryConfig>() : std::nullopt;
+    const auto& mask_memory_config =
+        tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : *default_memory_config;
     return operation::hash_operation<SoftmaxDeviceOperation>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.softmax_type,
@@ -368,7 +384,9 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
         tensor_args.input_tensor.logical_shape(),
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.memory_config(),
-        tensor_args.input_tensor.layout());
+        tensor_args.input_tensor.layout(),
+        tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID,
+        mask_memory_config);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>
