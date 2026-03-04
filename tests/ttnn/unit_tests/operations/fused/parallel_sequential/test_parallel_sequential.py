@@ -23,7 +23,6 @@ import pytest
 import torch
 import ttnn
 
-_PROFILER_ON = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
 from models.common.utility_functions import comp_pcc
 
@@ -128,7 +127,7 @@ def multi_tensors(device):
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestInfrastructure:
     """Build-time infrastructure tests (CB extraction, source structure, named args)."""
 
@@ -198,24 +197,11 @@ class TestInfrastructure:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestSequentialExecution:
     """Core sequential chain execution tests."""
 
-    @pytest.mark.parametrize(
-        "num_phases",
-        [
-            2,
-            3,
-            pytest.param(
-                4,
-                marks=pytest.mark.skipif(
-                    _PROFILER_ON,
-                    reason="4-phase fused kernel exceeds TENSIX config buffer with profiler instrumentation",
-                ),
-            ),
-        ],
-    )
+    @pytest.mark.parametrize("num_phases", [2, 3, 4])
     def test_norm_chain(self, device, test_tensors, num_phases):
         """Mixed LN/RMS chain of varying length on single core."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -353,7 +339,7 @@ class TestSequentialExecution:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestShardedExecution:
     """Sharded (L1) execution tests."""
 
@@ -524,7 +510,7 @@ class TestShardedExecution:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestMatmulFusion:
     """Matmul fusion tests — orderings, multicore, N-RMS tail, fp32 mismatch."""
 
@@ -742,7 +728,7 @@ class TestMatmulFusion:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestBranchingTopology:
     """Branching (tree) topology tests, including slice ops."""
 
@@ -964,7 +950,7 @@ class TestBranchingTopology:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestParallelExecution:
     """Independent parallel execution tests."""
 
@@ -1253,7 +1239,7 @@ class TestParallelExecution:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestSequentialParallelAPI:
     """API surface tests for Sequential/Parallel."""
 
@@ -1458,7 +1444,7 @@ class TestCrossOpCompilation:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestDocExample:
     """Integration test matching the example in op_fusion.md."""
 
@@ -1553,7 +1539,7 @@ class TestDocExample:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestDeepSeekV3:
     """DeepSeek V3 MLA block patterns using Parallel fusion."""
 
@@ -1661,7 +1647,7 @@ class TestDeepSeekV3:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 class TestAsymmetricBarrier:
     """Tests for asymmetric barrier (narrow→wide) topologies.
 
