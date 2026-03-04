@@ -238,7 +238,8 @@ public:
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_leak_ownership() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
