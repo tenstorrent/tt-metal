@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 
@@ -68,3 +68,5 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
