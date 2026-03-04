@@ -146,7 +146,7 @@ The overall flow follows the standard pattern for unary compute kernels:
         constexpr float edge0 = 0.0f;
         constexpr float edge1 = 1.0f;
         // pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)
-        // uses software floating-point. Constexpr making this evaluation compile-time
+        // uses software floating-point. Constexpr making this evaulation compile-time
         constexpr float inv_delta = 1.0f / (edge1 - edge0);
 
         init_sfpu(cb_in0, cb_out0);

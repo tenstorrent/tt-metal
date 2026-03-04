@@ -21,7 +21,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_RELAY_LINEAR_H =
         2,  // relay linear from src_noc on prefetch_h chip to dispatcher. Must be only command in fetchq entry.
     CQ_PREFETCH_CMD_RELAY_PAGED = 3,           // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 4,    // relay banked/paged data from multiple srcs to dispatcher
+    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 4,    // relay banked/paged data from multiple srcs to dispacher
     CQ_PREFETCH_CMD_RELAY_INLINE = 5,          // relay (inline) data from CmdDatQ to dispatcher
     CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 6,  // same as above, but doesn't flush the page to dispatcher
     CQ_PREFETCH_CMD_EXEC_BUF = 7,              // execute commands from a buffer

@@ -302,7 +302,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
-    // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
+    // Tilize drain-sync-core propogates this to the tilize non-drain-sync cores
     auto matmul_chunk_available_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 

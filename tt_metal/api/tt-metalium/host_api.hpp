@@ -311,7 +311,7 @@ uint32_t CreateSemaphore(
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
- * | core_spec     | Range of the Tensix coordinates using the semaphore  | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
+ * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  */
 // clang-format on
@@ -328,7 +328,7 @@ uint32_t CreateSemaphore(
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
+ * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
@@ -346,7 +346,7 @@ GlobalSemaphore CreateGlobalSemaphore(
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
+ * | cores          | Range of the Tensix co-ordinates using the semaphore   | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
