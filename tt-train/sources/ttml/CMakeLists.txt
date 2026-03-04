@@ -409,6 +409,14 @@ target_precompile_headers(
         "metal/ttnn_all_includes.hpp"
 )
 
+# Disable ccache for the ttml target so the PCH is always built fresh.
+# See cmake/ccache.cmake for the full explanation.
+# TODO: extract a dedicated ttml_pch provider target so that the 100+
+# source files in ttml can still benefit from ccache.
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(ttml)
+endif()
+
 if(ENABLE_LIBCXX)
     target_link_libraries(
         ttml
