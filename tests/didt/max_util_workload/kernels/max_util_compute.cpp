@@ -10,15 +10,14 @@
 // No CB dependencies, no waits - runs compute at full speed.
 //
 // Compile-time args:
-//   0: l1_buffer0_addr   – L1 address of pre-filled buffer 0 (float16_b)
+//   0: l1_buffer0_addr  – L1 address of pre-filled buffer 0 (float16_b)
 //   1: l1_buffer1_addr  – L1 address of pre-filled buffer 1 (float16_b)
 //   2: l1_buffer2_addr  – L1 output buffer for compute results (8 float16_b tiles)
 //   3: num_tiles        – number of tiles to process per iteration (8)
-//   4: num_iterations   – number of workload repetitions (stress-test loop)
+//   4: num_loops        – number of workload repetitions (stress-test loop)
 
 #ifdef TRISC_UNPACK
-ALWI void max_util_unpack(
-    uint32_t num_iterations, uint32_t num_tiles, uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr) {
+ALWI void max_util_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
     constexpr uint32_t face_r_dim = 16;
@@ -103,7 +102,7 @@ ALWI void max_util_unpack(
     // compute loop
     volatile uint32_t* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         for (uint32_t j = 0; j < num_tiles; j++) {
             uint32_t address_a = L1_ADDRESS(l1_buffer0_addr);
             uint32_t address_b = L1_ADDRESS(l1_buffer1_addr + j * 2048);
@@ -146,7 +145,7 @@ ALWI void max_util_unpack(
 #endif
 
 #ifdef TRISC_MATH
-ALWI void max_util_math(uint32_t num_iterations, uint32_t num_tiles) {
+ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
     constexpr uint32_t face_rc_dim = 16;
@@ -275,7 +274,7 @@ ALWI void max_util_math(uint32_t num_iterations, uint32_t num_tiles) {
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // compute loop
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (uint32_t j = 0; j < num_tiles; j++) {
             ckernel_template::run();
@@ -286,7 +285,7 @@ ALWI void max_util_math(uint32_t num_iterations, uint32_t num_tiles) {
 #endif
 
 #ifdef TRISC_PACK
-ALWI void max_util_pack(uint32_t num_iterations, uint32_t num_tiles, uint32_t l1_buffer2_addr) {
+ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer2_addr) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
     _llk_pack_hw_configure_<is_fp32_dest_acc_en>(
@@ -361,13 +360,39 @@ ALWI void max_util_pack(uint32_t num_iterations, uint32_t num_tiles, uint32_t l1
     program_packer_destination(L1_ADDRESS(l1_buffer2_addr));
 
     // compute loop
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    for (uint32_t i = 0; i < num_loops; i++) {
         _llk_packer_wait_for_math_done_();
         for (uint32_t j = 0; j < num_tiles; j++) {
             ckernel::ckernel_template::run();
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
+}
+
+// #include "ckernel_sfpu_typecast.h"
+#include "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_typecast.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+ALWI void max_util_sfpu(uint32_t num_loops, uint32_t num_tiles) {
+    // init
+    constexpr bool is_fp32_dest_acc_en = false;
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en>(
+        (uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b, 128 /* tile size for float16_b >> 4 */);
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+
+    // typecast (Float16_b -> UInt16): programs SFPLOADMACRO macros for a 2-cycle/row pipeline
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::typecast>();
+    ckernel::sfpu::_init_typecast_uint16_to_fp16b_<false>();
+
+    // compute loop
+    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+    for (uint32_t i = 0; i < num_loops; i++) {
+        _llk_packer_wait_for_math_done_();
+        for (uint32_t j = 0; j < num_tiles; j++) {
+            ckernel::sfpu::_calculate_typecast_uint16_to_fp16b_<false, 10>();
+        }
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
+    _llk_math_eltwise_unary_sfpu_done_();
 }
 #endif
 
@@ -376,14 +401,15 @@ void kernel_main() {
     constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
     constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
+    constexpr uint32_t num_loops = get_compile_time_arg_val(4);
 
     // TRISC0: perform unpack A (float16_b) and unpack B (float16_b) to SRC_A and SRC_B
-    UNPACK((max_util_unpack(num_iterations, num_tiles, l1_buffer0_addr, l1_buffer1_addr)));
+    UNPACK((max_util_unpack(num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr)));
 
     // TRISC1: perform MVMUL to DST
-    MATH((max_util_math(num_iterations, num_tiles)));
+    MATH((max_util_math(num_loops, num_tiles)));
 
-    // TRISC2: perform pack to output L1 addr + SFPU programming
-    PACK((max_util_pack(num_iterations, num_tiles, l1_buffer2_addr)));
+    // TRISC2: perform pack to output L1 addr or SFPU programming
+    PACK((max_util_pack(num_loops, num_tiles, l1_buffer2_addr)));
+    // PACK((max_util_sfpu(num_loops, num_tiles)));
 }
