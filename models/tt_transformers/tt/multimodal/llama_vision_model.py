@@ -75,9 +75,7 @@ def _get_full_row_masked_out_mask(
     values which are 0 if the a full row in the last dimension
     contains negative infinity values, otherwise it's 1.
     """
-    return (
-        (attn_bias > negative_inf_value / 2).any(dim=-1).type_as(attn_bias)[..., None]
-    )  # (attn_bias != negative_inf_value).any(dim=-1).type_as(attn_bias)[..., None]
+    return (attn_bias != negative_inf_value).any(dim=-1).type_as(attn_bias)[..., None]
 
 
 def _get_xattn_mask(
