@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstring>
+#include <utility>
+
 #include "ckernel.h"
 #include "ckernel_common_ops.h"
 #include "ckernel_instr_params.h"
@@ -90,13 +93,15 @@ namespace internal
 }
 
 /**
- * @brief Issues a load transaction that will block the core until the transaction is completed
+ * @brief Issues a load transaction that will block the core until the transaction is completed.
+ * @tparam T 32-bit type to load
  * @param ptr address to read from
  * @return value read from the address
  */
-inline std::uint32_t load_blocking(volatile std::uint32_t *ptr)
+template <typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
+inline T load_blocking(volatile T *ptr)
 {
-    std::uint32_t val;
+    static_assert(sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 32-bit");
 
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/TensixTile/BabyRISCV/MemoryOrdering.md
 
@@ -108,24 +113,38 @@ inline std::uint32_t load_blocking(volatile std::uint32_t *ptr)
     // - memory clobber
     //     - prevent reordering of transactions that occur after the load before the load by the COMPILER
 
-    asm volatile(
-        "lw %[val], (%[ptr])\n\t"
-        "and x0, x0, %[val]"
-        : [val] "=r"(val)
-        : [ptr] "r"(ptr));
+    std::uint32_t raw;
 
-    asm volatile("" : ::"memory");
+    asm volatile(
+        "lw %[raw], (%[ptr])\n\t"
+        "and x0, x0, %[raw]"
+        : [raw] "=r"(raw)
+        : [ptr] "r"(ptr)
+        : "memory");
+
+    T val;
+    std::memcpy(&val, &raw, sizeof(T));
 
     return val;
 }
 
 /**
- * @brief Issues a store transaction that will block the core until the transaction is completed
+ * @brief Issues a store transaction that will block the core until the transaction is completed.
+ * @tparam T 32-bit type to store
+ * @tparam U type of the value to store, must be trivially assignable to T
  * @param ptr address to write to
- * @param val value that will be written to the address
+ * @param val value to write
  */
-inline void store_blocking(volatile std::uint32_t *ptr, std::uint32_t val)
+template <typename T, typename U, typename = std::enable_if_t<std::is_trivially_copyable_v<T> && std::is_trivially_assignable_v<T &, U>>>
+inline void store_blocking(volatile T *ptr, U &&val)
 {
+    static_assert(sizeof(T) == sizeof(std::uint32_t), "store_blocking: operand must be 32-bit");
+
+    T typed = static_cast<T>(std::forward<U>(val));
+
+    std::uint32_t raw;
+    std::memcpy(&raw, &typed, sizeof(raw));
+
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/TensixTile/BabyRISCV/MemoryOrdering.md
 
     // this code provides a blocking store by doing the following:
@@ -140,13 +159,12 @@ inline void store_blocking(volatile std::uint32_t *ptr, std::uint32_t val)
     //     - prevent reordering of transactions that occur after the store before the store by the COMPILER
 
     asm volatile(
-        "sw %[val], (%[ptr])\n\t"
-        "lw %[val], (%[ptr])\n\t"
-        "and x0, x0, %[val]"
-        : [val] "+r"(val)
-        : [ptr] "r"(ptr));
-
-    asm volatile("" : ::"memory");
+        "sw %[raw], (%[ptr])\n\t"
+        "lw %[raw], (%[ptr])\n\t"
+        "and x0, x0, %[raw]"
+        : [raw] "+r"(raw)
+        : [ptr] "r"(ptr)
+        : "memory");
 }
 
 inline void tensix_sync()
