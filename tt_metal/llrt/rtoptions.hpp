@@ -10,15 +10,16 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <set>
-#include <unordered_set>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
-#include <atomic>
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
@@ -758,7 +759,7 @@ public:
     // This must be called after the system mesh is initialized (which in turn requires the
     // control plane). Coordinates that belong to remote hosts in a multi-host system are
     // skipped with a warning.
-    void resolve_mesh_coords_to_chip_ids(tt::tt_metal::distributed::SystemMesh& system_mesh);
+    void resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distributed::SystemMesh& system_mesh);
 
 private:
     // Helper functions to parse feature-specific environment variables.
