@@ -41,7 +41,7 @@ Runs with hardcoded defaults: `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, num_q_
     --Sq_chunk_t 7 --Sk_chunk_t 16 --head_dim_t 4 \
     --num_q_chunks 1 --num_k_chunks 5 \
     --subblock_h 1 --mm_throttle_level 0 --exp_approx_mode 0 \
-    --padded_k_tiles 0
+    --padded_k_tiles 0 --kv_bf8b 0
 ```
 
 Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, untilizes output, and writes `<dir>/device_output.bin`.
@@ -57,9 +57,25 @@ Reads `<dir>/q.bin`, `k.bin`, `v.bin` (raw bfloat16), tilizes, runs the kernel, 
 
 Where `Sq = num_q_chunks * Sq_chunk_t * 32`, `Sk = num_k_chunks * Sk_chunk_t * 32`, `d = head_dim_t * 32`.
 
-**CLI parameter defaults** (when omitted): `Sq_chunk_t=7, Sk_chunk_t=16, head_dim_t=4, subblock_h=1, mm_throttle_level=0, exp_approx_mode=0, padded_k_tiles=0`. `num_q_chunks` and `num_k_chunks` default to 2/3 (benchmark mode) or 3/5 (test mode).
+**CLI parameters:**
 
-**Padded K masking:** When `--padded_k_tiles N` is nonzero, the last N tiles of the last K chunk are treated as zero-padding and masked with -inf before softmax. K/V input files must still have the full padded shape.
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--test <dir>` | string | "" (benchmark) | Test directory with q.bin, k.bin, v.bin |
+| `--Sq_chunk_t` | uint32 | 7 | Q sequence chunk tile height |
+| `--Sk_chunk_t` | uint32 | 16 | K/V sequence chunk tile height |
+| `--head_dim_t` | uint32 | 4 | Head dimension in tiles |
+| `--num_q_chunks` | uint32 | 2 (bench) / 3 (test) | Number of Q chunks |
+| `--num_k_chunks` | uint32 | 3 (bench) / 5 (test) | Number of K/V chunks |
+| `--subblock_h` | uint32 | 1 | Subblock height (1 or 2) |
+| `--mm_throttle_level` | uint32 | 0 | Matrix multiply throttle (0-5) |
+| `--exp_approx_mode` | uint32 | 0 | Fast exponential approximation (0=off, 1=on) |
+| `--padded_k_tiles` | uint32 | 0 | Padded K tiles in final chunk |
+| `--kv_bf8b` | uint32 | 0 | Use bfloat8_b for K/V (0=bf16, 1=bfp8_b) |
+
+**Padded K masking:** When `--padded_k_tiles N` is nonzero, the last N tiles of the last K chunk are treated as zero-padding. On the last K chunk, the compute kernel dispatches a reduced-path instantiation (`effective_Sk = Sk_chunk_t - N`) that skips all padded-tile computation — matmuls, softmax, reduce, and masking all operate on `effective_Sk` tiles only. K/V input files must still have the full padded shape.
+
+**bfp8_b K/V:** When `--kv_bf8b 1`, K and V buffers use bfloat8_b data format (1 KB/tile vs 2 KB for bf16), halving K/V L1 footprint. Useful for large head dimensions (e.g., MLA with head_dim_t=16).
 
 ## Python Correctness Tests
 
@@ -80,37 +96,38 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 
 ### Main test cases
 
-| ID | Q chunks | K/V chunks | Sq_chunk_t | Sk_chunk_t | sbh | Padded | Data |
-|----|----------|------------|------------|------------|-----|--------|------|
-| `1q_1k-zeros-sk16` | 1 | 1 | 7 | 16 | 1 | 0 | All zeros |
-| `1q_1k-ones-sk16` | 1 | 1 | 7 | 16 | 1 | 0 | All ones |
-| `1q_1k-random-sk16` | 1 | 1 | 7 | 16 | 1 | 0 | `fa_rand` |
-| `1q_5k-random-sk16` | 1 | 5 | 7 | 16 | 1 | 0 | `fa_rand` |
-| `3q_5k-random-sk16` | 3 | 5 | 7 | 16 | 1 | 0 | `fa_rand` |
-| `1q_1k-random-sk8` | 1 | 1 | 7 | 8 | 1 | 0 | `fa_rand` |
-| `1q_5k-random-sk8` | 1 | 5 | 7 | 8 | 1 | 0 | `fa_rand` |
-| `3q_5k-random-sk8` | 3 | 5 | 7 | 8 | 1 | 0 | `fa_rand` |
-| `1q_5k-random-sk16-pad4` | 1 | 5 | 7 | 16 | 1 | 4 | `fa_rand` |
-| `1q_5k-random-sk8-pad2` | 1 | 5 | 7 | 8 | 1 | 2 | `fa_rand` |
-| `3q_5k-random-sk16-pad8` | 3 | 5 | 7 | 16 | 1 | 8 | `fa_rand` |
-| `1q_1k-random-sk4-sbh2` | 1 | 1 | 4 | 4 | 2 | 0 | `fa_rand` |
-| `1q_5k-random-sk4-sbh2` | 1 | 5 | 4 | 4 | 2 | 0 | `fa_rand` |
-| `1q_5k-random-sk8-sbh2` | 1 | 5 | 4 | 8 | 2 | 0 | `fa_rand` |
-| `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 4 | 2 | 1 | `fa_rand` |
-| `3q_19k-random-sk16-pad8-sq9` | 3 | 19 | 9 | 16 | 1 | 8 | `fa_rand` |
-| `3q_5k-random-sk16-pad6` | 3 | 5 | 7 | 16 | 1 | 6 | `fa_rand` |
+| ID | Q chunks | K/V chunks | Sq_chunk_t | Sk_chunk_t | head_dim_t | sbh | Padded | kv_bf8b | Data |
+|----|----------|------------|------------|------------|------------|-----|--------|---------|------|
+| `1q_1k-zeros-sk16` | 1 | 1 | 7 | 16 | 4 | 1 | 0 | 0 | All zeros |
+| `1q_1k-ones-sk16` | 1 | 1 | 7 | 16 | 4 | 1 | 0 | 0 | All ones |
+| `1q_1k-random-sk16` | 1 | 1 | 7 | 16 | 4 | 1 | 0 | 0 | `fa_rand` |
+| `1q_5k-random-sk16` | 1 | 5 | 7 | 16 | 4 | 1 | 0 | 0 | `fa_rand` |
+| `3q_5k-random-sk16` | 3 | 5 | 7 | 16 | 4 | 1 | 0 | 0 | `fa_rand` |
+| `1q_1k-random-sk8` | 1 | 1 | 7 | 8 | 4 | 1 | 0 | 0 | `fa_rand` |
+| `1q_5k-random-sk8` | 1 | 5 | 7 | 8 | 4 | 1 | 0 | 0 | `fa_rand` |
+| `3q_5k-random-sk8` | 3 | 5 | 7 | 8 | 4 | 1 | 0 | 0 | `fa_rand` |
+| `1q_5k-random-sk16-pad4` | 1 | 5 | 7 | 16 | 4 | 1 | 4 | 0 | `fa_rand` |
+| `1q_5k-random-sk8-pad2` | 1 | 5 | 7 | 8 | 4 | 1 | 2 | 0 | `fa_rand` |
+| `3q_5k-random-sk16-pad8` | 3 | 5 | 7 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
+| `1q_1k-random-sk4-sbh2` | 1 | 1 | 4 | 4 | 4 | 2 | 0 | 0 | `fa_rand` |
+| `1q_5k-random-sk4-sbh2` | 1 | 5 | 4 | 4 | 4 | 2 | 0 | 0 | `fa_rand` |
+| `1q_5k-random-sk8-sbh2` | 1 | 5 | 4 | 8 | 4 | 2 | 0 | 0 | `fa_rand` |
+| `3q_5k-random-sk4-sbh2-pad1` | 3 | 5 | 4 | 4 | 4 | 2 | 1 | 0 | `fa_rand` |
+| `3q_19k-random-sk16-pad8-sq9` | 3 | 19 | 9 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
+| `3q_5k-random-sk16-pad6` | 3 | 5 | 7 | 16 | 4 | 1 | 6 | 0 | `fa_rand` |
+| `1q_1k-random-sk16-pad8` | 1 | 1 | 7 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
+| `1q_2k-random-sk16-pad8` | 1 | 2 | 7 | 16 | 4 | 1 | 8 | 0 | `fa_rand` |
 
-### Padding PCC impact tests
+### Additional tests
 
-Additional tests that sweep padding levels (0, 1, 2, 4, 8, 12, 15 tiles) on a fixed config (Sq_chunk_t=9, Sk_chunk_t=16, head_dim_t=4, 1 Q chunk, 3 K chunks) and verify PCC stays above threshold. `test_padding_pcc_correlation` also reports correlation between padding amount and PCC degradation.
-
-```bash
-# Run individual padding level tests
-pytest generate_and_test_sdpa.py -v -k "test_padding_pcc_impact"
-
-# Run the sweep/correlation test
-pytest generate_and_test_sdpa.py -v -k "test_padding_pcc_correlation"
-```
+| Test | Description |
+|------|-------------|
+| `test_padding_pcc_impact[pad0..pad15]` | Sweeps padding levels (0, 1, 2, 4, 8, 12, 15) on Sq=9, Sk=16, 1q, 3k |
+| `test_padding_pcc_correlation` | Verifies PCC stays above threshold across all padding levels |
+| `test_mla_vDHt16` | MLA config: head_dim_t=16, sbh=2, sk=8, kv_bf8b=1 |
+| `test_mla_vDHt4` | MLA config: head_dim_t=4, sbh=2, sk=8 |
+| `test_padded_s160_k512_sbh1` | Large padded config: Sq=160, Sk=512, sbh=1 |
+| `test_padded_s160_k512_sbh2` | Large padded config: Sq=160, Sk=512, sbh=2 |
 
 ### Run a single test
 
@@ -162,6 +179,8 @@ pytest tt_metal/programming_examples/sdpa_single_core/generate_and_test_sdpa.py 
 | `sdpa_single_core.cpp` | Host code (CB setup, kernel dispatch) |
 | `generate_and_test_sdpa.py` | Pytest harness (generates inputs, runs binary, compares) |
 | `SDPA_kernel_analysis.md` | Full architecture and data flow documentation |
+| `kernels/skip_padding.md` | Feasibility study for skip-padding optimization |
+| `kernels/skip_padding_plan.md` | Implementation plan for Approach B (dual-path) |
 
 ## Important: After Editing Kernels
 

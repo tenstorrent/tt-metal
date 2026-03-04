@@ -602,7 +602,13 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
  * Caller manages cb_reserve_back/cb_push_back for out_cb.
  * in0_row_group_index overrides in0_cb read position (e.g., 0 when reading from a row buffer).
  */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t SBH>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t scale_cb,
+    uint32_t cols,
+    uint32_t SBH,
+    uint32_t ROW_STRIDE = cols>
 void reduce_c_row_group(
     uint32_t in0_cb,
     uint32_t out_cb,
@@ -616,7 +622,9 @@ void reduce_c_row_group(
     const uint32_t in0_rgi = (in0_row_group_index != 0xFFFFFFFF) ? in0_row_group_index : row_group_index;
     const uint32_t in0_row_start = in0_rgi * GROUP_SIZE;
 
-    const uint32_t cumulative_input_tiles = (in0_rgi + 1) * GROUP_SIZE * cols;
+    // ROW_STRIDE: physical row width in the CB (may exceed cols on the reduced path).
+    // cols: number of columns to actually reduce over.
+    const uint32_t cumulative_input_tiles = (in0_rgi + 1) * GROUP_SIZE * ROW_STRIDE;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
 
     // Assuming this is ready.
@@ -639,7 +647,7 @@ void reduce_c_row_group(
 
     reduce_block_max_row_init<cols>();
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t input_tile_start = (in0_row_start + i) * cols;
+        const uint32_t input_tile_start = (in0_row_start + i) * ROW_STRIDE;
         reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
     }
     reduce_block_max_row_uninit(in0_cb);
@@ -728,51 +736,6 @@ void blocked_matmul_and_pack(
         }
     }
     tile_regs_release();
-}
-
-/**
- * Applies padded-K mask by L1-accumulating a -inf tile onto padded tile positions
- * in a row buffer that is in reserved (not yet pushed) state.
- *
- * Processes in batches of up to DST_BATCH tiles to minimize tile_regs_acquire/release overhead.
- * The neginf_cb must have 1 tile fronted and is NOT popped (reusable across calls).
- * For SBH > 1, the same mask pattern is applied to each sub-row in the buffer.
- *
- * @tparam num_padded  Number of padded tiles per sub-row (must be > 0)
- * @tparam num_cols    Tiles per sub-row (Sk_chunk_t)
- * @tparam SBH         Number of sub-rows in the buffer (subblock_h)
- * @tparam DST_BATCH   Max tiles per DST batch (8 for fp16b half-sync)
- */
-template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t SBH = 1, uint32_t DST_BATCH = 8>
-void apply_padded_mask(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
-    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
-    static_assert(num_padded > 0, "num_padded must be > 0");
-    static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
-    static_assert(DST_BATCH <= 8, "DST_BATCH must fit in DST (max 8 tiles with fp16b half-sync)");
-    constexpr uint32_t start = num_cols - num_padded;
-
-    sdpa_reduce_copy_tile_to_dst_init_short(neginf_cb);
-    cb_wait_front(neginf_cb, 1);
-    PACK((llk_pack_reconfig_l1_acc(1)));
-
-    for (uint32_t row = 0; row < SBH; row++) {
-        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
-        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
-            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < batch; i++) {
-                copy_tile(neginf_cb, 0, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, out_cb, row_offset + base + i);
-            }
-            tile_regs_release();
-        }
-    }
-
-    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 // ===================== Normalization Functions =====================
@@ -898,8 +861,6 @@ template <
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
-    uint32_t padded_k_tiles,
-    uint32_t cb_mask_in,
     uint32_t KT_stride = Sk_chunk_t>
 void sdpa_inner_loop_step(
     const uint32_t prev_max,
@@ -918,7 +879,7 @@ void sdpa_inner_loop_step(
     constexpr uint32_t kt_remainder = Sk_chunk_t % qkt_subblock_w;
     constexpr bool has_partial_subblock = (kt_remainder > 0);
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
-    constexpr uint32_t row_tiles = sbh * KT_stride;  // Use KT_stride for cb_qkt_im row width
+    constexpr uint32_t row_tiles = sbh * KT_stride;  // cb_qkt_im row width = KT_stride (keeps CB pointer alignment)
 
     static_assert(sbh * qkt_subblock_w <= 8, "sbh * qkt_subblock_w must fit in DST (max 8 tiles)");
     static_assert(Sq_chunk_t % sbh == 0, "Sq_chunk_t must be divisible by subblock_h");
@@ -932,7 +893,6 @@ void sdpa_inner_loop_step(
 
     pack_reconfig_data_format(cb_qkt_im);
     reconfig_data_format(cb_kt_in, cb_q_in);
-    // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * KT_stride);
     cb_reserve_back(cur_sum, Sq_chunk_t);
 
@@ -1043,15 +1003,6 @@ void sdpa_inner_loop_step(
         // Restore float16b for mask/reduce after Q@KT.
         reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
 
-        // Apply padded mask on last K chunk: L1-accumulate -inf onto padded tile positions.
-        // Tiles are still in reserved (not pushed) state, so pack_tile<true> with L1 acc works.
-        if constexpr (padded_k_tiles > 0) {
-            if (is_last_iter) {
-                PACK((llk_pack_mop_config<false, false, false>(cb_mask_in, 1)));
-                apply_padded_mask<PROFILING_ENABLED, padded_k_tiles, KT_stride, sbh>(cb_mask_in, cb_qkt_im, q_subblock);
-            }
-        }
-
         // Push row (makes it visible for UNPACK reads) but keep wr_ptr stable
         cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
 
@@ -1061,7 +1012,7 @@ void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
             cb_reserve_back(cur_max, sbh);
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, KT_stride, sbh>(
+            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh, KT_stride>(
                 cb_qkt_im,
                 cur_max,
                 prev_max,
@@ -1095,7 +1046,6 @@ void sdpa_inner_loop_step(
         constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
         constexpr uint32_t qktv_v_num_subblocks = head_dim_t / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * head_dim_t;
-        // cb_qkt_im row width is KT_stride (for pointer alignment), not Sv_chunk_t
         constexpr uint32_t qktv_in0_row_tiles = qktv_subblock_h * KT_stride;
 
         uint32_t qktv_in0_index_offset = 0;
@@ -1379,7 +1329,6 @@ void kernel_main() {
     constexpr uint32_t cb_qkt_im = tt::CBIndex::c_2;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_out_A = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_B = tt::CBIndex::c_26;
@@ -1438,9 +1387,7 @@ void kernel_main() {
                     subblock_h,
                     cb_col_identity,
                     cb_recip_scratch,
-                    cb_normalized_out,
-                    padded_k_tiles,
-                    cb_mask_in>(
+                    cb_normalized_out>(
                     alias_prev_max,
                     alias_cur_max,
                     alias_prev_sum,
@@ -1452,8 +1399,8 @@ void kernel_main() {
             };
 
             // Reduced path for last K chunk with padding: compute with effective_Sk,
-            // skip all padded-tile computation. No padding mask needed (padded_k_tiles=0).
-            // KT_stride = original Sk_chunk_t to index into the reader's full KT CB layout.
+            // skip all padded-tile computation. KT_stride = original Sk_chunk_t to
+            // index into the reader's full KT CB layout.
             auto call_step_reduced = [&](auto profiling_tag) {
                 sdpa_inner_loop_step<
                     decltype(profiling_tag)::value,
@@ -1472,8 +1419,6 @@ void kernel_main() {
                     cb_col_identity,
                     cb_recip_scratch,
                     cb_normalized_out,
-                    padded_k_tiles,  // Keep masking — uncomputed positions need -inf
-                    cb_mask_in,
                     Sk_chunk_t>(
                     alias_prev_max,
                     alias_cur_max,
