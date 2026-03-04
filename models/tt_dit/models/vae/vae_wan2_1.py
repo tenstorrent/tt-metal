@@ -404,12 +404,6 @@ class WanCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
@@ -812,12 +806,6 @@ class WanConv2d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
