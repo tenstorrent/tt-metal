@@ -71,7 +71,13 @@ void kernel_main() {
             get_arg_val<uint32_t>(8),  // socket_config_addr
             0,
             0,
+            0,  // agg_sem_l1_addr, agg_core_noc_x, agg_core_noc_y
             0,
+            0,
+            0,
+            0,
+            0,
+            0,  // persistent fields (unused in standalone kernel)
         };
         if constexpr (CTArgs::total_num_workers > 0) {
             rt_args.agg_sem_l1_addr = get_arg_val<uint32_t>(9);
