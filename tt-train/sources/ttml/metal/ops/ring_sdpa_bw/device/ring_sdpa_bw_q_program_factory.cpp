@@ -46,13 +46,13 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
 
     // Get mesh buffers
-    auto grad_output_mesh_buffer = grad_output.mesh_buffer();
-    auto attn_output_mesh_buffer = attn_output.mesh_buffer();
-    auto query_mesh_buffer = query.mesh_buffer();
-    auto key_mesh_buffer = key.mesh_buffer();
-    auto value_mesh_buffer = value.mesh_buffer();
-    auto intermediates_mesh_buffer = intermediates.mesh_buffer();
-    auto grad_query_mesh_buffer = grad_query.mesh_buffer();
+    auto grad_output_mesh_buffer = grad_output.mesh_buffer_leak_ownership();
+    auto attn_output_mesh_buffer = attn_output.mesh_buffer_leak_ownership();
+    auto query_mesh_buffer = query.mesh_buffer_leak_ownership();
+    auto key_mesh_buffer = key.mesh_buffer_leak_ownership();
+    auto value_mesh_buffer = value.mesh_buffer_leak_ownership();
+    auto intermediates_mesh_buffer = intermediates.mesh_buffer_leak_ownership();
+    auto grad_query_mesh_buffer = grad_query.mesh_buffer_leak_ownership();
 
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
@@ -153,13 +153,13 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
     const auto ring_direction = operation_attributes.ring_direction;
 
     // Get mesh buffers
-    auto grad_output_mesh_buffer = grad_output.mesh_buffer();
-    auto attn_output_mesh_buffer = attn_output.mesh_buffer();
-    auto query_mesh_buffer = query.mesh_buffer();
-    auto key_mesh_buffer = key.mesh_buffer();
-    auto value_mesh_buffer = value.mesh_buffer();
-    auto intermediates_mesh_buffer = intermediates.mesh_buffer();
-    auto grad_query_mesh_buffer = grad_query.mesh_buffer();
+    auto grad_output_mesh_buffer = grad_output.mesh_buffer_leak_ownership();
+    auto attn_output_mesh_buffer = attn_output.mesh_buffer_leak_ownership();
+    auto query_mesh_buffer = query.mesh_buffer_leak_ownership();
+    auto key_mesh_buffer = key.mesh_buffer_leak_ownership();
+    auto value_mesh_buffer = value.mesh_buffer_leak_ownership();
+    auto intermediates_mesh_buffer = intermediates.mesh_buffer_leak_ownership();
+    auto grad_query_mesh_buffer = grad_query.mesh_buffer_leak_ownership();
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coord_range);

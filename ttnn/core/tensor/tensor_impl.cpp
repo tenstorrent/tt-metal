@@ -726,7 +726,7 @@ void copy_to_host(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.device_storage().get_mesh_buffer(), blocking);
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
@@ -759,7 +759,7 @@ void copy_to_device(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(device_tensor.device_storage().get_mesh_buffer(), shard_data_transfers, false);
 }
 
 // ======================================================================================
