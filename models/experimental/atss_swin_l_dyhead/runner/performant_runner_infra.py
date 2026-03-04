@@ -90,7 +90,12 @@ class ATSSPerformanceRunnerInfra:
         ATSS_CKPT_PATH = "models/experimental/atss_swin_l_dyhead/weights/atss_swin-l-p4-w12_fpn_dyhead_mstrain_2x_coco_20220509_100315-bc5b6516.pth"
 
         self.ttnn_model = TtATSSModel.from_checkpoint(
-            ATSS_CKPT_PATH, device=self.device, input_h=resolution[0], input_w=resolution[1]
+            ATSS_CKPT_PATH,
+            device=self.device,
+            input_h=resolution[0],
+            input_w=resolution[1],
+            inputs_mesh_mapper=self.inputs_mesh_mapper,
+            output_mesh_composer=self.outputs_mesh_composer,
         )
 
         self.torch_output = self.torch_model.forward(self.torch_input_tensor)

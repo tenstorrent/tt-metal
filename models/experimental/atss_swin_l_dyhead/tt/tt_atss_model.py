@@ -68,6 +68,8 @@ class TtATSSModel:
         pixel_mean=ATSS_PIXEL_MEAN,
         pixel_std=ATSS_PIXEL_STD,
         pad_size_divisor=ATSS_PAD_SIZE_DIVISOR,
+        inputs_mesh_mapper=None,
+        output_mesh_composer=None,
     ):
         self.device = device
         self.backbone = backbone
@@ -77,6 +79,8 @@ class TtATSSModel:
         self.pixel_mean = torch.tensor(pixel_mean).view(1, 3, 1, 1)
         self.pixel_std = torch.tensor(pixel_std).view(1, 3, 1, 1)
         self.pad_size_divisor = pad_size_divisor
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.output_mesh_composer = output_mesh_composer
 
     @classmethod
     def from_checkpoint(
@@ -86,6 +90,8 @@ class TtATSSModel:
         input_h=None,
         input_w=None,
         hybrid_dyhead: bool = True,
+        inputs_mesh_mapper=None,
+        output_mesh_composer=None,
     ):
         """Build the full model from an mmdet checkpoint.
 
@@ -96,6 +102,8 @@ class TtATSSModel:
             input_w: padded input width  (default: ATSS_INPUT_W).
             hybrid_dyhead: if True, run scale/task attention on TTNN device
                 (spatial DCNv2 stays on CPU). If False, run entire DyHead on CPU.
+            inputs_mesh_mapper: mesh mapper for sharding inputs across devices.
+            output_mesh_composer: mesh composer for gathering outputs from devices.
         """
         # 1. Swin-L backbone (TTNN)
         backbone = build_atss_backbone(checkpoint_path, device, input_h=input_h, input_w=input_w)
@@ -123,7 +131,12 @@ class TtATSSModel:
         pt_dyhead.eval()
 
         if hybrid_dyhead:
-            dyhead = TtHybridDyHead(device, pt_dyhead)
+            dyhead = TtHybridDyHead(
+                device,
+                pt_dyhead,
+                inputs_mesh_mapper=inputs_mesh_mapper,
+                output_mesh_composer=output_mesh_composer,
+            )
         else:
             dyhead = pt_dyhead
 
@@ -138,7 +151,15 @@ class TtATSSModel:
             num_levels=ATSS_FPN_NUM_OUTS,
         )
 
-        return cls(device, backbone, fpn, dyhead, head)
+        return cls(
+            device,
+            backbone,
+            fpn,
+            dyhead,
+            head,
+            inputs_mesh_mapper=inputs_mesh_mapper,
+            output_mesh_composer=output_mesh_composer,
+        )
 
     def preprocess(self, img: torch.Tensor) -> torch.Tensor:
         """Normalize and pad image. Input: [1, 3, H, W] BGR float [0, 255]."""
@@ -162,7 +183,7 @@ class TtATSSModel:
         """Run DyHead on FPN features (hybrid TTNN or pure PyTorch)."""
         torch_feats = []
         for feat in fpn_feats_ttnn:
-            t = ttnn.to_torch(ttnn.from_device(feat)).float()
+            t = ttnn.to_torch(ttnn.from_device(feat), mesh_composer=self.output_mesh_composer).float()
             torch_feats.append(t)
 
         with torch.no_grad():
@@ -182,14 +203,24 @@ class TtATSSModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.inputs_mesh_mapper,
             )
             ttnn_feats.append(t)
 
         cls_scores_ttnn, bbox_preds_ttnn, centernesses_ttnn = self.head(ttnn_feats)
 
-        cls_scores = [ttnn.to_torch(ttnn.from_device(x)).float() for x in cls_scores_ttnn]
-        bbox_preds = [ttnn.to_torch(ttnn.from_device(x)).float() for x in bbox_preds_ttnn]
-        centernesses = [ttnn.to_torch(ttnn.from_device(x)).float() for x in centernesses_ttnn]
+        # Head returns NHWC (1, H, W, C); postprocess expects NCHW (1, C, H, W).
+        # Single-device: use to_torch without mesh_composer for correct host copy.
+        to_torch_kw = {} if self.output_mesh_composer is None else {"mesh_composer": self.output_mesh_composer}
+        cls_scores = [
+            ttnn.to_torch(ttnn.from_device(x), **to_torch_kw).float().permute(0, 3, 1, 2) for x in cls_scores_ttnn
+        ]
+        bbox_preds = [
+            ttnn.to_torch(ttnn.from_device(x), **to_torch_kw).float().permute(0, 3, 1, 2) for x in bbox_preds_ttnn
+        ]
+        centernesses = [
+            ttnn.to_torch(ttnn.from_device(x), **to_torch_kw).float().permute(0, 3, 1, 2) for x in centernesses_ttnn
+        ]
         return cls_scores, bbox_preds, centernesses
 
     def forward(self, x_ttnn):
