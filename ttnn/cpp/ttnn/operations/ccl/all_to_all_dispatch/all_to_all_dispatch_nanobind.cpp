@@ -70,7 +70,7 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::ccl::all_to_all_dispatch,
+            &ttnn::all_to_all_dispatch,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),

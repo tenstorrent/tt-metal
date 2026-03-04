@@ -53,7 +53,7 @@ void bind_reduce_scatter(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::ccl::reduce_scatter,
+            &ttnn::reduce_scatter,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),

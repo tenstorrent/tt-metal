@@ -9,7 +9,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::ccl {
+namespace ttnn {
 
 ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,
@@ -24,4 +24,4 @@ ttnn::Tensor all_to_all_combine(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 
-}  // namespace ttnn::ccl
+}  // namespace ttnn

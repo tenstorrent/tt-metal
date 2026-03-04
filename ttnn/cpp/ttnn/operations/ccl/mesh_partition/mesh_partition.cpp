@@ -8,7 +8,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 
-namespace ttnn::ccl {
+namespace ttnn {
 ttnn::Tensor mesh_partition(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
@@ -22,4 +22,4 @@ ttnn::Tensor mesh_partition(
         input_tensor, dim, cluster_axis, memory_config.value_or(input_tensor.memory_config()));
 }
 
-}  // namespace ttnn::ccl
+}  // namespace ttnn

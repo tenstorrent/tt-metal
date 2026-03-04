@@ -60,7 +60,7 @@ void bind_all_gather(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::ccl::all_gather,
+            &ttnn::all_gather,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::kw_only(),

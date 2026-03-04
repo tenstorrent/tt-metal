@@ -15,7 +15,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::ccl {
+namespace ttnn {
 using namespace ttnn::operations::ccl;
 
 ttnn::Tensor all_gather(
@@ -43,7 +43,7 @@ ttnn::Tensor all_gather(
             auto mesh_view = mesh_shape.view();
             for (auto it = mesh_view.rbegin(); it != mesh_view.rend(); ++it) {
                 auto axis = std::distance(mesh_view.begin(), it.base()) - 1;
-                tensor = ttnn::ccl::all_gather(
+                tensor = ttnn::all_gather(
                     tensor,
                     dim,
                     axis,
@@ -87,4 +87,4 @@ ttnn::Tensor all_gather(
         sub_core_grid);
 }
 
-}  // namespace ttnn::ccl
+}  // namespace ttnn

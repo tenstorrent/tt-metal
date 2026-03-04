@@ -69,7 +69,7 @@ void bind_broadcast(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::ccl::broadcast,
+            &ttnn::broadcast,
             nb::arg("input_tensor"),
             nb::arg("sender_coord"),
             nb::kw_only(),

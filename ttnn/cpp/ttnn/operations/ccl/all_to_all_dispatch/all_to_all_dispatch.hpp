@@ -8,7 +8,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::ccl {
+namespace ttnn {
 
 std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     const ttnn::Tensor& input_tensor,
@@ -22,4 +22,4 @@ std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     const std::optional<uint32_t>& output_concat_dim = std::nullopt);
 
-}  // namespace ttnn::ccl
+}  // namespace ttnn

@@ -9,7 +9,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn::ccl {
+namespace ttnn {
 
 ttnn::Tensor mesh_partition(
     const ttnn::Tensor& input_tensor,
@@ -17,4 +17,4 @@ ttnn::Tensor mesh_partition(
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
-}  // namespace ttnn::ccl
+}  // namespace ttnn

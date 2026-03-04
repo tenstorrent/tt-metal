@@ -8,7 +8,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::ccl {
+namespace ttnn {
 
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
@@ -20,4 +20,4 @@ std::vector<ttnn::Tensor> all_broadcast(
         ttnn::ccl::Topology::Linear);  // change to std::nullopt when we add support/test for non-linear topologies
                                        // #30798
 
-}  // namespace ttnn::ccl
+}  // namespace ttnn

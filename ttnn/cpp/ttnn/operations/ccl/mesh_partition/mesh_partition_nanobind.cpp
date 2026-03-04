@@ -43,7 +43,7 @@ void bind_mesh_partition(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            &ttnn::ccl::mesh_partition,
+            &ttnn::mesh_partition,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),

@@ -342,7 +342,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             worker_subdevice_id_opt,
             cluster_axis);
     } else {
-        scattered_tensor = ttnn::ccl::reduce_scatter(
+        scattered_tensor = ttnn::reduce_scatter(
             interleaved_tensor,
             dim,
             cluster_axis,
@@ -381,7 +381,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             /*sub_core_grid*/ std::nullopt,
             /*mesh_device*/ &mesh_device);
     } else {
-        gathered = ttnn::ccl::all_gather(
+        gathered = ttnn::all_gather(
             scattered_tensor,
             dim,
             cluster_axis,
