@@ -57,11 +57,12 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
         auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
             program, shared_variables.mm_shared_variables);
 
+        std::vector<Tensor> matmul_return_value = {output_tensor.at(1)};
         ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
             {output_tensor.at(0), tensor_args.weight_tensor, tensor_args.bias, tensor_args.input_tensor},
-            {output_tensor.at(1)});
+            matmul_return_value);
     }
 }
 

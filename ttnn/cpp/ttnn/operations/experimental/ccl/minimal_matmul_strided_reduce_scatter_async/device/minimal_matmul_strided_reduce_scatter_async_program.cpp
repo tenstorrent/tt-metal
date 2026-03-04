@@ -131,11 +131,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
             program, shared_variables.mm_shared_variables);
 
+        std::vector<Tensor> mm_outputs = {output_tensor.at(0)};
         ttnn::experimental::prim::MinimalMatmulProgramFactory::override_runtime_arguments(
             cached_program_proxy,
             attributes.matmul_struct,
             {tensor_args.input_tensor, tensor_args.weight_tensor, tensor_args.bias, std::nullopt},
-            {output_tensor.at(0)});
+            mm_outputs);
     }
 }
 

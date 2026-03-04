@@ -63,9 +63,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
     uint32_t N_chunks,
-    std::optional<float> fused_ternary_scalar = std::nullopt,
-    const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
-    const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<const Tensor>& fused_ternary_input_a,
+    const std::optional<const Tensor>& fused_ternary_input_b,
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler);
 
 }  // namespace ttnn::experimental::prim
