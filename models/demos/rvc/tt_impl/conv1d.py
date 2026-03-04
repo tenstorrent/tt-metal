@@ -86,7 +86,7 @@ def to_slice_config(slice_type: str):
     # )
 
 
-class TTConv1d:
+class Conv1d:
     """Stateful Conv1d wrapper around `ttnn.conv1d`."""
 
     def __init__(

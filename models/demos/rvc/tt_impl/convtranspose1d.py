@@ -17,7 +17,7 @@ def _normalize_input(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.reshape(input_t, (batch_size, 1, input_length, input_channel))
 
 
-class TTConvTranspose1d:
+class ConvTranspose1d:
     """Stateful ConvTranspose1d wrapper built on top of `ttnn.conv_transpose2d`."""
 
     def __init__(

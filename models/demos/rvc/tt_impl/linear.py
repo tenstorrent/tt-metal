@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 
-class TTLinear:
+class Linear:
     """Stateful Linear wrapper around `ttnn.linear` for NLC tensors."""
 
     def __init__(

@@ -9,9 +9,9 @@ import math
 import torch
 
 import ttnn
-from models.demos.rvc.tt_impl.conv1d import TTConv1d
-from models.demos.rvc.tt_impl.convtranspose1d import TTConvTranspose1d
-from models.demos.rvc.tt_impl.linear import TTLinear
+from models.demos.rvc.tt_impl.conv1d import Conv1d
+from models.demos.rvc.tt_impl.convtranspose1d import ConvTranspose1d
+from models.demos.rvc.tt_impl.linear import Linear
 from models.demos.rvc.tt_impl.synthesizer.attentions import FFN, MultiHeadAttention
 from models.demos.rvc.tt_impl.synthesizer.modules import (
     LRELU_SLOPE,
@@ -41,7 +41,7 @@ def _flip_last_dim(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
 
-class TTEmbedding:
+class Embedding:
     def __init__(self, device: ttnn.MeshDevice, num_embeddings: int, embedding_dim: int) -> None:
         self.device = device
         self.num_embeddings = num_embeddings
@@ -131,9 +131,9 @@ class TextEncoder:
     ) -> None:
         self.out_channels = out_channels
         self.hidden_channels = hidden_channels
-        self.emb_phone = TTLinear(device, embedding_dims, hidden_channels)
+        self.emb_phone = Linear(device, embedding_dims, hidden_channels)
         self.use_f0 = f0
-        self.emb_pitch = TTEmbedding(device, 256, hidden_channels) if f0 else None
+        self.emb_pitch = Embedding(device, 256, hidden_channels) if f0 else None
         self.encoder = Encoder(
             device=device,
             hidden_channels=hidden_channels,
@@ -142,7 +142,7 @@ class TextEncoder:
             n_layers=n_layers,
             kernel_size=kernel_size,
         )
-        self.proj = TTConv1d(
+        self.proj = Conv1d(
             device=device,
             in_channels=hidden_channels,
             out_channels=out_channels * 2,
@@ -226,7 +226,7 @@ class Generator:
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
 
-        self.conv_pre = TTConv1d(
+        self.conv_pre = Conv1d(
             device=device,
             in_channels=initial_channel,
             out_channels=upsample_initial_channel,
@@ -235,10 +235,10 @@ class Generator:
             padding=3,
         )
 
-        self.ups: list[TTConvTranspose1d] = []
+        self.ups: list[ConvTranspose1d] = []
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes, strict=True)):
             self.ups.append(
-                TTConvTranspose1d(
+                ConvTranspose1d(
                     device=device,
                     in_channels=upsample_initial_channel // (2**i),
                     out_channels=upsample_initial_channel // (2 ** (i + 1)),
@@ -255,7 +255,7 @@ class Generator:
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes, strict=True):
                 self.resblocks.append(resblock_cls(device, ch, k, tuple(d)))
 
-        self.conv_post = TTConv1d(
+        self.conv_post = Conv1d(
             device=device,
             in_channels=ch,
             out_channels=1,
@@ -265,7 +265,7 @@ class Generator:
         )
         self.cond = None
         if gin_channels != 0:
-            self.cond = TTConv1d(
+            self.cond = Conv1d(
                 device=device,
                 in_channels=gin_channels,
                 out_channels=upsample_initial_channel,
@@ -388,7 +388,7 @@ class SourceModuleHnNSF:
     ) -> None:
         self.device = device
         self.l_sin_gen = SineGen(device, sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod)
-        self.l_linear = TTLinear(device=device, in_features=harmonic_num + 1, out_features=1, dtype=ttnn.bfloat16)
+        self.l_linear = Linear(device=device, in_features=harmonic_num + 1, out_features=1, dtype=ttnn.bfloat16)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.l_linear.load_parameters(parameters=parameters, key="l_linear", prefix=prefix)
@@ -422,7 +422,7 @@ class GeneratorNSF:
         self.upp = math.prod(upsample_rates)
         self.lrelu_slope = LRELU_SLOPE
 
-        self.conv_pre = TTConv1d(
+        self.conv_pre = Conv1d(
             device=device,
             in_channels=initial_channel,
             out_channels=upsample_initial_channel,
@@ -431,12 +431,12 @@ class GeneratorNSF:
             padding=3,
         )
 
-        self.ups: list[TTConvTranspose1d] = []
-        self.noise_convs: list[TTConv1d] = []
+        self.ups: list[ConvTranspose1d] = []
+        self.noise_convs: list[Conv1d] = []
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes, strict=True)):
             c_cur = upsample_initial_channel // (2 ** (i + 1))
             self.ups.append(
-                TTConvTranspose1d(
+                ConvTranspose1d(
                     device=device,
                     in_channels=upsample_initial_channel // (2**i),
                     out_channels=c_cur,
@@ -448,7 +448,7 @@ class GeneratorNSF:
             if i + 1 < len(upsample_rates):
                 stride_f0 = math.prod(upsample_rates[i + 1 :])
                 self.noise_convs.append(
-                    TTConv1d(
+                    Conv1d(
                         device=device,
                         in_channels=1,
                         out_channels=c_cur,
@@ -459,7 +459,7 @@ class GeneratorNSF:
                 )
             else:
                 self.noise_convs.append(
-                    TTConv1d(
+                    Conv1d(
                         device=device,
                         in_channels=1,
                         out_channels=c_cur,
@@ -474,7 +474,7 @@ class GeneratorNSF:
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes, strict=True):
                 self.resblocks.append(resblock_cls(device, ch, k, tuple(d)))
 
-        self.conv_post = TTConv1d(
+        self.conv_post = Conv1d(
             device=device,
             in_channels=ch,
             out_channels=1,
@@ -482,7 +482,7 @@ class GeneratorNSF:
             stride=1,
             padding=3,
         )
-        self.cond = TTConv1d(
+        self.cond = Conv1d(
             device=device,
             in_channels=gin_channels,
             out_channels=upsample_initial_channel,
@@ -578,7 +578,7 @@ class SynthesizerTrnMsNSF:
             sr=sr,
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
-        self.emb_g = TTEmbedding(device, spk_embed_dim, gin_channels)
+        self.emb_g = Embedding(device, spk_embed_dim, gin_channels)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.enc_p.load_parameters(parameters, prefix=f"{prefix}enc_p.")
@@ -645,7 +645,7 @@ class SynthesizerTrnMsNSF_nono:
             gin_channels=gin_channels,
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
-        self.emb_g = TTEmbedding(device, spk_embed_dim, gin_channels)
+        self.emb_g = Embedding(device, spk_embed_dim, gin_channels)
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         self.enc_p.load_parameters(parameters, prefix=f"{prefix}enc_p.")
