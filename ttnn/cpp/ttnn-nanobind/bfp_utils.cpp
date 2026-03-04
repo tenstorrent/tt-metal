@@ -22,7 +22,7 @@ namespace nb = nanobind;
 template <typename PackFn>
 static nb::ndarray<nb::numpy, uint32_t, nb::ndim<1>> pack_impl(
     const PackFn& pack_fn,
-    nb::ndarray<nb::numpy, const float, nb::ndim<1>> input,
+    const nb::ndarray<nb::numpy, const float, nb::ndim<1>>& input,
     bool row_major_input,
     bool is_exp_a) {
     tt::stl::Span<const float> data_span(input.data(), input.size());
@@ -40,7 +40,7 @@ static nb::ndarray<nb::numpy, uint32_t, nb::ndim<1>> pack_impl(
 template <typename UnpackFn>
 static nb::ndarray<nb::numpy, float, nb::ndim<1>> unpack_impl(
     const UnpackFn& unpack_fn,
-    nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input,
+    const nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>>& input,
     bool row_major_output,
     bool is_exp_a) {
     tt::stl::Span<const uint32_t> data_span(input.data(), input.size());
@@ -57,7 +57,7 @@ static nb::ndarray<nb::numpy, float, nb::ndim<1>> unpack_impl(
 void py_module(nb::module_& mod) {
     mod.def(
         "pack_bfp8",
-        [](nb::ndarray<nb::numpy, const float, nb::ndim<1>> input, bool row_major_input, bool is_exp_a) {
+        [](const nb::ndarray<nb::numpy, const float, nb::ndim<1>>& input, bool row_major_input, bool is_exp_a) {
             return pack_impl(pack_as_bfp8_tiles<float>, input, row_major_input, is_exp_a);
         },
         nb::arg("input"),
@@ -67,7 +67,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "pack_bfp4",
-        [](nb::ndarray<nb::numpy, const float, nb::ndim<1>> input, bool row_major_input, bool is_exp_a) {
+        [](const nb::ndarray<nb::numpy, const float, nb::ndim<1>>& input, bool row_major_input, bool is_exp_a) {
             return pack_impl(pack_as_bfp4_tiles<float>, input, row_major_input, is_exp_a);
         },
         nb::arg("input"),
@@ -77,7 +77,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "pack_bfp2",
-        [](nb::ndarray<nb::numpy, const float, nb::ndim<1>> input, bool row_major_input, bool is_exp_a) {
+        [](const nb::ndarray<nb::numpy, const float, nb::ndim<1>>& input, bool row_major_input, bool is_exp_a) {
             return pack_impl(pack_as_bfp2_tiles<float>, input, row_major_input, is_exp_a);
         },
         nb::arg("input"),
@@ -87,7 +87,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "unpack_bfp8",
-        [](nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input, bool row_major_output, bool is_exp_a) {
+        [](const nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>>& input, bool row_major_output, bool is_exp_a) {
             return unpack_impl(unpack_bfp8_tiles_into_float_vec, input, row_major_output, is_exp_a);
         },
         nb::arg("input"),
@@ -97,7 +97,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "unpack_bfp4",
-        [](nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input, bool row_major_output, bool is_exp_a) {
+        [](const nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>>& input, bool row_major_output, bool is_exp_a) {
             return unpack_impl(unpack_bfp4_tiles_into_float_vec, input, row_major_output, is_exp_a);
         },
         nb::arg("input"),
@@ -107,7 +107,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "unpack_bfp2",
-        [](nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>> input, bool row_major_output, bool is_exp_a) {
+        [](const nb::ndarray<nb::numpy, const uint32_t, nb::ndim<1>>& input, bool row_major_output, bool is_exp_a) {
             return unpack_impl(unpack_bfp2_tiles_into_float_vec, input, row_major_output, is_exp_a);
         },
         nb::arg("input"),
