@@ -601,7 +601,14 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndMeshL1BuffersCollision) {
         auto& program_ = workload.get_programs().at(device_range);
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-        auto buffer_size = page_size * 128;
+        DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+        DeviceAddr l1_bank_size = l1_max_size - l1_unreserved_base;
+
+        // Allocate a MeshBuffer that consumes most of L1 bank 0 (top-down), leaving room for
+        // only one tile worth of CBs. The buffer occupies [l1_unreserved_base + page_size, l1_max_size).
+        uint32_t alignment = mesh_device->allocator()->get_alignment(BufferType::L1);
+        DeviceAddr buffer_size = (l1_bank_size - page_size) / alignment * alignment;
         distributed::ReplicatedBufferConfig replicated_config = {
             .size = buffer_size,
         };
@@ -616,14 +623,12 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndMeshL1BuffersCollision) {
         CoreRangeSet cr_set({cr});
         initialize_program(program_, cr_set);
 
-        uint32_t num_pages =
-            ((l1_mesh_buffer->address() - mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1)) /
-             max_cbs_ / page_size) +
-            1;
-        CBConfig cb_config = {.num_pages = num_pages};
-        for (uint32_t buffer_id = 0; buffer_id < max_cbs_; buffer_id++) {
+        // Create two CBs each of page_size. The second CB will push the CB region past the
+        // MeshBuffer's lowest occupied address, triggering the collision.
+        CBConfig cb_config;
+        for (uint32_t buffer_id = 0; buffer_id < 2; buffer_id++) {
             CircularBufferConfig config1 =
-                CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}})
+                CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}})
                     .set_page_size(buffer_id, cb_config.page_size);
             CreateCircularBuffer(program_, core, config1);
         }
