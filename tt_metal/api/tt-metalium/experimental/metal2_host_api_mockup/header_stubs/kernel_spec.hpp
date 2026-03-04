@@ -12,31 +12,23 @@ struct KernelSpec {
     // Kernel identifier
     // A handle used to reference this kernel within the ProgramSpec
     std::variant<KernelID, KernelName> unique_id;
-    // TODO -- I'm strongly considering removing the string option. 
-
+    // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
 
     // Kernel source
     std::string source;
-
     enum class SourceType { FILE_PATH, SOURCE_CODE };
     SourceType  source_type = SourceType::FILE_PATH;
 
-    
     // Target nodes
     // The set of device nodes on which the kernel will run
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     Nodes target_nodes;
     
-
     // Threading
     // Number of kernel threads (this can be specified globally or per-node)
     uint8_t num_threads = 1;
-
     using ThreadNodeMap = std::unordered_map<Nodes, uint8_t>; // node -> number of kernel threads
     std::optional<ThreadNodeMap> thread_node_map = std::nullopt;
-        // Hmm... @Almeet, if we want to allow different num_threads per-node, any DFB bound to 
-        // the kernel will have different per-node num_producers or num_consumers....
-        // Should we go back to forcing separate KernelSpec for this case?
 
 
     ///////////////////////////////////////////////////////////////////
@@ -74,26 +66,22 @@ struct KernelSpec {
         std::variant<DFBid, DFBName> dfb_id;  // identify the DFB within the ProgramSpec
         std::string local_accessor_name;      // DFB accessor name (used in the kernel source code, via DFBAccessor)
         DFBEndpointType endpoint_type;        // producer, consumer, or relay
-        DFBAccessPattern access_pattern;      // strided, blocked, contiguous
+        DFBAccessPattern access_pattern;      // strided, blocked, or contiguous
     };
     std::vector<DFBBinding> dfb_bindings;
 
 
-    // TODO -- GlobalDataflowBuffer bindings
-    // TODO -- Socket bindings (might replace GlobalDataflowBuffer?)
-
-
     // Semaphore bindings
-    // (TODO -- needs additional vetting)
     struct SemaphoreBinding {
         std::variant<SemaphoreID, std::string> semaphore_id; // identify the semaphore within the ProgramSpec
-        std::string local_accessor_name;                     // semaphore accessor name (used in the kernel source code)
+        std::string accessor_name;                           // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
 
 
     // TODO -- GlobalSemaphore bindings
-
+    // TODO -- GlobalDataflowBuffer bindings
+    // TODO -- Socket bindings (might replace GlobalDataflowBuffer?)
 
 
     //////////////////////////////////////////////////////////////////////////////

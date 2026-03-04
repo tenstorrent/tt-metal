@@ -9,17 +9,16 @@ struct DataflowBufferSpec {
     // DFB identifier
     // A handle used to reference this DFB within the ProgramSpec
     std::variant<DFBid, DFBName> unique_id;  
-    // TODO -- I'm strongly considering removing the string option. 
-    // It spews icky variants everywhere, for little advantage. You'd just use a named variable as a handle anyways.
+    // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
 
     // Target nodes
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>
     Nodes target_nodes;
 
     // Backing memory
-    uint32_t entry_size;   // in bytes
+    uint32_t entry_size;  // in bytes
     uint32_t num_entries;  
-    // Note: It is possible to override these per-Program execution (via program execution parameters).
+    // Note: It is possible to override these per-Program execution (via ProgramRunParams).
 
     // Endpoint info 
     // Configuring a DFB requires endpoint-specific info.
@@ -39,7 +38,7 @@ struct DataflowBufferSpec {
     // A "remote DFB" has its producer and consumer kernels on different nodes.
     // For a remote DFB, you must specify the producer-consumer map.
     bool is_remote_dfb = false;
-    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeRangeSet>>;
+    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
     std::optional<ProducerConsumerMap> producer_consumer_map = std::nullopt;
 
 
