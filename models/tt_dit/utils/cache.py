@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -74,12 +75,20 @@ def load_model(
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
         `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
     """
+    _t_load_start = time.perf_counter()
+    logger.info(
+        f"[TIMING] cache.load_model called: model_name={model_name}, subfolder={subfolder}, mesh_shape={mesh_shape}, dtype={dtype}"
+    )
+
     if tt_model.is_loaded():
+        logger.info("[TIMING] Model already loaded, skipping")
         return
 
-    # unload any modules that need to be unloaded before loading this module
     for module in tt_model.unload_set or []:
+        logger.info(f"[TIMING] Deallocating weights for unload_set module: {type(module).__name__}")
+        _t0 = time.perf_counter()
         module.deallocate_weights()
+        logger.info(f"[TIMING] deallocate_weights took {time.perf_counter() - _t0:.2f}s")
 
     cache_dir = model_cache_dir(
         model_name=model_name,
@@ -90,34 +99,54 @@ def load_model(
         is_fsdp=is_fsdp,
         required=get_torch_state_dict is None,
     )
+    logger.info(f"[TIMING] Resolved cache_dir: {cache_dir}")
 
     if cache_dir is None:
         assert get_torch_state_dict is not None
 
+        logger.info("[TIMING] No cache dir (TT_DIT_CACHE_DIR not set). Loading from PyTorch state dict directly...")
+        _t0 = time.perf_counter()
+        state_dict = get_torch_state_dict()
         logger.info(
-            "Loading transformer weights from PyTorch state dict. "
-            "To use caching, set the TT_DIT_CACHE_DIR environment variable."
+            f"[TIMING] get_torch_state_dict() took {time.perf_counter() - _t0:.2f}s (num keys: {len(state_dict)})"
         )
-        tt_model.load_torch_state_dict(get_torch_state_dict())
+        _t0 = time.perf_counter()
+        tt_model.load_torch_state_dict(state_dict)
+        logger.info(f"[TIMING] load_torch_state_dict (no cache) took {time.perf_counter() - _t0:.2f}s")
+        logger.info(f"[TIMING] cache.load_model total took {time.perf_counter() - _t_load_start:.2f}s")
         return
 
     if Path(cache_dir).is_dir():
-        logger.info(f"loading cache at '{cache_dir}'.")
+        logger.info(f"[TIMING] Cache exists at '{cache_dir}'. Loading from cache...")
+        _t0 = time.perf_counter()
         tt_model.load(cache_dir)
+        logger.info(f"[TIMING] tt_model.load (from cache) took {time.perf_counter() - _t0:.2f}s")
+        logger.info(f"[TIMING] cache.load_model total took {time.perf_counter() - _t_load_start:.2f}s")
         return
 
     if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
 
-    logger.info("Cache does not exist. Loading PyTorch state dict.")
-    # Create host tensors when creating the cache to circumvent the issue that replicated device
-    # tensors lead to redundant copies when saved to disk.
-    tt_model.load_torch_state_dict(get_torch_state_dict(), on_host=create_cache)
+    logger.info(f"[TIMING] Cache does not exist at '{cache_dir}'. Loading PyTorch state dict and creating cache...")
+    _t0 = time.perf_counter()
+    state_dict = get_torch_state_dict()
+    logger.info(f"[TIMING] get_torch_state_dict() took {time.perf_counter() - _t0:.2f}s (num keys: {len(state_dict)})")
+
+    _t0 = time.perf_counter()
+    tt_model.load_torch_state_dict(state_dict, on_host=create_cache)
+    logger.info(f"[TIMING] load_torch_state_dict (on_host={create_cache}) took {time.perf_counter() - _t0:.2f}s")
 
     if create_cache:
-        logger.info(f"Writing cache to '{cache_dir}'.")
+        _t0 = time.perf_counter()
+        logger.info(f"[TIMING] Writing cache to '{cache_dir}'...")
         tt_model.save(cache_dir)
-        tt_model.load(cache_dir)  # move to device
+        logger.info(f"[TIMING] tt_model.save took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
+        tt_model.load(cache_dir)
+        logger.info(f"[TIMING] tt_model.load (move to device after cache write) took {time.perf_counter() - _t0:.2f}s")
+
+    logger.info(f"[TIMING] cache.load_model total took {time.perf_counter() - _t_load_start:.2f}s")
 
 
 def model_cache_dir(

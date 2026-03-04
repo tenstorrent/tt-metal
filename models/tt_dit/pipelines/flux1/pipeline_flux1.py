@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 
@@ -86,6 +87,8 @@ class Flux1Pipeline:
                 )
             )
 
+        _t_init_start = time.perf_counter()
+
         # No CFG. Create submeshes based on SP and TP
         submesh_shape = list(mesh_device.shape)
         submesh_shape[parallel_config.sequence_parallel.mesh_axis] = parallel_config.sequence_parallel.factor
@@ -93,13 +96,18 @@ class Flux1Pipeline:
         logger.info(f"Parallel config: {parallel_config}")
         logger.info(f"Original mesh shape: {mesh_device.shape}")
         logger.info(f"Creating submeshes with shape {submesh_shape}")
+        _t0 = time.perf_counter()
         self._submesh_devices = self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))[
             0:1
         ]  # Only create one submesh for now. This can be used to support batching in the future.
+        logger.info(f"[TIMING] create_submeshes took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
         self._ccl_managers = [
             CCLManager(submesh_device, num_links=num_links, topology=topology)
             for submesh_device in self._submesh_devices
         ]
+        logger.info(f"[TIMING] CCLManager init took {time.perf_counter() - _t0:.2f}s")
 
         self.encoder_device = self._submesh_devices[0]
         self.original_submesh_shape = tuple(self.encoder_device.shape)
@@ -108,21 +116,40 @@ class Flux1Pipeline:
         self.vae_submesh_idx = 0  # Use submesh 0 for VAE
 
         logger.info("loading models...")
+        _t0 = time.perf_counter()
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
+        logger.info(f"[TIMING] CLIPTokenizer.from_pretrained took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
         self._t5_tokenizer = T5TokenizerFast.from_pretrained(checkpoint_name, subfolder="tokenizer_2")
+        logger.info(f"[TIMING] T5TokenizerFast.from_pretrained took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
         torch_text_encoder_1 = CLIPTextModel.from_pretrained(checkpoint_name, subfolder="text_encoder")
         torch_text_encoder_1.eval()
-        if enable_t5_text_encoder:
-            torch_t5_text_encoder = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_2")
-        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
-        self._torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
+        logger.info(f"[TIMING] CLIPTextModel.from_pretrained took {time.perf_counter() - _t0:.2f}s")
 
+        if enable_t5_text_encoder:
+            _t0 = time.perf_counter()
+            torch_t5_text_encoder = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_2")
+            logger.info(f"[TIMING] T5EncoderModel.from_pretrained took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
+        self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        logger.info(f"[TIMING] FlowMatchEulerDiscreteScheduler.from_pretrained took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
+        self._torch_vae = AutoencoderKL.from_pretrained(checkpoint_name, subfolder="vae")
+        logger.info(f"[TIMING] AutoencoderKL.from_pretrained took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
         torch_transformer = FluxTransformer2DModel.from_pretrained(
             checkpoint_name,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
         torch_transformer.eval()
+        logger.info(f"[TIMING] FluxTransformer2DModel.from_pretrained took {time.perf_counter() - _t0:.2f}s")
 
         logger.info("creating TT-NN transformer...")
 
@@ -137,6 +164,8 @@ class Flux1Pipeline:
 
         self.transformers = []
         for i, submesh_device in enumerate(self._submesh_devices):
+            logger.info(f"[TIMING] Creating Flux1Transformer for submesh {i}...")
+            _t0 = time.perf_counter()
             tt_transformer = Flux1Transformer(
                 patch_size=torch_transformer.config.patch_size,
                 in_channels=torch_transformer.config.in_channels,
@@ -154,8 +183,11 @@ class Flux1Pipeline:
                 parallel_config=parallel_config,
                 padding_config=padding_config,
             )
+            logger.info(f"[TIMING] Flux1Transformer.__init__ for submesh {i} took {time.perf_counter() - _t0:.2f}s")
 
             model_name = os.path.basename(checkpoint_name)
+            logger.info(f"[TIMING] Loading transformer weights for submesh {i} (cache.load_model)...")
+            _t0 = time.perf_counter()
             cache.load_model(
                 tt_transformer,
                 get_torch_state_dict=torch_transformer.state_dict,
@@ -164,9 +196,17 @@ class Flux1Pipeline:
                 parallel_config=parallel_config,
                 mesh_shape=tuple(submesh_device.shape),
             )
+            logger.info(
+                f"[TIMING] cache.load_model (transformer) for submesh {i} took {time.perf_counter() - _t0:.2f}s"
+            )
 
             self.transformers.append(tt_transformer)
+            logger.info(f"[TIMING] Synchronizing submesh device {i}...")
+            _t0 = time.perf_counter()
             ttnn.synchronize_device(submesh_device)
+            logger.info(
+                f"[TIMING] synchronize_device (transformer) for submesh {i} took {time.perf_counter() - _t0:.2f}s"
+            )
 
         self._pos_embed = torch_transformer.pos_embed
 
@@ -185,6 +225,7 @@ class Flux1Pipeline:
         logger.info("creating TT-NN CLIP text encoder...")
 
         if use_torch_clip_text_encoder:
+            logger.info("[TIMING] Using torch CLIP text encoder (no TT-NN conversion)")
             self._text_encoder_1 = torch_text_encoder_1
         else:
             clip_config_1 = CLIPConfig(
@@ -199,6 +240,7 @@ class Flux1Pipeline:
                 hidden_act=torch_text_encoder_1.config.hidden_act,
             )
 
+            _t0 = time.perf_counter()
             self._text_encoder_1 = CLIPEncoder(
                 config=clip_config_1,
                 mesh_device=self.encoder_device,
@@ -206,14 +248,18 @@ class Flux1Pipeline:
                 parallel_config=encoder_parallel_config,
                 eos_token_id=2,  # default EOS token ID for CLIP
             )
+            logger.info(f"[TIMING] CLIPEncoder.__init__ took {time.perf_counter() - _t0:.2f}s")
 
+            _t0 = time.perf_counter()
             self._text_encoder_1.load_torch_state_dict(torch_text_encoder_1.state_dict())
+            logger.info(f"[TIMING] CLIPEncoder.load_torch_state_dict took {time.perf_counter() - _t0:.2f}s")
 
         if enable_t5_text_encoder:
             if use_torch_t5_text_encoder:
+                logger.info("[TIMING] Using torch T5 text encoder (no TT-NN conversion)")
                 self._t5_text_encoder = torch_t5_text_encoder
             else:
-                logger.info("creating TT-NN text encoder...")
+                logger.info("creating TT-NN T5 text encoder...")
 
                 t5_config = T5Config(
                     vocab_size=torch_t5_text_encoder.config.vocab_size,
@@ -228,13 +274,17 @@ class Flux1Pipeline:
                     relative_attention_max_distance=torch_t5_text_encoder.config.relative_attention_max_distance,
                 )
 
+                _t0 = time.perf_counter()
                 self._t5_text_encoder = T5Encoder(
                     config=t5_config,
                     mesh_device=self.encoder_device,
                     ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
                     parallel_config=encoder_parallel_config,
                 )
+                logger.info(f"[TIMING] T5Encoder.__init__ took {time.perf_counter() - _t0:.2f}s")
 
+                logger.info("[TIMING] Loading T5 text encoder weights (cache.load_model)...")
+                _t0 = time.perf_counter()
                 cache.load_model(
                     self._t5_text_encoder,
                     get_torch_state_dict=torch_t5_text_encoder.state_dict,
@@ -243,24 +293,38 @@ class Flux1Pipeline:
                     parallel_config=encoder_parallel_config,
                     mesh_shape=tuple(self.encoder_device.shape),
                 )
+                logger.info(f"[TIMING] cache.load_model (T5) took {time.perf_counter() - _t0:.2f}s")
         else:
             self._t5_text_encoder = None
 
         self._traces = None
 
+        logger.info("[TIMING] Synchronizing encoder device...")
+        _t0 = time.perf_counter()
         ttnn.synchronize_device(self.encoder_device)
+        logger.info(f"[TIMING] synchronize_device (encoder) took {time.perf_counter() - _t0:.2f}s")
 
+        logger.info("[TIMING] Creating VAEDecoder from torch...")
+        _t0 = time.perf_counter()
         self._vae_decoder = VAEDecoder.from_torch(
             torch_ref=self._torch_vae.decoder,
             mesh_device=self.vae_device,
             parallel_config=self._vae_parallel_config,
             ccl_manager=self._ccl_managers[self.vae_submesh_idx],
         )
+        logger.info(f"[TIMING] VAEDecoder.from_torch took {time.perf_counter() - _t0:.2f}s")
 
-        # warmup for safe tracing.
-        logger.info("warming up for tracing...")
+        logger.info(f"[TIMING] Total model loading took {time.perf_counter() - _t_init_start:.2f}s")
+
+        logger.info("[TIMING] Starting warmup inference (1 step, untraced)...")
+        _t0 = time.perf_counter()
         self.run_single_prompt(prompt="", num_inference_steps=1, seed=0, traced=False)
+        logger.info(f"[TIMING] Warmup run_single_prompt took {time.perf_counter() - _t0:.2f}s")
+
+        _t0 = time.perf_counter()
         self.synchronize_devices()
+        logger.info(f"[TIMING] synchronize_devices (warmup) took {time.perf_counter() - _t0:.2f}s")
+        logger.info(f"[TIMING] Flux1Pipeline.__init__ total took {time.perf_counter() - _t_init_start:.2f}s")
 
     @staticmethod
     def create_pipeline(
@@ -276,6 +340,11 @@ class Flux1Pipeline:
         num_links=None,
         topology=ttnn.Topology.Linear,
     ):
+        _t_create_start = time.perf_counter()
+        logger.info(
+            f"[TIMING] create_pipeline called: checkpoint={checkpoint_name}, mesh_shape={tuple(mesh_device.shape)}, is_blackhole={is_blackhole()}"
+        )
+
         wh_config = {
             (1, 4): {"sp": (1, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (2, 4): {"sp": (2, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
@@ -289,11 +358,20 @@ class Flux1Pipeline:
         }
 
         default_config = bh_config if is_blackhole() else wh_config
+        mesh_shape_key = tuple(mesh_device.shape)
+        if mesh_shape_key not in default_config:
+            logger.error(
+                f"[TIMING] mesh shape {mesh_shape_key} not found in {'bh_config' if is_blackhole() else 'wh_config'}! Available: {list(default_config.keys())}"
+            )
         sp_factor, sp_axis = dit_sp or default_config[tuple(mesh_device.shape)]["sp"]
         tp_factor, tp_axis = dit_tp or default_config[tuple(mesh_device.shape)]["tp"]
         encoder_tp_factor, encoder_tp_axis = encoder_tp or default_config[tuple(mesh_device.shape)]["encoder_tp"]
         vae_tp_factor, vae_tp_axis = vae_tp or default_config[tuple(mesh_device.shape)]["vae_tp"]
         num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
+
+        logger.info(
+            f"[TIMING] Resolved config: SP=({sp_factor},{sp_axis}), TP=({tp_factor},{tp_axis}), encoder_TP=({encoder_tp_factor},{encoder_tp_axis}), vae_TP=({vae_tp_factor},{vae_tp_axis}), num_links={num_links}"
+        )
 
         dit_parallel_config = DiTParallelConfig(
             cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
@@ -307,6 +385,7 @@ class Flux1Pipeline:
             tensor_parallel=ParallelFactor(factor=vae_tp_factor, mesh_axis=vae_tp_axis)
         )
 
+        logger.info("[TIMING] Calling Flux1Pipeline.__init__...")
         pipeline = Flux1Pipeline(
             checkpoint_name=checkpoint_name,
             mesh_device=mesh_device,
@@ -320,6 +399,7 @@ class Flux1Pipeline:
             num_links=num_links,
         )
 
+        logger.info(f"[TIMING] create_pipeline total took {time.perf_counter() - _t_create_start:.2f}s")
         return pipeline
 
     def run_single_prompt(
@@ -368,6 +448,8 @@ class Flux1Pipeline:
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ) -> list[Image.Image]:
+        _t_call_start = time.perf_counter()
+        logger.info(f"[TIMING] __call__: width={width}, height={height}, steps={num_inference_steps}, traced={traced}")
         prompt_count = len(prompt_1)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -386,7 +468,8 @@ class Flux1Pipeline:
             latents_width = width // self._vae_scale_factor
             spatial_sequence_length = latents_height * latents_width
 
-            logger.info("encoding prompts...")
+            logger.info("[TIMING] encoding prompts...")
+            _t_enc = time.perf_counter()
 
             with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
@@ -402,7 +485,8 @@ class Flux1Pipeline:
                 )
                 _, prompt_sequence_length, _ = prompt_embeds.shape
 
-            logger.info("preparing timesteps...")
+            logger.info(f"[TIMING] Encoding prompts took {time.perf_counter() - _t_enc:.2f}s")
+            logger.info("[TIMING] preparing timesteps...")
 
             self._scheduler.set_timesteps(
                 sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
@@ -421,7 +505,8 @@ class Flux1Pipeline:
                 else None
             )
 
-            logger.info("preparing latents...")
+            logger.info("[TIMING] preparing latents...")
+            _t_prep = time.perf_counter()
 
             if seed is not None:
                 torch.manual_seed(seed)
@@ -589,10 +674,13 @@ class Flux1Pipeline:
                 tt_prompt_rope_cos_list.append(tt_prompt_rope_cos)
                 tt_prompt_rope_sin_list.append(tt_prompt_rope_sin)
 
-            logger.info("denoising...")
+            logger.info(f"[TIMING] Tensor preparation took {time.perf_counter() - _t_prep:.2f}s")
+            logger.info("[TIMING] denoising...")
 
+            _t_denoise = time.perf_counter()
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(self._scheduler.timesteps)):
+                    _t_step = time.perf_counter()
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
                         sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
@@ -637,19 +725,25 @@ class Flux1Pipeline:
                             prompt_sequence_length=prompt_sequence_length,
                             traced=traced,
                         )
+                    logger.info(f"[TIMING] Denoising step {i} took {time.perf_counter() - _t_step:.2f}s")
 
-            logger.info("decoding image...")
+            logger.info(
+                f"[TIMING] Total denoising ({num_inference_steps} steps) took {time.perf_counter() - _t_denoise:.2f}s"
+            )
+            logger.info("[TIMING] decoding image...")
 
+            _t_vae = time.perf_counter()
             with profiler("vae", profiler_iteration) if profiler else nullcontext():
-                # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
+                _t0 = time.perf_counter()
                 tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
                     tt_latents_step_list[self.vae_submesh_idx],
                     dim=1,
                     mesh_axis=sp_axis,
                     use_hyperparams=True,
                 )
+                logger.info(f"[TIMING] VAE all_gather took {time.perf_counter() - _t0:.2f}s")
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._latents_scaling) + self._latents_shift
@@ -662,13 +756,18 @@ class Flux1Pipeline:
                     device=self.vae_device,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_device),
                 )
+                _t0 = time.perf_counter()
                 tt_decoded_output = self._vae_decoder(tt_latents)
+                logger.info(f"[TIMING] VAE decode forward took {time.perf_counter() - _t0:.2f}s")
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+
+            logger.info(f"[TIMING] VAE total took {time.perf_counter() - _t_vae:.2f}s")
+            logger.info(f"[TIMING] __call__ total took {time.perf_counter() - _t_call_start:.2f}s")
 
         return output
 

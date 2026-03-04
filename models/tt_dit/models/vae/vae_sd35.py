@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
+
+from loguru import logger as _vae_logger
 
 import ttnn
 
@@ -471,6 +474,8 @@ class VAEDecoder(Module):
         parallel_config: VAEParallelConfig,
         ccl_manager: CCLManager,
     ) -> VAEDecoder:
+        _t0 = time.perf_counter()
+        _vae_logger.info("[TIMING] VAEDecoder.__init__...")
         model = cls(
             block_out_channels=[block.resnets[0].conv2.out_channels for block in torch_ref.up_blocks][::-1],
             in_channels=torch_ref.conv_in.in_channels,
@@ -481,7 +486,13 @@ class VAEDecoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
+        _vae_logger.info(f"[TIMING] VAEDecoder.__init__ took {time.perf_counter() - _t0:.2f}s")
+
+        _t1 = time.perf_counter()
+        _vae_logger.info("[TIMING] VAEDecoder.load_torch_state_dict...")
         model.load_torch_state_dict(torch_ref.state_dict())
+        _vae_logger.info(f"[TIMING] VAEDecoder.load_torch_state_dict took {time.perf_counter() - _t1:.2f}s")
+        _vae_logger.info(f"[TIMING] VAEDecoder.from_torch total took {time.perf_counter() - _t0:.2f}s")
         return model
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
