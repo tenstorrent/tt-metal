@@ -46,6 +46,13 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(29);
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(31);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(32);
+
+    constexpr uint32_t cb_partial_mask = tt::CBIndex::c_9;
+    constexpr uint32_t global_n_partial_tile_idx = 0;
+    constexpr uint32_t joint_l_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
+
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -113,6 +120,18 @@ void kernel_main() {
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
+        // Compute padded tile counts for lightweight mask
+        constexpr uint32_t local_n_padded_tiles =
+            (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
+        constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
+        uint32_t global_n_padded_tiles = 0;
+        if (ring_iter_needs_global_n_mask) {
+            const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+            const uint32_t valid_tiles =
+                (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            global_n_padded_tiles = Sk_chunk_t - valid_tiles;
+        }
+
         sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
             qk_in0_block_w,
             qk_subblock_w,
@@ -160,6 +179,14 @@ void kernel_main() {
             cb_lse_in,
             cb_lse_out,
             cb_prev_out,
-            cb_out);
+            cb_out,
+            global_n_padded_tiles,
+            local_n_padded_tiles,
+            joint_n_padded_tiles,
+            cb_partial_mask,
+            global_n_partial_col,
+            joint_l_partial_col,
+            global_n_partial_tile_idx,
+            joint_l_partial_tile_idx);
     }
 }

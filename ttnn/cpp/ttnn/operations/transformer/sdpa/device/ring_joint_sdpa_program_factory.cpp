@@ -169,6 +169,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
 
+    // Partial mask tile support: when padding boundary falls inside a tile, we need a partial
+    // mask tile with 0 for valid columns and -inf for padded columns.
+    const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
+    const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
+    const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
+
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
     Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
@@ -257,7 +263,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
     uint32_t out0_t = Sq_chunk_t * DHt;
@@ -268,7 +273,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
     log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
@@ -397,7 +401,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        args.all_gather_operation_attributes.ring_size};
+        args.all_gather_operation_attributes.ring_size,
+        global_n_partial_col,
+        joint_l_partial_col,
+    };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -434,7 +441,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_union.u};
+        scale_union.u,
+        global_n_partial_col,
+        joint_l_partial_col,
+    };
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -472,7 +482,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -482,7 +491,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
     uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
     uint32_t out_tile_size = tt::tile_size(out_df);
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
@@ -491,7 +499,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
     log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
     log_debug(tt::LogOp, "out_data_format: {}", out_df);
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
@@ -511,10 +518,22 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    // attn_mask input
-    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                            .set_page_size(tt::CB::c_in3, mask_tile_size);
+    // attn_mask input — lightweight mask uses a single Float16_b -inf tile
+    const tt::DataFormat lightweight_mask_df = tt::DataFormat::Float16_b;
+    const uint32_t lightweight_mask_tile_size = tt::tile_size(lightweight_mask_df);
+    auto c_in3_config = CircularBufferConfig(lightweight_mask_tile_size, {{tt::CB::c_in3, lightweight_mask_df}})
+                            .set_page_size(tt::CB::c_in3, lightweight_mask_tile_size);
     CreateCircularBuffer(program, core_grid, c_in3_config);
+
+    // Partial mask tile(s) for boundary tiles — Float16_b, same format as c_in3 lightweight mask
+    if (partial_mask_tiles > 0) {
+        const tt::DataFormat partial_df = tt::DataFormat::Float16_b;
+        const uint32_t partial_tile_size = tt::tile_size(partial_df);
+        auto c_in9_config =
+            CircularBufferConfig(partial_mask_tiles * partial_tile_size, {{tt::CBIndex::c_9, partial_df}})
+                .set_page_size(tt::CBIndex::c_9, partial_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in9_config);
+    }
 
     // scale input
     auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
