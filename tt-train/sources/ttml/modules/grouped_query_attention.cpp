@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
@@ -34,7 +35,7 @@ GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
 }
 
 ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     // Standard attention without KV cache
     auto q = (*m_q_linear)(x);
     auto kv = (*m_kv_linear)(x);

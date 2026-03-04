@@ -2017,9 +2017,7 @@ class MLA1D(AbstractModule):
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,1,32,16384 L1 interleaved
         # Shard in0 to L1 WIDTH sharded for wo matmul
-
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
-
         # 1,1,32,896 width sharded 7x4 [32,32]
         return out
 
