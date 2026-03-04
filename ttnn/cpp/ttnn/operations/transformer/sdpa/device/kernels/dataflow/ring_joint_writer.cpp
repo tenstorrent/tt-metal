@@ -87,8 +87,10 @@ void kernel_main() {
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(17);
     constexpr uint32_t scale_val = get_compile_time_arg_val(18);
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(20);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(21);
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<22>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -130,6 +132,39 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+
+    // Lightweight mask: generate a single -inf tile once, leave permanently fronted.
+    // Only needed if padding actually exists (logical_n doesn't fill all local K tiles, or L has a partial chunk).
+    constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
+    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool needs_neginf_tile = local_n_has_padding || global_n_has_padding || joint_has_padding;
+
+    if constexpr (needs_neginf_tile) {
+        constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+        cb_reserve_back(cb_mask_in, 1);
+        auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mask_in));
+        for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
+            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
+        }
+        cb_push_back(cb_mask_in, 1);
+    }
+
+    // Generate partial mask tiles for boundary tiles where padding falls inside a tile.
+    constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+    if constexpr (partial_mask_tiles > 0) {
+        constexpr uint32_t cb_partial_mask = tt::CBIndex::c_9;
+        constexpr uint32_t partial_tile_bytes = get_tile_size(cb_partial_mask);
+        uint32_t tile_idx = 0;
+        cb_reserve_back(cb_partial_mask, partial_mask_tiles);
+        if constexpr (global_n_partial_col > 0) {
+            fill_vertical_tile_bf16<partial_tile_bytes>(cb_partial_mask, tile_idx++, global_n_partial_col);
+        }
+        if constexpr (joint_l_partial_col > 0) {
+            fill_vertical_tile_bf16<partial_tile_bytes>(cb_partial_mask, tile_idx++, joint_l_partial_col);
+        }
+        cb_push_back(cb_partial_mask, partial_mask_tiles);
+    }
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -185,16 +220,6 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
-
-            generate_mask<false, false, 0, true, cb_mask_in>(
-                Sq_chunk_t,
-                Sk_chunk_t,
-                q_chunk,
-                0,
-                ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
-                ring_iter_needs_joint_n_mask,
-                ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
-                L);
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;

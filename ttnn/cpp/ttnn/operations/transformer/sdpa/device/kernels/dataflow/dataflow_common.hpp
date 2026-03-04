@@ -286,6 +286,75 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     }
 }
 
+/**
+ * Fill a bf16 tile with a vertical partial mask: columns [0, unpad_col) = 0, columns [unpad_col, 32) = -inf.
+ * Used for lightweight mask when padding boundary falls inside a tile.
+ *
+ * bf16 tile layout: 4 faces of 16x16, each face row-major with 8 uint32 words per row (2 bf16 per uint32).
+ * Face 0: rows[0:16], cols[0:16]
+ * Face 1: rows[0:16], cols[16:32]
+ * Face 2: rows[16:32], cols[0:16]
+ * Face 3: rows[16:32], cols[16:32]
+ *
+ * Within each uint32 word: low 16 bits = even column, high 16 bits = odd column.
+ */
+template <uint32_t tile_bytes>
+void fill_vertical_tile_bf16(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile) {
+    // Start with all zeros (valid)
+    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+
+    constexpr uint32_t NEGINF_PAIR = 0xFF80FF80;
+    constexpr uint32_t bf16_per_uint32 = 2;
+    constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
+    constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
+
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    // Face offsets in uint32 words
+    constexpr uint32_t face_offsets[4] = {
+        0,                    // Face 0: rows[0:16], cols[0:16]
+        uint32_per_face,      // Face 1: rows[0:16], cols[16:32]
+        2 * uint32_per_face,  // Face 2: rows[16:32], cols[0:16]
+        3 * uint32_per_face   // Face 3: rows[16:32], cols[16:32]
+    };
+    constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
+
+    for (uint32_t f = 0; f < 4; f++) {
+        uint32_t face_col_start = face_col_starts[f];
+
+        if (unpad_col_in_tile <= face_col_start) {
+            // Entire face is padded -> fill with -inf
+            for (uint32_t i = 0; i < uint32_per_face; i++) {
+                ptr[face_offsets[f] + i] = NEGINF_PAIR;
+            }
+        } else if (unpad_col_in_tile >= face_col_start + tt::constants::FACE_WIDTH) {
+            // Entire face is valid -> already zeros, skip
+        } else {
+            // Partial face: boundary falls within this face
+            uint32_t local_col = unpad_col_in_tile - face_col_start;  // 0-15
+            uint32_t boundary_word = local_col / bf16_per_uint32;     // which uint32
+            uint32_t boundary_pos = local_col % bf16_per_uint32;      // position within uint32
+
+            for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+                uint32_t row_base = face_offsets[f] + row * uint32_per_face_row;
+
+                // Handle boundary word (may have one valid + one -inf bf16)
+                if (boundary_pos != 0) {
+                    // Low 16 bits = even col (valid, 0), high 16 bits = odd col (-inf, 0xFF80)
+                    ptr[row_base + boundary_word] = 0xFF800000;
+                }
+
+                // Fill remaining words with -inf
+                uint32_t start_word = boundary_word + (boundary_pos != 0 ? 1 : 0);
+                for (uint32_t w = start_word; w < uint32_per_face_row; w++) {
+                    ptr[row_base + w] = NEGINF_PAIR;
+                }
+            }
+        }
+    }
+}
+
 template <uint32_t tile_bytes>
 inline void fill_custom_diagonal_tile_bfp4(
     uint32_t cb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
