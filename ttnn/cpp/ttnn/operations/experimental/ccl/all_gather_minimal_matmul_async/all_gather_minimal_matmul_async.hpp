@@ -16,7 +16,7 @@
 
 namespace ttnn {
 
-ttnn::Tensor all_gather_minimal_matmul_async(
+std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
@@ -36,6 +36,8 @@ ttnn::Tensor all_gather_minimal_matmul_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     const bool force_transpose = true,
     uint32_t num_workers_per_link = 1,
-    uint32_t num_buffers_per_channel = 1);
+    uint32_t num_buffers_per_channel = 1,
+    int32_t chunks = 1,
+    int32_t dim = -1);
 
 }  // namespace ttnn

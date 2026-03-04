@@ -97,6 +97,25 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     TT_FATAL(K == K_w, "all_gather_minimal_matmul_async inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "all_gather_minimal_matmul_async dimensions must be positive");
 
+    // Validate chunks and dim parameters
+    const int32_t chunks = attributes.chunks;
+    const int32_t dim = attributes.dim;
+    TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
+    TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
+
+    if (chunks > 1) {
+        // Validate N is divisible by chunks
+        TT_FATAL(N % chunks == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
+
+        // Validate each chunk is tile-aligned
+        const uint32_t N_per_chunk = N / chunks;
+        TT_FATAL(
+            N_per_chunk % tt::constants::TILE_WIDTH == 0,
+            "Each chunk size N/chunks={} must be a multiple of TILE_WIDTH={}",
+            N_per_chunk,
+            tt::constants::TILE_WIDTH);
+    }
+
     if (has_bias) {
         const auto& b_logical = bias_ptr->logical_shape();
         TT_FATAL(b_logical.rank() >= 1, "all_gather_minimal_matmul_async bias must have rank >= 1");
@@ -216,32 +235,44 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    uint32_t N = in1_input_tensor_shape[-1];
+    const uint32_t N = in1_input_tensor_shape[-1];
+    const int32_t chunks = attributes.chunks;
 
     ttnn::Shape intermediate_shape(in0_input_tensor_shape);
     intermediate_shape[-1] = intermediate_shape[-1] * attributes.ring_size;
 
-    ttnn::Shape output_shape(in0_input_tensor_shape);
-    output_shape[-1] = N;
-
     const auto& memory_config = attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
-    return {
-        TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)),
-        TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
+    // Create specs for output tensors
+    std::vector<TensorSpec> output_specs;
+    output_specs.reserve(chunks + 1);
+
+    output_specs.push_back(
+        TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+
+    const uint32_t N_per_chunk = N / chunks;
+    for (int32_t i = 0; i < chunks; ++i) {
+        ttnn::Shape output_shape(in0_input_tensor_shape);
+        output_shape[-1] = N_per_chunk;
+        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+    }
+
+    return output_specs;
 }
 
 AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsyncOp::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     std::vector<Tensor> output_tensors;
-    const auto& device = tensor_args.input_tensor.device();
-    const auto& output_specs = compute_output_specs(attributes, tensor_args);
+    auto* device = tensor_args.input_tensor.device();
+    const auto output_specs = compute_output_specs(attributes, tensor_args);
     output_tensors.reserve(output_specs.size());
 
     if (tensor_args.persistent_output_buffer.has_value()) {
         output_tensors.emplace_back(tensor_args.persistent_output_buffer.value());
-        output_tensors.emplace_back(create_device_tensor(output_specs[1], device));
+        for (size_t i = 1; i < output_specs.size(); ++i) {
+            output_tensors.emplace_back(create_device_tensor(output_specs[i], device));
+        }
     } else {
         for (const auto& output_spec : output_specs) {
             output_tensors.emplace_back(create_device_tensor(output_spec, device));
@@ -274,7 +305,7 @@ tt::tt_metal::operation::Hash AllGatherMinimalMatmulAsyncOp::compute_program_has
 
 namespace ttnn::prim {
 
-ttnn::Tensor all_gather_minimal_matmul_async(
+std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
@@ -294,7 +325,9 @@ ttnn::Tensor all_gather_minimal_matmul_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const bool force_transpose,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    int32_t chunks,
+    int32_t dim) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -308,8 +341,6 @@ ttnn::Tensor all_gather_minimal_matmul_async(
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     bool using_persistent_buffers = persistent_output_buffer.has_value();
-
-    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
@@ -329,7 +360,9 @@ ttnn::Tensor all_gather_minimal_matmul_async(
         force_transpose,
         num_workers_per_link,
         num_buffers_per_channel,
-        scalar};
+        scalar,
+        chunks,
+        dim};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
@@ -338,7 +371,9 @@ ttnn::Tensor all_gather_minimal_matmul_async(
         addcmul_input_tensor1,
         addcmul_input_tensor2};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).at(1);
+    std::vector<Tensor> returned_tensors =
+        ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return std::vector<Tensor>(returned_tensors.begin() + 1, returned_tensors.end());
 }
 
 }  // namespace ttnn::prim
