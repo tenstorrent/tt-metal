@@ -39,11 +39,13 @@ namespace policies = kutil::compute::policies;
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
+// DEBUG
 template <typename To>
 ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
     return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
 }
 
+// DEBUG
 void print_cb_tile(uint32_t cb, uint32_t tile_idx) {
     volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb, tile_idx);
     for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
@@ -71,7 +73,7 @@ void print_cb_tile(uint32_t cb, uint32_t tile_idx) {
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
@@ -116,7 +118,15 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
-#ifndef TILIZE_IN
+#ifdef TILIZE_IN
+    // Initializes the MATH-PACK DST semaphore so that the first tilize_block's
+    // internal llk_math_wait_for_dest_available() does not deadlock.
+    // Must be called once at startup, BEFORE the ncht loop (not immediately before
+    // tilize_init — doing so puts the UNPACK into binary-AB mode with SRCA=cb_in,
+    // which tilize_init does not fully undo, causing tilize_block to read from
+    // cb_in instead of cb_in_rm and produce garbage output).
+    binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#else
 #ifdef RMSNORM
     binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
 #else
@@ -135,47 +145,50 @@ void kernel_main() {
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
-    const auto total_buffer_size = generic::blocks(Wt, blk).total_with_remainder();
+    const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
 
     // DEBUG:
-    // DPRINT_MATH(
-    //     DPRINT << "[layernorm] NCHt=" << NCHt << " Wt=" << Wt << " blk=" << blk << ENDL();
-    // )
+    DPRINT_MATH(DPRINT << "[layernorm] NCHt=" << NCHt << " Wt=" << Wt << " block_size=" << block_size << ENDL();)
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         // Tilize ROW_MAJOR input into cb_in (CB 0) one block at a time.
         // tilize_init/uninit wrap each ncht iteration; tilize_block is called per block.
-        // DPRINT_MATH(DPRINT << "[layernorm] TILIZE_IN ncht=" << ncht << " Wt=" << Wt << " blk=" << blk << ENDL();)
+        // DPRINT_MATH(DPRINT << "[layernorm] TILIZE_IN ncht=" << ncht << " Wt=" << Wt << " block_size=" << block_size
+        // << ENDL();)
         reconfig_data_format(cb_in_rm, cb_in_rm);
         pack_reconfig_data_format(cb_in);
+        tilize_init(cb_in_rm, block_size, cb_in);
 
-        unary_op_init_common(cb_in_rm, cb_in_rm, cb_in_rm);
-        tilize_init(cb_in_rm, blk, cb_in);
-        for (auto block : generic::blocks(Wt, blk)) {
-            // DPRINT_MATH(DPRINT << "[layernorm] tilize_block block.start=" << block.start() << " size=" <<
-            // block.size()
-            //                    << " full=" << block.full_block_size() << ENDL();)
+        uint32_t j_debug = 0;
+        for (auto block : generic::blocks(Wt, block_size)) {
+            DPRINT_MATH(DPRINT << "[layernorm] tilize_block block.start=" << block.start() << " size=" << block.size()
+                               << " full=" << block.full_block_size() << ENDL();)
             cb_wait_front(cb_in_rm, block.full_block_size());
             cb_reserve_back(cb_in, block.full_block_size());
-            tilize_block(cb_in_rm, block.full_block_size(), cb_in);
 
             // DEBUG: DO NOT REMOVE THIS CODE
             // for (auto i : block.local()) {
+            //     DPRINT_MATH(DPRINT << "[layernorm] tilize_block j_debug=" << j_debug << ENDL();)
             //     tile_regs_acquire();
             //     copy_tile_to_dst_init_short(cb_in_rm);
             //     copy_tile(cb_in_rm, i, 0);
-            //     fill_tile_init();
-            //     fill_tile(0, static_cast<float>(i));
 
-            //                     dprint_tensix_dest_reg(0);
+            //     dprint_tensix_dest_reg(0);
 
             //     tile_regs_commit();
 
             //     tile_regs_wait();
-            //     pack_tile(0, cb_in);
             //     tile_regs_release();
+
+            //     j_debug++;
             // }
+
+            for (auto i : block.local()) {
+                DPRINT_PACK(DPRINT << "[layernorm] print tile i=" << i << ENDL();)
+                print_cb_tile(cb_in_rm, i);
+            }
+            tilize_block(cb_in_rm, block.full_block_size(), cb_in);
 
             // PACK(
             //     DPRINT << "[layernorm] cb_in tile 0:" << ENDL();
@@ -186,7 +199,6 @@ void kernel_main() {
             cb_pop_front(cb_in_rm, block.full_block_size());
         }
         tilize_uninit(cb_in_rm, cb_in);
-        DPRINT_MATH(DPRINT << "[layernorm] tilize_uninit done, re-initing binary ops" << ENDL();)
         // Re-init binary ops after tilize hardware reconfiguration.
 #ifdef RMSNORM
         binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
@@ -201,7 +213,7 @@ void kernel_main() {
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
         add_tiles_init(cb_in, cb_inb);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             ACQ();
             // In/inb come from the reader and need to be
             // synced on full block size. Keep cb_x aligned
@@ -235,13 +247,13 @@ void kernel_main() {
 #ifndef RMSNORM
         // E[x]
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
-            cb_x, cb_scaler, cb_ex, W, Wt, blk);
+            cb_x, cb_scaler, cb_ex, W, Wt, block_size);
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
         cb_reserve_back(cb_xmm, total_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             ACQ();
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
@@ -262,7 +274,7 @@ void kernel_main() {
          * compute temp = xmm*xmm = (x-E[x])^2
          */
         mul_tiles_init(cb_xmm, cb_xmm);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
 #ifndef RMSNORM
             cb_wait_front(cb_xmm, block.start() + block.size());
 #else
@@ -284,7 +296,7 @@ void kernel_main() {
 
         // Var[x]
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_xmm2, cb_scaler, cb_ex2, W, Wt, blk);
+            cb_xmm2, cb_scaler, cb_ex2, W, Wt, block_size);
 
         // Var[x] + eps
         cb_wait_front(cb_ex2, 1);
@@ -304,7 +316,7 @@ void kernel_main() {
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_wait_front(cb_ex2pe, 1);
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
                 pack_reconfig_data_format(cb_out);
@@ -414,17 +426,17 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
         // All Wt tiles for this ncht are now in cb_out (CB 16).
         // Pack-untilize them block-by-block into cb_out_rm (CB 28) for the RM writer.
-        // pack_untilize_block<blk, blk> produces true row-major output in cb_out_rm:
-        //   row r starts at offset r * blk * TILE_W * elem_size from the CB base.
+        // pack_untilize_block<block_size, block_size> produces true row-major output in cb_out_rm:
+        //   row r starts at offset r * block_size * TILE_W * elem_size from the CB base.
 
         reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
 
         constexpr auto cb_out_rm = tt::CBIndex::c_28;
-        pack_untilize_init<blk, blk>(cb_out, cb_out_rm);
-        for (auto block : generic::blocks(Wt, blk)) {
+        pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
+        for (auto block : generic::blocks(Wt, block_size)) {
             cb_wait_front(cb_out, block.full_block_size());
             cb_reserve_back(cb_out_rm, block.full_block_size());
-            pack_untilize_block<blk, blk>(cb_out, 1, cb_out_rm);
+            pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
             cb_push_back(cb_out_rm, block.full_block_size());
             cb_pop_front(cb_out, block.full_block_size());
         }

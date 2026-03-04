@@ -249,8 +249,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t in0_t =
         Wt_next_block_up;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
-    // For RM input we accumulate the full ncht into cb_out before the untilize pass,
-    // so the writer no longer drains cb_out concurrently.
     uint32_t out0_t = input_is_row_major ? Wt_next_block_up : block_size * 2;
     uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
     uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
@@ -287,11 +285,16 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     // accumulation data format.
     const uint32_t with_weights_max_size = 56 * bfloat16_tile_size / single_tile_size;
     const uint32_t without_weights_max_size = 112 * bfloat16_tile_size / single_tile_size;
-    // cb_in_rm (CB 27) holds `block_size` tiles of row-major input for in-flight tilization.
-    // Only allocated when input_is_row_major; always a small buffer (block_size * tile_size).
-    const uint32_t in_rm_size = input_is_row_major ? block_size * in_single_tile_size : 0;
-    // cb_out_rm (CB 28) double-buffers the untilized output for the RM writer.
-    const uint32_t out_rm_size = input_is_row_major ? block_size * 2 * out_single_tile_size : 0;
+    // cb_in_rm (CB 27): double-buffered staging for in-flight tilization.
+    // Two blocks let the reader DMA the next block from DRAM while compute tilizes the current
+    // block, hiding DRAM read latency.  Only allocated when input_is_row_major.
+    const uint32_t in_rm_tiles = input_is_row_major ? 2 * block_size : 0;
+    const uint32_t in_rm_size = in_rm_tiles * in_single_tile_size;
+    // cb_out_rm (CB 28): double-buffered staging for the RM writer.
+    // Two blocks let the writer drain the previous block to DRAM while compute untilizes the
+    // next block into the CB, hiding DRAM write latency.  Only allocated when input_is_row_major.
+    const uint32_t out_rm_tiles = input_is_row_major ? 2 * block_size : 0;
+    const uint32_t out_rm_size = out_rm_tiles * out_single_tile_size;
 
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
@@ -338,7 +341,65 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
     }
 
-    // DEBUG:
+    if (input_is_row_major && large_tensor_needed) {
+        // layernorm_large_tensor.cpp interleaves tilize / compute / untilize per block, so
+        // cb_in and cb_out only ever hold one block at a time.  Move the double-buffering to
+        // cb_in_rm / cb_out_rm so the reader prefetches the next DRAM block while compute
+        // processes the current one, and the writer drains concurrently.
+        //
+        // layernorm.cpp (large_tensor_needed=false) pre-fills ALL Wt tiles into cb_in before
+        // starting the variance loop, and similarly accumulates all Wt tiles in cb_out before
+        // UNTILIZE_OUT.  Those paths must keep cb_in = cb_out = Wt_next_block_up.
+        in0_t = block_size;
+        out0_t = block_size;
+    }
+
+    // DEBUG: Print all buffer sizes (both block_size, number of elements, and byte sizes)
+
+    // print block size
+    std::cout << "block_size: " << block_size << std::endl;
+
+    std::cout << "in0_t: " << in0_t << " (elements: " << in0_t * in_single_tile_size
+              << ", bytes: " << in0_t * in_single_tile_size * a.element_size() << ")" << std::endl;
+    if (b.has_value()) {
+        std::cout << "in1_t: " << in1_t << " (elements: " << in1_t * inb_single_tile_size
+                  << ", bytes: " << in1_t * inb_single_tile_size * b.value().element_size() << ")" << std::endl;
+    }
+    std::cout << "out0_t: " << out0_t << " (elements: " << out0_t * out_single_tile_size
+              << ", bytes: " << out0_t * out_single_tile_size * output.element_size() << ")" << std::endl;
+    std::cout << "im0_t: " << im0_t << " (elements: " << im0_t * single_tile_size
+              << ", bytes: " << im0_t * single_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "im3_t: " << im3_t << " (elements: " << im3_t * single_tile_size
+              << ", bytes: " << im3_t * single_tile_size * a.element_size() << ")" << std::endl;
+    if (gamma.has_value()) {
+        std::cout << "in5_t (gamma): " << in5_t << " (elements: " << in5_t * gamma_single_tile_size
+                  << ", bytes: " << in5_t * gamma_single_tile_size * gamma.value().element_size() << ")" << std::endl;
+    }
+    if (beta.has_value()) {
+        std::cout << "in6_t (beta): " << in6_t << " (elements: " << in6_t * beta_single_tile_size
+                  << ", bytes: " << in6_t * beta_single_tile_size * beta.value().element_size() << ")" << std::endl;
+    }
+    std::cout << "im6_t: " << im6_t << " (elements: " << im6_t * single_tile_size
+              << ", bytes: " << im6_t * single_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "im5_t: " << im5_t << " (elements: " << im5_t * single_tile_size
+              << ", bytes: " << im5_t * single_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "im4_t: " << im4_t << " (elements: " << im4_t * single_tile_size
+              << ", bytes: " << im4_t * single_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "im1_t: " << im1_t << " (elements: " << im1_t * single_tile_size
+              << ", bytes: " << im1_t * single_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "in2_t: " << in2_t << " (elements: " << in2_t * bfloat16_tile_size
+              << ", bytes: " << in2_t * bfloat16_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "in3_t: " << in3_t << " (elements: " << in3_t * bfloat16_tile_size
+              << ", bytes: " << in3_t * bfloat16_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "im2_t: " << im2_t << " (elements: " << im2_t * single_tile_size
+              << ", bytes: " << im2_t * single_tile_size * a.element_size() << ")" << std::endl;
+    std::cout << "reciprocal_CB_size_bytes: " << reciprocal_CB_size_bytes << " (bytes: " << reciprocal_CB_size_bytes
+              << ")" << std::endl;
+    std::cout << "in_rm_size: " << in_rm_tiles << " (elements: " << in_rm_tiles * in_single_tile_size
+              << ", bytes: " << in_rm_size << ")" << std::endl;
+    std::cout << "out_rm_size: " << out_rm_tiles << " (elements: " << out_rm_tiles * out_single_tile_size
+              << ", bytes: " << out_rm_size << ")" << std::endl;
+
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True.  Without it, UNPACK's SRCA register file is 16-bit and
     // silently truncates every float32 value to bfloat16 before it reaches DST, producing
@@ -434,6 +495,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     }
 
     // Select reader kernel path
+    // TODO: Remove lambda
     const auto* reader_kernel_path = [&]() -> const char* {
         if (input_is_row_major) {
             return large_tensor_needed ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"

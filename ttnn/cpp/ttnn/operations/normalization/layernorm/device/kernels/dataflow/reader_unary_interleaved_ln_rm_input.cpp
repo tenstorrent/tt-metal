@@ -10,7 +10,7 @@
 // Gamma and beta (if present) are always TILE layout and read once at ncht==0.
 //
 // Compile-time args:
-//   CTA[0]     = blk (block size in tiles)
+//   CTA[0]     = block_size (block size in tiles)
 //   CTA[1]     = use_welford
 //   CTA[2..]   = TensorAccessorArgs for input a (ROW_MAJOR, page_size = W * elem_size)
 //   ...        = TensorAccessorArgs for b / residual (TILE, may be null)
@@ -42,6 +42,33 @@
 namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
+// DEBUG
+void print_cb_tile(uint32_t cb, uint32_t tile_idx) {
+    volatile uint16_t* ptr = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb));
+    ptr += tile_idx * 32 * 32;
+
+    for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
+        // Iterate through 16 rows within each subtile row
+        for (int local_row = 0; local_row < 16; local_row++) {
+            // Calculate the actual row in original matrix
+            int row = subtile_i * 16 + local_row;
+            // Iterate through 2x2 subtiles horizontally
+            for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+                // Iterate through 16 columns within each subtile
+                for (int local_col = 0; local_col < 16; local_col++) {
+                    // Calculate the actual column in original matrix
+                    int col = subtile_j * 16 + local_col;
+                    // Calculate index using only multiplication and addition
+                    auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+                    // /*element_offset=*/index);ptr
+                    DPRINT << BF16(ptr[index]) << ", ";
+                }
+            }
+            DPRINT << ENDL();
+        }
+    }  // subtile_i
+}
+
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t NCHt = get_arg_val<uint32_t>(1);
@@ -50,7 +77,7 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
-    const uint32_t W = get_arg_val<uint32_t>(9);
+    const uint32_t W_logical = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -58,7 +85,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);
+    constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
     constexpr auto src0_args = TensorAccessorArgs<2>();
     [[maybe_unused]] constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
@@ -68,7 +95,7 @@ void kernel_main() {
 
     // ROW_MAJOR accessor: one page = one full row (W * elem_size bytes).
     // get_noc_addr(row_idx, src_a) returns the NOC address of the start of row row_idx.
-    const uint32_t rm_page_size = W * elem_size_bytes;
+    const uint32_t rm_page_size = W_logical * elem_size_bytes;
     const auto src_a = TensorAccessor(src0_args, src_addr, rm_page_size);
 
 #ifdef FUSE_GAMMA
@@ -91,7 +118,7 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         const uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        const auto partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
         if (partial_last_tile_cols > 0) {
             norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
         }
@@ -101,67 +128,25 @@ void kernel_main() {
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     // cb_in_rm row stride: full-block-width of row-major elements per row.
-    // Each row in cb_in_rm occupies blk * TILE_WIDTH * elem_size bytes.
+    // Each row in cb_in_rm occupies block_size * TILE_WIDTH * elem_size bytes.
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
-    constexpr uint32_t full_row_stride = blk * TILE_W * elem_size_bytes;
+    constexpr uint32_t full_row_stride = block_size * TILE_W * elem_size_bytes;
 
     uint32_t tile_offs = 0;  // running tile offset for FUSE_PRE_ADD b-tensor reads
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // TODO: Remove division
         const uint32_t abs_tile_row = row_offset / TILE_H + ncht;
 
         // Push one column block of ROW_MAJOR input into cb_in_rm per iteration.
         // The compute kernel tilizes each block before the existing computation.
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, blk, abs_tile_row, elem_size_bytes, full_row_stride);
-        // for (auto block : generic::blocks(Wt, blk)) {
-        //     const uint32_t col_byte_offset = block.start() * TILE_W * elem_size_bytes;
-        //     const uint32_t row_read_bytes = block.size() * TILE_W * elem_size_bytes;
+            cb_id_in_rm, src_a, Wt, block_size, abs_tile_row, elem_size_bytes, full_row_stride);
 
-        //     cb_reserve_back(cb_id_in_rm, block.full_block_size());
-        //     const uint32_t l1_base = get_write_ptr(cb_id_in_rm);
-        //     uint32_t l1_ptr = l1_base;
-
-        //     for (uint32_t row = 0; row < TILE_H; ++row) {
-        //         const uint64_t noc_addr = get_noc_addr(abs_tile_row * TILE_H + row, src_a) + col_byte_offset;
-        //         noc_async_read(noc_addr, l1_ptr, row_read_bytes);
-        //         l1_ptr += full_row_stride;  // advance by full blk-wide row slot
-        //     }
-        //     noc_async_read_barrier();
-
-        //     // DPRINT: show what was read for first block of first ncht, to diagnose data corruption.
-        //     // Enable by running with TT_METAL_DPRINT_CORES=0,0
-        //     if (ncht == 0 && block.is_first()) {
-        //         DPRINT << "blocks characterstics, start =  " << block.start() << ", size =  "
-        //             << block.size() << ", full_block_size =  " << block.full_block_size() << ENDL();
-
-        //         // DPRINT << "[rm_reader] src_addr=" << src_addr << " abs_tile_row=" << abs_tile_row
-        //         //        << " col_byte_off=" << col_byte_offset << " row_read_bytes=" << row_read_bytes
-        //         //        << " full_row_stride=" << full_row_stride << " l1_base=" << l1_base << ENDL();
-        //         // // Print first 4 BF16 values (first 2 rows, 2 elements each)
-        //         // volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_base);
-        //         // DPRINT << "[rm_reader] row0[0]=" << BF16(d[0]) << " row0[1]=" << BF16(d[1])
-        //         //        << " row1[0]=" << BF16(d[full_row_stride / elem_size_bytes])
-        //         //        << " row1[1]=" << BF16(d[full_row_stride / elem_size_bytes + 1]) << ENDL();
-        //     }
-
-        //     cb_push_back(cb_id_in_rm, block.full_block_size());
-
-        //     // // DEBUG: AFTER
-        //     // cb_reserve_back(cb_id_in_rm, block.full_block_size());
-        //     // uint32_t l1_ptr = get_write_ptr(cb_id_in_rm);
-
-        //     // for (auto r : block.local()) {
-        //     //     noc_async_read_tile(offs + block.start() + r + tile_offset, src_a, l1_ptr);
-        //     //     l1_ptr += src0_tile_bytes;
-        //     // }
-        //     // noc_async_read_barrier();
-        //     // cb_push_back(cb_id_in_rm, block.full_block_size());
-
-        // }
+        print_cb_tile(cb_id_in_rm, 7);
 
 #ifdef FUSE_PRE_ADD
-        for (auto block : generic::blocks(Wt, blk)) {
+        for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
                 cb_id_in1, src_b, src1_tile_bytes, tile_offs + block.start() + tile_offset, block);
         }
@@ -169,7 +154,7 @@ void kernel_main() {
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
-            for (auto block : generic::blocks(Wt, blk)) {
+            for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef FUSE_GAMMA
                 layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
 #endif
