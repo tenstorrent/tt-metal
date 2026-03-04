@@ -13,6 +13,8 @@ from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
 
+from models.tt_transformers.tt.model_config import is_phi1
+
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
@@ -356,7 +358,8 @@ def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
 
 
 def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
-    """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
+    """Convert HuggingFace Q/K weights to Meta format for RoPE compatibility."""
+
     converted_weights = {}
     for key, tensor in loaded_weights.items():
         if "vision_tower" in key:
@@ -697,6 +700,36 @@ def map_hf_to_meta_keys(loaded_weights):
     You can use this to support other models by adding more mappings.
     See replace_keys for more details on the format of replacements.
     """
+
+    if is_phi1():
+        replacements = [
+            ("model.", ""),
+            ("model.layers.", "layers."),
+            ("embed_tokens", "tok_embeddings"),
+            ("lm_head", "output"),
+            # norms
+            ("input_layernorm", "attention_norm"),
+            # attention
+            ("self_attn.q_proj", "attention.wq"),
+            ("self_attn.k_proj", "attention.wk"),
+            ("self_attn.v_proj", "attention.wv"),
+            ("self_attn.dense", "attention.wo"),
+            # mlp
+            ("mlp.fc1", "feed_forward.w1"),
+            ("mlp.fc2", "feed_forward.w2"),
+        ]
+
+        state_dict = replace_keys(loaded_weights, replacements)
+
+        # final_layernorm -> norm (TT expects norm.*)
+        if "final_layernorm.weight" in state_dict and "norm.weight" not in state_dict:
+            state_dict["norm.weight"] = state_dict.pop("final_layernorm.weight")
+        if "final_layernorm.bias" in state_dict and "norm.bias" not in state_dict:
+            state_dict["norm.bias"] = state_dict.pop("final_layernorm.bias")
+
+        return state_dict
+
+    # non-phi path: keep your existing generic replacements
     replacements = [
         ("^emb.weight", "weight"),
         ("model.language_model.", ""),
