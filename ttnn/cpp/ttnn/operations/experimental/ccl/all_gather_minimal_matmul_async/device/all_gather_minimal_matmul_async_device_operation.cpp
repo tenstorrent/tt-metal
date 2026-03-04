@@ -297,6 +297,11 @@ tt::tt_metal::operation::Hash AllGatherMinimalMatmulAsyncOp::compute_program_has
         attributes.force_transpose,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
+        attributes.config.value().M_block_size,
+        attributes.config.value().K_block_size,
+        attributes.config.value().N_block_size,
+        attributes.config.value().subblock_h,
+        attributes.config.value().subblock_w,
         tensor_args,
         program_factory.index());
 }
