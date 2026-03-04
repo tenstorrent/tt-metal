@@ -90,6 +90,31 @@ template <
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
+inline void llk_unpack_A_custom(const std::uint32_t operand, const std::uint32_t tile_index) {
+    std::uint32_t operand_id = get_operand_id(operand);
+    std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+    std::uint32_t address = base_address + offset_address;
+
+    LLK_ASSERT(
+        (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
+            unpack_src_format[operand_id],
+            unpack_dst_format[operand_id],
+            get_operand_face_r_dim(operand_id),
+            get_operand_num_faces(operand_id))),
+        "");
+
+    WAYPOINT("UPAW");
+    _llk_unpack_A_custom_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+        address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+    WAYPOINT("UPAD");
+}
+
+template <
+    BroadcastType BType = BroadcastType::NONE,
+    bool acc_to_dest = false,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     std::uint32_t operand_id = get_operand_id(operand);

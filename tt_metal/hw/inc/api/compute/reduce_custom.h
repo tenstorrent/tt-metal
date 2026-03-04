@@ -84,14 +84,26 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 
 #ifdef ARCH_BLACKHOLE
 /**
- * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
- * Reprograms reduce MOP and restores only the reduce addrmods.
+ * Blackhole-only reinit at K-chunk boundary: restores addrmods + SETC16 + counters +
+ * MOP registers (clobbered by SALAD eltwise-binary between K chunks) + PACK reduce mask.
+ * Skips replay buffer re-recording (positions 0-14 preserved since matmul/eltwise use offset 16+).
  */
 template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_mop_config<block_ct_dim, DST_ACCUM_MODE>()));
-    MATH((llk_math_reduce_block_max_row_reinit()));
+    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+/**
+ * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
+ * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
+ */
+template <uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_reinit_minimal() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal()));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
 #endif
 

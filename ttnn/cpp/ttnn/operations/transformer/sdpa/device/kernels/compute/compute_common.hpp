@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/tile_move_copy_custom.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
@@ -1463,9 +1464,10 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         cb_wait_front(prev_cb, cumulative_prev_tiles);
-        sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
+        // sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-            copy_tile(prev_cb, row_start + i, i);
+            // copy_tile(prev_cb, row_start + i, i);
+            copy_tile_custom(prev_cb, row_start + i, i);
         }
     }
 
@@ -1476,7 +1478,17 @@ void reduce_c_row_group(
     // When respect_trigger=true, the unpack MOP is split into two halves with a
     // HW semaphore wait in between, so we don't need cb_wait_front here.
 
+#ifdef ARCH_BLACKHOLE
+    if (!do_eltwise_max) {
+        reduce_block_max_row_init<cols, respect_trigger>();
+    } else if (row_group_index == 0) {
+        reduce_block_max_row_reinit_short<cols, respect_trigger>();
+    } else {
+        reduce_block_max_row_reinit_minimal<cols, respect_trigger>();
+    }
+#else
     reduce_block_max_row_init<cols, respect_trigger>();
+#endif
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (in0_row_start + i) * ROW_STRIDE;
         reduce_block_max_row<cols, respect_trigger>(in0_cb, scale_cb, input_tile_start, i);
@@ -1897,7 +1909,11 @@ void sdpa_inner_loop_step(
         }
         kt_index_offset = 0;
 #ifdef ARCH_BLACKHOLE
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+        if (q_subblock == 0) {
+            mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+        } else {
+            mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+        }
 #else
         mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
@@ -1915,7 +1931,7 @@ void sdpa_inner_loop_step(
                     true /*blocked_pack*/>(
                     cb_qkt_im, cur_max, cur_sum, KT_stride, prev_q_subblock, kt_subblock * qkt_subblock_w);
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+                mm_no_mop_reinit_after_sub(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #else
                 mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
