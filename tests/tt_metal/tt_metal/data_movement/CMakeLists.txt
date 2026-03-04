@@ -1,6 +1,8 @@
 # Include source file lists (module owners maintain sources.cmake)
 include(sources.cmake)
 
+add_subdirectory(noc_estimator)
+
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_data_movement)
 target_precompile_headers(unit_tests_data_movement REUSE_FROM metal_common_pch)

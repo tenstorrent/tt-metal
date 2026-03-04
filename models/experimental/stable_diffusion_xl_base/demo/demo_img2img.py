@@ -227,10 +227,10 @@ def run_demo_inference(
 
 
 @pytest.mark.parametrize(
-    "image_resolution",
+    "image_resolution, images_or_path",
     [
-        (1024, 1024),
-        (512, 512),
+        ((1024, 1024), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_1024x1024.jpg"),
+        ((512, 512), "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_input_512x512.jpg"),
     ],
     ids=["1024x1024", "512x512"],
 )
@@ -265,10 +265,6 @@ def run_demo_inference(
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a red dragon in space, cinematic lighting"),),
-)
-@pytest.mark.parametrize(
-    "images_or_path",
-    (("models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"),),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
@@ -341,9 +337,6 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("512x512 image resolution is not yet supported for img2img pipeline.")
-
     if isinstance(images_or_path, str):
         images = [Image.open(images_or_path).convert("RGB")]
     else:
