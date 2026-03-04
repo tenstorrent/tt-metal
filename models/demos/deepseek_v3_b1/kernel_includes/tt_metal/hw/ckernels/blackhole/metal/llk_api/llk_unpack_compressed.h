@@ -282,52 +282,79 @@ FORCE_INLINE void reconfig_custom_mm_srca(
     // The GPR is only used by standard matmul's _llk_unpack_AB_matmul_.
 }
 
-FORCE_INLINE void _custom_mm_compressed_run_ct1_(
+/**
+ * @brief Custom _run_ for compressed weights with per-tile format switching.
+ *
+ * Supports ct_dim=1 and even ct_dim>1. Follows the same structure as
+ * _llk_unpack_AB_custom_mm_run_ but with per-tile reconfig + variable increment.
+ *
+ * B[K, N] tiles are row-major in assign_ptr: tile (k, n) at index k * ct_dim + n.
+ * Compressed data is also row-major contiguous.
+ */
+FORCE_INLINE void _custom_mm_compressed_run_(
     const volatile uint8_t* assign_ptr,
     uint32_t address_a,  // starting SrcA address (in1/weights)
     uint32_t address_b,  // SrcB base (in0/activations, set once)
-    uint32_t kt_dim)     // must be even
-{
+    uint32_t kt_dim,     // must be even
+    uint32_t ct_dim) {
     UNPACK(({
         volatile uint* cfg = get_cfg_pointer();
 
-        // Cache upper bits of format registers (only bottom 4 bits change per tile)
         uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
         uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
 
         cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
         TT_MOP(0, (kt_dim / 2) - 1, 0);
 
-        for (uint32_t k = 0; k < kt_dim; k += 2) {
-            uint32_t fmt0 = get_tile_format(assign_ptr, k);
-            wait_for_next_context(2);
-            reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-            address_a += TILE_SIZES[fmt0] >> cb_addr_shift;
-            semaphore_post(semaphore::UNPACK_SYNC);
+        if (ct_dim == 1) {
+            // ct_dim=1: 2 K-tiles per MOP iteration (ctx0 + ctx1)
+            for (uint32_t k = 0; k < kt_dim; k += 2) {
+                uint32_t fmt0 = get_tile_format(assign_ptr, k);
+                wait_for_next_context(2);
+                reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+                address_a += TILE_SIZES[fmt0] >> cb_addr_shift;
+                semaphore_post(semaphore::UNPACK_SYNC);
 
-            uint32_t fmt1 = get_tile_format(assign_ptr, k + 1);
-            wait_for_next_context(2);
-            reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-            address_a += TILE_SIZES[fmt1] >> cb_addr_shift;
-            semaphore_post(semaphore::UNPACK_SYNC);
+                uint32_t fmt1 = get_tile_format(assign_ptr, k + 1);
+                wait_for_next_context(2);
+                reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+                address_a += TILE_SIZES[fmt1] >> cb_addr_shift;
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }
+        } else {
+            // even ct_dim>1: 1 K-step per MOP iteration, ct_dim columns
+            // Tiles are row-major: (k=0,n=0), (k=0,n=1), ..., (k=1,n=0), ...
+            uint32_t tile_idx = 0;
+            for (uint32_t k = 0; k < kt_dim; k++) {
+                uint32_t row_start = address_a;
+                for (uint32_t ct = 0; ct < ct_dim; ct += 2) {
+                    uint32_t fmt0 = get_tile_format(assign_ptr, tile_idx);
+                    wait_for_next_context(2);
+                    reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+                    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+                    address_a += TILE_SIZES[fmt0] >> cb_addr_shift;
+                    tile_idx++;
+                    semaphore_post(semaphore::UNPACK_SYNC);
+
+                    uint32_t fmt1 = get_tile_format(assign_ptr, tile_idx);
+                    wait_for_next_context(2);
+                    reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+                    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+                    address_a += TILE_SIZES[fmt1] >> cb_addr_shift;
+                    tile_idx++;
+                    semaphore_post(semaphore::UNPACK_SYNC);
+                }
+            }
         }
     }));
 }
 
 /**
- * @brief Custom MM block for compressed weights (ct_dim=1, per-tile format).
+ * @brief Custom MM block for compressed weights.
  *
- * Combines unpack (_custom_mm_compressed_run_ct1_) with math (_llk_math_custom_mm_).
- * Requires custom_mm_block_init_short to have been called first.
- *
- * @param assign_ptr   Pointer to 2-bit packed assignment array
- * @param addr_in0     SrcB base (in0/activations) in shifted units
- * @param addr_in1     SrcA base (in1/compressed weights) in shifted units
- * @param in0_face_r_dim  Face row dim of in0 (for math)
- * @param kt_dim       Number of K tiles (must be even)
- * @param dst_index    Destination register index
+ * Supports ct_dim=1 and even ct_dim>1.
  */
 FORCE_INLINE void custom_mm_compressed_block(
     const volatile uint8_t* assign_ptr,
@@ -335,13 +362,14 @@ FORCE_INLINE void custom_mm_compressed_block(
     uint32_t addr_in1,
     uint32_t in0_face_r_dim,
     uint32_t kt_dim,
+    uint32_t ct_dim,
     uint32_t dst_index) {
     UNPACK(({
         wait_for_next_context(1);
         reset_config_context();
     }));
-    _custom_mm_compressed_run_ct1_(assign_ptr, addr_in1, addr_in0, kt_dim);
-    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, kt_dim, 1)));
+    _custom_mm_compressed_run_(assign_ptr, addr_in1, addr_in0, kt_dim, ct_dim);
+    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, kt_dim, ct_dim)));
 }
 
 }  // namespace compressed
