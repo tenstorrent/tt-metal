@@ -20,6 +20,23 @@ import torch
 import ttnn
 
 
+def _get_binary_core_grid(grid_size=None):
+    """Create CoreRangeSet for binary operations (multiply, add, subtract, etc.).
+
+    Args:
+        grid_size: Optional (cores_x, cores_y) tuple. If None, returns None (auto-config).
+
+    Returns:
+        CoreRangeSet or None if auto-config is better
+    """
+    if grid_size is None:
+        return None
+
+    cores_x, cores_y = grid_size
+    # Create a CoreRangeSet from (0,0) to (cores_x-1, cores_y-1)
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_x - 1, cores_y - 1))})
+
+
 def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
     """Create optimized program config for matmul operations.
 
@@ -651,6 +668,15 @@ def chunk_gated_delta_rule_ttnn(
     prog_config_intra = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     prog_config_state = _get_matmul_program_config(K, chunk_size, V, grid_size=None)
 
+    # Optional: Pre-compute core grids for binary operations
+    # Note: Binary operations typically work well with auto-config, but manual grids
+    # can be specified for consistency or experimentation. For element-wise ops,
+    # auto-config usually performs well, so this is optional.
+    # To enable manual core grids, uncomment and set a grid size, e.g.:
+    # binary_core_grid = _get_binary_core_grid((8, 4))  # 32 cores (8x4 grid)
+    # For most cases, auto-config (None) performs well for binary operations.
+    binary_core_grid = None
+
     outputs = []
     for i in range(num_chunks):
         # Slice and re-tilize (slicing from 4D may lose TILE_LAYOUT)
@@ -673,8 +699,12 @@ def chunk_gated_delta_rule_ttnn(
             qk = ttnn.matmul(q_i, k_i_t, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Combine two multiplies into one by pre-multiplying masks
         # This reduces one BinaryNgDeviceOperation (reduces from 46 to fewer ops)
-        combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
-        intra_attn = ttnn.multiply(qk, combined_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Optional: Use manual core grid for binary operations (typically auto-config works well)
+        multiply_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG}
+        if binary_core_grid is not None:
+            multiply_kwargs["sub_core_grids"] = binary_core_grid
+        combined_mask = ttnn.multiply(L_mask_i, lower_causal, **multiply_kwargs)
+        intra_attn = ttnn.multiply(qk, combined_mask, **multiply_kwargs)
 
         # Cross-chunk: read from state
         # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)
@@ -684,7 +714,11 @@ def chunk_gated_delta_rule_ttnn(
             v_prime = ttnn.matmul(k_cum_i, S, program_config=prog_config_vprime, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             v_prime = ttnn.matmul(k_cum_i, S, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_new = ttnn.subtract(v_i, v_prime, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Optional: Use manual core grid for binary operations
+        subtract_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG}
+        if binary_core_grid is not None:
+            subtract_kwargs["sub_core_grids"] = binary_core_grid
+        v_new = ttnn.subtract(v_i, v_prime, **subtract_kwargs)
 
         decay_i_exp = ttnn.reshape(
             ttnn.exp(decay_i, memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -693,7 +727,7 @@ def chunk_gated_delta_rule_ttnn(
         )
         # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)
         # Shape: chunk_size x K x V (e.g., 64 x 64 x 256)
-        q_decay = ttnn.multiply(q_i, decay_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q_decay = ttnn.multiply(q_i, decay_i_exp, **multiply_kwargs)
         # Use pre-computed program_config to avoid recreation overhead
         if prog_config_o_inter:
             o_inter = ttnn.matmul(q_decay, S, program_config=prog_config_o_inter, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -710,7 +744,11 @@ def chunk_gated_delta_rule_ttnn(
         else:
             intra_v = ttnn.matmul(intra_attn, v_new, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        o_i = ttnn.add(o_inter, intra_v, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Optional: Use manual core grid for binary operations
+        add_kwargs = {"memory_config": ttnn.L1_MEMORY_CONFIG}
+        if binary_core_grid is not None:
+            add_kwargs["sub_core_grids"] = binary_core_grid
+        o_i = ttnn.add(o_inter, intra_v, **add_kwargs)
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG))
 
         # Update state
@@ -718,10 +756,10 @@ def chunk_gated_delta_rule_ttnn(
         dl_i_exp = ttnn.reshape(
             ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        S = ttnn.multiply(S, dl_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
+        S = ttnn.multiply(S, dl_i_exp, **multiply_kwargs)
 
         dl_i_2d = ttnn.reshape(dl_i, [BH, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        decay_diff = ttnn.subtract(dl_i_2d, decay_i, memory_config=ttnn.L1_MEMORY_CONFIG)
+        decay_diff = ttnn.subtract(dl_i_2d, decay_i, **subtract_kwargs)
         k_decay = ttnn.multiply(
             k_i,
             ttnn.reshape(
@@ -729,7 +767,7 @@ def chunk_gated_delta_rule_ttnn(
                 [BH, chunk_size, 1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             ),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            **multiply_kwargs,
         )
         k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
         # Optimize: (BH, K, chunk_size) @ (BH, chunk_size, V) -> (BH, K, V)
@@ -741,7 +779,7 @@ def chunk_gated_delta_rule_ttnn(
             )
         else:
             state_update = ttnn.matmul(k_decay_t, v_new, memory_config=ttnn.L1_MEMORY_CONFIG)
-        S = ttnn.add(S, state_update, memory_config=ttnn.L1_MEMORY_CONFIG)
+        S = ttnn.add(S, state_update, **add_kwargs)
 
     o = ttnn.concat(outputs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.reshape(o, [BH, L, V], memory_config=ttnn.L1_MEMORY_CONFIG)
