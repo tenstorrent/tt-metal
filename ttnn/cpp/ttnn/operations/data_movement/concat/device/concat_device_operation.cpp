@@ -160,7 +160,19 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
-    if (shard_first) {
+
+    if (nd_sharded) {
+        TT_FATAL(
+            args.output_mem_config.nd_shard_spec().has_value(),
+            "ND Sharded output memory config should be specified for concat nd sharded tensors");
+        TT_FATAL(
+            args.output_mem_config.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
+            "ND Sharded output and inputs must have the same grid.");
+        TT_FATAL(
+            args.output_mem_config.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+            "Block sharded output necessary for ND sharded tensors concat");
+        // if nd sharded ends
+    } else if (shard_first) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
