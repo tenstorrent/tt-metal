@@ -21,6 +21,12 @@ from .row_mean_rm import row_mean_rm
         pytest.param((1, 1, 32, 32), id="minimal_single_tile"),
         pytest.param((1, 1, 32, 128), id="multi_tile_W"),
         pytest.param((1, 1, 64, 128), id="multi_tile_HW"),
+        pytest.param((1, 1, 32, 256), id="W_256_tiles"),
+        pytest.param((1, 1, 32, 384), id="W_384_tiles"),
+        pytest.param((1, 1, 32, 512), id="W_512_tiles"),
+        pytest.param((1, 1, 128, 256), id="H_128_W_256"),
+        pytest.param((1, 1, 256, 384), id="H_256_W_384"),
+        pytest.param((2, 1, 32, 512), id="batch_2_W_512"),
     ],
 )
 def test_row_mean_rm(device, shape):
