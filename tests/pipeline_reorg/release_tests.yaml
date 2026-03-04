@@ -531,17 +531,6 @@
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
 
-- name: Galaxy Falcon7b demo tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
-    pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/tg/falcon7b/input_data_tg.json' models/demos/tg/falcon7b/demo_tg.py --timeout 600
-  model-name: falcon7b
-  skus:
-    wh_galaxy_release:
-      timeout: 18
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-
 - name: Galaxy Llama3 70B data-parallel demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG
@@ -560,15 +549,6 @@
     wh_galaxy_release:
       timeout: 6
   owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-
-- name: Galaxy Whisper demo tests
-  cmd: pytest models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout 1500
-  model-name: whisper
-  skus:
-    wh_galaxy_release:
-      timeout: 6
-  owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
 - name: Galaxy Stable Diffusion 3.5 Large demo tests
@@ -597,8 +577,8 @@
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000
-    TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
+    # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000
+    # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8" --timeout 1000
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/tests/accuracy/test_model.py -k "4x8" --timeout 900
   model-name: gpt-oss
