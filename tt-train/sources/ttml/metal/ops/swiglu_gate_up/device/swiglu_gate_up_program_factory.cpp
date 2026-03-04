@@ -29,6 +29,8 @@ constexpr auto kCbW3Index = tt::CBIndex::c_2;      // W3 batch (double-buffered)
 constexpr auto kCbXW1AccIndex = tt::CBIndex::c_3;  // XW1 accumulation (L1 acc target)
 constexpr auto kCbXW3AccIndex = tt::CBIndex::c_4;  // XW3 accumulation (L1 acc target)
 constexpr auto kCbMOutIndex = tt::CBIndex::c_5;    // M output tiles
+constexpr auto kCbSigmoidIndex = tt::CBIndex::c_6;  // sigmoid(XW1) intermediate
+constexpr auto kCbSiluIndex = tt::CBIndex::c_7;     // SiLU(XW1) intermediate
 
 constexpr uint32_t kBlockSize = 4U;
 constexpr uint32_t kTilesPerBatch = kBlockSize * kBlockSize;
@@ -92,8 +94,9 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
 
     // block_h: number of M tile-rows processed per K-loop pass.
     // Larger block_h amortizes weight reads across more M rows.
-    // L1 = (2*block_h*kBlockSize + 4*kTilesPerBatch + 3*block_h*per_core_N_rounded) * tile_size
-    uint32_t baseline_weight_l1 = 4U * kTilesPerBatch * single_tile_size;
+    // L1 = (2*block_h*kBlockSize + 4*kTilesPerBatch + 4*kBlockSize + 3*block_h*per_core_N_rounded) * tile_size
+    //       ^-- X (dbl-buf)         ^-- W1+W3 (dbl-buf)  ^-- sigmoid+silu (dbl-buf)  ^-- xw1_acc+xw3_acc+m_out
+    uint32_t baseline_weight_l1 = (4U * kTilesPerBatch + 4U * kBlockSize) * single_tile_size;
     uint32_t per_row_l1 = (2U * kBlockSize + 3U * per_core_N_rounded) * single_tile_size;
     uint32_t max_block_h =
         (kL1UsableBytes > baseline_weight_l1) ? (kL1UsableBytes - baseline_weight_l1) / per_row_l1 : 1U;
@@ -150,6 +153,11 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
         create_circular_buffer(program, all_cores_set, kCbXW3AccIndex, data_format, single_tile_size, acc_cb_tiles);
     [[maybe_unused]] auto cb_m_out =
         create_circular_buffer(program, all_cores_set, kCbMOutIndex, data_format, single_tile_size, m_out_cb_tiles);
+    constexpr uint32_t kTwiceBlockSize = 2U * kBlockSize;
+    [[maybe_unused]] auto cb_sigmoid =
+        create_circular_buffer(program, all_cores_set, kCbSigmoidIndex, data_format, single_tile_size, kTwiceBlockSize);
+    [[maybe_unused]] auto cb_silu =
+        create_circular_buffer(program, all_cores_set, kCbSiluIndex, data_format, single_tile_size, kTwiceBlockSize);
 
     // -------------------------------------------------------------------------
     // 5) Create semaphores (4 for 2D multicast)
@@ -273,10 +281,8 @@ SwiGLUGateUpProgramFactory::cached_program_t SwiGLUGateUpProgramFactory::create(
     // -------------------------------------------------------------------------
     std::vector<uint32_t> compute_ct_args = {
         per_core_N,
-        per_core_N_rounded,
         kBlockSize,
         Wt,
-        num_n_blocks,
         block_h,
         num_m_blocks,
     };
