@@ -22,7 +22,7 @@
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
-#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_compressed.h"
+#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed.h"
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
