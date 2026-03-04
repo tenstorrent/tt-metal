@@ -2,10 +2,12 @@
 """
 Add roofline analysis to experiment results.
 
-For each TP=1 experiment, runs the roofline model to get theoretical
-minimum times and FLOP counts, then computes:
+For each experiment, runs the roofline model to get theoretical minimum
+times and FLOP counts, then computes:
   - roofline_perc: what fraction of roofline is achieved (higher = better)
   - mfu_perc: model FLOP utilization vs peak BF16
+  - grad_sync_bw_GBs / grad_sync_util_perc: DDP all-reduce bandwidth & utilization
+  - fwd/bwd/total_ccl_util_perc: TP CCL utilization (theoretical / achieved)
 
 Usage:
     python add_roofline.py experiments/all_results.json /path/to/tt-train-roofline
@@ -92,14 +94,13 @@ def get_measured_phase_ms(entry: dict, phase: str) -> float | None:
 def enrich_roofline(
     results: list[dict],
     roofline_dir: str | Path,
-    hardware: str = "p100",
+    hardware: str = "bh_glx",
     peak_tflops: float | None = None,
 ) -> int:
-    """Add roofline data to TP=1 experiments in-place. Returns count of annotated entries."""
+    """Add roofline data to all experiments in-place. Returns count of annotated entries."""
     _init_roofline(roofline_dir)
-    tp1_entries = [e for e in results if e.get("experiment", {}).get("tp", 1) == 1]
 
-    for entry in tp1_entries:
+    for entry in results:
         _enrich_one(entry, hardware, peak_tflops)
 
     return sum(1 for e in results if "roofline" in e)
@@ -112,6 +113,31 @@ def _extract_phase(timing_breakdown: dict, phase: str) -> dict:
         "roofline_ms": phase_data.get("time_ms", 0),
         "flops_tflops": phase_data.get("tflops", 0),
     }
+
+
+def _get_measured_tp_ccl_ms(entry: dict, phase: str) -> float | None:
+    """Get measured TP CCL time (rs + ag) for a phase.
+
+    phase should be "fwd", "bwd", or "total".
+    Only available from profiler timings (not naive).
+    """
+    if not entry.get("timings"):
+        return None
+    first_dev = next(iter(entry["timings"]))
+    avg = entry["timings"][first_dev].get("average", {})
+
+    if phase == "total":
+        fwd = _get_measured_tp_ccl_ms(entry, "fwd")
+        bwd = _get_measured_tp_ccl_ms(entry, "bwd")
+        if fwd is not None and bwd is not None:
+            return fwd + bwd
+        return None
+
+    rs = avg.get(f"{phase}_rs_ms")
+    ag = avg.get(f"{phase}_ag_ms")
+    if rs is not None and ag is not None:
+        return rs + ag
+    return None
 
 
 def _enrich_one(entry, hardware, peak_tflops_override):
@@ -127,7 +153,9 @@ def _enrich_one(entry, hardware, peak_tflops_override):
         return
 
     timing = result["timing_breakdown"]
-    peak_tflops = peak_tflops_override or result.get("hardware", {}).get(
+    hw = result.get("hardware", {})
+    ccl = result.get("ccl", {})
+    peak_tflops = peak_tflops_override or hw.get(
         "peak_tflops_hifi4", DEFAULT_BF16_PEAK_TFLOPS
     )
 
@@ -180,6 +208,41 @@ def _enrich_one(entry, hardware, peak_tflops_override):
             rf_total_flops / (meas_total / 1000) / peak_tflops * 100, 1
         )
     roofline_data["total"] = total_data
+
+    # --- CCL utilization ---
+    ccl_data = {}
+    eth_bw = hw.get("eth_bw_gb_s_per_link", 0)
+
+    # DDP gradient sync
+    theo_grad_sync_ms = ccl.get("grad_sync_time_ms", 0)
+    if theo_grad_sync_ms > 0:
+        meas_grad_sync_ms = get_measured_phase_ms(entry, "gradient_sync_ms")
+        ccl_data["grad_sync_theoretical_ms"] = round(theo_grad_sync_ms, 4)
+        if meas_grad_sync_ms and meas_grad_sync_ms > 0:
+            util = theo_grad_sync_ms / meas_grad_sync_ms
+            ccl_data["grad_sync_measured_ms"] = round(meas_grad_sync_ms, 3)
+            ccl_data["grad_sync_bw_GBs"] = round(eth_bw * util, 2)
+            ccl_data["grad_sync_util_perc"] = round(util * 100, 1)
+
+    # TP CCL (forward / backward / total)
+    for label, theo_key in [
+        ("fwd", "ccl_forward_time_ms"),
+        ("bwd", "ccl_backward_time_ms"),
+        ("total", "ccl_total_tp_ms"),
+    ]:
+        theo_ms = ccl.get(theo_key, 0)
+        if theo_ms <= 0:
+            continue
+        meas_ms = _get_measured_tp_ccl_ms(entry, label)
+        ccl_data[f"{label}_ccl_theoretical_ms"] = round(theo_ms, 4)
+        if meas_ms and meas_ms > 0:
+            util = theo_ms / meas_ms
+            ccl_data[f"{label}_ccl_measured_ms"] = round(meas_ms, 3)
+            ccl_data[f"{label}_ccl_util_perc"] = round(util * 100, 1)
+
+    if ccl_data:
+        roofline_data["ccl"] = ccl_data
+
     entry["roofline"] = roofline_data
 
 

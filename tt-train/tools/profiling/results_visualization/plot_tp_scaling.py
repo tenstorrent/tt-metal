@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract TP-scaling subset from the full results CSV and produce 6 plots.
+"""Extract TP-scaling subset from the full results CSV and produce 7 plots.
 
 The script filters rows where dp==1 and tp in {1, 2, 4, 8} (pure TP scaling),
 groups them by n_blocks, and creates:
@@ -10,6 +10,7 @@ groups them by n_blocks, and creates:
   - bwd_ms_vs_tp.png        - backward time vs TP
   - opt_ms_vs_tp.png        - optimizer time vs TP
   - step_time_ms_vs_tp.png  - total step time vs TP
+  - ccl_util_vs_tp.png      - TP CCL utilization & overhead vs TP
 
 Each plot includes a red dashed "ideal scaling" line derived from the tp=1
 baseline for each block count.
@@ -188,6 +189,84 @@ def make_plot(
         print(f"  saved {out_path}")
 
 
+CCL_UTIL_COL = "total_ccl_util_perc"
+CCL_OVERHEAD_COL = "ccl_overhead_perc"
+
+
+def make_ccl_util_plot(
+    subset: pd.DataFrame,
+    out_path: Path | None,
+    show: bool = False,
+) -> None:
+    """Plot TP CCL utilization and TP overhead vs TP."""
+    df = subset.copy()
+    has_util = CCL_UTIL_COL in df.columns and df[CCL_UTIL_COL].notna().any()
+    has_ccl_ms = "total_ccl_ms" in df.columns and "step_time_ms" in df.columns
+    if has_ccl_ms:
+        df[CCL_OVERHEAD_COL] = df["total_ccl_ms"] / df["step_time_ms"] * 100
+
+    if not has_util and not has_ccl_ms:
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+
+    if has_util:
+        drawn = False
+        for blk in sorted(df["n_blocks"].unique()):
+            grp = df[df["n_blocks"] == blk].sort_values("tp")
+            valid = grp.dropna(subset=[CCL_UTIL_COL])
+            if valid.empty:
+                continue
+            lbl = "CCL util %" if not drawn else None
+            ax.plot(
+                valid["tp"],
+                valid[CCL_UTIL_COL],
+                marker=MARKERS.get(blk, "o"),
+                color=COLORS.get(blk, None),
+                linewidth=2,
+                markersize=7,
+                label=lbl,
+            )
+            drawn = True
+
+    if has_ccl_ms:
+        drawn = False
+        for blk in sorted(df["n_blocks"].unique()):
+            grp = df[df["n_blocks"] == blk].sort_values("tp")
+            valid = grp.dropna(subset=[CCL_OVERHEAD_COL])
+            if valid.empty:
+                continue
+            lbl = "CCL overhead %" if not drawn else None
+            ax.plot(
+                valid["tp"],
+                valid[CCL_OVERHEAD_COL],
+                marker="d",
+                color=COLORS.get(blk, None),
+                linewidth=1.5,
+                markersize=6,
+                linestyle=":",
+                alpha=0.8,
+                label=lbl,
+            )
+            drawn = True
+
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Tensor Parallelism (TP)")
+    ax.set_ylabel("%")
+    ax.set_title("TP CCL utilization & overhead  vs  TP")
+    ax.set_xticks(TP_VALUES)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+
+    fig.tight_layout()
+    if show:
+        plt.show()
+    elif out_path:
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"  saved {out_path}")
+
+
 def plot_all(
     df: pd.DataFrame, output_dir: Path | None = None, show: bool = False
 ) -> pd.DataFrame:
@@ -199,6 +278,11 @@ def plot_all(
     for col, ylabel, fname, scaling, ccl_col in PLOT_SPECS:
         out = output_dir / fname if output_dir else None
         make_plot(subset, col, ylabel, out, scaling, ccl_col, show=show)
+    make_ccl_util_plot(
+        subset,
+        output_dir / "ccl_util_vs_tp.png" if output_dir else None,
+        show=show,
+    )
     return subset
 
 

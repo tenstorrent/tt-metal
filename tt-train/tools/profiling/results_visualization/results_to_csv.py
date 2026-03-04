@@ -36,6 +36,9 @@ COLUMNS = [
     "total_mfu_perc",
     "grad_sync_bw_GBs",
     "grad_sync_util_perc",
+    "fwd_ccl_util_perc",
+    "bwd_ccl_util_perc",
+    "total_ccl_util_perc",
     "t/s",
     "t/s/d",
     "fwd_ccl_ms",
@@ -123,12 +126,12 @@ def process_entry(entry: dict) -> dict:
 
     step_time = _step_time(entry, avg)
 
-    allreduce = entry.get("allreduce") or {}
     throughput = entry.get("throughput") or {}
     fwd_r = roofline.get("forward") or {}
     bwd_r = roofline.get("backward") or {}
     opt_r = roofline.get("optimizer") or {}
     tot_r = roofline.get("total") or {}
+    rf_ccl = roofline.get("ccl") or {}
 
     return {
         "name": name,
@@ -157,8 +160,11 @@ def process_entry(entry: dict) -> dict:
         "bwd_mfu_perc": bwd_r.get("mfu_perc"),
         "opt_mfu_perc": opt_r.get("mfu_perc"),
         "total_mfu_perc": tot_r.get("mfu_perc"),
-        "grad_sync_bw_GBs": allreduce.get("bw_GBs"),
-        "grad_sync_util_perc": allreduce.get("bw_util_perc"),
+        "grad_sync_bw_GBs": rf_ccl.get("grad_sync_bw_GBs"),
+        "grad_sync_util_perc": rf_ccl.get("grad_sync_util_perc"),
+        "fwd_ccl_util_perc": rf_ccl.get("fwd_ccl_util_perc"),
+        "bwd_ccl_util_perc": rf_ccl.get("bwd_ccl_util_perc"),
+        "total_ccl_util_perc": rf_ccl.get("total_ccl_util_perc"),
         "t/s": throughput.get("tokens_per_sec"),
         "t/s/d": throughput.get("tokens_per_sec_per_device"),
         **_ccl_fields(avg),
