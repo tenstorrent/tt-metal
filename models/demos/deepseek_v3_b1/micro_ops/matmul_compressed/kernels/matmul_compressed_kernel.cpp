@@ -26,7 +26,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 using namespace ckernel;
-#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_compressed.h"
+#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_matmul_compressed.h"
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
