@@ -64,7 +64,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             Limitations:
                 - All input tensors must be on-device.
-                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1 or :attr:`dim` = rank - 1).
                 - Sharding is not supported for this operation
                 - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
                 - The (optional) preallocated output tensor must have ROW_MAJOR layout
