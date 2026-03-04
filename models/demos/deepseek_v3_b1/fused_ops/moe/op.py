@@ -1736,6 +1736,7 @@ class MoeRoutedExpertOp:
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_brisc_rt_arg_base", 0),
             ("reduce_brisc_fabric_rt_arg_base", 0),
+            ("reduce_persistent_fabric_rt_arg_base", 18),
             # Broadcast (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb),
         ]
@@ -3991,6 +3992,28 @@ class MoeOp:
             agg_core_noc_x = agg_core_phys.x
             agg_core_noc_y = agg_core_phys.y
 
+        # Persistent signal: aggregator on ROOT1 sends fabric atomic inc to bcast sender on entry device
+        persistent_enable_root1 = (
+            device_role == MESH_ROOT1 and self.downstream_socket is not None and self.persistent_next_iter_sem_addr != 0
+        )
+        persistent_dst_noc_x = 0
+        persistent_dst_noc_y = 0
+        persistent_dst_mesh_id = 0
+        persistent_dst_chip_id = 0
+        persistent_dst_sem_addr = 0
+        self._persistent_aggregator_core = None
+        self._persistent_target_node = None
+        if persistent_enable_root1:
+            bcast_sender_coord = ctx.bcast_sender_coord
+            persistent_target_node = mesh_device.get_fabric_node_id(bcast_sender_coord)
+            persistent_dst_noc_x = sender_core_physical.x
+            persistent_dst_noc_y = sender_core_physical.y
+            persistent_dst_mesh_id = int(persistent_target_node.mesh_id)
+            persistent_dst_chip_id = int(persistent_target_node.chip_id)
+            persistent_dst_sem_addr = self.persistent_next_iter_sem_addr
+            self._persistent_aggregator_core = reduce_params["worker_cores_list"][0]
+            self._persistent_target_node = persistent_target_node
+
         reduce_brisc_per_core_args = []
         for core_idx, core in enumerate(reduce_params["worker_cores_list"]):
             fabric_core = reduce_params["column_to_fabric_core"][core.x]
@@ -4010,6 +4033,8 @@ class MoeOp:
                 if shard_idx == 0:
                     socket_config_addr = self.downstream_socket.get_config_buffer_address()
 
+            is_persistent_agg = persistent_enable_root1 and shard_idx == 0
+
             reduce_brisc_per_core_args.append(
                 (
                     core,
@@ -4026,6 +4051,12 @@ class MoeOp:
                         worker_agg_sem_addr,
                         worker_agg_noc_x,
                         worker_agg_noc_y,
+                        int(is_persistent_agg),
+                        persistent_dst_noc_x if is_persistent_agg else 0,
+                        persistent_dst_noc_y if is_persistent_agg else 0,
+                        persistent_dst_mesh_id if is_persistent_agg else 0,
+                        persistent_dst_chip_id if is_persistent_agg else 0,
+                        persistent_dst_sem_addr if is_persistent_agg else 0,
                     ],
                 )
             )
@@ -4233,6 +4264,27 @@ class MoeOp:
                         fabric_node_id, dest_fabric_node_id, link_idx, program, fc
                     )
                     fabric_rt_args_ref.extend(fabric_conn_args)
+
+        # Persistent next-iteration signal: aggregator on ROOT1 sends fabric atomic inc
+        # to bcast sender on entry device
+        if ctx.enable_reduce_to_one and self._persistent_aggregator_core is not None:
+            mesh_device = ctx.mesh_device
+            agg_core = self._persistent_aggregator_core
+            src_fabric_node_id = mesh_device.get_fabric_node_id(coord)
+            dst_fabric_node_id = self._persistent_target_node
+
+            agg_kernel_idx = None
+            for group in kernel_result.groups:
+                if group.compile_time_arg_values.get("is_reduce_fabric_core") == 0 and group.core_range_set.contains(
+                    agg_core
+                ):
+                    agg_kernel_idx = group.brisc_kernel_index
+                    break
+            if agg_kernel_idx is not None:
+                persistent_fabric_rt_args = ttnn.setup_fabric_connection(
+                    src_fabric_node_id, dst_fabric_node_id, 0, program, agg_core
+                )
+                program.kernels[agg_kernel_idx].runtime_args[agg_core.x][agg_core.y].extend(persistent_fabric_rt_args)
 
         # Broadcast fabric connections
         if ctx.enable_bcast and len(self.bcast_dst_nodes) > 0:
@@ -4486,7 +4538,16 @@ class MoeOp:
         per_core_descs += shared_per_core
         return unified_core_descs, per_core_descs
 
-    def _append_compile_time_args(self, chip_id, num_iterations, ncrisc_args, brisc_args, trisc_args):
+    def _append_compile_time_args(
+        self,
+        chip_id,
+        num_iterations,
+        persistent_mode,
+        persistent_next_iter_sem_addr,
+        ncrisc_args,
+        brisc_args,
+        trisc_args,
+    ):
         """Append MoE compile-time args (routed + shared) to existing arg lists."""
         routed_ncrisc, routed_brisc, routed_trisc = MoeRoutedExpertOp._build_compile_time_args(
             self.ctx.routed_ctx, chip_id
@@ -4506,6 +4567,12 @@ class MoeOp:
         ncrisc_args += [("num_iterations", num_iterations)]
         brisc_args += [("num_iterations", num_iterations)]
         trisc_args += [("num_iterations", num_iterations)]
+        ncrisc_args += [("persistent_mode", persistent_mode)]
+        brisc_args += [("persistent_mode", persistent_mode)]
+        trisc_args += [("persistent_mode", persistent_mode)]
+        ncrisc_args += [("persistent_next_iter_sem_addr", persistent_next_iter_sem_addr)]
+        brisc_args += [("persistent_next_iter_sem_addr", persistent_next_iter_sem_addr)]
+        trisc_args += [("persistent_next_iter_sem_addr", persistent_next_iter_sem_addr)]
 
     def _build_semaphore_descriptors(self):
         """Build semaphore descriptors — empty, global semaphores are used instead."""
@@ -4580,13 +4647,34 @@ class MoeOp:
         self.io_tensors = self._build_io_tensors()
         self.kernel_defines = self._build_kernel_defines()
 
-    def _setup_per_device_args(self, chip_id, num_iterations, reduce_root_coord, coord, row, col):
+    def _setup_per_device_args(
+        self,
+        chip_id,
+        num_iterations,
+        persistent_mode,
+        persistent_next_iter_sem_addr,
+        reduce_root_coord,
+        coord,
+        row,
+        col,
+    ):
         """Build all per-device state: compile-time args, descriptor copies, and reduce modifications."""
+        self.persistent_next_iter_sem_addr = persistent_next_iter_sem_addr
+        self._persistent_aggregator_core = None
+        self._persistent_target_node = None
         # Start from shared descriptors
         self.ncrisc_args = []
         self.brisc_args = []
         self.trisc_args = []
-        self._append_compile_time_args(chip_id, num_iterations, self.ncrisc_args, self.brisc_args, self.trisc_args)
+        self._append_compile_time_args(
+            chip_id,
+            num_iterations,
+            persistent_mode,
+            persistent_next_iter_sem_addr,
+            self.ncrisc_args,
+            self.brisc_args,
+            self.trisc_args,
+        )
 
         if self.ctx.reconfig_moe_cbs:
             addr = self.reconfig_tensor.buffer_address()
@@ -4639,6 +4727,8 @@ class MoeOp:
         sdpa_kv_cache_buffer=None,
         sdpa_out_interm_buffer=None,
         num_iterations=1,
+        persistent_mode=False,
+        persistent_next_iter_semaphore=None,
         # ReduceToOne parameters
         reduce_intermediate_tensors: Optional[list] = None,
         reduce_output_tensor: Optional[ttnn.Tensor] = None,
@@ -4750,12 +4840,27 @@ class MoeOp:
         ctx = moe.ctx
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
+        persistent_next_iter_sem_addr = (
+            int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
+            if persistent_next_iter_semaphore is not None
+            else 0
+        )
+
         for row in range(ctx.mesh_rows):
             for col in range(ctx.mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 chip_id = row * ctx.mesh_cols + col
 
-                moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, coord, row, col)
+                moe._setup_per_device_args(
+                    chip_id,
+                    num_iterations,
+                    persistent_mode,
+                    persistent_next_iter_sem_addr,
+                    reduce_root_coord,
+                    coord,
+                    row,
+                    col,
+                )
 
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp",
