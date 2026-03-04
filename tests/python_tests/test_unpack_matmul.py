@@ -228,8 +228,9 @@ def test_unpack_matmul(math_fidelity, matmul_config, workers_tensix_coordinates)
         tile_cnt = matmul_config.tile_dimensions.output_tile_cnt
 
         # Compare each tile separately
+        TILE_R_DIM, TILE_C_DIM = 32, 32
         for i in range(tile_cnt):
-            start = i * num_elements_per_tile
+            start = i * (TILE_R_DIM * TILE_C_DIM)
             assert passed_test(
                 golden_tensor[
                     start : start + num_elements_per_tile

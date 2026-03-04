@@ -238,7 +238,6 @@ def skip_matmul_combination(
 
 def generate_tile_dims(
     dimension: Tuple[list, list],
-    tiny_tiles: bool = False,
     in0_tile_r_dim: int = 32,
     in1_tile_c_dim: int = 32,  # TODO: generate tile dimensions based on input dimensions
 ) -> TileDimensions:
@@ -279,9 +278,7 @@ def generate_tile_dims(
         tile_cnt=output_tile_cnt,
         tile_cnt_in0=(input0_dims[0] * input0_dims[1]) // (32 * 32),
         tile_cnt_in1=(input1_dims[0] * input1_dims[1]) // (32 * 32),
-        output_tile_cnt=(
-            output_tile_cnt if not tiny_tiles else 1
-        ),  # matmul with input 0 tiny tile does not work on multiple tiles for input 1 https://github.com/tenstorrent/tt-llk/issues/697
+        output_tile_cnt=output_tile_cnt,
         in0_tile_r_dim=in0_tile_r_dim,
         in0_tile_c_dim=32,
         in1_tile_r_dim=32,
@@ -509,7 +506,7 @@ def sweep_tiny_tiles_matmul(
             # Generate tile dimensions for the tiny tiles
             input0_dims, input1_dims = dims
             tile_dims = generate_tile_dims(
-                ([32, 32], input1_dims), tiny_tiles=True, in0_tile_r_dim=input0_dims[0]
+                ([32, 32], input1_dims), in0_tile_r_dim=input0_dims[0]
             )
 
             # generate face layout for tiny tiles
@@ -557,9 +554,7 @@ def sweep_tiny_tiles_matmul(
                         face_layout_config=face,
                         formats=config["fmt"],
                         stochastic_rnd=config["stochastic_mode"],
-                        dst_index=(
-                            min(max_dst_idx, 3) if math_matmul else max_dst_idx
-                        ),  # multi-matmul with input 0 tiny tile does not work when dst_index > 3 https://github.com/tenstorrent/tt-llk/issues/697
+                        dst_index=max_dst_idx,
                         dest_sync=config["dest_sync"],
                         dest_acc=config["dest_acc"],
                     )
