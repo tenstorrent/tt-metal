@@ -200,16 +200,16 @@ def test_wan_transformer_block(
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
     # Run torch model
-    # logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    # with torch.no_grad():
-    #     torch_spatial_out = torch_model(
-    #         hidden_states=spatial_input,
-    #         encoder_hidden_states=prompt_input,
-    #         temb=temb_input,
-    #         rotary_emb=[torch_rope_cos, torch_rope_sin],
-    #     )
+    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    with torch.no_grad():
+        torch_spatial_out = torch_model(
+            hidden_states=spatial_input,
+            encoder_hidden_states=prompt_input,
+            temb=temb_input,
+            rotary_emb=[torch_rope_cos, torch_rope_sin],
+        )
 
-    # assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
