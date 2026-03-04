@@ -449,9 +449,7 @@ def test_bcast_moe_two_stage_pipeline_real_weights(
     if not is_slow_dispatch():
         pytest.skip("requires slow dispatch")
 
-    logger.info(f"[rank={my_mesh_id}] test_bcast_moe_two_stage_pipeline_real_weights started")
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    logger.info(f"[rank={my_mesh_id}] asynchronous slow dispatch enabled")
 
     my_mesh_id = mesh_device.get_system_mesh_id()
     logger.info(f"[rank={my_mesh_id}] my_mesh_id: {my_mesh_id}")
