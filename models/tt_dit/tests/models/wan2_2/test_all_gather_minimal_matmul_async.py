@@ -84,13 +84,19 @@ def run_test_linear_impl(
     M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
     K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
     N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
-    per_device_M = M // device.shape[sp_axis]
+    per_device_M = M // device.shape[tp_axis]
     if use_persistent_buffers:
+        # Persistent buffer is AllGather output: (per_device_M, K_per_device * ring_size)
+        if use_non_fused:
+            ag_buffer_shape = (1, 1, per_device_M, K)
+        else:
+            k_per_device = K // device.shape[sp_axis]
+            ring_size = device.shape[cluster_axis]
+            ag_buffer_shape = (per_device_M, k_per_device * ring_size)
+
         persistent_output_buffers = [
             ttnn.from_torch(
-                torch.zeros((1, 1, per_device_M, K), dtype=torch_dtype)
-                if use_non_fused
-                else torch.zeros((per_device_M, K), dtype=torch_dtype),
+                torch.zeros(ag_buffer_shape, dtype=torch_dtype),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
@@ -124,16 +130,34 @@ def run_test_linear_impl(
             dtype=input_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
         )
-        tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_addcmul_b = ttnn.from_torch(
+            torch_addcmul_b,
+            dtype=input_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
     else:
         tt_addcmul_a = None
         tt_addcmul_b = None
         addcmul_scalar = None
 
     with torch.no_grad():
-        torch_output = torch_input @ weight_input
+        if use_non_fused:
+            torch_output = torch_input @ weight_input
+        else:
+            # Fused: simulate AllGather then MatMul
+            # Input is (M, K), sharded as (M, K_per_device) per device
+            # AllGather concatenates K_per_device from cluster_axis devices
+            k_per_device = K // device.shape[sp_axis]
+            gathered_K = k_per_device * device.shape[cluster_axis]
+            # Simulate: take first k_per_device columns, repeat cluster_axis times
+            input_slice = torch_input[:, :k_per_device]
+            gathered_input = input_slice.repeat(1, device.shape[cluster_axis])
+            torch_output = gathered_input @ weight_input
         if bias_input is not None:
             torch_output = torch_output + bias_input
         if fuse_addcmul:
@@ -347,8 +371,12 @@ def run_test_linear(
         torch_input = torch.randn((1, 1, M, K), dtype=torch_dtype)
         weight_input = torch.randn((1, 1, K, N), dtype=torch_dtype)
     else:
+        # Fused: input is sharded, weight expects gathered K dimension
         torch_input = torch.randn((M, K), dtype=torch_dtype)
-        weight_input = torch.randn((K, N), dtype=torch_dtype)
+        # Weight first dim should match AllGather output (K_per_device * ring_size)
+        k_per_device = K // device.shape[sp_axis]  # K is sharded along sp_axis
+        gathered_K = k_per_device * device.shape[cluster_axis]  # AllGather over cluster_axis
+        weight_input = torch.randn((gathered_K, N), dtype=torch_dtype)
     bias_input = None
     if use_bias:
         if use_non_fused:
@@ -383,13 +411,26 @@ def run_test_linear(
         dtype=dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
     )
 
-    tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(
+        weight_input,
+        dtype=weight_dtype or dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
     tt_bias = None
     if use_bias:
-        tt_bias = ttnn.from_torch(bias_input, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = ttnn.from_torch(
+            bias_input,
+            dtype=bias_dtype or dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
 
     return run_test_linear_impl(
         device=device,

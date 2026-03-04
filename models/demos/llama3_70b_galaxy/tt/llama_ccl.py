@@ -1149,6 +1149,66 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
+    def line_all_gather_matmul(
+        self,
+        input_tensor_mesh,
+        weight_tensor,
+        dim,
+        cluster_axis,
+        memory_config,
+        num_links=1,
+        matmul_config=None,
+        compute_kernel_config=None,
+        dtype=None,
+    ):
+        """
+        Fused AllGather + MatMul operation for prefill using all_gather_minimal_matmul_async.
+        Uses Ring topology for Galaxy.
+        """
+        topology = ttnn.Topology.Ring  # Galaxy uses Ring topology
+
+        # Reshape input to [1, 1, S, x] for prefill
+        B = input_tensor_mesh.shape[1]
+        input_tensor_mesh = ttnn.reshape(
+            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+        )
+
+        # The fused op check: (force_transpose ? grid_x : grid_y) % num_links == 0
+        # With force_transpose=True, it checks grid_x % num_links == 0
+        # Grid is typically (7, 8) or (7, 9), so grid_x=7 (prime)
+        # Only num_links=1 or num_links=7 works with grid_x=7
+        # Force num_links=1 to ensure compatibility
+        num_links = 1
+
+        # Get semaphores - the API expects a flat list of semaphores
+        sem_current = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+        sem_next = self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs]
+
+        # Flatten if nested (ring mode), otherwise create list from single semaphores
+        if isinstance(sem_current, list):
+            semaphores = sem_current + sem_next
+        else:
+            semaphores = [sem_current, sem_next]
+
+        output = ttnn.experimental.all_gather_minimal_matmul_async(
+            input_tensor=input_tensor_mesh,
+            weight_tensor=weight_tensor,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config,
+            multi_device_global_semaphore=semaphores,
+            num_links=num_links,
+            topology=topology,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            dtype=dtype,
+            force_transpose=True,
+            num_workers_per_link=6,
+            num_buffers_per_channel=48,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return output[0]  # all_gather_minimal_matmul_async returns a tuple
+
     def ring_all_gather(
         self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None, reverse_order=False
     ):
