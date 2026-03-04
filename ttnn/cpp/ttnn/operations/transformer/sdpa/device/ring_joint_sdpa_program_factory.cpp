@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chain_utils.hpp"
 
 #include <optional>
 #include <cmath>
@@ -358,7 +359,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size};
+        args.all_gather_operation_attributes.ring_size,
+        qk_out_subblock_h};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -377,9 +379,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
+    const auto sem_args_offset = reader_compile_time_args.size();
     reader_compile_time_args.push_back(sender_semaphore_id);
     reader_compile_time_args.push_back(receiver_semaphore_id);
     reader_compile_time_args.push_back(valid_semaphore_id);
+    reader_compile_time_args.push_back(0);  // mcast_enabled placeholder (patched after chain construction)
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -454,28 +458,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
-
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
-
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    // NOTE: CreateKernel calls are deferred until after chain construction so that
+    // the mcast_enabled compile-time arg can be determined first.
 
     // Create circular buffers
 
@@ -625,38 +609,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     /**
      * Build chain selection for store-and-forward across cores per (batch, head).
      */
-    struct CoreHeadWork {
-        uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
-    };
-
-    struct CoreWork {
-        CoreCoord logical_core;
-        CoreCoord physical_core;
-        uint32_t global_q_start = 0;
-        uint32_t global_q_count = 0;
-        std::vector<CoreHeadWork> head_work;
-    };
-
-    struct HeadSegmentRef {
-        uint32_t core_idx = 0;
-        uint32_t head_work_index = 0;
-    };
-
-    struct CoreChainInfo {
-        bool participates = false;
-        bool is_injector = false;
-        bool is_sink = false;
-        uint32_t batch = 0;
-        uint32_t head = 0;
-        uint32_t q_chunk_start = 0;
-        uint32_t q_chunk_count = 0;
-        CoreCoord prev_physical = CoreCoord{0, 0};
-        CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
-    };
+    using detail::CoreChainInfo;
+    using detail::CoreHeadWork;
+    using detail::CoreWork;
+    using detail::HeadSegmentRef;
 
     std::vector<CoreWork> core_work(num_cores);
     std::vector<CoreChainInfo> core_chain_info(num_cores);
@@ -722,17 +678,27 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         next_global_chunk += chunk_count;
     }
 
-    // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
-    for (auto& segments : head_segments) {
+    // Construct chains: for each head that spans >= 2 cores, rotate injector selection
+    // per head_id so DRAM reads hit different bank groups (different physical columns).
+    for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+        auto& segments = head_segments[head_id];
         if (segments.size() < 2) {
             continue;
         }
 
+        // Rotate preferred start position per head to spread injectors across columns
+        const std::size_t preferred_start = head_id % segments.size();
         std::optional<std::size_t> chain_start_idx;
-        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+
+        // First pass: prefer cores handling only one head segment
+        for (std::size_t offset = 0; offset < segments.size(); ++offset) {
+            std::size_t idx = (preferred_start + offset) % segments.size();
             const auto& seg = segments.at(idx);
             const auto& work = core_work.at(seg.core_idx);
             if (work.global_q_count == 0) {
+                continue;
+            }
+            if (core_chain_info.at(seg.core_idx).participates) {
                 continue;
             }
             if (work.head_work.size() == 1) {
@@ -741,12 +707,57 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             }
         }
 
+        // If no single-segment core found, try any core not in a chain
+        if (!chain_start_idx.has_value()) {
+            for (std::size_t offset = 0; offset < segments.size(); ++offset) {
+                std::size_t idx = (preferred_start + offset) % segments.size();
+                const auto& seg = segments.at(idx);
+                if (core_work.at(seg.core_idx).global_q_count == 0) {
+                    continue;
+                }
+                if (!core_chain_info.at(seg.core_idx).participates) {
+                    chain_start_idx = idx;
+                    break;
+                }
+            }
+        }
+
         if (!chain_start_idx.has_value()) {
             continue;
         }
 
         const std::size_t start = chain_start_idx.value();
-        for (std::size_t idx = start; idx < segments.size(); ++idx) {
+
+        // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1
+        // Exclude segments with different q_chunk_count than the injector (uneven tail).
+        std::vector<std::size_t> chain_order;
+        const auto& start_seg = segments.at(start);
+        const uint32_t ref_q_count =
+            core_work.at(start_seg.core_idx).head_work.at(start_seg.head_work_index).q_chunk_count;
+
+        for (std::size_t step = 0; step < segments.size(); ++step) {
+            std::size_t idx = (start + step) % segments.size();
+            const auto& seg = segments.at(idx);
+            const uint32_t core_idx = seg.core_idx;
+
+            if (core_work.at(core_idx).global_q_count == 0) {
+                continue;
+            }
+            if (core_chain_info.at(core_idx).participates) {
+                break;
+            }
+
+            // Skip cores with different q_chunk_count (e.g. uneven tail)
+            const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+            if (hw.q_chunk_count != ref_q_count) {
+                continue;
+            }
+
+            chain_order.push_back(idx);
+        }
+
+        for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+            const std::size_t idx = chain_order[pos];
             const auto& seg = segments.at(idx);
             const uint32_t core_idx = seg.core_idx;
             const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
@@ -758,25 +769,59 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             chain.q_chunk_start = hw.q_chunk_start;
             chain.q_chunk_count = hw.q_chunk_count;
 
-            if (idx == start) {
+            if (pos == 0) {
                 chain.is_injector = true;
             }
-            if (idx == segments.size() - 1) {
+            if (pos == chain_order.size() - 1) {
                 chain.is_sink = true;
             }
 
-            if (idx > start) {
-                const uint32_t prev_core_idx = segments.at(idx - 1).core_idx;
+            // Set prev core coordinates (previous in wrap order)
+            if (pos > 0) {
+                const uint32_t prev_core_idx = segments.at(chain_order[pos - 1]).core_idx;
                 chain.prev_physical = core_work.at(prev_core_idx).physical_core;
             }
-            if (idx + 1 < segments.size()) {
-                const uint32_t next_core_idx = segments.at(idx + 1).core_idx;
+
+            // Set next core coordinates and q_chunk count (next in wrap order)
+            if (pos + 1 < chain_order.size()) {
+                const std::size_t next_idx = chain_order[pos + 1];
+                const uint32_t next_core_idx = segments.at(next_idx).core_idx;
                 chain.next_physical = core_work.at(next_core_idx).physical_core;
-                const auto& next_hw = core_work.at(next_core_idx).head_work.at(segments.at(idx + 1).head_work_index);
+                const auto& next_hw = core_work.at(next_core_idx).head_work.at(segments.at(next_idx).head_work_index);
                 chain.next_core_q_chunks = next_hw.q_chunk_count;
             }
         }
     }
+
+    // Third pass: Check multicast eligibility and configure mcast for eligible chains
+    const uint32_t mcast_chains = detail::configure_mcast_for_chains(head_segments, core_chain_info, core_work, NH);
+
+    // Update mcast_enabled compile-time arg now that chain construction is complete
+    reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+
+    // Create kernels (deferred until after chain construction for mcast_enabled flag)
+    auto reader_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
+        core_grid,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
+
+    auto writer_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
+        core_grid,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+
+    auto compute_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
+        core_grid,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -839,6 +884,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
         reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
         reader_args.push_back(chain.next_core_q_chunks);
+        reader_args.push_back(chain.mcast_num_dests);
+        reader_args.push_back(chain.mcast_sender_wait);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
