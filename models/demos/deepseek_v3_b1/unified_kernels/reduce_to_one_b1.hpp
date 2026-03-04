@@ -340,6 +340,7 @@ struct ReduceToOneB1 {
 
             // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                DPRINT << "Start of root 1 last section\n";
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
@@ -401,6 +402,7 @@ struct ReduceToOneB1 {
                 }
 
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "end of root 1 last section\n";
                 return;
             }
 
