@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-# SPDX-License-Identifier: Apache-2.0
-
+SPDX-License-Identifier: Apache-2.0
+"""
 import inspect
 import json
 import math
@@ -962,6 +963,7 @@ class ModelArgs:
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
+            self.is_phi1 = is_phi1()
 
             # model specific CCL configs
             default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
@@ -2481,6 +2483,7 @@ class ModelArgs:
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
+            "gelu_new": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
             "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
@@ -2910,7 +2913,6 @@ class ModelArgs:
                 else:
                     raise
 
-            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
@@ -2919,10 +2921,7 @@ class ModelArgs:
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                local_files_only=os.getenv("CI") == "true",
             )
             if self.cache_hf_flag:
                 self.cached_hf_model = model
@@ -3334,6 +3333,10 @@ class ModelArgs:
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
 
+        # Force Phi-1 tokenizer from the same repo as weights
+        if self.is_phi1:
+            self.TOKENIZER_PATH = "microsoft/Phi-1"
+
         tokenizer = None
         try:
             # Try to load tokenizer from the original model path
@@ -3341,6 +3344,9 @@ class ModelArgs:
             tokenizer = AutoTokenizer.from_pretrained(
                 self.TOKENIZER_PATH,
                 local_files_only=os.getenv("CI") == "true",
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
                 trust_remote_code=self.trust_remote_code_hf,
             )
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
@@ -3404,6 +3410,10 @@ class ModelArgs:
             # Phi-3-mini uses "<|end|>" as EOS token
             if "phi-3-mini" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
+
+        if self.is_phi1 and tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
         return tokenizer
 
     def create_processor(self):
@@ -4234,3 +4244,15 @@ def determine_device_name(mesh_device):
         return dict_device_names[num_devices]
     else:
         raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
+
+
+@lru_cache()
+def get_hf_model() -> str:
+    """Return normalized HF model name from env."""
+    return os.getenv("HF_MODEL", "").strip()
+
+
+@lru_cache()
+def is_phi1() -> bool:
+    """Flag for Phi-1 family models."""
+    return get_hf_model() in {"microsoft/Phi-1"}
