@@ -4624,3 +4624,53 @@ def test_multiply_bfloat8_b_bcast_scalarsharded(device):
     )
     ttnn_result = ttnn.to_torch(ttnn_result)
     assert_with_pcc(torch_output, ttnn_result, pcc=0.998)
+
+
+@pytest.mark.parametrize(
+    "a_shape, shard_shape",
+    [
+        # [[1, 1, 1024, 1024], [16, 1024]],
+        [[1, 1, 4096, 4096], [64, 4096]],
+    ],
+)
+def test_binary_mul_scalar_bcast_height_sharded_sd_regression(device, a_shape, shard_shape):
+    """Regression test for stable diffusion MUL scalar broadcast on height-sharded BF8_B tensors.
+
+    Extracted from profiling test_unet_2d_condition_model_512x512 where BinaryNgDeviceOperation
+    MUL with SubtileBroadcastType::SCALAR_B was ~2x slower than the old BinaryDeviceOperation.
+    Config: in0 height-sharded BF8_B on 8x8 grid, in1 scalar in DRAM, output height-sharded.
+    """
+    torch.manual_seed(0)
+
+    b_shape = [1, 1, 1, 1]
+
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(b_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=a_sharded_config,
+    )
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    out_pt = torch.mul(a_pt, b_pt)
+    out_tt = ttnn.multiply(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
+    out_tt = ttnn.to_torch(out_tt)
+    assert_with_pcc(out_pt, out_tt)

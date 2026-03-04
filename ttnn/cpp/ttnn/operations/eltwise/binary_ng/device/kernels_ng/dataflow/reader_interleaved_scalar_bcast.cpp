@@ -35,11 +35,21 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
     constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
-#if !SRC_SHARDED
+#if SRC_SHARDED
+#if !SRC_BCAST
+    cb_reserve_back(cb_id_src, src_num_tiles);
+    cb_push_back(cb_id_src, src_num_tiles);
+#endif
+#else
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 #endif
-#if !SRC_SHARDED_B
+#if SRC_SHARDED_B
+#if !SRC_BCAST_B
+    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
+    cb_push_back(cb_id_src_b, src_num_tiles_b);
+#endif
+#else
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
 #endif
@@ -114,22 +124,18 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-#if !SRC_BCAST
+#if !SRC_BCAST && !SRC_SHARDED
                             cb_reserve_back(cb_id_src, onetile);
-#if !SRC_SHARDED
                             uint32_t l1_write_addr = get_write_ptr(cb_id_src);
                             noc_async_read_page(tile_offset + tw, src, l1_write_addr);
                             noc_async_read_barrier();
-#endif
                             cb_push_back(cb_id_src, onetile);
 #endif
-#if !SRC_BCAST_B
+#if !SRC_BCAST_B && !SRC_SHARDED_B
                             cb_reserve_back(cb_id_src_b, onetile);
-#if !SRC_SHARDED_B
                             uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
                             noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
                             noc_async_read_barrier();
-#endif
                             cb_push_back(cb_id_src_b, onetile);
 #endif
                         }
