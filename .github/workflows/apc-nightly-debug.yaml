@@ -19,6 +19,14 @@ on:
         default: false
         type: boolean
         description: "Enable watcher"
+      run-wormhole-tests:
+        default: true
+        type: boolean
+        description: "Run Wormhole (N300) tests"
+      run-blackhole-tests:
+        default: true
+        type: boolean
+        description: "Run Blackhole (P100/P150) tests"
 
 permissions:
   actions: read
@@ -47,6 +55,7 @@ jobs:
   build-artifacts-ubuntu-22:
     name: Build artifacts (Ubuntu 22.04)
     needs: determine-watcher
+    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -63,6 +72,7 @@ jobs:
   build-artifacts-ubuntu-24:
     name: Build artifacts (Ubuntu 24.04)
     needs: determine-watcher
+    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -80,6 +90,7 @@ jobs:
   nightly-debug-ubuntu-22:
     name: apc nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
@@ -97,6 +108,7 @@ jobs:
   blackhole-nightly-debug-ubuntu-22:
     name: blackhole nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
     uses: ./.github/workflows/blackhole-post-commit.yaml
     secrets: inherit
     with:
@@ -115,6 +127,7 @@ jobs:
   nightly-debug-ubuntu-24:
     name: apc nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
@@ -132,6 +145,7 @@ jobs:
   blackhole-nightly-debug-ubuntu-24:
     name: blackhole nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
     uses: ./.github/workflows/blackhole-post-commit.yaml
     secrets: inherit
     with:
