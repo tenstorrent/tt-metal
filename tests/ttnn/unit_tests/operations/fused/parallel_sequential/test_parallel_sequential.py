@@ -1439,6 +1439,98 @@ class TestCrossOpCompilation:
 
 
 # ===========================================================================
+# TestDocExample
+# ===========================================================================
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestDocExample:
+    """Integration test matching the example in op_fusion.md."""
+
+    def test_matmul_slice_ln_rms_tree(self, device):
+        """Doc-example: matmul -> Parallel(slice->Parallel(matmul, LN), slice->RMS).
+
+        Tree (8 cores, single row):
+            op1: matmul [1,1,256,256]x[1,1,256,256]    on (0,0)-(7,0)
+            +- op2: slice left half -> [1,1,256,128]    on (0,0)-(3,0)
+            |  +- op4: matmul [1,1,256,128]x[1,1,128,128]  on (0,0)-(1,0)
+            |  +- op5: layer_norm [1,1,256,128]             on (2,0)-(3,0)
+            +- op3: slice right half -> [1,1,256,128]   on (4,0)-(7,0)
+               +- op6: rms_norm [1,1,256,128]               on (4,0)-(7,0)
+        """
+        import models.experimental.ops.descriptors as descriptors
+        from models.experimental.ops.descriptors.fusion import Sequential, Parallel
+
+        torch.manual_seed(42)
+
+        compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+
+        full = cores(0, 0, 7, 0)
+        left = cores(0, 0, 3, 0)
+        right = cores(4, 0, 7, 0)
+        left_top = cores(0, 0, 1, 0)
+        left_bot = cores(2, 0, 3, 0)
+
+        torch_a = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+        torch_b4 = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
+        torch_ln_w = torch.ones(1, 1, 1, 128, dtype=torch.bfloat16)
+        torch_ln_bias = torch.zeros(1, 1, 1, 128, dtype=torch.bfloat16)
+        torch_rms_w = torch.ones(1, 1, 1, 128, dtype=torch.bfloat16)
+
+        op1 = descriptors.matmul(
+            tt(torch_a, device), tt(torch_b1, device), core_range_set=full, compute_kernel_config=compute_cfg
+        )
+        op2 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 0], [1, 1, 256, 128], core_range_set=left)
+        op3 = descriptors.slice(op1.output_tensors[0], [0, 0, 0, 128], [1, 1, 256, 256], core_range_set=right)
+        op4 = descriptors.matmul(
+            op2.output_tensors[0], tt(torch_b4, device), core_range_set=left_top, compute_kernel_config=compute_cfg
+        )
+        op5 = descriptors.layer_norm(
+            op2.output_tensors[0],
+            core_range_set=left_bot,
+            weight=tt(torch_ln_w, device),
+            bias=tt(torch_ln_bias, device),
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+        )
+        op6 = descriptors.rms_norm(
+            op3.output_tensors[0],
+            core_range_set=right,
+            weight=tt(torch_rms_w, device),
+            epsilon=1e-5,
+            compute_kernel_config=compute_cfg,
+        )
+
+        fused = Sequential(
+            op1,
+            Parallel(
+                Sequential(op2, Parallel(op4, op5)),
+                Sequential(op3, op6),
+            ),
+        ).build(device)
+        fused.launch()
+
+        # Golden
+        g1 = torch.matmul(torch_a.float(), torch_b1.float())
+        g_left = g1[:, :, :, :128]
+        g_right = g1[:, :, :, 128:]
+
+        check_pcc(torch.matmul(g_left, torch_b4.float()), op4.output_tensors[0], pcc=0.97, label="op4 matmul")
+        check_pcc(
+            torch_layer_norm(g_left, torch_ln_w.float(), torch_ln_bias.float()),
+            op5.output_tensors[0],
+            pcc=0.97,
+            label="op5 LN",
+        )
+        check_pcc(torch_rms_norm(g_right, torch_rms_w.float()), op6.output_tensors[0], pcc=0.97, label="op6 RMS")
+
+
+# ===========================================================================
 # TestDeepSeekV3
 # ===========================================================================
 
