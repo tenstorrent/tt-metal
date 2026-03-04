@@ -1662,24 +1662,47 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_q)
         ttnn.deallocate(tt_kvpe)
 
-        # DP wkv_b2 to match decode weights
-        v_out = ttnn.experimental.all_gather_async(
-            attn_out, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
-        )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
+        # DP wkv_b2 to match decode weights.
+        # Chunk sequence for all_gather to avoid single giant output allocations at 8K+ prefill.
+        wkv_b2_ag_prefill_runtime_args = ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
+        WKV_B2_AG_SEQ_CHUNK_SIZE = 4096
+        if seq_len > WKV_B2_AG_SEQ_CHUNK_SIZE:
+            num_chunks = (seq_len + WKV_B2_AG_SEQ_CHUNK_SIZE - 1) // WKV_B2_AG_SEQ_CHUNK_SIZE
+            v_out_chunks = []
+            for chunk_idx in range(num_chunks):
+                start = chunk_idx * WKV_B2_AG_SEQ_CHUNK_SIZE
+                end = min(start + WKV_B2_AG_SEQ_CHUNK_SIZE, seq_len)
+                attn_out_chunk = ttnn.slice(
+                    attn_out,
+                    (0, 0, start, 0),
+                    (1, num_heads_local, end, kv_lora_rank),
+                )  # [1, num_heads_local, chunk_seq_len, kv_lora_rank]
+                v_out_chunk_ag = ttnn.experimental.all_gather_async(
+                    attn_out_chunk, **wkv_b2_ag_prefill_runtime_args
+                )  # [1, num_heads, chunk_seq_len, kv_lora_rank]
+                ttnn.deallocate(attn_out_chunk)
 
-        # wkv_b2 (interleaved in0 + DRAM HEIGHT sharded in1)
-        # Pad batch dimension to match DRAM sharded weight layout
-        num_heads_padded = pad_batch_to_dram_banks(num_heads)
+                # wkv_b2
+                v_out_chunk = ttnn.linear(v_out_chunk_ag, **cfg["wkv_b2"])  # [1, num_heads, chunk_seq_len, v_head_dim]
+                ttnn.deallocate(v_out_chunk_ag)
+                v_out_chunks.append(v_out_chunk)
 
-        wkv_b2_program_config = build_prefill_matmul_program_config(
-            seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
-        )
-        v_out = ttnn.linear(
-            v_out, **cfg["wkv_b2"], program_config=wkv_b2_program_config
-        )  # [1, num_heads_padded, seq_len, v_head_dim]
-        ttnn.deallocate(attn_out)
+            ttnn.deallocate(attn_out)
+            if len(v_out_chunks) == 1:
+                v_out = v_out_chunks[0]
+            else:
+                v_out = ttnn.concat(v_out_chunks, dim=2)  # [1, num_heads, seq_len, v_head_dim]
+                for v_chunk in v_out_chunks:
+                    ttnn.deallocate(v_chunk)
+        else:
+            v_out_ag = ttnn.experimental.all_gather_async(
+                attn_out, **wkv_b2_ag_prefill_runtime_args
+            )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
 
-        # Slice off batch padding from wkv_b2 output
+            # wkv_b2
+            v_out = ttnn.linear(v_out_ag, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
+            ttnn.deallocate(v_out_ag)
+            ttnn.deallocate(attn_out)
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
