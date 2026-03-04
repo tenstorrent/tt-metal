@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize("use_socket", [True, False])
 @pytest.mark.parametrize(
     "device_params",
@@ -58,6 +59,7 @@ def test_broadcast_rms_fused(
     layout,
     input_dtype,
     num_iters,
+    num_links,
     use_socket,
 ):
     num_devices = mesh_rows * mesh_cols
@@ -110,7 +112,7 @@ def test_broadcast_rms_fused(
         layout=layout,
         input_dtype=input_dtype,
         bcast_core=bcast_core,
-        num_links=1,
+        num_links=num_links,
         input_tensor_torch=sender_tensor,
     )
     input_tensor_mesh = bcast_inputs.input_tensor_mesh
@@ -213,7 +215,7 @@ def test_broadcast_rms_fused(
         sender_coord,
         output_tensor,
         semaphores,
-        num_links=1,
+        num_links=num_links,
         socket=recv_socket if use_socket else None,
     )
 

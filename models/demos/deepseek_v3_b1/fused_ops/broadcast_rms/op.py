@@ -107,8 +107,6 @@ class BroadcastRMSNorm:
         output_cb = 2
         bcast_cb_start_offset = 3
 
-        if num_links != 1:
-            raise ValueError("BroadcastRMSNorm migration currently supports num_links=1 only")
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
