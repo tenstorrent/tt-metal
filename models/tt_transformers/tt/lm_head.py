@@ -182,10 +182,11 @@ class LMHead(LightweightModule):
 
         # Concatenate the outputs
         # outputs shape: a list of tensors, each tensor is 1,1,32,size_per_device per device
+        prefill_concat_mem_config = self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
         output = ttnn.concat(
             outputs,
             dim=-1,
-            memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=prefill_concat_mem_config if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
 
