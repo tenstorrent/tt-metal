@@ -19,7 +19,7 @@
     }
 
 // Causes a NOC fence which ensures that all inbound flits after this fence instruction, that are already in the local
-// niu, have been committed to L1 When calling this you must call: asm volatile ("fence" : : : "memory");
+// niu, have been commited to L1 When calling this you must call: asm volatile ("fence" : : : "memory");
 #define NOC_FENCE()                    \
     {                                  \
         ROCC_INSTRUCTION(2, (32 + 2)); \
@@ -325,7 +325,7 @@
         return result;                                                \
     }()
 
-// Returns the number of acks that are yet to be received for non-posted read or write transactions
+// Returns the number of acks that are yet to be recieved for non-posted read or write transactions
 // using the programmed tr-ack transaction id
 #define CMDBUF_TR_ACK(cmdbuf)                                \
     [&]() {                                                  \
@@ -334,7 +334,7 @@
         return result;                                       \
     }()
 
-// Returns the number of acks that are yet to be received for non-posted read or write transactions
+// Returns the number of acks that are yet to be recieved for non-posted read or write transactions
 // using the given transaction id
 #define CMDBUF_TR_ACK_TRID(cmdbuf, trid)                              \
     [&]() {                                                           \
@@ -365,7 +365,7 @@
         return result;                                              \
     }()
 
-// Returns the number of idma acks that are yet to be received for non-posted read or write transactions
+// Returns the number of idma acks that are yet to be recieved for non-posted read or write transactions
 // using the programmed tr-ack transaction id
 #define CMDBUF_IDMA_TR_ACK(cmdbuf)                           \
     [&]() {                                                  \
@@ -374,7 +374,7 @@
         return result;                                       \
     }()
 
-// Returns the number of idma acks that are yet to be received for non-posted read or write transactions
+// Returns the number of idma acks that are yet to be recieved for non-posted read or write transactions
 // using the given transaction id
 #define CMDBUF_IDMA_TR_ACK_TRID(cmdbuf, trid)                         \
     [&]() {                                                           \

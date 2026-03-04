@@ -21,7 +21,7 @@ void bind_permute(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            dim (number): the permutation of the dimensions of the input tensor.
+            dim (number): tthe permutation of the dimensions of the input tensor.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.

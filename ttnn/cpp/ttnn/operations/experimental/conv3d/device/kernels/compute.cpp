@@ -26,7 +26,7 @@ void matmul_blocks(
     const uint32_t subblock_w,
     const bool transpose) {
     // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
+    // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
     mm_block_init_short(

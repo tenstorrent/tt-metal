@@ -76,7 +76,7 @@ int main() {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 
-        // It is necessary to explicitly read profile results at the end of the
+        // It is necessary to explictly read profile results at the end of the
         // program to get noc traces for standalone tt_metal programs.  For
         // ttnn, this is called _automatically_
         ReadMeshDeviceProfilerResults(*mesh_device);
