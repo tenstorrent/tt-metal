@@ -284,10 +284,6 @@ inline void pipeline_transfer_targets_if_needed(const MultihostConfig &config, c
 }  // namespace
 
 int main(int argc, char **argv) {
-    if (std::getenv("TTML_NAIVE_PROFILER")) {
-        ttml::autograd::ctx().get_profiler().set_naive_profiling(true);
-    }
-
     auto start_timer = std::chrono::high_resolution_clock::now();
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);

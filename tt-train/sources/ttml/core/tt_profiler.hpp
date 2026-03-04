@@ -30,12 +30,10 @@ public:
     void enable();
     void disable();
 
-    void set_naive_profiling(bool naive_profiling);
     [[nodiscard]] bool get_naive_profiling() const;
 
 private:
     bool m_enabled = false;
-    bool m_naive_profiling = false;
 };
 
 }  // namespace ttml::core

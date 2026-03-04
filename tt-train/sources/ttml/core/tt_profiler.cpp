@@ -27,11 +27,11 @@ void TTProfiler::read_results(
     const size_t number_of_noops,
     tt::tt_metal::ProfilerReadState read_state) const {
     assert(device);
-    if (!m_enabled && !m_naive_profiling) {
+    if (!m_enabled && !get_naive_profiling()) {
         return;
     }
 
-    if (m_naive_profiling) {
+    if (get_naive_profiling()) {
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         auto now = std::chrono::high_resolution_clock::now();
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
@@ -69,12 +69,9 @@ void TTProfiler::disable() {
     m_enabled = false;
 }
 
-void TTProfiler::set_naive_profiling(bool naive_profiling) {
-    m_naive_profiling = naive_profiling;
-}
-
 bool TTProfiler::get_naive_profiling() const {
-    return m_naive_profiling;
+    static bool naive_profiling = std::getenv("TTML_NAIVE_PROFILER") != nullptr;
+    return naive_profiling;
 }
 
 TTProfiler::TTProfiler() : m_enabled(false) {

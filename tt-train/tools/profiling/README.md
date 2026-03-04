@@ -16,9 +16,8 @@ python3 tt-train/tools/profiling/results_json/extract_results.py \
   tt-train/tools/profiling/experiments/<run_dir>/ \
   -o results.json
 
-# 4. (Optional) Add roofline / bandwidth analysis
+# 4. (Optional) Add roofline analysis (includes CCL bandwidth/utilization)
 python3 tt-train/tools/profiling/results_json/add_roofline.py results.json /path/to/tt-train-roofline
-python3 tt-train/tools/profiling/results_json/add_allreduce_bw.py results_roofline.json
 ```
 
 ## Scripts
@@ -28,8 +27,7 @@ python3 tt-train/tools/profiling/results_json/add_allreduce_bw.py results_roofli
 | `run_experiments.sh` | Slurm wrapper — submits experiments or runs locally |
 | `run_experiments.py` | Generates configs, resets board, runs each experiment |
 | `results_json/extract_results.py` | Parses profiler CSVs and stdout logs → JSON |
-| `results_json/add_roofline.py` | Adds roofline % and MFU to results JSON |
-| `results_json/add_allreduce_bw.py` | Adds gradient sync bandwidth utilization to results JSON |
+| `results_json/add_roofline.py` | Adds roofline %, MFU, and CCL bandwidth/utilization to results JSON |
 
 ## Step 1: Running Experiments
 
@@ -135,28 +133,14 @@ Key flags: `--seq-len <n>` (default 2048), `--device-clock-ghz <f>` (default 1.3
 
 ## Step 3 (Optional): Roofline Analysis
 
-Adds per-phase roofline percentage and MFU for TP=1 experiments:
+Adds per-phase roofline percentage, MFU, and CCL utilization for all experiments:
 
 ```bash
 python3 tt-train/tools/profiling/results_json/add_roofline.py \
   results.json \
   /path/to/tt-train-roofline \
   -o results_roofline.json \
-  --hardware p100 \
-  --peak-tflops 160
-```
-
-## Step 4 (Optional): All-Reduce Bandwidth
-
-Adds gradient sync bandwidth utilization for DDP experiments:
-
-```bash
-python3 tt-train/tools/profiling/results_json/add_allreduce_bw.py \
-  results_roofline.json \
-  -o results_roofline_bw.json \
-  --topology linear \
-  --theoretical-bw 48 \
-  --tp-mem-shard 0.88
+  --hardware bh_glx
 ```
 
 ## Output JSON Structure
@@ -234,20 +218,13 @@ Each experiment entry in the results JSON:
     "forward":  { "roofline_ms": 37.2, "flops_tflops": 0.77, "measured_ms": 88.6, "roofline_perc": 42.0, "mfu_perc": 5.4 },
     "backward": { ... },
     "optimizer": { ... },
-    "total":    { "roofline_ms": 134.5, "flops_tflops": 2.31, "measured_ms": 312.5, "roofline_perc": 43.0, "mfu_perc": 4.6 }
-  },
-
-  "allreduce": {
-    "topology": "linear",
-    "ddp": 4,
-    "tp": 1,
-    "params_fraction": 1.0,
-    "tensor_bytes": 2269088768,
-    "tensor_mb": 2269.1,
-    "grad_sync_ms": 45.2,
-    "bw_GBs": 12.3,
-    "theoretical_bw_GBs": 48.0,
-    "bw_util_perc": 25.6
+    "total":    { "roofline_ms": 134.5, "flops_tflops": 2.31, "measured_ms": 312.5, "roofline_perc": 43.0, "mfu_perc": 4.6 },
+    "ccl": {
+      "grad_sync_theoretical_ms": 62.5, "grad_sync_measured_ms": 363.1, "grad_sync_bw_GBs": 8.26, "grad_sync_util_perc": 17.2,
+      "fwd_ccl_theoretical_ms": 10.4, "fwd_ccl_measured_ms": 15.2, "fwd_ccl_util_perc": 68.9,
+      "bwd_ccl_theoretical_ms": 19.3, "bwd_ccl_measured_ms": 29.4, "bwd_ccl_util_perc": 65.8,
+      "total_ccl_theoretical_ms": 29.8, "total_ccl_measured_ms": 44.6, "total_ccl_util_perc": 66.8
+    }
   }
 }
 ```
@@ -268,7 +245,7 @@ Each experiment entry in the results JSON:
 ### Enrichment fields (optional)
 
 - **`roofline`**: Added by `add_roofline.py`. Per-phase roofline time, FLOPs, `roofline_perc` (% of theoretical minimum achieved), `mfu_perc` (model FLOP utilization vs peak BF16).
-- **`allreduce`**: Added by `add_allreduce_bw.py`. Gradient sync bandwidth in GB/s and utilization vs theoretical link bandwidth.
+- **`roofline.ccl`**: DDP gradient sync bandwidth/utilization and TP CCL utilization (theoretical vs achieved) for forward, backward, and total.
 
 ## Experiment Parameters
 
