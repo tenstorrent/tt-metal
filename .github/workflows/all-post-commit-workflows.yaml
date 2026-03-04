@@ -210,6 +210,17 @@ jobs:
     steps:
       - id: resolve
         run: |
+          # Validate pre-built artifact inputs - all three must be provided together
+          if [[ -n "${{ inputs.dev-docker-image }}" || -n "${{ inputs.build-artifact-name }}" || -n "${{ inputs.wheel-artifact-name }}" ]]; then
+            if [[ -z "${{ inputs.dev-docker-image }}" || -z "${{ inputs.build-artifact-name }}" || -z "${{ inputs.wheel-artifact-name }}" ]]; then
+              echo "Error: When using pre-built artifacts, all three inputs must be provided:"
+              echo "  - dev-docker-image: '${{ inputs.dev-docker-image }}'"
+              echo "  - build-artifact-name: '${{ inputs.build-artifact-name }}'"
+              echo "  - wheel-artifact-name: '${{ inputs.wheel-artifact-name }}'"
+              exit 1
+            fi
+          fi
+
           # Use provided artifacts if available, otherwise use built artifacts
           if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
             echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
