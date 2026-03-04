@@ -489,12 +489,169 @@ def base_model_name(hf_config):
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
 
 
-def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
+def _env_is_true(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name, None)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _device_preprocess_enabled() -> bool:
+    # Enabled by default, with automatic fallback to host implementation on unsupported cases.
+    return _env_is_true("DEEPSEEK_V3_DEVICE_PREPROCESS", default=True)
+
+
+def _strict_device_runtime_enabled() -> bool:
+    return _env_is_true("DEEPSEEK_V3_STRICT_DEVICE_RUNTIME_CONVERSIONS", default=False)
+
+
+def _assert_device_tensor(tensor: ttnn.Tensor, op_name: str) -> None:
+    if not _strict_device_runtime_enabled():
+        return
+    if not ttnn.is_tensor_storage_on_device(tensor):
+        raise RuntimeError(f"{op_name}: expected device tensor, got storage={tensor.storage_type()}")
+
+
+def to_memory_config_device(tensor: ttnn.Tensor, *args, **kwargs) -> ttnn.Tensor:
+    _assert_device_tensor(tensor, "to_memory_config_device(input)")
+    out = ttnn.to_memory_config(tensor, *args, **kwargs)
+    _assert_device_tensor(out, "to_memory_config_device(output)")
+    return out
+
+
+def typecast_device(tensor: ttnn.Tensor, *args, **kwargs) -> ttnn.Tensor:
+    _assert_device_tensor(tensor, "typecast_device(input)")
+    out = ttnn.typecast(tensor, *args, **kwargs)
+    _assert_device_tensor(out, "typecast_device(output)")
+    return out
+
+
+def _expand_inv_scale(inv_scale: torch.Tensor, out_shape: Sequence[int], block_shape: Sequence[int]) -> torch.Tensor:
+    expanded = inv_scale
+    for dim, block in enumerate(block_shape):
+        expanded = expanded.repeat_interleave(block, dim=dim)
+    slices = tuple(slice(0, s) for s in out_shape)
+    return expanded[slices]
+
+
+def _dequantize_on_device(
+    tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int], mesh_device: ttnn.MeshDevice
+) -> torch.Tensor:
+    # Convert quantized values + expanded inverse scale to device tensors and multiply there.
+    # NOTE: This currently materializes expanded scales on host for correctness and broad op support.
+    quant_fp32 = tensor.to(torch.float32)
+    expanded_inv_scale = _expand_inv_scale(inv_scale.to(torch.float32), quant_fp32.shape, block_shape)
+
+    tt_quant = ttnn.from_torch(
+        quant_fp32,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_scale = ttnn.from_torch(
+        expanded_inv_scale,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_out = ttnn.mul(tt_quant, tt_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.to_torch(tt_out, torch_rank=tensor.ndim, dtype=torch.float32)
+
+    ttnn.deallocate(tt_quant)
+    ttnn.deallocate(tt_scale)
+    ttnn.deallocate(tt_out)
+    return out
+
+
+def maybe_device_transpose(
+    tensor: torch.Tensor,
+    dim0: int,
+    dim1: int,
+    *,
+    mesh_device: ttnn.MeshDevice | None = None,
+    prefer_device: bool = False,
+) -> torch.Tensor:
+    if prefer_device and mesh_device is not None and _device_preprocess_enabled():
+        try:
+            tt_tensor = ttnn.from_torch(
+                tensor,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            tt_out = ttnn.transpose(tt_tensor, dim0, dim1)
+            out = ttnn.to_torch(tt_out, torch_rank=tensor.ndim, dtype=tensor.dtype)
+            ttnn.deallocate(tt_tensor)
+            ttnn.deallocate(tt_out)
+            return out
+        except Exception as e:
+            logger.warning(
+                f"Device transpose failed for shape={tuple(tensor.shape)} dims=({dim0},{dim1}); "
+                f"falling back to torch transpose: {type(e).__name__}: {e}"
+            )
+    return tensor.transpose(dim0, dim1)
+
+
+def maybe_device_concat(
+    tensors: Sequence[torch.Tensor],
+    dim: int,
+    *,
+    mesh_device: ttnn.MeshDevice | None = None,
+    prefer_device: bool = False,
+) -> torch.Tensor:
+    if prefer_device and mesh_device is not None and _device_preprocess_enabled():
+        try:
+            tt_tensors = [
+                ttnn.from_torch(
+                    t,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for t in tensors
+            ]
+            tt_out = ttnn.concat(tt_tensors, dim=dim)
+            out = ttnn.to_torch(tt_out, torch_rank=tensors[0].ndim, dtype=tensors[0].dtype)
+            for tt_t in tt_tensors:
+                ttnn.deallocate(tt_t)
+            ttnn.deallocate(tt_out)
+            return out
+        except Exception as e:
+            logger.warning(
+                f"Device concat failed for dim={dim} with {len(tensors)} tensors; "
+                f"falling back to torch concat: {type(e).__name__}: {e}"
+            )
+    return torch.concat(list(tensors), dim=dim)
+
+
+def dequantize(
+    tensor: torch.Tensor,
+    inv_scale: torch.Tensor,
+    block_shape: Sequence[int],
+    *,
+    mesh_device: ttnn.MeshDevice | None = None,
+    prefer_device: bool = False,
+) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
     assert tensor.ndim == inv_scale.ndim
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
+    if prefer_device and mesh_device is not None and _device_preprocess_enabled():
+        try:
+            return _dequantize_on_device(tensor, inv_scale, block_shape, mesh_device)
+        except Exception as e:
+            logger.warning(
+                f"Device dequantization failed for shape={tuple(tensor.shape)}; "
+                f"falling back to host dequantization: {type(e).__name__}: {e}"
+            )
     return dequantize_tensor(tensor, inv_scale, block_shape)
 
 
@@ -827,7 +984,7 @@ def shard_and_save(
             raise ValueError(f"Invalid path structure after 'mesh_': {path}")
         path = Path(parts[1])
 
-    return SavedWeight(path, memory_config)
+    return SavedWeight(path=path, memory_config=memory_config, dtype=ttnn_tensor.dtype, layout=ttnn_tensor.layout)
 
 
 def _shard_device_impl(

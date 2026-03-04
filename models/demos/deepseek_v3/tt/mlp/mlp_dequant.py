@@ -89,7 +89,13 @@ class MLPDequant(MLP):
         """
         return cls.convert_metaweight(
             path=path,
-            torch_metaweight_tensor=dequantize(quantized_weight_tensor, scale_inv_tensor, metaweight_block_size),
+            torch_metaweight_tensor=dequantize(
+                quantized_weight_tensor,
+                scale_inv_tensor,
+                metaweight_block_size,
+                mesh_device=mesh_device,
+                prefer_device=True,
+            ),
             mesh_device=mesh_device,
             is_w2=is_w2,
         )

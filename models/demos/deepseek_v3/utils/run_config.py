@@ -390,9 +390,17 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
-    return ttnn.load_tensor(
-        saved_weight.path,
-    ).to(
-        device=device,
-        mem_config=saved_weight.memory_config,
-    )
+    # Load directly onto the target mesh device to avoid an extra host->device tensor move.
+    loaded_weight = ttnn.load_tensor(saved_weight.path, device=device)
+
+    # Materialize layout and dtype on device if metadata is available.
+    if saved_weight.layout is not None and loaded_weight.layout != saved_weight.layout:
+        loaded_weight = loaded_weight.to(saved_weight.layout)
+    if saved_weight.dtype is not None and loaded_weight.dtype != saved_weight.dtype:
+        loaded_weight = ttnn.typecast(loaded_weight, dtype=saved_weight.dtype)
+
+    # Preserve SavedWeight memory layout expectations in case serialized metadata differs from runtime.
+    if saved_weight.memory_config is not None and loaded_weight.memory_config() != saved_weight.memory_config:
+        loaded_weight = ttnn.to_memory_config(loaded_weight, memory_config=saved_weight.memory_config)
+
+    return loaded_weight

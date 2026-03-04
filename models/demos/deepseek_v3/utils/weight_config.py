@@ -55,6 +55,8 @@ class WeightConfigEncoder(json.JSONEncoder):
             obj = {
                 "path": str(obj.path),
                 "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
+                "dtype": None if obj.dtype is None else getattr(obj.dtype, "name", str(obj.dtype)),
+                "layout": None if obj.layout is None else getattr(obj.layout, "name", str(obj.layout)),
             }
         return obj
 
@@ -64,13 +66,34 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     if not isinstance(path_str, str):
         return obj
     memory_config_dict = obj.get("memory_config", None)
-    if not isinstance(memory_config_dict, dict) or not {
-        "buffer_type",
-        "memory_layout",
-        "created_with_nd_shard_spec",
-    }.issubset(memory_config_dict.keys()):
-        return obj
-    return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
+    memory_config = None
+    if memory_config_dict is not None:
+        if not isinstance(memory_config_dict, dict) or not {
+            "buffer_type",
+            "memory_layout",
+            "created_with_nd_shard_spec",
+        }.issubset(memory_config_dict.keys()):
+            return obj
+        memory_config = ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict))
+
+    dtype = None
+    dtype_name = obj.get("dtype", None)
+    if isinstance(dtype_name, str):
+        dtype = getattr(ttnn, dtype_name.lower(), None)
+        if dtype is None:
+            dtype = getattr(ttnn.DataType, dtype_name, None)
+
+    layout = None
+    layout_name = obj.get("layout", None)
+    if isinstance(layout_name, str):
+        if layout_name in {"ROW_MAJOR", "ROW_MAJOR_LAYOUT"}:
+            layout = ttnn.ROW_MAJOR_LAYOUT
+        elif layout_name in {"TILE", "TILE_LAYOUT"}:
+            layout = ttnn.TILE_LAYOUT
+        else:
+            layout = getattr(ttnn.Layout, layout_name, None)
+
+    return SavedWeight(path=Path(path_str), memory_config=memory_config, dtype=dtype, layout=layout)
 
 
 def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_recalculate: bool) -> WeightConfig | None:
@@ -264,7 +287,12 @@ def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) 
             normalized_path = weight_config.path
         else:
             normalized_path = root_path / weight_config.path
-        return SavedWeight(path=normalized_path, memory_config=weight_config.memory_config)
+        return SavedWeight(
+            path=normalized_path,
+            memory_config=weight_config.memory_config,
+            dtype=weight_config.dtype,
+            layout=weight_config.layout,
+        )
     else:
         # For other types (None, primitives, etc.), return as-is
         return weight_config

@@ -42,6 +42,10 @@ class MeshDeviceStub:
 class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 is resolved
     path: Path
     memory_config: ttnn.MemoryConfig | None = None
+    # Optional runtime materialization hints. These are persisted in weight config
+    # so load-time can enforce conversion on device without host detours.
+    dtype: ttnn.DataType | None = None
+    layout: ttnn.Layout | None = None
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub

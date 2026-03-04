@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     dequantize,
     even_int_div,
+    maybe_device_transpose,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -54,23 +55,29 @@ class Experts(AbstractModule):
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    dequantize(
-                        torch.stack(
-                            [
-                                state_dict[f"experts.{expert_id}.{hf_name}.weight"]
-                                for expert_id in range(hf_config.n_routed_experts)
-                            ]
-                        ),
-                        torch.stack(
-                            [
-                                state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
-                                for expert_id in range(hf_config.n_routed_experts)
-                            ]
-                        ),
-                        (1, *hf_config.quantization_config["weight_block_size"]),
-                    )
-                    .unsqueeze(0)
-                    .transpose(-1, -2),
+                    maybe_device_transpose(
+                        dequantize(
+                            torch.stack(
+                                [
+                                    state_dict[f"experts.{expert_id}.{hf_name}.weight"]
+                                    for expert_id in range(hf_config.n_routed_experts)
+                                ]
+                            ),
+                            torch.stack(
+                                [
+                                    state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
+                                    for expert_id in range(hf_config.n_routed_experts)
+                                ]
+                            ),
+                            (1, *hf_config.quantization_config["weight_block_size"]),
+                            mesh_device=mesh_device,
+                            prefer_device=True,
+                        ).unsqueeze(0),
+                        -1,
+                        -2,
+                        mesh_device=mesh_device,
+                        prefer_device=True,
+                    ),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "up_proj" else ttnn.bfloat4_b,

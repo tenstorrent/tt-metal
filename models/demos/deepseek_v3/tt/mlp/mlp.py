@@ -31,6 +31,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
     get_state_dicts,
+    maybe_device_transpose,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -111,8 +112,8 @@ class MLP(AbstractModule):
         Returns:
             The converted TTNN tensor.
         """
-        torch_metaweight_tensor = torch_metaweight_tensor.transpose(
-            2, 1
+        torch_metaweight_tensor = maybe_device_transpose(
+            torch_metaweight_tensor, 2, 1, mesh_device=mesh_device, prefer_device=True
         )  # In torch the weights are in (out_features, in_features) format
 
         # Calculate the expected weight dimensions
