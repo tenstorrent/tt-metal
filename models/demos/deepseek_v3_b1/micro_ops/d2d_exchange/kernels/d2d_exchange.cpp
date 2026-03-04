@@ -190,12 +190,16 @@ void kernel_main() {
 
     while (true) {
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "Waiting for pages with termination" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "Pages with termination received" << ENDL();
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
+
+        DPRINT << "Send pages downstream" << ENDL();
 
         send_pages_over_socket(
             sender_socket,
@@ -206,13 +210,16 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
+        DPRINT << "Send pages downstream done" << ENDL();
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
+            DPRINT << "Send notifications downstream" << ENDL();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
+            DPRINT << "Send notifications downstream done" << ENDL();
         } else {
             socket_notify_sender(receiver_socket);
         }
