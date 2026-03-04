@@ -19,6 +19,8 @@
 #include <map>
 #include <type_traits>
 
+#include "common/filesystem_utils.hpp"
+
 #ifdef ELF_STANDALONE
 // For development of this functionality
 #if __has_include(<format>)
@@ -63,10 +65,6 @@ static constexpr uint32_t mask_lo12_s = 0x01fff07f;
 static constexpr unsigned mask_lo12_s_split = 5;
 static constexpr unsigned mask_lo12_s_shift_1 = 7;
 static constexpr unsigned mask_lo12_s_shift_2 = 25;
-
-// ESTALE retry parameters for NFS resilience
-inline constexpr int kMaxFsRetries = 5;
-inline constexpr int kFsRetryDelayMs = 500;
 
 using namespace ll_api;
 
@@ -280,7 +278,7 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
     void* buffer = MAP_FAILED;
     int saved_errno = 0;
 
-    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
         int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (fd >= 0 && fstat(fd, &st) >= 0) {
             buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
@@ -295,8 +293,8 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
         if (saved_errno != ESTALE) {
             break;
         }
-        if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+        if (attempt < tt::filesystem::kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
         }
     }
 
@@ -332,7 +330,7 @@ void ElfFile::WriteImage(std::string const& path) {
     bool failed = true;
     int saved_errno = 0;
 
-    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
         int file_descriptor = open(
             path.c_str(),
             O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
@@ -351,8 +349,8 @@ void ElfFile::WriteImage(std::string const& path) {
         if (saved_errno != ESTALE) {
             break;
         }
-        if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+        if (attempt < tt::filesystem::kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
         }
     }
 

@@ -576,11 +576,11 @@ void writeProgramsPerfResultsToCSV(
         }
     }
 
-    TT_ASSERT(tt::filesystem::safe_exists(report_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(report_path.parent_path()).value_or(false));
     TT_ASSERT(report_path.extension() == ".csv");
 
     std::ofstream log_file_ofs;
-    if (tt::filesystem::safe_exists(report_path)) {
+    if (tt::filesystem::safe_exists(report_path).value_or(false)) {
         log_file_ofs.open(report_path, std::ios_base::app);
     } else {
         log_file_ofs.open(report_path);
@@ -764,7 +764,7 @@ void from_json(const nlohmann::json& j, AnalysisConfig& config) {
 }
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path) {
-    TT_ASSERT(tt::filesystem::safe_exists(json_path));
+    TT_ASSERT(tt::filesystem::safe_exists(json_path).value_or(false));
     std::ifstream json_ifs(json_path);
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 

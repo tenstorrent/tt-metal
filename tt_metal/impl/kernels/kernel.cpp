@@ -272,7 +272,8 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
     // Note: this->get_full_kernel_name() already has a '/' at the end.
     const std::string build_success_marker_path =
         fmt::format("{}{}{}", output_path.value(), this->get_full_kernel_name(), SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
-    return tt::filesystem::safe_exists(build_success_marker_path);
+    auto result = tt::filesystem::safe_exists(build_success_marker_path);
+    return result.value_or(false);
 }
 
 std::vector<std::string> Kernel::file_paths(IDevice& device) const {

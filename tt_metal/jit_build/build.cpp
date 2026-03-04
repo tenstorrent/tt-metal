@@ -57,10 +57,6 @@ namespace tt::tt_metal {
 
 namespace {
 
-// ESTALE retry parameters for NFS resilience
-inline constexpr int kMaxFsRetries = 5;
-inline constexpr int kFsRetryDelayMs = 500;
-
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
@@ -92,7 +88,7 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
 std::string get_default_root_path() {
     const std::string emptyString;
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
-    if (!home_path.empty() && tt::filesystem::safe_exists(home_path)) {
+    if (!home_path.empty() && tt::filesystem::safe_exists(home_path).value_or(false)) {
         return home_path + "/.cache/tt-metal-cache/";
     }
     return "/tmp/tt-metal-cache/";
@@ -129,7 +125,7 @@ void JitBuildEnv::init(
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
         auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
-        if (tt::filesystem::safe_exists(gxx)) {
+        if (tt::filesystem::safe_exists(gxx).value_or(false)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";
             log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
@@ -451,11 +447,11 @@ static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
 bool JitBuildState::build_state_matches(const string& out_dir) const {
     std::string hash_path = out_dir + string(BUILD_STATE_HASH_FILE);
 
-    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
         std::ifstream file(hash_path);
         if (!file.is_open()) {
-            if (errno == ESTALE && attempt < kMaxFsRetries - 1) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
                 continue;
             }
             return false;
@@ -463,8 +459,8 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
         uint64_t stored_hash{};
         file >> stored_hash;
         if (file.fail()) {
-            if (errno == ESTALE && attempt < kMaxFsRetries - 1) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
                 continue;
             }
         }
@@ -570,7 +566,8 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
-    return env_.get_rtoptions().get_force_jit_compile() || !tt::filesystem::safe_exists(out_dir + obj) ||
+    return env_.get_rtoptions().get_force_jit_compile() ||
+           !tt::filesystem::safe_exists(out_dir + obj).value_or(false) ||
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
@@ -604,7 +601,8 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
 bool JitBuildState::need_link(const string& out_dir) const {
     std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !tt::filesystem::safe_exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !tt::filesystem::safe_exists(elf_path).value_or(false) ||
+           !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {

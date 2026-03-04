@@ -1024,7 +1024,7 @@ void dumpJsonNocTraces(
     const std::filesystem::path& output_dir) {
     // create output directory if it does not exist
     tt::filesystem::safe_create_directories(output_dir);
-    if (!tt::filesystem::safe_is_directory(output_dir)) {
+    if (!tt::filesystem::safe_is_directory(output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not write profiler noc traces to '{}' because the directory path could not be created!",
@@ -1075,14 +1075,14 @@ void dumpDeviceResultsToCSV(
     int device_core_frequency,
     uint32_t max_compute_cores,
     const std::filesystem::path& log_path) {
-    TT_ASSERT(tt::filesystem::safe_exists(log_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(log_path.parent_path()).value_or(false));
     TT_ASSERT(log_path.extension() == ".csv");
 
     // open CSV log file
     std::ofstream log_file_ofs;
 
     // append to existing CSV log file if it already exists
-    if (tt::filesystem::safe_exists(log_path)) {
+    if (tt::filesystem::safe_exists(log_path).value_or(false)) {
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
@@ -2303,7 +2303,7 @@ void DeviceProfiler::processResults(
 
 void DeviceProfiler::dumpRoutingInfo() const {
     tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir)) {
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not dump topology to '{}' because the directory path could not be created!",
@@ -2316,7 +2316,7 @@ void DeviceProfiler::dumpRoutingInfo() const {
 
 void DeviceProfiler::dumpClusterCoordinates() const {
     tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir)) {
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not dump cluster coordinates to '{}' because the directory path could not be created!",

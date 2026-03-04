@@ -258,7 +258,7 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
-    if (tt::filesystem::safe_is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+    if (tt::filesystem::safe_is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT)).value_or(false)) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
@@ -277,7 +277,7 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         // treat the current working directory as the repository root.
         std::filesystem::path current_working_directory = std::filesystem::current_path();
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
-        if (tt::filesystem::safe_is_directory(tt_metal_subdirectory)) {
+        if (tt::filesystem::safe_is_directory(tt_metal_subdirectory).value_or(false)) {
             this->root_dir = current_working_directory.string();
             log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
         }

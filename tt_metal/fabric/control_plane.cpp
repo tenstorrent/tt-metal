@@ -3168,7 +3168,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
     TT_ASSERT(
-        tt::filesystem::safe_exists(cabling_descriptor_path),
+        tt::filesystem::safe_exists(cabling_descriptor_path).value_or(false),
         "Cabling descriptor file not found: {}",
         cabling_descriptor_path);
 

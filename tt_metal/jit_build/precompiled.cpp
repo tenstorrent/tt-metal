@@ -12,7 +12,7 @@ namespace tt::tt_metal::precompiled {
 
 std::optional<std::string> find_precompiled_dir(const std::string& root, uint64_t hash) {
     auto path = fmt::format("{}pre-compiled/{}/", root, hash);
-    if (tt::filesystem::safe_is_directory(path)) {
+    if (tt::filesystem::safe_is_directory(path).value_or(false)) {
         // TODO: validate the dir contains all binaries we need
         return path;
     }
