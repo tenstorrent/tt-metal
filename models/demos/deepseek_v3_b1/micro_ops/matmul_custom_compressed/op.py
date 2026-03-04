@@ -123,8 +123,6 @@ class MatmulCustomCompressed:
             shard_assignment = ct.get_assignment_numpy_per_shard(core_coord)
             shard_k = shard_assignment.shape[0]
             shard_w = shard_assignment.shape[1]
-            unique, counts = np.unique(shard_assignment, return_counts=True)
-            fmt_summary = dict(zip(unique.tolist(), counts.tolist()))
             ctas = pack_formats_as_ctas(shard_assignment, shard_k, shard_w)
             core_values.append((core_coord, ctas))
         per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
