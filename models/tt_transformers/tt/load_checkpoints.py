@@ -153,10 +153,17 @@ def standardize_hf_keys_multimodal(state_dict):
     return output
 
 
-def convert_hf_to_meta(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+def convert_hf_to_meta(
+    state_dict,
+    head_dim,
+    n_heads=None,
+    n_kv_heads=None,
+    rotary_dim=None,
+    model_type=None,
+):
     state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
-    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
-    state_dict = map_hf_to_meta_keys(state_dict)
+    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim, rotary_dim=rotary_dim)
+    state_dict = map_hf_to_meta_keys(state_dict, model_type=model_type)
     return state_dict
 
 
@@ -355,9 +362,12 @@ def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
     return converted_weights
 
 
-def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
+def convert_hf_qkv_to_meta_format(loaded_weights, head_dim, rotary_dim=None):
     """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
     converted_weights = {}
+    rotary_dim = head_dim if rotary_dim is None else rotary_dim
+    if rotary_dim <= 0 or rotary_dim > head_dim or rotary_dim % 2 != 0:
+        raise ValueError(f"Invalid rotary_dim={rotary_dim} for head_dim={head_dim}")
     for key, tensor in loaded_weights.items():
         if "vision_tower" in key:
             # Skip conversion for vision tower weights (Mistral vision support)
@@ -365,11 +375,11 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
         elif "q_proj.weight" in key or "k_proj.weight" in key:
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+            converted_weights[key] = reverse_permute_partial_rotary(tensor, n_heads, head_dim, rotary_dim)
         elif "q_proj.bias" in key or "k_proj.bias" in key:
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+            converted_weights[key] = reverse_permute_partial_rotary_bias(tensor, n_heads, head_dim, rotary_dim)
         elif "q_norm.weight" in key or "k_norm.weight" in key:
             converted_weights[key] = reverse_permute_1d(tensor)
         else:
@@ -505,15 +515,23 @@ def rename_layers_to_cross_attn(state_dict, config):
     return new_state_dict
 
 
-def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, config=None):
+def convert_meta_to_hf(
+    state_dict,
+    head_dim,
+    fuse_qkv=False,
+    fuse_mlp=False,
+    config=None,
+    rotary_dim=None,
+    model_type=None,
+):
     state_dict = reindex_layers(state_dict, config)
-    state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim, rotary_dim=rotary_dim)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
 
-    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = map_meta_to_hf_keys(state_dict, model_type=model_type)
     state_dict = rename_layers_to_cross_attn(state_dict, config)
     return state_dict
 
@@ -691,7 +709,7 @@ def flatten_conv_linear(state_dict):
     return state_dict
 
 
-def map_hf_to_meta_keys(loaded_weights):
+def map_hf_to_meta_keys(loaded_weights, model_type=None):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.
     You can use this to support other models by adding more mappings.
@@ -718,10 +736,22 @@ def map_hf_to_meta_keys(loaded_weights):
         ("k_norm", "k_norm"),
         ("patch_conv.weight", "patch_conv._linear.weight"),  # Minimal addition for Mistral vision
     ]
+
+    # Phi-1 uses fc1/fc2 MLP and a final_layernorm naming convention.
+    if model_type == "phi":
+        replacements.extend(
+            [
+                ("fc1", "w1"),
+                ("fc2", "w2"),
+                ("dense", "wo"),
+                ("final_layernorm", "norm"),
+            ]
+        )
+
     return replace_keys(loaded_weights, replacements)
 
 
-def map_meta_to_hf_keys(state_dict):
+def map_meta_to_hf_keys(state_dict, model_type=None):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.
     You can use this to support other models by adding more mappings.
@@ -739,6 +769,8 @@ def map_meta_to_hf_keys(state_dict):
             dim=0,
         )
 
+    is_phi = model_type == "phi"
+
     replacements = [
         ("layers", "model.layers"),
         ("attention_norm", "input_layernorm"),
@@ -747,33 +779,38 @@ def map_meta_to_hf_keys(state_dict):
         ("wq", "q_proj"),
         ("wk", "k_proj"),
         ("wv", "v_proj"),
-        ("wo", "o_proj"),
+        ("wo", "dense" if is_phi else "o_proj"),
         ("wqkv", "qkv_proj"),
         ("feed_forward", "mlp"),
-        ("w1", "gate_proj"),
-        ("w2", "down_proj"),
-        ("w3", "up_proj"),
-        ("w1_w3", "gate_up_proj"),
+        ("w1", "fc1" if is_phi else "gate_proj"),
+        ("w2", "fc2" if is_phi else "down_proj"),
         ("emb.weight", "weight"),
         ("tok_embeddings", "model.embed_tokens"),
-        ("norm", "model.norm"),
+        ("norm", "model.final_layernorm" if is_phi else "model.norm"),
         ("output", "lm_head"),
     ]
+
+    if not is_phi:
+        replacements.extend([("w3", "up_proj"), ("w1_w3", "gate_up_proj")])
+
     return replace_keys(state_dict, replacements)
 
 
-def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
+def convert_meta_qkv_to_hf_format(loaded_weights, head_dim, rotary_dim=None):
     """Convert Meta QKV weights back to HuggingFace format."""
     converted_weights = {}
+    rotary_dim = head_dim if rotary_dim is None else rotary_dim
+    if rotary_dim <= 0 or rotary_dim > head_dim or rotary_dim % 2 != 0:
+        raise ValueError(f"Invalid rotary_dim={rotary_dim} for head_dim={head_dim}")
     for key, tensor in loaded_weights.items():
         if "wq.weight" in key or "wk.weight" in key:
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+            converted_weights[key] = permute_partial_rotary(tensor, n_heads, head_dim, rotary_dim)
         elif "wq.bias" in key or "wk.bias" in key:
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = permute(tensor.unsqueeze(-1), n_heads, tensor.shape[0], 1).squeeze(-1)
+            converted_weights[key] = permute_partial_rotary_bias(tensor, n_heads, head_dim, rotary_dim)
         elif "q_norm.weight" in key or "k_norm.weight" in key:
             converted_weights[key] = permute_1d(tensor)
         else:
@@ -788,6 +825,54 @@ def reverse_permute(tensor, n_heads, dim1, dim2):
 
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
+
+def reverse_permute_partial_rotary(tensor, n_heads, head_dim, rotary_dim):
+    """Apply reverse_permute only on the rotary slice of each attention head."""
+    if rotary_dim == head_dim:
+        return reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+
+    reshaped = tensor.reshape(n_heads, head_dim, tensor.shape[1]).clone()
+    rotary = reshaped[:, :rotary_dim, :].reshape(n_heads * rotary_dim, tensor.shape[1])
+    rotary = reverse_permute(rotary, n_heads, rotary.shape[0], rotary.shape[1])
+    reshaped[:, :rotary_dim, :] = rotary.reshape(n_heads, rotary_dim, tensor.shape[1])
+    return reshaped.reshape(tensor.shape[0], tensor.shape[1])
+
+
+def reverse_permute_partial_rotary_bias(tensor, n_heads, head_dim, rotary_dim):
+    """Bias variant of reverse_permute_partial_rotary."""
+    if rotary_dim == head_dim:
+        return reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+
+    reshaped = tensor.reshape(n_heads, head_dim).clone()
+    rotary = reshaped[:, :rotary_dim].reshape(n_heads * rotary_dim)
+    rotary = reverse_permute(rotary.unsqueeze(-1), n_heads, rotary.shape[0], 1).squeeze(-1)
+    reshaped[:, :rotary_dim] = rotary.reshape(n_heads, rotary_dim)
+    return reshaped.reshape(tensor.shape[0])
+
+
+def permute_partial_rotary(tensor, n_heads, head_dim, rotary_dim):
+    """Apply permute only on the rotary slice of each attention head."""
+    if rotary_dim == head_dim:
+        return permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+
+    reshaped = tensor.reshape(n_heads, head_dim, tensor.shape[1]).clone()
+    rotary = reshaped[:, :rotary_dim, :].reshape(n_heads * rotary_dim, tensor.shape[1])
+    rotary = permute(rotary, n_heads, rotary.shape[0], rotary.shape[1])
+    reshaped[:, :rotary_dim, :] = rotary.reshape(n_heads, rotary_dim, tensor.shape[1])
+    return reshaped.reshape(tensor.shape[0], tensor.shape[1])
+
+
+def permute_partial_rotary_bias(tensor, n_heads, head_dim, rotary_dim):
+    """Bias variant of permute_partial_rotary."""
+    if rotary_dim == head_dim:
+        return permute(tensor.unsqueeze(-1), n_heads, tensor.shape[0], 1).squeeze(-1)
+
+    reshaped = tensor.reshape(n_heads, head_dim).clone()
+    rotary = reshaped[:, :rotary_dim].reshape(n_heads * rotary_dim)
+    rotary = permute(rotary.unsqueeze(-1), n_heads, rotary.shape[0], 1).squeeze(-1)
+    reshaped[:, :rotary_dim] = rotary.reshape(n_heads, rotary_dim)
+    return reshaped.reshape(tensor.shape[0])
 
 
 def reverse_permute_1d(tensor):

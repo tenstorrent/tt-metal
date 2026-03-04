@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
+import inspect
 
 import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
@@ -64,16 +65,19 @@ class Transformer(LightweightModule):
 
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
 
-        self.rope_setup = ActualRopeSetupClass(
-            device=mesh_device,
-            batch_size=args.max_batch_size,
-            head_dim=args.head_dim,
-            max_seq_len=args.max_seq_len,
-            rope_theta=args.rope_theta,
-            rope_scaling=args.rope_scaling,
-            use_qk_fused=args.use_qk_fused,
-            prefetcher=prefetcher,
-        )
+        rope_setup_kwargs = {
+            "device": mesh_device,
+            "batch_size": args.max_batch_size,
+            "head_dim": args.head_dim,
+            "max_seq_len": args.max_seq_len,
+            "rope_theta": args.rope_theta,
+            "rope_scaling": args.rope_scaling,
+            "use_qk_fused": args.use_qk_fused,
+            "prefetcher": prefetcher,
+        }
+        if "rotary_dim" in inspect.signature(ActualRopeSetupClass.__init__).parameters:
+            rope_setup_kwargs["rotary_dim"] = args.rotary_dim
+        self.rope_setup = ActualRopeSetupClass(**rope_setup_kwargs)
 
         if args.rope_theta_local:
             self.rope_local_setup = RotarySetup(
@@ -84,6 +88,7 @@ class Transformer(LightweightModule):
                 args.rope_theta_local,
                 use_qk_fused=args.use_qk_fused,
                 prefetcher=None,
+                rotary_dim=args.rotary_dim,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -105,25 +110,29 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+        norm_cls = LayerNorm if args.is_phi_model else RMSNorm
+        norm_kwargs = {
+            "device": mesh_device,
+            "dim": args.dim,
+            "eps": args.norm_eps,
+            "state_dict": state_dict,
+            "state_dict_prefix": args.get_state_dict_prefix("", None),
+            "weight_cache_path": None if args.dummy_weights else weight_cache_path,
+            "weight_dtype": ttnn.bfloat16,
+            "weight_key": "norm",
+            "is_distributed": self.args.is_distributed_norm,
+        }
+        if not args.is_phi_model:
+            norm_kwargs["add_unit_offset"] = self.args.rms_norm_add_unit_offset
+            norm_kwargs["ccl_topology"] = self.args.ccl_topology()
+            norm_kwargs["tt_ccl"] = self.tt_ccl
+
         self.norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", None),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="norm",
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
-            ),
+            norm_cls(**norm_kwargs),
             args,
             tt_ccl=self.tt_ccl,
             prefetcher=prefetcher,
-            TG=args.is_galaxy,
+            TG=args.is_galaxy and not args.is_phi_model,
         )
 
         self.lm_head = LMHead(
