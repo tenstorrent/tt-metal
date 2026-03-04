@@ -412,7 +412,7 @@ tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczews
 # ops
 tt-train/sources/ttml/ops/** @mdragulaTT @vmelnykovTT @dyurshevichTT @tenstorrent/codeowner-bypass
 # optimizers
-tt-train/sources/ttml/optimizers/** @zbaczewskiTT @tenstorrent/codeowner-bypass
+tt-train/sources/ttml/optimizers/** @tenstorrent/tt-train-optimizers @tenstorrent/codeowner-bypass
 # tests
 tt-train/tests/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @abustamanteTT @tenstorrent/codeowner-bypass
 
