@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
+    dprint/test_dprint_mesh_coords.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
     dprint/test_mute_device.cpp
