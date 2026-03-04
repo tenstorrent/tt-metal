@@ -73,9 +73,10 @@ The rest of this document provides implementation details for the various compon
 - [Overview](#overview)
 - [Public API](#public-api)
   - [`Sequential`](#sequential) | [`Parallel`](#parallel)
-- [Glossary](#glossary)
-  - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment) | [Barrier Scope vs. Core Group vs. Arrive/Release Sets](#barrier-scope-vs-core-group-vs-arriverelease-sets)
 - [Opt-In Requirements](#opt-in-requirements)
+- [High-Level Components](#high-level-components)
+- [Glossary](#glossary)
+  - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment) | [Core Group](#core-group) | [Barrier Scope](#barrier-scope) | [Arrive Set / Release Set](#arrive-set--release-set) | [How They Interact](#how-core-groups-barrier-scopes-and-arriverelease-sets-interact)
 - [Representing Fused Op Structure](#representing-fused-op-structure)
   - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Narrow→Wide Topology](#narrowwide-topology-and-no-op-phases) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
 - [Synchronization Protocol](#synchronization-protocol)
@@ -161,76 +162,6 @@ Items after a `Parallel` in a `Sequential` are not allowed — the tree
 diverges and cannot rejoin. Place trailing items inside each branch instead.
 
 
-## Glossary
-
-### Node (`OpNode`)
-
-An `OpNode` holds a single `OpDescriptor` and an optional list of children.
-The node's core range is derived from its op's `ProgramDescriptor` kernels. Every node in the tree -- root, internal, and leaf -- has exactly one op. `OpNode` encodes dependencies between ops. Parent nodes run to completion before child nodes. Sibling nodes (nodes at the same level) run in parallel on disjoint cores. Each root-to-leaf path through the tree produces one set of fused kernels (reader, writer, compute).
-
-### Segment
-
-A segment is a contiguous portion of a root-to-leaf path where the barrier
-scope (set of participating cores) remains constant. Consecutive nodes with
-the same core range are grouped into one segment. Each segment has its own
-`arrive`/`release` `GlobalSemaphore` pair for cross-core synchronization.
-
-For example, in a tree where the root and one intermediate node share the same
-core range (0-7), but the leaf uses cores 0-3, the path has two segments:
-segment 0 covers cores 0-7 (root + intermediate phases), segment 1 covers
-cores 0-3 (leaf phase).
-
-### Barrier Scope vs. Core Group vs. Arrive/Release Sets
-
-These three concepts are orthogonal but interact at barrier transitions.
-Understanding the distinction prevents confusion about what determines
-synchronization behavior.
-
-**Core Group** — a code generation concept.  Cores with identical phase
-sequences (same ops in the same order, including `_NOOP_OP` padding) are
-compiled into the same kernel binary.  A group answers: *"what code runs on
-these cores?"*  Groups exist because fused kernels are compiled once per
-unique phase sequence.
-
-**Barrier Scope** — a topology concept.  At each phase transition, the barrier
-scope is the set of *all* cores that participate in the synchronization: every
-core that either signals completion or waits for the signal.  It is computed
-from the tree structure as `node_coords ∪ desc_coords` — the current node's
-cores plus all descendant cores.  A single barrier scope often spans multiple
-groups.  The scope answers: *"who syncs here?"*
-
-**Arrive Set / Release Set** — per-transition subsets of the barrier scope.
-The *arrive set* is the cores that completed real work and signal "done"
-(`SyncMode::Full`).  The *release set* is all cores in the barrier scope that
-wait for the signal — including noop cores that had no real work
-(`SyncMode::WaitOnly`).  The arrive set is always a subset of the release set.
-These answer: *"who signals?"* and *"who waits?"*
-
-**How they interact:** At a given barrier transition, multiple groups may share
-the same barrier scope (same GlobalSemaphore).  Within each group, every core
-either arrives or waits, determined by whether its just-completed phase was
-real work or `_NOOP_OP`.  The arrive threshold equals `|arrive set|`, so only
-cores that did real work count toward the release trigger.
-
-**Example:**
-
-```
-Root [0-7] → Left [0-3] → LL [0-1] / LR [2-3]
-           → Right [4-7]
-```
-
-At the root→branches transition:
-
-| Concept | Value |
-|---------|-------|
-| Barrier scope | all 8 cores (root ∪ descendants) |
-| Arrive set | 8 cores (all did real work in root) |
-| Release set | 8 cores (all need to proceed) |
-| Core groups | 3 groups: {0-1}, {2-3}, {4-7} (different phase sequences) |
-
-All three groups share the same GlobalSemaphore at this transition, but each
-group's binary has its own dispatch table entry calling `sync()` on it.
-
 ## Opt-In Requirements
 
 An op must satisfy the following requirements before it can participate in
@@ -282,6 +213,111 @@ mis-compilation or a device hang.
    boxes.  The barrier coordinator unicasts the release signal to each
    core individually, so gaps in the grid are handled naturally.
 
+
+## High-Level Components
+
+Fusing a system of interconnected ops that run on arbitrary core ranges into a single program requires solving several technical challenges. This section introduces them at a high level; the sections that follow describe each in detail.
+
+**Topology analysis.**  The user-facing `Sequential` / `Parallel` tree is
+walked to determine which ops run on which cores and in what order.  Cores
+that execute the same sequence of ops are grouped together — each group
+compiles to one kernel binary.  Cores that share an op boundary but belong
+to different groups must still synchronize.
+
+**CB allocation and remapping.**  Different ops may declare overlapping
+CB hardware slot numbers.  A pool allocator assigns a globally unique slot to
+each CB across all ops, grouping compatible CBs (same data format, page size,
+buffer backing) onto the same slot where possible.
+
+**Barrier insertion.**  At every op boundary, all participating cores must
+synchronize before the next op begins.  The barrier protocol uses
+per-core L1 semaphores for local (same-core, cross-RISC) synchronization and
+GlobalSemaphores for cross-core synchronization.  A designated coordinator
+RISC (NCRISC) orchestrates the handshake.
+
+**Inter-op state reset.**  Circular buffer FIFO pointers and op-specific
+semaphores accumulate state during an op that would corrupt the next op
+if left in place.  Between ops, the coordinator equalizes shared stream
+registers and every RISC resets its local CB pointers back to the FIFO start.
+Sharded CBs whose backing buffer changes between ops are rebound to the
+new address.
+
+**Source generation.**  Each op's original kernel source is wrapped in a
+C++ namespace and pasted into a single compilation unit per RISC per group.
+Preprocessor redirects (`#define`) remap compile-time args, runtime args, and
+CB indices so that each op reads from its own slice of the concatenated
+argument arrays.
+
+## Glossary
+
+### Node (`OpNode`)
+
+An `OpNode` holds a single `OpDescriptor` and an optional list of children.
+The node's core range is derived from its op's `ProgramDescriptor` kernels. Every node in the tree -- root, internal, and leaf -- has exactly one op. `OpNode` encodes dependencies between ops. Parent nodes run to completion before child nodes. Sibling nodes (nodes at the same level) run in parallel on disjoint cores. Each root-to-leaf path through the tree produces one set of fused kernels (reader, writer, compute).
+
+### Segment
+
+A segment is a contiguous portion of a root-to-leaf path where the barrier
+scope (set of participating cores) remains constant. Consecutive nodes with
+the same core range are grouped into one segment. Each segment has its own
+`arrive`/`release` `GlobalSemaphore` pair for cross-core synchronization.
+
+For example, in a tree where the root and one intermediate node share the same
+core range (0-7), but the leaf uses cores 0-3, the path has two segments:
+segment 0 covers cores 0-7 (root + intermediate phases), segment 1 covers
+cores 0-3 (leaf phase).
+
+### Core Group
+
+A code generation concept.  Cores with identical phase
+sequences (same ops in the same order) are
+compiled into the same kernel binary.  A group answers: *"what code runs on
+these cores?"*  Groups exist because fused kernels are compiled once per
+unique phase sequence.
+
+### Barrier Scope
+
+A synchronization concept.  At each phase transition, the barrier
+scope is the set of *all* cores that participate in the synchronization: every
+core that either signals completion or waits for the signal.  A single
+barrier scope can span multiple groups.  The scope answers: *"who syncs
+here?"*
+
+### Arrive Set / Release Set
+
+Per-transition subsets of the barrier scope.
+The *arrive set* is the cores that completed work and signal "done".  The *release set* is all cores in the barrier scope that
+wait for the signal. The arrive set is always a subset of the release set.
+These answer: *"who signals?"* and *"who waits?"*
+
+### How Core Groups, Barrier Scopes, and Arrive/Release Sets Interact
+
+These three concepts are orthogonal but interact at barrier transitions.
+At a given barrier transition, multiple groups may share
+the same barrier scope (same GlobalSemaphore).  Cores that completed real
+work both arrive (signal done) and wait for release.  Cores that had no
+work in the just-completed phase only wait.  The arrive threshold equals
+`|arrive set|`, so only cores that did real work count toward the release
+trigger.
+
+**Example:**
+
+```
+Root [0-7] → Left [0-3] → LL [0-1] / LR [2-3]
+           → Right [4-7]
+```
+
+At the root→branches transition:
+
+| Concept | Value |
+|---------|-------|
+| Barrier scope | all 8 cores (root ∪ descendants) |
+| Arrive set | 8 cores (all did real work in root) |
+| Release set | 8 cores (all need to proceed) |
+| Core groups | 3 groups: {0-1}, {2-3}, {4-7} (different phase sequences) |
+
+All three groups share the same GlobalSemaphore at this transition, but each
+group's binary has its own dispatch table entry calling `sync()` on it.
 
 ## Representing Fused Op Structure
 
@@ -448,9 +484,9 @@ is recorded instead:
 ```python
 def _walk(node):
     desc_coords = self._all_descendant_coords(node)       # ALL descendant cores
-    barrier_scope = desc_coords | node_coords              # everyone who syncs
-    release_scope = _coords_to_core_range_set(barrier_scope)
     node_coords = _core_range_set_to_coords(...)           # this node's kernel cores
+    barrier_coords = desc_coords | node_coords             # everyone who syncs
+    release_scope = _coords_to_core_range_set(barrier_coords)
     arrive_scope = _coords_to_core_range_set(node_coords)  # cores that did real work
 
     for coord in node_coords:
@@ -458,6 +494,12 @@ def _walk(node):
 
     for coord in desc_coords - node_coords:
         per_core[coord].append((_NOOP_OP, release_scope, arrive_scope))     # no-op phase
+
+    # Early-exit cores: trailing barrier (no fake exit phase)
+    exit_coords = node_coords - desc_coords
+    if exit_coords and desc_coords:
+        for coord in exit_coords:
+            trailing_barrier_coords[coord] = (release_scope, arrive_scope)
 ```
 
 **Why all descendants, not just leaves?** The barrier scope after a node must
@@ -468,19 +510,18 @@ actually continue past the matmul (8 slice cores + 2 noop-padded rms-only
 cores that aren't in slice's range). The barrier must cover all 10 so the
 coordinator waits for all of them before releasing.
 
-**Early-exit cores.** Cores in a node's range but not in any descendant's
-range run one real phase, then exit.  These cores are still part of the
-barrier scope (`node_coords ∪ desc_coords`) so they can arrive to signal
-"phase done" before exiting.  If the node has descendants on other cores,
-the early-exit cores get a `_NOOP_OP` exit phase so they have a barrier
-transition to arrive at — they arrive (`SyncMode::Full`), receive the
-release, run the noop (which compiles to nothing), and return.
+**Early-exit cores.** Cores that participate in some phases but not the final
+phase exit before other cores finish.  These cores are still part of the
+barrier scope so they can arrive to signal "phase done" before exiting.  Instead of padding with a fake phase, these
+cores get a **trailing barrier**: `barrier::sync()` is emitted *after*
+the last `phase_N::run()` call (not just between phases).  The core
+arrives (`SyncMode::Full`), receives the release, and returns — no dummy
+phase needed.
 
-**Core ranges come from factories, not users.** `_get_node_core_range()`
-reads `kernel.core_ranges` from the `ProgramDescriptor` — these are the
-**actual** ranges the op factory chose, not the user's `core_range_set`.
-Factories can (and do) pick fewer cores than requested. The barrier scope
-is computed from these factory-chosen ranges.
+In `_compute_core_groups()`, the trailing barrier is tracked separately
+from the inter-phase barriers.  The group's `barrier_scopes` list has
+`len(phases)` entries (one more than normal) and `has_trailing_barrier`
+is `True`.
 
 **Example**: Parent on cores 0-1, child on cores 0-3:
 
@@ -498,28 +539,32 @@ and 1 barrier transition, so barrier counts align.
 **Example — disjoint**: Parent on cores 0-1, children on cores 2-3 and 4-5
 (no overlap):
 
-| Core | Phase 0 | Barrier | Phase 1 |
-|------|---------|---------|---------|
-| 0 | Parent (real) | arrive (`Full`) | `_NOOP_OP` (exit) |
-| 1 | Parent (real) | arrive (`Full`) | `_NOOP_OP` (exit) |
+| Core | Phase 0 | Trailing barrier | Phase 1 |
+|------|---------|------------------|---------|
+| 0 | Parent (real) | arrive (`Full`) + exit | — |
+| 1 | Parent (real) | arrive (`Full`) + exit | — |
 | 2 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child A (real) |
 | 3 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child A (real) |
 | 4 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child B (real) |
 | 5 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child B (real) |
 
 Cores 0-1 arrive (threshold = 2), core 0 unicasts release to all 6 cores.
-Cores 0-1 run the exit noop and return.  Cores 2-5 proceed to their real
-child ops.  The barrier scope is all 6 cores (`node_coords ∪ desc_coords`).
+Cores 0-1 exit after the trailing barrier — no fake phase needed.  Cores
+2-5 proceed to their real child ops.  The barrier scope is all 6 cores
+(`node_coords ∪ desc_coords`).  Note: cores 0-1 have 1 phase with
+`has_trailing_barrier=True`; cores 2-5 have 2 phases.
 
 **Example — partial disjoint**: Parent on cores 0-1, child on cores 1-3.
 Core 0 is an early-exit core (in parent but not in any descendant):
 
 | Core | Phase 0 | Barrier | Phase 1 |
 |------|---------|---------|---------|
-| 0 | Parent (real) | arrive (`Full`) | `_NOOP_OP` (exit) |
+| 0 | Parent (real) | arrive (`Full`) + exit | — |
 | 1 | Parent (real) | arrive (`Full`) | Child (real) |
 | 2 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child (real) |
 | 3 | `_NOOP_OP` (wait) | wait (`WaitOnly`) | Child (real) |
+
+Core 0 has 1 phase with a trailing barrier.  Cores 1-3 have 2 phases.
 
 **How no-op phases propagate through the stack:**
 
@@ -571,7 +616,7 @@ kernel binary.
 **Kernel variant keying.**  Some ops produce multiple kernels for the same
 RISC type on disjoint core subsets — e.g., a block-sharded LayerNorm has a
 multicast *sender* on row 0 and a *receiver* on row 1, both on riscv_0.
-`_kernel_variant_key(node, coord)` returns the tuple of kernel indices whose
+`_kernel_variant_key(op, coord)` returns the tuple of kernel indices whose
 core ranges contain `coord`, distinguishing sender cores from receiver cores.
 The grouping key includes both the op identity *and* its variant key, so cores
 seeing different kernel subsets never land in the same group.
@@ -706,7 +751,7 @@ have two transitions with barrier scopes derived from `_all_descendant_coords()`
 | B | 1 | GeLU_B | right leaves | 8 |
 
 Three distinct scopes → three barrier segments (16-core, 8-left, 8-right).
-Each group's kernel binary has two `segment_N` namespaces — one per distinct
+Each group's kernel binary has two `seg_N` namespaces — one per distinct
 scope in its transition sequence.
 
 ### MultiBarrierSpec
@@ -796,17 +841,22 @@ different L1 addresses and never synchronize — group A's cores would wait on
 one semaphore while group B's cores signal a different one.
 
 `OpGraphBuilder._build_internal()` solves this with a `segment_cache` keyed
-on `frozenset(core_ranges)`. Before building any group, it pre-scans all
-barrier scopes across all groups and allocates one `BarrierConfig` per unique
-scope:
+on `(release_scope_key, arrive_scope_key)` — a tuple of two frozensets.
+Different arrive scopes need different arrive thresholds, so the cache key
+includes both. Before building any group, it pre-scans all barrier scopes
+across all groups and allocates one `BarrierConfig` per unique scope pair:
 
 ```python
-segment_cache: Dict[frozenset, BarrierConfig] = {}
+segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig] = {}
 for group in groups:
-    for scope in group.barrier_scopes:
-        key = _core_ranges_key(scope)       # frozenset of (start_x, start_y, end_x, end_y)
-        if key not in segment_cache:
-            segment_cache[key] = _create_barrier_segment_config(device, scope)
+    for release_scope, arrive_scope in zip(group.barrier_scopes, group.barrier_arrive_scopes):
+        release_key = _core_ranges_key(release_scope)
+        arrive_key = _core_ranges_key(arrive_scope) if arrive_scope is not None else frozenset()
+        cache_key = (release_key, arrive_key)
+        if cache_key not in segment_cache:
+            segment_cache[cache_key] = _create_barrier_segment_config(
+                device, release_scope, arrive_ranges=arrive_scope
+            )
 ```
 
 `_create_barrier_segment_config()` (`builder.py`) allocates a pair of
@@ -817,9 +867,9 @@ For the example tree, the cache ends up with three entries:
 
 | Cache Key | Scope | Semaphores |
 |-----------|-------|------------|
-| `frozenset(16 cores)` | All cores | arrive=0x1000, release=0x1004 |
-| `frozenset(8-left)` | Left branch | arrive=0x2000, release=0x2004 |
-| `frozenset(8-right)` | Right branch | arrive=0x3000, release=0x3004 |
+| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1000, release=0x1004 |
+| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x2000, release=0x2004 |
+| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x3000, release=0x3004 |
 
 When `_build_group_barriers()` runs for each group, it looks up the cache
 rather than allocating new semaphores. Both groups' seg_0 resolves to the
@@ -953,8 +1003,8 @@ phase (N atomic increments serialized at core 0) and spin-wait polling.
 Measured barrier latency is ~1.5 us regardless of release method.
 
 ```c++
-// barrier::segment_N — NCRISC side (coordinator)
-namespace segment_N {
+// barrier::seg_N — NCRISC side (coordinator)
+namespace seg_N {
     uint32_t call_count;
     volatile tt_l1_ptr uint32_t* arrive;    // L1 on core 0, atomically incremented
     volatile tt_l1_ptr uint32_t* release;   // L1, unicast to each core
@@ -982,7 +1032,7 @@ namespace segment_N {
 ```
 
 Writer and compute RISCs see only the `release` semaphore — they spin on it
-in `segment_N::sync()` without participating in the arrive/unicast protocol.
+in `seg_N::sync()` without participating in the arrive/unicast protocol.
 
 
 ## CB Pool Allocator
@@ -1995,7 +2045,7 @@ template <typename T>
 FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 5);
 }
-FORCE_INLINE uint32_t phase_1_get_arg_addr(int arg_idx) {
+static FORCE_INLINE uintptr_t phase_1_get_arg_addr(int arg_idx) {
     return get_arg_addr(arg_idx + 5);
 }
 ```
@@ -2079,21 +2129,21 @@ template <typename T>
 FORCE_INLINE T phase_0_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 0);
 }
-FORCE_INLINE uint32_t phase_0_get_arg_addr(int arg_idx) {
+static FORCE_INLINE uintptr_t phase_0_get_arg_addr(int arg_idx) {
     return get_arg_addr(arg_idx + 0);
 }
 template <typename T>
 FORCE_INLINE T phase_1_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 5);
 }
-FORCE_INLINE uint32_t phase_1_get_arg_addr(int arg_idx) {
+static FORCE_INLINE uintptr_t phase_1_get_arg_addr(int arg_idx) {
     return get_arg_addr(arg_idx + 5);
 }
 template <typename T>
 FORCE_INLINE T phase_2_get_arg_val(int arg_idx) {
     return get_arg_val<T>(arg_idx + 11);
 }
-FORCE_INLINE uint32_t phase_2_get_arg_addr(int arg_idx) {
+static FORCE_INLINE uintptr_t phase_2_get_arg_addr(int arg_idx) {
     return get_arg_addr(arg_idx + 11);
 }
 
@@ -2166,6 +2216,7 @@ void kernel_main() {
 
     // Phase 0: LayerNorm
     {
+#line 300 "fused_zones"
         DeviceZoneScopedN("LayerNorm");
         phase_0::run();
     }
@@ -2173,6 +2224,7 @@ void kernel_main() {
 
     // Phase 1: Slice
     {
+#line 301 "fused_zones"
         DeviceZoneScopedN("Slice");
         phase_1::run();
     }
@@ -2180,6 +2232,7 @@ void kernel_main() {
 
     // Phase 2: Matmul
     {
+#line 302 "fused_zones"
         DeviceZoneScopedN("Matmul");
         phase_2::run();
     }
@@ -2261,7 +2314,7 @@ namespace are:
 
 ### Code Generation Pipeline Summary
 
-For each fused kernel binary (one per root-to-leaf path), `_generate_fused_source`
+For each fused kernel binary (one per core group), `_generate_fused_source`
 runs independently for each RISC type:
 
 ```
@@ -2523,6 +2576,5 @@ development or when switching between different device configurations.
 | `models/experimental/ops/descriptors/fusion/codegen/args.py` | RT/CT/named arg merging + define handling + fp32 validation |
 | `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor` namedtuple |
-| `models/experimental/ops/descriptors/fusion/fusion.py` | `Sequential`, `Parallel`, `FusedOp` high-level API |
-| `tests/ttnn/unit_tests/operations/fused/test_sequential.py` | Device tests (require hardware) |
-| `tests/ttnn/unit_tests/operations/fused/test_sequential_standalone.py` | Standalone tests (mock ttnn, no hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py` | Device tests (require hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests (no hardware) |
