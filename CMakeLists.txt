@@ -259,6 +259,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
+tt_disable_ccache_for_pch(metal_common_pch)
 
 ############################################################################################################################
 # Build subdirectories
