@@ -415,14 +415,27 @@ target_precompile_headers(
         "metal/ttnn_all_includes.hpp"
 )
 
+# Mirror ttml's link libraries so the PCH and consuming TUs see identical
+# include paths.  Mismatched -I / -isystem ordering causes ODR violations
+# (e.g. tt-logger fetched locally vs system metalium copy).
 target_link_libraries(
     ttml_pch
     PRIVATE
         TT::Metalium
         TTNN::TTNN
+        Python3::Python
         fmt::fmt-header-only
         nlohmann_json::nlohmann_json
         enchantum::enchantum
+        yaml-cpp::yaml-cpp
+        xtensor
+        xtensor-blas
+        xtl
+        Boost::core
+        Boost::container
+        tt-logger
+        simde::simde
+        FlatBuffers::FlatBuffers
 )
 
 target_include_directories(ttml_pch PRIVATE ${PROJECT_SOURCE_DIR})
