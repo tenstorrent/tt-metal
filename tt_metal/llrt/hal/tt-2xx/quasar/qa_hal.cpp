@@ -460,7 +460,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->has_stream_registers_ = false;
-    this->noc_is_torus_ = false;
+    this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;

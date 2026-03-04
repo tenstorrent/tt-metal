@@ -48,8 +48,10 @@ bool RunDeviceMcastWrapAroundTest(
 
     // Test data
     constexpr uint32_t data_size_bytes = 64;  // Small test payload
-    constexpr uint32_t sender_l1_addr = 400 * 1024;
-    constexpr uint32_t receiver_l1_addr = 500 * 1024;
+    const uint32_t sender_l1_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                                        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                    400 * 1024;
+    const uint32_t receiver_l1_addr = sender_l1_addr + data_size_bytes;
 
     std::vector<uint32_t> test_data(data_size_bytes / sizeof(uint32_t));
     for (size_t i = 0; i < test_data.size(); i++) {
@@ -74,14 +76,8 @@ bool RunDeviceMcastWrapAroundTest(
                 continue;
             }
 
-            // Try to convert to NOC coordinates - if it fails, this isn't a valid worker core
-            CoreCoord noc_core;
-            try {
-                noc_core = device->worker_core_from_logical_core(logical_core);
-            } catch (...) {
-                // Not a valid worker core (e.g., dispatch core, harvested core)
-                continue;
-            }
+            // Convert to NOC coordinates
+            CoreCoord noc_core = device->worker_core_from_logical_core(logical_core);
 
             // Check if this core is in the multicast rectangle (with wrap-around)
             bool in_x_range, in_y_range;
@@ -311,10 +307,10 @@ TEST_F(MeshWatcherFixture, DeviceMcastMixedWrap_XWrapYNormal_Noc0) {
 
     // Try to mirror S4 pattern but in X dimension
     // S4: Y-wrap from y=11 to y=0, spanning x=1 to x=4 (4 columns)
-    // This: X-wrap from x=11 to x=0, spanning y=1 to y=4 (4 rows)
+    // This: X-wrap from right to left, spanning multiple rows
     CoreCoord sender(5, 5);
-    CoreCoord mcast_start(11, 1);  // Right side, starting at row 1
-    CoreCoord mcast_end(0, 4);     // Left side, ending at row 4 (X wraps, Y spans 4 rows)
+    CoreCoord mcast_start(grid.x - 2, 1);  // Right side, starting at row 1
+    CoreCoord mcast_end(0, 4);             // Left side, ending at row 4 (X wraps, Y spans 4 rows)
 
     bool pass = RunDeviceMcastWrapAroundTest(
         device,
