@@ -264,6 +264,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDISABLE_SFPLOADMACRO ";
     }
 
+    if (rtoptions.get_simulator_enabled()) {
+        this->defines_ += "-DTT_SIM ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
