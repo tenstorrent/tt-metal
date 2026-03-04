@@ -65,7 +65,7 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, invert=invert)
 
     # Assert - Compare results
-    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result).to(torch_isin_result.dtype)
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
     assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
     assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
