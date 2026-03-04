@@ -62,6 +62,22 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card fast unit tests"
+      # Pre-built artifacts (optional - if provided, skips build-artifact job)
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built dev Docker image tag (skips build if provided)"
+      build-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built build artifact name (skips build if provided)"
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built wheel artifact name (skips build if provided)"
   workflow_dispatch:
     inputs:
       runner-label:
@@ -210,6 +226,7 @@ jobs:
           echo "civ2_viommu_matrix: $civ2_viommu_matrix"
 
   build-artifact:
+    if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -220,9 +237,33 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
+      skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
+
+  resolve-artifacts:
+    runs-on: ubuntu-latest
+    needs: [build-artifact]
+    if: ${{ always() && !cancelled() }}
+    outputs:
+      dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
+      build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
+    steps:
+      - id: resolve
+        run: |
+          # Use provided artifacts if available, otherwise use built artifacts
+          if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
+            echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          fi
+
   run-profiler-regression:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     if: ${{ inputs.run-profiler-regression == true || github.event_name == 'schedule' }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
@@ -234,12 +275,12 @@ jobs:
       arch: "blackhole"
       runner-label: ${{ matrix.test-group }}
       post_commit_only: true
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   umd-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     if: ${{ inputs.run-umd-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
@@ -250,11 +291,11 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     if: ${{ inputs.run-models-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
@@ -266,11 +307,11 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       timeout: 20
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   ttnn-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     if: ${{ inputs.run-ttnn-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
@@ -280,12 +321,12 @@ jobs:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
   ops-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     if: ${{ inputs.run-ops-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     strategy:
@@ -296,14 +337,14 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     if: ${{ inputs.run-tt-cnn-unit-tests == true || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
@@ -314,14 +355,14 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
     if: ${{ !contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule' || inputs.run-blackhole-multi-card-fast-unit-tests == true }}
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
@@ -331,7 +372,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       fast-only: true
