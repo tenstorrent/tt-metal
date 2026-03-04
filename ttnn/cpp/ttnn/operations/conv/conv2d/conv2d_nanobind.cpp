@@ -326,7 +326,7 @@ void bind_conv2d(nb::module_& mod) {
 
     py_conv_config.def_rw("act_block_w_div", &Conv2dConfig::act_block_w_div, R"doc(
             Reduces the width of the activation block to reduce Circular Buffer sizes and prevent OOM. Valid only for Width Sharded Conv2d.
-            This is only useful when the input channels is greater than 32 * num_cores. For n150, that's 32 * 64 =  2048.
+            This is only useful when the input channels is greater than 32 * num_cores. For n150, thats 32 * 64 =  2048.
             This is a divisor of the activation block width.
             A value of 1 means no reduction, and a value of 2 means the activation block width is halved.
         )doc");

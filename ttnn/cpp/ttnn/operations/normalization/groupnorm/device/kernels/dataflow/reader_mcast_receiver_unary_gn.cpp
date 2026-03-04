@@ -46,13 +46,13 @@ void kernel_main() {
     //               Send Global Average to all Receiver cores
     //     Second Read of data:
     //       If Receiver:
-    //           Send partial reduction of Variance to Sender Core
+    //           Send partial reduction of Varience to Sender Core
     //       If Sender:
     //           Pack Partials:
     //               Accumulate partial reductions into single tile
-    //               Calculates the Global Variance sum
+    //               Calculates the Global Varience sum
     //           Send Global:
-    //               Send Global Variance to all Receiver cores
+    //               Send Global Varience to all Receiver cores
     //          Third Read of data:
     //
     //      // clang-format on
@@ -204,7 +204,7 @@ void kernel_main() {
 
 #endif
                     if (cur_read_iteration == 0 || cur_read_iteration == 1) {
-                        //Section for waiting for local reduce to be pushed to a cb_ex_partial
+                        //Section for wating for local reduce to be pushed to a cb_ex_partial
                         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
                         if (cur_read_iteration == 0) {
                             //Wait for local avg calculation

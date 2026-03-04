@@ -114,7 +114,7 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
     kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
 }
 
-// how slow is this? alternative is storing entire route buffer which isn't ideal either...
+// how slow is this? alternative is sotring entire route buffer which isn't ideal either...
 template <uint32_t STATIC_ID = NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordRoutingFields2D(
     const volatile tt::tt_fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {

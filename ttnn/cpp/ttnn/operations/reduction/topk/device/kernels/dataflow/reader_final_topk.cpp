@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Compile time args
+    // Compiletime args
     const uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));  // Ready-to-receive signal
     const uint32_t sender_semaphore = get_semaphore(get_compile_time_arg_val(1));    // Data-sent confirmation
     constexpr uint32_t noc_start_x = get_compile_time_arg_val(2);              // Starting X coordinate of core range

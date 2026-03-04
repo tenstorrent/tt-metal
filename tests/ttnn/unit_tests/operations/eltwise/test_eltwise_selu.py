@@ -88,7 +88,7 @@ def test_eltwise_selu(input_shape, dtype, dlayout, in_mem_config, out_mem_config
 
 
 def test_selu_arange(device):
-    # Generate all possible bit patterns for bf16
+    # Generate all possible bit pattersn for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
