@@ -68,6 +68,7 @@ def run_test_linear_impl(
     torch_addcmul_a=None,
     torch_addcmul_b=None,
     addcmul_scalar=1.0,
+    chunks=1,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -140,6 +141,8 @@ def run_test_linear_impl(
 
         if activation == "gelu":
             torch_output = torch.nn.functional.gelu(torch_output)
+
+        torch_output = torch.chunk(torch_output, chunks, dim=-1)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -217,6 +220,7 @@ def run_test_linear_impl(
                 scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
+                chunks=chunks,
             )
 
         return tt_output
@@ -269,33 +273,36 @@ def run_test_linear_impl(
             else:
                 concat_dims = [tp_axis, sp_axis]
 
-        tt_output = ttnn.from_device(tt_output)
-        tt_output = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
-        )
         check_result = []
+        for c in range(chunks):
+            tt_output_chunk = ttnn.from_device(tt_output[c])
+            tt_output_chunk = ttnn.to_torch(
+                tt_output_chunk,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
+            )
+            check_result_chunk = []
 
-        for i in range(device.shape[sp_axis]):
-            for j in range(device.shape[tp_axis]):
-                m_slice = slice(i * per_device_M, (i + 1) * per_device_M)
-                n_slice = slice(j * N, (j + 1) * N)
+            for i in range(device.shape[sp_axis]):
+                for j in range(device.shape[tp_axis]):
+                    m_slice = slice(i * per_device_M, (i + 1) * per_device_M)
+                    n_slice = slice(j * (N // chunks), (j + 1) * (N // chunks))
 
-                if use_non_fused:
-                    idx = (slice(None), slice(None), m_slice, n_slice)
-                else:
-                    idx = (m_slice, n_slice)
+                    if use_non_fused:
+                        idx = (slice(None), slice(None), m_slice, n_slice)
+                    else:
+                        idx = (m_slice, n_slice)
 
-                tt_device_output = tt_output[idx]
+                    tt_device_output = tt_output_chunk[idx]
 
-                check_result.append(
-                    assert_quality(
-                        torch_output[:, :, i * per_device_M : (i + 1) * per_device_M, :]
-                        if use_non_fused
-                        else torch_output[i * per_device_M : (i + 1) * per_device_M, :],
-                        tt_device_output,
+                    check_result_chunk.append(
+                        assert_quality(
+                            torch_output[c][:, :, i * per_device_M : (i + 1) * per_device_M, :]
+                            if use_non_fused
+                            else torch_output[c][i * per_device_M : (i + 1) * per_device_M, :],
+                            tt_device_output,
+                        )
                     )
-                )
+            check_result.append(check_result_chunk)
         check_result_list.append(check_result)
 
     return check_result_list
@@ -331,6 +338,7 @@ def run_test_linear(
     cluster_axis=1,
     fuse_addcmul=False,
     addcmul_scalar=1.0,
+    chunks=1,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -417,6 +425,7 @@ def run_test_linear(
         torch_addcmul_a=torch_addcmul_a,
         torch_addcmul_b=torch_addcmul_b,
         addcmul_scalar=addcmul_scalar,
+        chunks=chunks,
     )
 
 
@@ -510,25 +519,23 @@ def run_test_linear(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "M, K, N, force_transpose, use_bias, activation",
+    "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (32768, 4096, 4096, True, False, None),
-        (75776, 5120, 3840, True, True, None),
-        (75776, 5120, 1280, True, True, None),
-        (75776, 5120, 3456, True, True, "gelu"),
-        (3072, 5120, 3456, True, True, "gelu"),
+        (32768, 4096, 4096, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        (75776, 5120, 3840, True, True, None, 3, False, 6, 8, 14, 2, 2),
+        (75776, 5120, 1280, True, True, None, 1, True, 10, 8, 8, 2, 1),
+        (75776, 5120, 1280, True, True, None, 1, False, 10, 8, 8, 2, 1),
+        (75776, 5120, 3456, True, True, "gelu", 1, False, 9, 5, 12, 1, 2),
+        (3072, 5120, 3456, True, True, "gelu", 1, False, 8, 8, 8, 2, 2),
     ],
     ids=[
         "4k4k4k",
         "qkv",
-        "denseout",
+        "denseattn1",
+        "denseattn2",
         "ff1",
         "unit",
     ],
-)
-@pytest.mark.parametrize(
-    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [(10, 8, 8, 2, 1)],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
@@ -537,14 +544,6 @@ def run_test_linear(
         False,
     ],
     ids=["separate", "fused"],
-)
-@pytest.mark.parametrize(
-    "fuse_addcmul",
-    [
-        True,
-        False,
-    ],
-    ids=["addcmul", "noternary"],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -579,6 +578,7 @@ def test_linear(
     num_iters,
     cluster_axis,
     fuse_addcmul,
+    chunks,
 ):
     check_result = run_test_linear(
         mesh_device,
@@ -604,9 +604,11 @@ def test_linear(
         num_iters=num_iters,
         cluster_axis=cluster_axis,
         fuse_addcmul=fuse_addcmul,
+        chunks=chunks,
     )
 
     for n in range(num_iters):
-        for i in range(mesh_device.get_num_devices()):
-            assert check_result[n][i]["pcc"] > 0.999_500
-            assert check_result[n][i]["relative_rmse"] < 0.02
+        for c in range(chunks):
+            for i in range(mesh_device.get_num_devices()):
+                assert check_result[n][c][i]["pcc"] > 0.999_500
+                assert check_result[n][c][i]["relative_rmse"] < 0.02
