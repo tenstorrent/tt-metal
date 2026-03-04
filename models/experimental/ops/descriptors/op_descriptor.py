@@ -22,8 +22,15 @@ class OpDescriptor(NamedTuple):
     output_tensors: List["ttnn.Tensor"]
     name: str = ""
 
+    def launch(self):
+        """Dispatch this op via generic_op.
 
-# FusedOp moved to models.experimental.ops.descriptors.fusion.fusion
+        Returns:
+            self.output_tensors
+        """
+        io_tensors = list(self.input_tensors) + list(self.output_tensors)
+        ttnn.generic_op(io_tensors, self.descriptor)
+        return self.output_tensors
 
 
 __all__ = ["OpDescriptor"]

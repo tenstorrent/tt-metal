@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-High-Level Fusion API: Sequential, Parallel, and launch().
+High-Level Fusion API: Sequential and Parallel.
 
 Provides the user-facing API for composing operations into fused kernels.
 Sequential chains ops linearly; Parallel runs ops on disjoint core subsets.
 
 Usage (linear chain):
     >>> fused = Sequential(op0, op1, op2).build()
-    >>> launch([fused])
+    >>> fused.launch()
 
 Usage (branching tree):
     >>> fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
-    >>> launch([fused])
+    >>> fused.launch()
 """
 
 import os
@@ -301,8 +301,7 @@ class FusedOp:
 
     Properties ``descriptor``, ``input_tensors``, and ``output_tensors``
     forward to the underlying ``OpDescriptor``, so ``FusedOp`` is
-    duck-type compatible with ``OpDescriptor`` (e.g. for
-    ``launch()``).
+    duck-type compatible with ``OpDescriptor``.
 
     Cannot be nested in Sequential/Parallel -- ``_resolve()`` rejects it
     with a TypeError.
@@ -522,7 +521,7 @@ class Parallel:
 
         # Inline
         fused = Parallel(op_a, op_b).build()
-        launch([fused])
+        fused.launch()
 
         # As part of a Sequential
         fused = Sequential(stem, Parallel(branch_a, branch_b)).build()
@@ -695,41 +694,9 @@ def _core_range_tag(core_ranges) -> str:
     return "cores_" + "_".join(parts)
 
 
-def launch(op_descriptors):
-    """Launch one or more op descriptors as a single program.
-
-    Merges the program descriptors and executes them via ``generic_op``.
-    Each op descriptor operates on non-overlapping cores.
-
-    Args:
-        op_descriptors: A list of ``OpDescriptor`` or ``FusedOp`` objects.
-
-    Returns:
-        A list of output tensor lists, one per op descriptor.
-    """
-    if not op_descriptors:
-        raise ValueError("op_descriptors cannot be empty")
-
-    descriptors = [op.descriptor for op in op_descriptors]
-
-    if len(descriptors) == 1:
-        merged = descriptors[0]
-    else:
-        merged = ttnn.merge_program_descriptors(descriptors)
-
-    io_tensors = [t for op in op_descriptors for t in op.input_tensors] + [
-        t for op in op_descriptors for t in op.output_tensors
-    ]
-
-    ttnn.generic_op(io_tensors, merged)
-
-    return [op.output_tensors for op in op_descriptors]
-
-
 __all__ = [
     "Sequential",
     "Parallel",
     "FusedOp",
-    "launch",
     "clear_build_cache",
 ]

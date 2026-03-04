@@ -2317,6 +2317,6 @@ development or when switching between different device configurations.
 | `models/experimental/ops/descriptors/fusion/codegen/args.py` | RT/CT/named arg merging + define handling + fp32 validation |
 | `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor` namedtuple |
-| `models/experimental/ops/descriptors/fusion/fusion.py` | `launch()`: merges and dispatches multiple OpDescriptors |
+| `models/experimental/ops/descriptors/fusion/fusion.py` | `Sequential`, `Parallel`, `FusedOp` high-level API |
 | `tests/ttnn/unit_tests/operations/fused/test_sequential.py` | Device tests (require hardware) |
 | `tests/ttnn/unit_tests/operations/fused/test_sequential_standalone.py` | Standalone tests (mock ttnn, no hardware) |
