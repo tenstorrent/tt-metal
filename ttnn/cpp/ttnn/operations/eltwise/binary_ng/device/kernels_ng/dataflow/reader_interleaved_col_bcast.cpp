@@ -95,7 +95,9 @@ void kernel_main() {
                         noc_async_read_page(tile_offset + th, src, l1_write_addr_src);
                         noc_async_read_barrier();
 #endif
+#if !BCAST_LLK
                         FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
+#endif
                         cb_push_back(cb_id_src, onetile);
 #endif
 #if SRC_BCAST_B
@@ -105,7 +107,9 @@ void kernel_main() {
                         noc_async_read_page(tile_offset_b + th, src_b, l1_write_addr_src_b);
                         noc_async_read_barrier();
 #endif
+#if !BCAST_LLK
                         FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
+#endif
                         cb_push_back(cb_id_src_b, onetile);
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;

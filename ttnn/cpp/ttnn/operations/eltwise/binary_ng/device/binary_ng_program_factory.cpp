@@ -460,7 +460,8 @@ KernelName get_reader_kernel_name_and_defines(
 void overwrite_compute_kernel_name_and_defines(
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
-    std::map<std::string, std::string>& compute_defines) {
+    std::map<std::string, std::string>& compute_defines,
+    bool is_where_op) {
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
         compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
@@ -470,6 +471,18 @@ void overwrite_compute_kernel_name_and_defines(
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
         kernel_name = KernelName::ComputeRowColBcastNg;
+    } else if (
+        not is_where_op && (subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+                            subtile_broadcast_type == SubtileBroadcastType::COL_B)) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
+        kernel_name = KernelName::ComputeColBcastNg;
+    } else if (
+        not is_where_op && (subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+                            subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
+        kernel_name = KernelName::ComputeScalarBcastNg;
     }
 }
 
@@ -483,7 +496,11 @@ bool is_llk_bcast(
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
-        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
         if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B) ||
             all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
@@ -688,11 +705,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     }
 
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
     }
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
     }
 
@@ -791,9 +812,18 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         use_llk_bcast = false;
     }
 
+    // Where op does not support LLK bcast for scalar and col broadcast
+    if (use_llk_bcast && is_where_op &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        use_llk_bcast = false;
+    }
+
     if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
-            compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
+            compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines, is_where_op);
         reader_defines["BCAST_LLK"] = "1";
     } else {
         reader_defines["BCAST_LLK"] = "0";
