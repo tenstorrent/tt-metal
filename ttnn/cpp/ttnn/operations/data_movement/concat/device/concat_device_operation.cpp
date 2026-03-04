@@ -169,7 +169,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             args.output_mem_config.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
             "ND Sharded output and inputs must have the same grid.");
         TT_FATAL(
-            args.output_mem_config.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
             "Block sharded output necessary for ND sharded tensors concat");
         // if nd sharded ends
     } else if (shard_first) {
