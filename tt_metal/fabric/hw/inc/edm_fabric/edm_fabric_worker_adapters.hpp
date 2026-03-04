@@ -24,6 +24,10 @@
 
 namespace tt::tt_fabric {
 
+namespace fabric_tests {
+    struct SenderKernelTrafficConfig;
+}
+
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -579,9 +583,12 @@ struct WorkerToFabricEdmSenderBase {
         this->advance_buffer_slot_write_index();
     }
 
+    friend struct fabric_tests::SenderKernelTrafficConfig;
+
+protected:
     // One-time setup for stateful NOC credit updates.
     // Call this once before using update_edm_buffer_free_slots<true>.
-    FORCE_INLINE void setup_credit_update_noc_state(uint8_t noc = get_fabric_worker_noc()) {
+    FORCE_INLINE void setup_credit_update_noc_state(uint8_t noc = get_fabric_worker_noc()) const {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         const uint64_t noc_sem_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
