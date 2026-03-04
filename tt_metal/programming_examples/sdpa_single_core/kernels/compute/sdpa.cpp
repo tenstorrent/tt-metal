@@ -608,7 +608,8 @@ template <
     uint32_t scale_cb,
     uint32_t cols,
     uint32_t SBH,
-    uint32_t ROW_STRIDE = cols>
+    uint32_t ROW_STRIDE = cols,
+    bool respect_trigger = false>
 void reduce_c_row_group(
     uint32_t in0_cb,
     uint32_t out_cb,
@@ -640,17 +641,19 @@ void reduce_c_row_group(
         }
     }
 
-    // Deferred: wait for in0_cb just before its first use (reduce_block_max_row).
-    // When do_eltwise_max=true, the prev_cb wait + copy_tile work above can overlap
-    // with in0_cb data arrival.
-    cb_wait_front(in0_cb, cumulative_input_tiles);
+    if constexpr (!respect_trigger) {
+        // Standard path: wait for all input tiles before reduce.
+        cb_wait_front(in0_cb, cumulative_input_tiles);
+    }
+    // When respect_trigger=true, the unpack MOP is split into two halves with a
+    // HW semaphore wait in between, so we don't need cb_wait_front here.
 
-    reduce_block_max_row_init<cols>();
+    reduce_block_max_row_init<cols, respect_trigger>();
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (in0_row_start + i) * ROW_STRIDE;
-        reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row<cols, respect_trigger>(in0_cb, scale_cb, input_tile_start, i);
     }
-    reduce_block_max_row_uninit(in0_cb);
+    reduce_block_max_row_uninit<false, respect_trigger>(in0_cb);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -684,7 +687,8 @@ template <
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS,
     bool blocked_pack = false,
-    uint32_t KT_DIM_MATMUL = INNER_DIM>
+    uint32_t KT_DIM_MATMUL = INNER_DIM,
+    bool trigger_reduce = false>
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -723,6 +727,9 @@ void blocked_matmul_and_pack(
             uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
             dst_idx += SUBBLOCK_W;
+        }
+        if constexpr (trigger_reduce) {
+            PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
         }
     } else
 #endif
@@ -878,6 +885,8 @@ void sdpa_inner_loop_step(
     constexpr uint32_t kt_num_full_subblocks = Sk_chunk_t / qkt_subblock_w;
     constexpr uint32_t kt_remainder = Sk_chunk_t % qkt_subblock_w;
     constexpr bool has_partial_subblock = (kt_remainder > 0);
+    constexpr uint32_t total_kt_iterations = kt_num_full_subblocks + (has_partial_subblock ? 1 : 0);
+    constexpr bool reduce_trigger = (total_kt_iterations > 1) && (Sk_chunk_t % 2 == 0);
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
     constexpr uint32_t row_tiles = sbh * KT_stride;  // cb_qkt_im row width = KT_stride (keeps CB pointer alignment)
 
@@ -946,7 +955,9 @@ void sdpa_inner_loop_step(
                     in0_block_w,
                     KT_stride,
                     KT_stride,
-                    true /*blocked_pack*/>(
+                    true /*blocked_pack*/,
+                    in0_block_w,
+                    reduce_trigger>(
                     cb_q_in,
                     cb_kt_in,
                     cb_qkt_im,
@@ -990,7 +1001,9 @@ void sdpa_inner_loop_step(
                     in0_block_w,
                     KT_stride,
                     KT_stride,
-                    true /*blocked_pack*/>(
+                    true /*blocked_pack*/,
+                    in0_block_w,
+                    reduce_trigger>(
                     cb_q_in,
                     cb_kt_in,
                     cb_qkt_im,
@@ -1012,7 +1025,14 @@ void sdpa_inner_loop_step(
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
             cb_reserve_back(cur_max, sbh);
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh, KT_stride>(
+            reduce_c_row_group<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                cb_identity_scale_in,
+                Sk_chunk_t,
+                sbh,
+                KT_stride,
+                reduce_trigger>(
                 cb_qkt_im,
                 cur_max,
                 prev_max,
