@@ -174,7 +174,8 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused q_ab_proj + kv_a_proj weights ...")
-    q_a, q_b, kv = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a_raw, q_b_raw, kv_raw)
+    qab_kva = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a_raw, q_b_raw, kv_raw)
+    q_a, q_b, kv = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
@@ -308,7 +309,7 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused o_proj + gate_mm + rmsnorm gamma weights ...")
-    o_proj, gate_mm, attn_norm_g, q_norm_g, ffn_norm_g, kv_norm_g = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
         o_proj_raw,
         gate_mm_raw,
         attn_norm_raw,
@@ -316,6 +317,12 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         kv_norm_raw,
         ffn_norm_raw,
     )
+    o_proj = o_norms["o_proj"]
+    gate_mm = o_norms["gate_mm"]
+    attn_norm_g = o_norms["attn_norm"]
+    q_norm_g = o_norms["q_norm"]
+    ffn_norm_g = o_norms["ffn_norm"]
+    kv_norm_g = o_norms["kv_norm"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
@@ -467,7 +474,8 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused kv_b1 + kv_b2 weights ...")
-    kv_b1, kv_b2 = bdw.get_tt_kv_b12_proj_weights(kv_b1_raw, kv_b2_raw)
+    kv_b12 = bdw.get_tt_kv_b12_proj_weights(kv_b1_raw, kv_b2_raw)
+    kv_b1, kv_b2 = kv_b12["kv_b1_proj"], kv_b12["kv_b2_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
