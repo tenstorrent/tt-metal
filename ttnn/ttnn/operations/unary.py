@@ -188,6 +188,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.swish,
     ttnn.tril,
     ttnn.triu,
+    ttnn.xielu,
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
