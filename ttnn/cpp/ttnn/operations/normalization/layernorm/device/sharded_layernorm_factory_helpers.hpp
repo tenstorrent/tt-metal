@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
@@ -127,7 +128,14 @@ struct KernelDefines {
     KernelDescriptor::Defines compute;
 
     static KernelDefines build(
-        bool has_b, bool has_gamma, bool has_beta, bool rms_norm, bool use_welford, bool skip_write_back);
+        bool has_b,
+        bool has_gamma,
+        bool has_beta,
+        bool rms_norm,
+        bool use_welford,
+        bool skip_write_back,
+        const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
+        std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt);
 };
 
 // Parameters needed to compute CB sizes

@@ -177,7 +177,7 @@ std::pair<distributed::MeshWorkload, std::vector<KernelHandle>> initialize_progr
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
             core_range_set,
             tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_processors_per_cluster = dm_processors_per_kernel, .defines = dm_defines});
+                .num_threads_per_cluster = dm_processors_per_kernel, .defines = dm_defines});
     }
 
     workload.add_program(device_range, std::move(program));
@@ -440,6 +440,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
 
         detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
         std::vector<uint32_t> second_runtime_args = {0x12341234, 0xcafecafe};
@@ -452,6 +453,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
             }
         }
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
         auto workload2 =
@@ -462,6 +464,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         SetCommonRuntimeArgs(program2, 0, common_runtime_args);
         detail::WriteRuntimeArgsToDevice(device, program2);
         distributed::EnqueueMeshWorkload(cq, workload2, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload2, core_to_rt_args, common_runtime_args);
     }
 }
@@ -498,6 +501,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
         SetCommonRuntimeArgs(program, kernel, common_runtime_args);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, core_to_rt_args, common_runtime_args);
     }
 }
@@ -532,6 +536,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
         // Set common runtime args, automatically sent to all cores used by kernel.
         SetCommonRuntimeArgs(program, kernel, common_runtime_args);
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, core_to_rt_args, common_runtime_args);
     }
 }
@@ -570,6 +575,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
         SetCommonRuntimeArgs(program, kernel, common_runtime_args);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, core_to_rt_args, common_runtime_args);
     }
 }
@@ -628,6 +634,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
         SetCommonRuntimeArgs(program, 0, common_runtime_args);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, core_to_rt_args, common_runtime_args);
     }
 }
@@ -687,6 +694,7 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         }
         detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
         std::vector<uint32_t> invalid_runtime_args = {303, 404, 505};
@@ -729,6 +737,7 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
             SetCommonRuntimeArgs(program, kernel, common_rtas);
         }
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(true, mesh_device, workload, {}, common_rtas);
     }
 }

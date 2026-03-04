@@ -95,6 +95,14 @@ void run_single_dfb_program(
     experimental::dfb::DataflowBufferConfig& dfb_config,
     DFBPorCType producer_type,
     DFBPorCType consumer_type) {
+
+    if (dfb_config.num_producers > 1 and producer_type == DFBPorCType::TENSIX) {
+        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
+    }
+    if (dfb_config.num_consumers > 1 and consumer_type == DFBPorCType::TENSIX) {
+        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
+    }
+
     TT_FATAL(
         !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
         "Both producer and consumer cannot be Tensix. At least one must be a DM kernel for NOC transfers.");
@@ -131,13 +139,13 @@ void run_single_dfb_program(
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
             logical_core,
             experimental::quasar::QuasarDataMovementConfig{
-                .num_processors_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
+                .num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     } else {
         producer_kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
             logical_core,
-            ComputeConfig{.compile_args = producer_cta});
+            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = producer_cta});
     }
 
     uint32_t num_entries_per_consumer = dfb_config.cap == ::experimental::AccessPattern::STRIDED
@@ -156,23 +164,25 @@ void run_single_dfb_program(
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
             logical_core,
             experimental::quasar::QuasarDataMovementConfig{
-                .num_processors_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
+                .num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
     } else {
         consumer_kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
             logical_core,
-            ComputeConfig{.compile_args = consumer_cta});
+            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = consumer_cta});
     }
 
     auto logical_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, dfb_config);
 
-    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, logical_dfb_id, producer_kernel, consumer_kernel);
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, logical_dfb_id, producer_kernel, consumer_kernel);
 
     auto dfb = program.impl().get_dataflow_buffer(logical_dfb_id);
 
     SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)dfb->config.producer_risc_mask});
-    SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)dfb->config.consumer_risc_mask, (uint32_t)logical_dfb_id});
+    SetRuntimeArgs(
+        program, consumer_kernel, logical_core, {(uint32_t)dfb->config.consumer_risc_mask, (uint32_t)logical_dfb_id});
 
     execute_program_and_verify(
         mesh_device,
@@ -217,7 +227,7 @@ void run_in_dfb_out_dfb_program(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         logical_core,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = dm2tensix_config.num_producers, .compile_args = producer_cta});
+            .num_threads_per_cluster = dm2tensix_config.num_producers, .compile_args = producer_cta});
 
     uint32_t num_entries_per_unpacker = dm2tensix_config.num_entries / dm2tensix_config.num_consumers;
     uint32_t num_entries_per_packer = tensix2dm_config.num_entries / tensix2dm_config.num_producers;
@@ -228,7 +238,7 @@ void run_in_dfb_out_dfb_program(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6.cpp",
         logical_core,
-        ComputeConfig{.compile_args = compute_cta});
+        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_cta});
 
     uint32_t num_entries_per_consumer = tensix2dm_config.num_entries / tensix2dm_config.num_consumers;
     std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer, (uint32_t)tensix2dm_config.cap == ::experimental::AccessPattern::BLOCKED};
@@ -238,7 +248,7 @@ void run_in_dfb_out_dfb_program(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
         logical_core,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_processors_per_cluster = tensix2dm_config.num_consumers, .compile_args = consumer_cta});
+            .num_threads_per_cluster = tensix2dm_config.num_consumers, .compile_args = consumer_cta});
 
     auto input_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, dm2tensix_config);
     auto output_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, tensix2dm_config);

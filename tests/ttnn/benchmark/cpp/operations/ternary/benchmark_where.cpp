@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <benchmark/benchmark.h>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/experimental/where/where.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/device.hpp"
