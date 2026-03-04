@@ -149,8 +149,8 @@ public:
 #else
         cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_nDVB>(dst, val, 0xF, noc_idx);
         if constexpr (count) {
-            noc_nonposted_writes_num_issued[noc_idx]++;
-            noc_nonposted_writes_acked[noc_idx]++;
+            noc_increment_nonposted_writes_issued(noc_idx, 1);
+            noc_increment_nonposted_writes_acked(noc_idx, 1);
         }
 #endif
     }
@@ -207,8 +207,8 @@ public:
                 downstream_cmd_buf>(data_ptr, dst_ptr, length, 1, noc_idx);
         }
         if (count) {
-            noc_nonposted_writes_num_issued[noc_idx]++;
-            noc_nonposted_writes_acked[noc_idx]++;
+            noc_increment_nonposted_writes_issued(noc_idx, 1);
+            noc_increment_nonposted_writes_acked(noc_idx, 1);
         }
 #endif
     }
