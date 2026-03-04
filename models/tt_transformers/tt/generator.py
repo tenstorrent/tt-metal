@@ -284,6 +284,7 @@ class Generator(WarmupForwardMixin):
         start_pos: list[int] = None,  # Cached prefixes lengths
         return_hidden_states=False,
         warmup_prefill=True,
+        bitmask=None,
         **kwargs,
     ):
         self.mode = Mode.PREFILL
@@ -354,6 +355,10 @@ class Generator(WarmupForwardMixin):
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
+
+            if sampling_enabled and bitmask is not None:
+                bitmask_user = bitmask[idx : idx + 1]
+                self.model[model_id].bitmask_to_device(bitmask_user)
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
@@ -473,6 +478,8 @@ class Generator(WarmupForwardMixin):
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
 
             if sampling_enabled:
+                # applying only in the sampling case
+                logits = self.model[model_id].apply_bitmask_to_logits(logits)
                 tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                     logits,
                     enable_trace=False,
@@ -700,16 +707,19 @@ class Generator(WarmupForwardMixin):
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
 
-        # Transfer bitmask to device for structured outputs
-        if bitmask is not None:
-            for model in self.model:
-                model.bitmask_to_device(bitmask)
-
         B = tokens.shape[0]
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+
+        # Transfer bitmask to device for structured outputs
+        # TODO this means we transfer even if this dp rank doesnt have a structured output request
+        if bitmask is not None:
+            bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
+            for i in range(self.data_parallel):
+                self.model[i].bitmask_to_device(bitmasks[i])
+
         sampling_params_list = None
         if sampling_params is not None:
             # sampling_dp may differ from data_parallel for models that internally
