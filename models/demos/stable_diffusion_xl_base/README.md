@@ -75,7 +75,7 @@ pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py \
   -k "device_vae and device_encoders and with_trace and no_cfg_parallel and 1024x1024"
 ```
 
- -`strength` - How much to transform the input image. `0.0` = identical to input, `1.0` = fully new image
+- `strength` - How much to transform the input image. `0.0` = identical to input, `1.0` = fully new image
 - `input_image`: Path to input image
 - `mask` : Path to input mask
 
