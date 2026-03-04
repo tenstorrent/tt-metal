@@ -237,7 +237,6 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
-      skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
 
   resolve-artifacts:

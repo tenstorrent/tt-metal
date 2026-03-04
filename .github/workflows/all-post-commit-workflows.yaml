@@ -196,7 +196,6 @@ jobs:
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
-      build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
       ref: ${{ inputs.ref || github.sha }}
 
