@@ -43,9 +43,7 @@ NANO_GPT_BIN = (
 )
 
 DEFAULT_NAME = "llama_8b"
-DEFAULT_MODEL_TEMPLATE = (
-    TT_TRAIN_HOME / "configs" / "model_configs" / "llama8b" / "llama8b.yaml"
-)
+DEFAULT_MODEL_TEMPLATE = TT_TRAIN_HOME / "configs" / "model_configs" / "llama8b.yaml"
 DEFAULT_TRAINING_TEMPLATE = (
     TT_TRAIN_HOME
     / "configs"

@@ -320,7 +320,10 @@ def find_csv(exp_dir: Path):
 
 def extract_timings(csv_path: Path) -> dict | None:
     """Parse profiler CSV and return per-device per-iteration phase timings."""
-    raw = pd.read_csv(csv_path)
+    raw = pd.read_csv(csv_path, low_memory=False)
+    raw["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(
+        raw["DEVICE KERNEL DURATION [ns]"], errors="coerce"
+    )
 
     # Drop everything up to (and including) compilation_finished marker
     comp_mask = (raw["OP CODE"] == "ProfilerNoopOperation") & raw[
@@ -366,16 +369,10 @@ def extract_timings(csv_path: Path) -> dict | None:
     if not len(device_ids):
         device_ids = [None]
 
-    # Pre-compute CCL op durations: time from this op's start to next op's start
+    # Tag CCL op type for later per-phase summation
     non_marker = raw[~raw["_is_marker"]].copy()
     non_marker["_ccl_type"] = non_marker["OP CODE"].map(CCL_OPS)
-    non_marker["_next_start"] = non_marker.groupby("DEVICE ID")[
-        "DEVICE FW START CYCLE"
-    ].shift(-1)
-    non_marker["_ccl_dur_ms"] = (
-        non_marker["_next_start"] - non_marker["DEVICE FW START CYCLE"]
-    ) / (DEVICE_CLOCK_GHZ * 1e6)
-    raw = raw.join(non_marker[["_ccl_type", "_ccl_dur_ms"]])
+    raw = raw.join(non_marker[["_ccl_type"]])
 
     # Walk consecutive marker pairs and compute durations
     records = []
@@ -418,10 +415,7 @@ def extract_timings(csv_path: Path) -> dict | None:
                 else between
             )
             if len(ops) >= 1:
-                duration_ms = (
-                    ops["DEVICE FW END CYCLE"].iloc[-1]
-                    - ops["DEVICE FW START CYCLE"].iloc[0]
-                ) / (DEVICE_CLOCK_GHZ * 1e6)
+                duration_ms = ops["DEVICE KERNEL DURATION [ns]"].sum() / 1e6
             else:
                 duration_ms = 0.0
 
@@ -432,15 +426,17 @@ def extract_timings(csv_path: Path) -> dict | None:
                 "duration_ms": duration_ms,
             }
 
-            # Sum CCL op durations within this phase
+            # Sum CCL kernel durations within this phase
             if ccl_prefix:
                 ccl_ops = ops[ops["_ccl_type"].notna()]
                 for ccl_short in CCL_OPS.values():
                     col = f"{ccl_prefix}_{ccl_short}_ms"
                     rec[col] = float(
                         ccl_ops.loc[
-                            ccl_ops["_ccl_type"] == ccl_short, "_ccl_dur_ms"
+                            ccl_ops["_ccl_type"] == ccl_short,
+                            "DEVICE KERNEL DURATION [ns]",
                         ].sum()
+                        / 1e6
                     )
 
             records.append(rec)
