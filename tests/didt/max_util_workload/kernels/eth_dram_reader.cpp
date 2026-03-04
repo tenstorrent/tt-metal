@@ -9,21 +9,21 @@
 // One bank per core means summing per-core bandwidths gives total DRAM bandwidth.
 //
 // Compile-time args (indices 0..2):
-//   0: num_iterations    – outer loop count
+//   0: num_loops         – outer loop count
 //   1: pages_per_bank    – pages read per iteration from the assigned bank
 //   2: page_size_bytes   – bytes per page
 //
 // Runtime args (indices 0..2):
-//   0: dram_src_addr      – base DRAM buffer address (interleaved across banks)
+//   0: dram_src_addr       – base DRAM buffer address (interleaved across banks)
 //   1: eth_l1_staging_addr – ETH L1 unreserved base; first 16 bytes hold timing output
-//   2: bank_id            – which DRAM bank this core is assigned to
+//   2: bank_id             – which DRAM bank this core is assigned to
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "internal/ethernet/tt_eth_api.h"
 
 void kernel_main() {
-    constexpr uint32_t num_iterations = get_compile_time_arg_val(0);
+    constexpr uint32_t num_loops = get_compile_time_arg_val(0);
     constexpr uint32_t pages_per_bank = get_compile_time_arg_val(1);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(2);
 
@@ -45,7 +45,7 @@ void kernel_main() {
 
     uint64_t t0 = eth_read_wall_clock();
 
-    for (uint32_t iter = 0; iter < num_iterations; iter++) {
+    for (uint32_t iter = 0; iter < num_loops; iter++) {
         uint32_t dst = l1_data_addr;
         for (uint32_t p = 0; p < pages_per_bank; p++) {
             noc_async_read_one_packet_with_state(bank_noc_base + p * page_size_bytes, dst);
