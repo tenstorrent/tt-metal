@@ -303,7 +303,10 @@ class Penalties1D(LightweightModule):
         """
         self.load_device_buffers()
 
-        if new_tokens.shape[-1] == self.config.max_batch_size and new_tokens.shape[-2] == 1:
+        if (new_tokens.shape[-1] == self.config.max_batch_size and new_tokens.shape[-2] == 1) or (
+            new_tokens.shape[-2] == self.config.max_batch_size and new_tokens.shape[-1] == 1
+        ):
+            # Standard decode: [..., 1, B] or row-sharded: [..., B, 1] → [B, 1]
             new_tokens = ttnn.reshape(new_tokens, [self.config.max_batch_size, 1], **self._op_kwargs)
             src = self._decode_src
         else:
