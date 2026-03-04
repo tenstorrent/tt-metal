@@ -566,13 +566,6 @@ auto coalesceFabricEvents(
         std::unordered_map<CoreCoord, std::queue<tracy::TTDeviceMarker>> fabric_mux_markers;
 
         for (size_t i = 0; i < markers.size(); /* manual increment */) {
-            // Scoped lock events (CB_LOCK, CB_UNLOCK, MEM_LOCK, MEM_UNLOCK) use different metadata; pass through as-is.
-            // marker_id is full timer_id; static ID is the low 16 bits.
-            if ((markers[i].marker_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
-                coalesced_events_by_op[program_execution_uid].push_back(markers[i]);
-                i += 1;
-                continue;
-            }
             // If it is a zone, simply copy existing event as-is
             auto current_event = EMD(markers[i].data).getContents();
             TT_FATAL(
@@ -776,23 +769,6 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         {"zone_phase", enchantum::to_string(zone_phase)},
                         {"sx", device_marker.core_x},
                         {"sy", device_marker.core_y},
-                        {"timestamp", device_marker.timestamp},
-                    });
-                } else if ((device_marker.marker_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
-                    NocDebuggingEventMetadata ev_md(device_marker.data);
-                    json_events_by_op[program_execution_uid].push_back(nlohmann::ordered_json{
-                        {"run_host_id", device_marker.runtime_host_id},
-                        {"op_name", device_marker.op_name},
-                        {"proc", enchantum::to_string(device_marker.risc)},
-                        {"src_device_id", device_marker.chip_id},
-                        {"sx", device_marker.core_x},
-                        {"sy", device_marker.core_y},
-                        {"type", "scoped_lock"},
-                        {"event_type",
-                         enchantum::to_string(
-                             static_cast<NocDebuggingEventMetadata::NocDebugEventType>(ev_md.event_type))},
-                        {"locked_addr", ev_md.getLockedAddressBase()},
-                        {"num_bytes", ev_md.getNumBytes()},
                         {"timestamp", device_marker.timestamp},
                     });
                 } else if (std::holds_alternative<EMD::LocalNocEvent>(EMD(device_marker.data).getContents())) {
@@ -2361,7 +2337,8 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    if (!getDeviceProfilerState() || MetalContext::instance().rtoptions().get_profiler_disable_dump_to_files()) {
+    if (!getDeviceProfilerState() || MetalContext::instance().rtoptions().get_profiler_disable_dump_to_files() ||
+        MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         return;
     }
 

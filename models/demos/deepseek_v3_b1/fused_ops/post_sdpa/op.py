@@ -37,6 +37,7 @@ CB Layout:
 - CB 13: ccl_packet_header (sender + receiver cores)
 """
 
+
 import torch
 
 import ttnn
@@ -44,12 +45,12 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
+from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -82,34 +83,46 @@ class PostSDPA:
     """
 
     @staticmethod
-    def golden(input_tensors, weights1_tensor, weights2_tensor, residual_tensor=None):
+    def golden(input_tensor, weights1_tensor, weights2_tensor, residual_tensor=None):
         """
-        PyTorch reference implementation for validation.
+        PyTorch reference implementation for a single device.
+
+        Models the hardware pipeline:
+          - Matmul1: batched per-core [1, K1] x [K1, n1_per_core] across num_matmul1_cores cores
+          - Gather1: collect per-core outputs to [1, intermediate]
+          - Matmul2: [1, intermediate] x [intermediate, output_size]
 
         Args:
-            input_tensors: List of input tensors (torch.Tensor) [1, 512], one per device
-            weights1_tensor: First weights tensor (torch.Tensor) [512, 8192]
-            weights2_tensor: Second weights tensor (torch.Tensor) [8192, 7168]
-            residual_tensor: Optional residual tensor to add after reduction [1, 7168]
+            input_tensor: Input tensor (torch.Tensor) [num_matmul1_cores, K1]
+            weights1_tensor: First weights tensor (torch.Tensor) [K1, intermediate]
+                             (intermediate = num_matmul1_cores * n1_per_core)
+            weights2_tensor: Second weights tensor (torch.Tensor) [intermediate, output_size]
+            residual_tensor: Optional residual tensor to add [1, output_size]
 
         Returns:
-            Output tensor [1, 7168] - result of all-reduce across devices
+            Output tensor [1, output_size]
         """
-        # Compute matmul chain for each device
-        device_results = []
-        for input_tensor in input_tensors:
-            intermediate = input_tensor @ weights1_tensor  # [1, 8192]
-            result = intermediate @ weights2_tensor  # [1, 7168]
-            device_results.append(result)
+        num_cores, K1 = input_tensor.shape
+        intermediate = weights1_tensor.shape[1]
+        n1_per_core = intermediate // num_cores
 
-        # All-reduce: sum across all devices
-        reduced = torch.sum(torch.stack(device_results), dim=0)
+        # Batched matmul1: [num_cores, 1, K1] x [num_cores, K1, n1_per_core] -> [num_cores, 1, n1_per_core]
+        inp_batched = input_tensor.unsqueeze(1)  # [num_cores, 1, K1]
+        w1_batched = weights1_tensor.reshape(K1, num_cores, n1_per_core).permute(
+            1, 0, 2
+        )  # [num_cores, K1, n1_per_core]
+        out1 = torch.bmm(inp_batched, w1_batched)  # [num_cores, 1, n1_per_core]
 
-        # Add residual if provided
+        # Gather: [num_cores, 1, n1_per_core] -> [1, intermediate]
+        gathered = out1.reshape(1, intermediate)
+
+        # Matmul2: [1, intermediate] x [intermediate, output_size] -> [1, output_size]
+        result = gathered @ weights2_tensor
+
         if residual_tensor is not None:
-            reduced = reduced + residual_tensor
+            result = result + residual_tensor
 
-        return reduced
+        return result
 
     @staticmethod
     def get_program_context(

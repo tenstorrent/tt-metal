@@ -525,22 +525,7 @@ int main(int argc, char **argv) {
         std::optional<ttml::autograd::TensorPtr> masks_tensor;
     };
     CachedHostData cached_data;
-    std::vector<float> mask;
-    mask.reserve(sequence_length * sequence_length);
-    for (int i = 0; i < sequence_length; ++i) {
-        for (int j = 0; j < sequence_length; ++j) {
-            mask.push_back(i >= j ? 1.0F : 0.0F);
-        }
-    }
-    // Create mask tensor - shard along sequence dim if CP is enabled
-    if (device_config.enable_cp) {
-        // TODO: only causal mask is supported in cp mode for now
-        fmt::print("WARNING: Only causal mask is supported in CP mode for now, overriding masks_tensor to nullopt\n");
-        cached_data.masks_tensor = std::nullopt;
-    } else {
-        cached_data.masks_tensor = ttml::autograd::create_tensor(
-            ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
-    }
+
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
