@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.utils import deinterleave_kv_cache
 
 
 def create_fabric_router_config(max_payload_size):
@@ -45,9 +46,21 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
+@pytest.mark.parametrize("max_seq_len", [32 * 1024])
 @pytest.mark.parametrize(
-    "position_id", [127, 511]
-)  # Must test 128 chunk aligned decode postions, add other tests when causal masks are in for SDPA
+    "position_id",
+    [
+        0,
+        127,
+        511,
+        1023,
+        2047,
+        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
+        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
+        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
+        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+    ],
+)  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -71,6 +84,7 @@ def test_attention_block(
     cluster_axis,
     secondary_cluster_axis,
     num_iters,
+    max_seq_len,
     position_id,
     noc_mode,
 ):
@@ -98,7 +112,7 @@ def test_attention_block(
     shape = (1, 7168)
     matmul_weights_shape = (7168, 1536)
 
-    max_seq_len = 32 * 1024
+    per_device_max_seq_len = max_seq_len // mesh_rows
     assert position_id < max_seq_len, f"Position ID {position_id} must be less than max sequence length {max_seq_len}"
 
     # Head configuration
@@ -555,13 +569,16 @@ def test_attention_block(
         k_chunk_size=128,
         exp_approx_mode=False,  # Use exact exp for higher precision
     )
-    logger.info(f"Creating KV cache with seq_len={max_seq_len}...")
+    logger.info(f"Creating KV cache with per-device seq_len={per_device_max_seq_len}, total_seq_len={max_seq_len}...")
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
-    # from 0 to position id, the kv cache is valid, position_id data is filled by test
+
+    dcs = program_config.device_chunk_size
+    num_sp = mesh_rows
+
     torch_kv_cache = torch.full(cache_shape, float("-inf"), dtype=torch.bfloat16)
-    for i in range(position_id):
-        torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
 
     # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
     # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
@@ -584,14 +601,14 @@ def test_attention_block(
     )
 
     ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache,
+        torch_kv_cache_shuffled,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None)),
     )
-    #  kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    # kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Post-SDPA setup
     # Set up sub-device (not supported in slow dispatch mode)
@@ -912,7 +929,7 @@ def test_attention_block(
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
-    logger.info("Running pre-SDPA operation...")
+    logger.info(f"Running attention block operation with position_id={position_id}...")
 
     for i in range(num_iters):
         ttnn_output_result = AttentionBlock.op(
@@ -968,6 +985,9 @@ def test_attention_block(
 
     kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
+    # Read back the FlashMLA output (pre-post-SDPA) for SDPA validation
+    sdpa_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
@@ -976,9 +996,14 @@ def test_attention_block(
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE).
-    # Full tensor with num_tp * 64 heads; output is split per-TP for comparison.
-    torch_q_expected, torch_kv_cache_expected, torch_output_expected = AttentionBlock.golden(
+    device_chunk_size = program_config.device_chunk_size
+    num_sp = mesh_rows
+    owning_sp_device = (position_id // device_chunk_size) % num_sp
+
+    # Single golden call: full KV cache, global position_id.
+    # Returns the new KV entry (for owning-device validation) and the global
+    # SDPA output (post-SDPA reduces all SP local outputs to this).
+    _, golden_new_kv, torch_output_expected = AttentionBlock.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
@@ -1002,102 +1027,71 @@ def test_attention_block(
         rope_dim=KROPE_DIM,
     )
 
-    slice_size = sdpa_input_output_shape[0]
-    expected_width = KNOPE_DIM  # 512
+    logger.info(f"Golden computed (owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})")
 
-    # KV Cache is same across devices in 4x2 submesh
-    expected_nope = torch_kv_cache_expected[..., :KNOPE_DIM]
-    expected_rope = torch_kv_cache_expected[..., KNOPE_DIM:]
+    def get_local_seq_len(sp_idx):
+        """Return how many KV positions SP device sp_idx holds for the current global position_id."""
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        return num_full_blocks * device_chunk_size + dev_contrib
 
-    sdpa_pcc_by_tp = {}
-    kv_nope_pcc_first = None
-    kv_rope_pcc_first = None
-
+    # ========================================================================
+    # Validate KV cache outputs (per SP device)
+    # ========================================================================
     for device_idx in range(mesh_rows * mesh_cols):
-        tp_group = device_idx % mesh_cols  # TP group determined by mesh column
+        sp_group = device_idx // mesh_cols
+        local_seq_len = get_local_seq_len(sp_group)
 
-        # ---- KV Cache (fully replicated, no TP) ----
-        compare_kv_cache = kv_cache_output_torch[device_idx, ..., position_id, :]
-        # check that kv cache for 0 to pos_id -  1 is identical to kv cache before op
-        #  for i in range(position_id):
-        #     assert torch.allclose(
-        #          kv_cache_bfp8_before_op[device_idx, ..., i, :], kv_cache_output_torch[device_idx, ..., i, :], atol=1e-6
-        #      ), "KV Cache before and after op mismatch"
-        logger.info(f"Device {device_idx} old cache validation passed")
-
-        # Check that the new kv cache for pos_id is correct compared to golden
-        compare_nope = compare_kv_cache[..., :KNOPE_DIM]
-        compare_rope = compare_kv_cache[..., KNOPE_DIM:]
-
-        nope_max_diff = torch.max(torch.abs(expected_nope - compare_nope)).item()
-        nope_mean_diff = torch.mean(torch.abs(expected_nope - compare_nope)).item()
-        logger.info(f"Device {device_idx} KV Cache NOPE: Max diff={nope_max_diff}, Mean diff={nope_mean_diff}")
-        nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
-        logger.info(f"Device {device_idx} KV Cache NOPE PCC: {nope_pcc}")
-        assert nope_passing, f"Device {device_idx} KV Cache NOPE PCC check failed: {nope_pcc}"
-
-        if kv_nope_pcc_first is not None:
-            assert nope_pcc == kv_nope_pcc_first, (
-                f"Device {device_idx} KV Cache NOPE PCC mismatch across replicated dim: "
-                f"got {nope_pcc}, expected {kv_nope_pcc_first}"
-            )
-        else:
-            kv_nope_pcc_first = nope_pcc
-        rope_max_diff = torch.max(torch.abs(expected_rope - compare_rope)).item()
-        rope_mean_diff = torch.mean(torch.abs(expected_rope - compare_rope)).item()
-        logger.info(f"Device {device_idx} KV Cache ROPE: Max diff={rope_max_diff}, Mean diff={rope_mean_diff}")
-        rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
-        logger.info(f"Device {device_idx} KV Cache ROPE PCC: {rope_pcc}")
-        assert rope_passing, f"Device {device_idx} KV Cache ROPE PCC check failed: {rope_pcc}"
-
-        if kv_rope_pcc_first is not None:
-            assert rope_pcc == kv_rope_pcc_first, (
-                f"Device {device_idx} KV Cache ROPE PCC mismatch across replicated dim: "
-                f"got {rope_pcc}, expected {kv_rope_pcc_first}"
-            )
-        else:
-            kv_rope_pcc_first = rope_pcc
-
-        # ---- Attention Block Output (TP-sharded: replicated across rows, different across columns) ----
-        start = device_idx * slice_size
-        end = start + slice_size
-        received = output_torch[start:end, :expected_width]
-        print(received.shape)
-        print(received)
-
-        # Golden SDPA output is [num_tp * 64, 576]; slice per TP group.
-        # Each row is one head: [qnope[512], qrope[64]], 8 cores x 8 heads = 64 rows per TP.
-        """
-        tp_start = tp_group * slice_size
-        tp_end = tp_start + slice_size
-        torch_output_expected_flat = torch_output_expected[tp_start:tp_end, :]
-
-        if received.shape != torch_output_expected_flat.shape:
-            logger.error(
-                f"Attention Block Output shape mismatch at device {device_idx} (TP={tp_group}): "
-                f"got {received.shape}, expected {torch_output_expected_flat.shape}"
-            )
+        if local_seq_len == 0:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
             continue
 
-        max_diff = torch.max(torch.abs(received - torch_output_expected_flat)).item()
-        mean_diff = torch.mean(torch.abs(received - torch_output_expected_flat)).item()
-        logger.info(
-            f"Device {device_idx} (TP={tp_group}) Attention Block Output: Max diff={max_diff}, Mean diff={mean_diff}"
-        )
+        # ---- KV Cache: old positions must be unchanged ----
+        assert torch.equal(
+            kv_cache_bfp8_before_op[device_idx, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
-        # Lower PCC threshold due to random weights
-        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.90)
-        logger.info(f"Device {device_idx} (TP={tp_group}) Attention Block Output PCC: {sdpa_pcc}")
-        assert passing, f"Device {device_idx} (TP={tp_group}) Attention Block Output PCC check failed: {sdpa_pcc}"
+        # ---- KV Cache new-position check (owning device only) ----
+        if sp_group == owning_sp_device:
+            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-        if tp_group in sdpa_pcc_by_tp:
-            assert sdpa_pcc == sdpa_pcc_by_tp[tp_group], (
-                f"Device {device_idx} (TP={tp_group}) Attention Block Output PCC mismatch across replicated dim: "
-                f"got {sdpa_pcc}, expected {sdpa_pcc_by_tp[tp_group]}"
-            )
-        else:
-            sdpa_pcc_by_tp[tp_group] = sdpa_pcc
-        """
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+    # ========================================================================
+    # Validate SDPA output (global golden: full KV cache, global position_id)
+    # Post-SDPA reduces all local FlashMLA outputs across SP devices, so the
+    # final MLA output corresponds to running attention over the full KV cache.
+    # ========================================================================
+    slice_size = sdpa_input_output_shape[0]  # 64 heads per device
+    for device_idx in range(mesh_rows * mesh_cols):
+        tp_group = device_idx % mesh_cols
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = sdpa_output_torch[start:end, :]
+
+        tp_start = tp_group * slice_size
+        tp_end = tp_start + slice_size
+        expected = torch_output_expected[tp_start:tp_end, :]
+
+        passing, pcc = comp_pcc(expected, received, 0.84)
+        logger.info(f"Device {device_idx} (TP={tp_group}) SDPA Output PCC: {pcc}")
+        assert passing, f"Device {device_idx} (TP={tp_group}) SDPA Output PCC check failed: {pcc}"
 
     logger.info("✓ Attention Block mesh test passed!")
 

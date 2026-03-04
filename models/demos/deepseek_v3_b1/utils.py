@@ -13,6 +13,22 @@ if TYPE_CHECKING:
     from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 
 
+def deinterleave_kv_cache(kv, device_chunk_size: int, num_devices: int):
+    """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+    The global KV cache is written in round-robin device_chunk_size blocks:
+      [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+    ShardTensor2dMesh splits dim-2 contiguously, so each device would
+    receive the wrong data.  This function reorders to:
+      [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+    so that after the contiguous split each device gets its own chunks.
+    """
+    b, h, seq, d = kv.shape
+    num_chunks = seq // device_chunk_size
+    chunks_per_device = num_chunks // num_devices
+    return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
+
+
 def float_to_bfloat16_packed(value):
     """Convert float to packed bfloat16 (two copies in uint32)"""
     # Convert float32 to bytes

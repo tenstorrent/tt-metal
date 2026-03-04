@@ -78,28 +78,33 @@ class AttentionBlock:
         PyTorch reference implementation for validation.
 
         Args:
-            input_tensor: Input tensor (torch.Tensor) [1, K]
-            gamma_tensor: Gamma/weight tensor (torch.Tensor) [1, K]
-            matmul_weights_tensor: Matmul weights (torch.Tensor) [K, N]
-            rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (torch.Tensor) [1, N]
-            matmul2_weights_tensor: Matmul2 weights (torch.Tensor) [N, M]
-            matmul3_weights_tensor: Matmul3 weights (torch.Tensor) [num_qnope_heads, qnope_head_dim, qnope_out_dim]
-                                    e.g., [64, 128, 512] for batched matmul on Qnope heads
-            sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
-            cos_tensor: Cos tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
-            position_ids: Position indices (torch.Tensor) [batch] for decode mode
-            epsilon: Small value to avoid division by zero
-            num_qnope_heads: Number of Qnope heads (default 64)
-            num_qrope_heads: Number of Qrope heads (default 64)
-            qnope_head_dim: Dimension per Qnope head (default 128)
-            qrope_head_dim: Dimension per Qrope head (default 64)
-            heads_per_row: Number of heads per grid row (default 8)
+            input_tensor: [1, K]
+            gamma_tensor: RMSNorm gamma [1, K]
+            matmul_weights_tensor: q_a_proj weights [K, N]
+            rmsnorm2_gamma_tensor: q_norm gamma [1, N]
+            matmul2_weights_tensor: q_b_proj weights [N, num_qnope_heads*qnope_head_dim + num_qrope_heads*qrope_head_dim]
+            matmul3_weights_tensor: kv_b1_proj weights [num_qnope_heads, qnope_head_dim, nope_dim]
+            sin_tensor: RoPE sin table [max_seq_len, qrope_head_dim]
+            cos_tensor: RoPE cos table [max_seq_len, qrope_head_dim]
+            position_ids: global decode position [batch]
+            dkv_matmul_weights_tensor: kv_a_proj weights [K, nope_dim + rope_dim]
+            dkv_rmsnorm_gamma_tensor: kv_norm gamma [1, nope_dim]
+            kv_cache_tensor: KV cache [1, 1, seq_len, nope_dim + rope_dim]
+            scale: attention scale factor
+            epsilon: RMSNorm epsilon (default 1e-6)
+            num_qnope_heads: number of Q NoPE heads (default 64)
+            num_qrope_heads: number of Q RoPE heads (default 64)
+            qnope_head_dim: Q NoPE head dim (default 128)
+            qrope_head_dim: Q/K RoPE head dim (default 64)
+            heads_per_row: heads per SDPA core row (default 8)
+            nope_dim: KV NoPE dim (default 512)
+            rope_dim: KV RoPE dim (default 64)
 
         Returns:
-            Tuple of (qnope_output, qrope_output, sdpa_interleaved):
-            - qnope_output: [num_qnope_heads, 1, qnope_out_dim] after matmul3
-            - qrope_output: [num_qrope_heads, 1, qrope_head_dim] after RoPE
-            - sdpa_interleaved: [8, 8, 576] interleaved QNOPE/QROPE output for SDPA
+            Tuple of (full_q, new_kv, mla_output):
+            - full_q: [1, 1, num_qnope_heads, nope_dim + rope_dim] combined Q heads
+            - new_kv: [1, 1, 1, nope_dim + rope_dim] new KV entry written at position_ids[0]
+            - mla_output: [num_qnope_heads, nope_dim] FlashMLA attention output
         """
         from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
