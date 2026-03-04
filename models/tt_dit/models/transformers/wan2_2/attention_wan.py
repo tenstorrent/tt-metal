@@ -322,14 +322,18 @@ class WanAttention(Module):
                 spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
             )
         else:
-            if self.parallel_config.tensor_parallel.factor > 1:
-                spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                    spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
-
             # Cross-attention: Q from spatial, fused KV from prompt
-            kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
-            q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            if prompt_1BLP is not None:
+                kv_input = prompt_1BLP
+            else:
+                if self.parallel_config.tensor_parallel.factor > 1:
+                    spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                        spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                    )
+                kv_input = spatial_1BND
+            q_1BNF = self.to_q(
+                spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config, parallel_config=self.parallel_config
+            )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
