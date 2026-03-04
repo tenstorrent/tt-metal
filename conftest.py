@@ -1157,6 +1157,7 @@ def ttnn_graph_report():
         return
 
     report_path = Path(report_path)
+    ttnn.graph.enable_buffer_pages()
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     try:
         yield
@@ -1164,6 +1165,7 @@ def ttnn_graph_report():
         report_path.mkdir(parents=True, exist_ok=True)
         json_path = report_path / "graph_capture.json"
         ttnn.graph.end_graph_capture_to_file(str(json_path))
+        ttnn.graph.disable_buffer_pages()
         if json_path.exists():
             from ttnn.graph_report import import_report
 
