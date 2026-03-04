@@ -120,9 +120,16 @@ def gen_torch_dispatch_input_expert_indices_tensor(
         for s in range(seq):
             token += 1
             for k in range(selected_experts_k):
-                if scheme == "sequential":
-                    expert_indices[b, 0, s, k] = current_expert % experts
-                    current_expert += 1 + (k % 2)
+                if True:
+                    # if scheme == "sequential":
+
+                    expert = b // 2
+                    expert += k
+                    expert %= 256
+                    expert_indices[b, 0, s, k] = expert
+
+                    # expert_indices[b, 0, s, k] = current_expert % experts
+                    # current_expert += 1 + (k % 2)
                 elif scheme == "random" or scheme == "random_sequential_experts":
                     # need to ensure a set of unique indices
                     current_indices = expert_indices[b, 0, s, :].tolist()
@@ -402,6 +409,8 @@ def gen_combine_golden(
     torch_dispatch_input_tensor = torch_dispatch_input_tensor.repeat([cluster_factor, 1, 1, 1])
     torch_dispatch_input_expert_indices = torch_dispatch_input_expert_indices.repeat([cluster_factor, 1, 1, 1])
 
+    # (512, 32, 7168) local
+    # (512, 4096, 7168) global
     torch_combine_ref_tensor = torch.zeros(select_experts_k, batch * cluster_factor, hidden_size).bfloat16()
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch, batches_per_device)
     for m0, m1, d in _device_mesh_iterator(mesh_shape):
@@ -428,13 +437,12 @@ def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_gold
         tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
     )
 
-    # torch.set_printoptions(
-    #     threshold=float("inf"),  # Print all elements (no truncation)
-    #     linewidth=200,  # Wider lines before wrapping
-    #     precision=10,  # Decimal places for floats
-    #     # sci_mode=False,          # Disable scientific notation
-    # )
-    # print(torch_combine_output[0:1, :, 0:4])
+    torch.set_printoptions(
+        threshold=float("inf"),  # Print all elements (no truncation)
+        linewidth=200,  # Wider lines before wrapping
+        precision=10,  # Decimal places for floats
+        # sci_mode=False,          # Disable scientific notation
+    )
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
