@@ -22,7 +22,7 @@ void bind_convert_to_chw(nb::module_& mod) {
     with appropriate shard dimensions based on the input tensor's sharding configuration.
     )doc";
 
-    ttnn::bind_function<"convert_to_chw">(
+    ttnn::bind_function<"convert_to_chw", "ttnn.experimental.">(
         mod, doc, &ttnn::experimental::convert_to_chw, nb::arg("input"), nb::kw_only(), nb::arg("dtype") = nb::none());
 }
 
