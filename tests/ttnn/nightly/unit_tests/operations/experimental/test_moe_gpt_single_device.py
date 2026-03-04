@@ -11,26 +11,33 @@ need for a galaxy mesh.  Useful for iterating on individual kernel phases
 
 Currently supported phases:
   - Matmul phase: DRAM-sharded weights + L1-sharded activation input
-  - Tilize phase: selective tilize writing dense buffer to DRAM for
+  - Tilize phase: selective tilize from a sparse token buffer (simulating
+                  all_to_all_dispatch output) to a dense DRAM buffer for
                   correctness verification
 
 Future phases (commented out, included for completeness):
-  - sparse_buffer (token data from all_to_all_dispatch)
-  - expert_indices (all-gathered top-K expert selections)
-  - expert_scores (all-gathered routing weights)
-  - expert_mapping (expert-to-device ownership map)
   - all_to_all CCL dispatch/combine
+  - Tilize-to-matmul integration (tilized chunks sent directly to matmul
+    cores via L1 multicast instead of writing to DRAM)
 
 Dimensions (gpt-oss 20b, single device):
-  M = 32 (tokens per device, collapsed batch * seq_len)
-  K = 2880 (hidden_size) -> 90 tiles
-  N = 2880 (intermediate_size) -> 90 tiles
-  E = 4 (experts on this device)
-  L = 1 (layers)
+  Matmul test:
+    M = 32 (tokens per device)
+    K = 2880 (hidden_size) -> 90 tiles
+    N = 2880 (intermediate_size) -> 90 tiles
+    E = 4 (experts on this device)
+    L = 1 (layers)
 
-  num_devices = 1
-  num_dispatch_devices = 1  (single-device: dispatch only from self)
-  total_tokens = M * 1 = 32
+  Tilize test:
+    M = 32 (tokens per device)
+    experts_total = 16 (across 4 simulated devices)
+    E = 4 (experts on this device = experts_total / 4)
+    total_tokens = M * (experts_total / E) = 128  (sparse buffer rows)
+    K = 2880 (hidden_size)
+    selected_experts_k = 4
+
+    The sparse buffer has 128 rows but only ~32 per-expert tokens are
+    routed to this device (k=4 out of 16 experts -> ~25% per device).
 
 Activation: SwiGLU (gpt-oss variant)
   gate_clamped = clamp(gate, max=7.0)
@@ -483,6 +490,10 @@ def gen_expert_mapping(experts_total, num_devices):
     """
     Expert-to-device ownership: mapping[d, e] = e // experts_per_device.
     Shape: [num_devices, experts_total], dtype int32.
+
+    All rows are identical (static mapping).  The reader kernel selects the
+    row corresponding to the source device of each token, but on single-device
+    tests all tokens see the same row.
     """
     experts_per_device = experts_total // num_devices
     row = torch.zeros(experts_total, dtype=torch.int32)
@@ -492,22 +503,27 @@ def gen_expert_mapping(experts_total, num_devices):
 
 
 def gen_sparse_buffer_and_indices(
-    tokens_per_device,
+    total_tokens,
     hidden_size,
     experts_total,
     selected_experts_k,
-    num_dispatch_devices,
+    expert_mapping,
+    device_idx,
 ):
     """
-    Generate sparse buffer and all-gathered expert indices/scores.
+    Generate a sparse token buffer and all-gathered expert indices/scores.
+
+    Simulates the all_to_all_dispatch output: the sparse buffer has
+    ``total_tokens`` rows, but only rows for tokens that route to at least
+    one expert on ``device_idx`` contain valid data.  The rest are zeros
+    (garbage in practice, but zeros make debugging easier).
 
     Returns:
         sparse_buffer: [total_tokens, hidden_size] bfloat16
         expert_indices: [total_tokens, selected_experts_k] int32
         expert_scores:  [total_tokens, selected_experts_k] bfloat16
+        active_token_ids: set of token indices that have valid sparse data
     """
-    total_tokens = tokens_per_device * num_dispatch_devices
-
     expert_indices = torch.zeros(total_tokens, selected_experts_k, dtype=torch.int32)
     for t in range(total_tokens):
         selected = torch.randperm(experts_total)[:selected_experts_k]
@@ -516,22 +532,33 @@ def gen_sparse_buffer_and_indices(
     expert_scores = torch.rand(total_tokens, selected_experts_k, dtype=torch.bfloat16) + 1e-5
     expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
 
-    sparse_buffer = torch.rand(total_tokens, hidden_size, dtype=torch.bfloat16) - 0.5
+    # Only populate sparse buffer rows for tokens routed to this device
+    sparse_buffer = torch.zeros(total_tokens, hidden_size, dtype=torch.bfloat16)
+    active_token_ids = set()
+    for t in range(total_tokens):
+        for k in range(selected_experts_k):
+            eid = expert_indices[t, k].item()
+            if expert_mapping[device_idx, eid].item() == device_idx:
+                active_token_ids.add(t)
+                sparse_buffer[t, :] = torch.rand(hidden_size, dtype=torch.bfloat16) - 0.5
+                break
 
-    return sparse_buffer, expert_indices, expert_scores
+    return sparse_buffer, expert_indices, expert_scores, active_token_ids
 
 
 def tilize_reference(sparse_buffer, expert_indices, expert_mapping, device_idx, experts_per_device, tokens_per_chunk):
     """
     Torch reference for what the tilize kernels should produce.
 
-    For each local expert, gather the tokens routed to it (in order of token index),
-    and lay them out in [experts_per_device * total_tokens, hidden_size] format where
-    expert e's data starts at row e * total_tokens.
+    For each local expert, gather the tokens routed to it (in token-index
+    order) and lay them out in a dense ``[experts_per_device * total_tokens,
+    hidden_size]`` buffer.  Expert ``e``'s data starts at row
+    ``e * total_tokens``.  Only the first ``per_expert_counts[e]`` rows in
+    each expert's section contain valid data; the rest are zero-padding.
 
     Returns:
         output: [experts_per_device * total_tokens, hidden_size] bfloat16
-        per_expert_counts: [experts_per_device] int
+        per_expert_counts: list[int] of length experts_per_device
     """
     total_tokens, hidden_size = sparse_buffer.shape
     experts_total = expert_mapping.shape[-1]
@@ -539,6 +566,7 @@ def tilize_reference(sparse_buffer, expert_indices, expert_mapping, device_idx, 
     output = torch.zeros(experts_per_device * total_tokens, hidden_size, dtype=sparse_buffer.dtype)
     per_expert_counts = [0] * experts_per_device
 
+    # Identify which global expert IDs live on this device
     local_expert_global_ids = []
     for e in range(experts_total):
         if expert_mapping[device_idx, e].item() == device_idx:
@@ -546,6 +574,7 @@ def tilize_reference(sparse_buffer, expert_indices, expert_mapping, device_idx, 
             if len(local_expert_global_ids) >= experts_per_device:
                 break
 
+    # For each local expert, gather activated tokens in token-index order
     for local_idx, global_id in enumerate(local_expert_global_ids):
         count = 0
         for t in range(total_tokens):
@@ -572,24 +601,29 @@ def run_test_moe_gpt_tilize(
     N,
     E,
     selected_experts_k,
+    experts_total,
 ):
+    """
+    Run the moe_gpt tilize-to-DRAM verification test.
+
+    The sparse buffer has ``total_tokens = experts_total // E * M`` rows
+    (simulating the all_to_all dispatch output across multiple devices).
+    Only tokens whose expert selections include a local expert are actually
+    read and tilized.
+    """
     torch.manual_seed(42)
     random.seed(42)
 
-    num_devices = 1
-    num_dispatch_devices = 1
-    total_tokens = M * num_dispatch_devices
-    experts_total = E * num_devices
+    num_devices = experts_total // E
+    total_tokens = M * num_devices
 
-    logger.info(f"Tilize test configuration (single device):")
-    logger.info(f"  num_devices: {num_devices}, num_dispatch_devices: {num_dispatch_devices}")
+    logger.info(f"Tilize test configuration (single device, simulating {num_devices}-device routing):")
+    logger.info(f"  num_devices (simulated): {num_devices}")
     logger.info(f"  tokens_per_device (M): {M}, total_tokens: {total_tokens}")
     logger.info(f"  experts_per_device (E): {E}, experts_total: {experts_total}")
     logger.info(f"  hidden_size (K): {K}, selected_experts_k: {selected_experts_k}")
 
     tokens_per_chunk = 32
-    # cluster_axis is not meaningful for single-device but the op may still
-    # accept it; set to 0 as a placeholder.
     cluster_axis = 0
 
     # ------------------------------------------------------------------
@@ -679,16 +713,19 @@ def run_test_moe_gpt_tilize(
     # ------------------------------------------------------------------
     # Tilize inputs
     # ------------------------------------------------------------------
+    device_idx = 0
     expert_mapping_torch = gen_expert_mapping(experts_total, num_devices)
-    sparse_torch, indices_torch, scores_torch = gen_sparse_buffer_and_indices(
-        M,
+    sparse_torch, indices_torch, scores_torch, active_token_ids = gen_sparse_buffer_and_indices(
+        total_tokens,
         K,
         experts_total,
         selected_experts_k,
-        num_dispatch_devices,
+        expert_mapping_torch,
+        device_idx,
     )
 
     logger.info(f"  sparse_buffer shape: {sparse_torch.shape}")
+    logger.info(f"  active tokens on device {device_idx}: {len(active_token_ids)} / {total_tokens}")
     logger.info(f"  expert_indices shape: {indices_torch.shape}")
     logger.info(f"  expert_scores shape: {scores_torch.shape}")
     logger.info(f"  expert_mapping shape: {expert_mapping_torch.shape}")
@@ -760,7 +797,6 @@ def run_test_moe_gpt_tilize(
     # ------------------------------------------------------------------
     # Verify tilize output
     # ------------------------------------------------------------------
-    device_idx = 0
     tt_tilize_result = ttnn.to_torch(tt_tilize_out)
     tt_tilize_result = tt_tilize_result.reshape(E * total_tokens, K)
 
@@ -773,7 +809,7 @@ def run_test_moe_gpt_tilize(
         tokens_per_chunk,
     )
 
-    logger.info(f"  Per-expert token counts: {per_expert_counts}")
+    logger.info(f"  Per-expert token counts: {per_expert_counts} (total_tokens={total_tokens})")
 
     all_passing = True
     for e in range(E):
@@ -813,7 +849,7 @@ def run_test_moe_gpt_tilize(
 )
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
-@pytest.mark.parametrize("E", [4])
+@pytest.mark.parametrize("E, experts_total", [(4, 16)])
 @pytest.mark.parametrize("selected_experts_k", [4])
 def test_moe_gpt_tilize_single_device(
     device,
@@ -821,6 +857,7 @@ def test_moe_gpt_tilize_single_device(
     K,
     N,
     E,
+    experts_total,
     selected_experts_k,
     device_params,
 ):
@@ -831,6 +868,7 @@ def test_moe_gpt_tilize_single_device(
         N=N,
         E=E,
         selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
     )
 
     assert passing, "Tilize output PCC check failed for one or more experts"
