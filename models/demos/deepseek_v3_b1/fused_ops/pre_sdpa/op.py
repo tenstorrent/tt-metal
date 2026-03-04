@@ -19,7 +19,11 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import cb_descriptor_from_overlapped_tensor, float_to_uint32
+from models.demos.deepseek_v3_b1.utils import (
+    cb_descriptor_from_overlapped_tensor,
+    float_to_uint32,
+    merge_per_core_runtime_args,
+)
 
 
 class PreSDPA:
@@ -222,7 +226,7 @@ class PreSDPA:
                 trisc_named_compile_time_args, brisc_common_runtime_args,
                 ncrisc_common_runtime_args, trisc_common_runtime_args,
                 unified_compile_time_core_descriptors, per_core_compile_time_descriptors,
-                per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
+                per_core_ncrisc_tail_args, per_core_brisc_args, per_core_trisc_args,
                 cbs_list, worker_core
         """
         # Get mesh/device info
@@ -2226,7 +2230,11 @@ class PreSDPA:
                     ),
                 ]
 
-                per_core_ncrisc_args = mla_ncrisc_per_core_args
+                # Two-phase per-core NCRISC args:
+                # 1) Tail args from non-broadcast ops are assembled here.
+                # 2) Broadcast prefix args are prepended later after program creation,
+                #    because setup_fabric_connection requires ProgramDescriptor.
+                per_core_ncrisc_tail_args = mla_ncrisc_per_core_args
                 per_core_brisc_args = mla_brisc_per_core_args
                 per_core_trisc_args = mla_trisc_per_core_args
 
@@ -2283,7 +2291,7 @@ class PreSDPA:
                         "trisc_common_runtime_args": trisc_common_runtime_args,
                         "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
                         "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
-                        "per_core_ncrisc_args": per_core_ncrisc_args,
+                        "per_core_ncrisc_tail_args": per_core_ncrisc_tail_args,
                         "per_core_brisc_args": per_core_brisc_args,
                         "per_core_trisc_args": per_core_trisc_args,
                         "input_cb_descriptor": in_cb_descriptor,
@@ -2396,7 +2404,7 @@ class PreSDPA:
                 unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
                 per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
                 per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                    ncrisc_args=ctx["per_core_ncrisc_args"],
+                    ncrisc_args=ctx["per_core_ncrisc_tail_args"],
                     brisc_args=ctx["per_core_brisc_args"],
                     trisc_args=ctx["per_core_trisc_args"],
                 ),
@@ -2419,7 +2427,23 @@ class PreSDPA:
                         and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
                     )
                 ):
-                    bcast_config.append_writer_per_core_rt_args(coord, program, idx, worker_core)
+                    # Phase 2 (CCL mode only): build bcast prefix args (program-dependent
+                    # fabric setup), then merge only for the bcast worker core in explicit
+                    # order: bcast prefix first, that core's tail args after.
+                    #
+                    # In skip_ccl mode, kernel_main does not parse broadcast per-core args.
+                    # Prepending even a dummy bcast prefix would shift downstream per-core
+                    # args (e.g. MLA) and can deadlock execution.
+                    if not skip_ccl:
+                        bcast_writer_args = bcast_config.get_writer_per_core_rt_args(coord, program, worker_core)
+                        bcast_group = [(worker_core, bcast_writer_args)]
+                        merged_ncrisc_group = merge_per_core_runtime_args(
+                            bcast_group,
+                            [(worker_core, kernel.runtime_args[worker_core.x][worker_core.y])],
+                        )
+                        # TODO: Generalize to multi-core merge/writeback if bcast and tail
+                        # producers overlap on additional cores in this op.
+                        kernel.runtime_args[worker_core.x][worker_core.y][:] = merged_ncrisc_group[0][1]
                     break
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program

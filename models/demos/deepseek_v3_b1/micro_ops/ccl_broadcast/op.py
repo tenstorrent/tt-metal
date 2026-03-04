@@ -287,11 +287,9 @@ class BroadcastConfig:
             schema = _reader_common_rt_schema()
         return _schema_to_rt_list(schema, READER_COMMON_RT_KEYS)
 
-    def append_writer_per_core_rt_args(self, coord, program, kernel_idx, core):
+    def get_writer_per_core_rt_args(self, coord, program, core):
         d = self._per_device[coord]
-        writer_rt_args_ref = program.kernels[kernel_idx].runtime_args[core.x][core.y]
         src_node = d["my_fabric_node_id"]
-        before_len = len(writer_rt_args_ref)
         payload = []
 
         # Neighbor-blocked RT arg layout:
@@ -309,9 +307,7 @@ class BroadcastConfig:
                         len(setup_args) == self._setup_fabric_rt_arg_count
                     ), "setup_fabric_connection arg width changed across calls"
                 payload.extend(setup_args)
-        writer_rt_args_ref.append(len(payload))
-        writer_rt_args_ref.extend(payload)
-        return len(writer_rt_args_ref) - before_len
+        return [len(payload)] + payload
 
     def get_cb_descriptor(self, coord):
         d = self._per_device[coord]
@@ -461,7 +457,9 @@ class DeepseekMinimalBroadcast:
                     cbs=[config.get_cb_descriptor(coord)],
                 )
 
-                config.append_writer_per_core_rt_args(coord, program, kernel_idx=0, core=config.get_worker_core(coord))
+                writer_core = config.get_worker_core(coord)
+                writer_rt_args_ref = program.kernels[0].runtime_args[writer_core.x][writer_core.y]
+                writer_rt_args_ref.extend(config.get_writer_per_core_rt_args(coord, program, writer_core))
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
@@ -613,8 +611,8 @@ class BypassBroadcastConfig:
     def get_reader_common_rt_args(self, coord):
         return self.get_socket_reader_rt_args(coord)
 
-    def append_writer_per_core_rt_args(self, coord, program, kernel_idx, core):
-        return 0
+    def get_writer_per_core_rt_args(self, coord, program, core):
+        return [0]
 
     def get_cb_descriptor(self, coord):
         return None

@@ -157,3 +157,26 @@ def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
         memory_config=mem_config,
         **from_torch_kwargs,
     )
+
+
+def merge_per_core_runtime_args(*groups):
+    """
+    Merge per-core runtime arg groups in-order with core-aware concatenation.
+
+    Each group is a list of tuples: (core_coord, list[int]).
+    If a core appears in multiple groups, args are concatenated in group order.
+    """
+    merged = []
+    core_to_index = {}
+    for group in groups:
+        for core, args in group:
+            key = (core.x, core.y)
+            args_list = list(args)
+            if key in core_to_index:
+                idx = core_to_index[key]
+                merged_core, merged_args = merged[idx]
+                merged[idx] = (merged_core, merged_args + args_list)
+            else:
+                core_to_index[key] = len(merged)
+                merged.append((core, args_list))
+    return merged

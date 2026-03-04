@@ -280,7 +280,8 @@ class BroadcastRMSNorm:
                     + ([] if bcast_cb_descriptor is None else [bcast_cb_descriptor]),
                     semaphores=[],
                 )
-                bcast_config.append_writer_per_core_rt_args(coord, program, 0, bcast_worker_core)
+                writer_rt_args_ref = program.kernels[0].runtime_args[bcast_worker_core.x][bcast_worker_core.y]
+                writer_rt_args_ref.extend(bcast_config.get_writer_per_core_rt_args(coord, program, bcast_worker_core))
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
