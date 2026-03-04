@@ -87,9 +87,6 @@ jobs:
       platform: "Ubuntu 22.04"
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
-      run-ttnn-unit-tests: true
-      run-models-unit-tests: true
-      run-tt-train-cpp-unit-tests: true
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-t3000-apc-fast-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
@@ -107,10 +104,6 @@ jobs:
       platform: "Ubuntu 22.04"
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
-      run-ttnn-unit-tests: true
-      run-models-unit-tests: true
-      run-umd-unit-tests: true
-      run-tt-cnn-unit-tests: true
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-blackhole-multi-card-fast-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
@@ -129,9 +122,6 @@ jobs:
       platform: "Ubuntu 24.04"
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
-      run-ttnn-unit-tests: true
-      run-models-unit-tests: true
-      run-tt-train-cpp-unit-tests: true
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-t3000-apc-fast-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
@@ -149,10 +139,6 @@ jobs:
       platform: "Ubuntu 24.04"
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
-      run-ttnn-unit-tests: true
-      run-models-unit-tests: true
-      run-umd-unit-tests: true
-      run-tt-cnn-unit-tests: true
       run-profiler-regression: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
       run-blackhole-multi-card-fast-unit-tests: ${{ needs.determine-watcher.outputs.enable-watcher != 'true' }}
