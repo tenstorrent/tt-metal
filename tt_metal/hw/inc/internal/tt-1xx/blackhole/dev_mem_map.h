@@ -122,8 +122,10 @@
 #define MEM_TRISC1_FIRMWARE_BASE (MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE)
 #define MEM_TRISC2_FIRMWARE_BASE (MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE)
 
+// NOC barrier counters in L1: 6 barrier types × 2 DMs × 2 NOCs × 4 bytes = 96 bytes
+// Must match sizeof(NocBarrierCounter) in noc_nonblocking_api.h
 #define MEM_NOC_COUNTER_SIZE 4
-#define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
+#define MEM_NOC_COUNTER_L1_SIZE (6 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Fabric transaction counters (similar to NoC counters)
@@ -324,7 +326,7 @@
 
 // These Dynamic NOC counter buffers come from base FW
 #define MEM_AERISC_NOC_COUNTER_SIZE 4
-#define MEM_AERISC_NOC_COUNTER_BASE (0x7D040)
+#define MEM_AERISC_NOC_COUNTER_BASE (0x7D050)
 
 #define MEM_AERISC_LOCAL_SIZE (MEM_ERISC_LOCAL_SIZE - MEM_ERISC_BASE_FW_LOCAL_SIZE)  // Minus the base FW local usage
 #define MEM_SUBORDINATE_AERISC_LOCAL_SIZE MEM_ERISC_LOCAL_SIZE

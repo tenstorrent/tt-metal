@@ -104,8 +104,10 @@
 /* Kernel is in IRAM.  */
 #define MEM_NCRISC_KERNEL_BASE MEM_NCRISC_IRAM_BASE
 
+// NOC barrier counters in L1: 6 barrier types × 2 DMs × 2 NOCs × 4 bytes = 96 bytes
+// Must match sizeof(NocBarrierCounter) in noc_nonblocking_api.h
 #define MEM_NOC_COUNTER_SIZE 4
-#define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
+#define MEM_NOC_COUNTER_L1_SIZE (6 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Fabric transaction counters (similar to NoC counters)

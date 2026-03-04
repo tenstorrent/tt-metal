@@ -15,6 +15,7 @@ void kernel_main() {
     const uint32_t test_id = get_compile_time_arg_val(3);
     const uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(4);
     const uint32_t semaphore_addr_offset = get_compile_time_arg_val(5);
+    const uint32_t use_posted_atomics = get_compile_time_arg_val(6);
 
     // Unpack coordinates
     uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
@@ -27,12 +28,20 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
 
-        for (uint32_t i = 0; i < num_of_transactions; i++) {
-            // Send atomic increment to remote semaphore
-            noc_semaphore_inc(dst_semaphore_noc_addr, atomic_inc_value);
-
-            // Wait for atomic operation to complete before proceeding
-            noc_async_atomic_barrier();
+        if (use_posted_atomics) {
+            // Posted atomics - fire and forget
+            for (uint32_t i = 0; i < num_of_transactions; i++) {
+                noc_semaphore_inc<true>(dst_semaphore_noc_addr, atomic_inc_value);
+            }
+            // Wait for all posted atomics to be flushed/sent
+            noc_async_posted_atomics_flushed();
+        } else {
+            // Non-posted atomics - wait for each to complete
+            for (uint32_t i = 0; i < num_of_transactions; i++) {
+                noc_semaphore_inc(dst_semaphore_noc_addr, atomic_inc_value);
+                // Wait for atomic operation to complete before proceeding
+                noc_async_atomic_barrier();
+            }
         }
     }
 

@@ -35,3 +35,5 @@ static_assert(MEM_AERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base m
 static_assert(MEM_IERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
 // This is where base firmware starts
 static_assert(MEM_ERISC_MAX_SIZE < 0x70000);
+static_assert(MEM_FABRIC_COUNTER_BASE % 16 == 0, "Fabric counter base must be 16-byte aligned");
+static_assert(MEM_FABRIC_CONNECTION_LOCK_BASE % 16 == 0, "Fabric connection lock base must be 16-byte aligned");
