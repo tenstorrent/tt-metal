@@ -18,7 +18,7 @@ void kernel_main() {
     uint32_t num_words = get_common_arg_val<uint32_t>(1);
 
     // Write values to cacheable addresses
-    volatile uint32_t* ptr = (volatile uint32_t*)base_addr;
+    volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)base_addr;
     for (uint32_t i = 0; i < num_words; i++) {
         ptr[i] = value + i;
     }

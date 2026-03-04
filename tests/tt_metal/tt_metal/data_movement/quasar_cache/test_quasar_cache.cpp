@@ -60,7 +60,7 @@ bool run_l2_flush_test(
         program,
         "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l2_flush_test.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
+        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
 
     // Set runtime args
     SetRuntimeArgs(program, kernel, core, {config.base_addr, config.test_mode});
@@ -124,7 +124,7 @@ bool run_l1_dcache_test(
         program,
         "tests/tt_metal/tt_metal/data_movement/quasar_cache/kernels/l1_dcache_test.cpp",
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
+        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
 
     // Set runtime args
     SetRuntimeArgs(program, kernel, core, {config.base_addr, config.test_mode});
