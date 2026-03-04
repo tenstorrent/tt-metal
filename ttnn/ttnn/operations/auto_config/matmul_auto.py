@@ -61,6 +61,14 @@ def _get_global_cache() -> ConfigCache:
     return _global_cache
 
 
+# Config capture for mutation testing
+_last_selected_config = None
+_last_selected_api = None
+
+def get_last_selected_config():
+    return _last_selected_config, _last_selected_api
+
+
 def _get_global_scorer() -> HeuristicScorer:
     global _global_scorer
     if _global_scorer is None:
@@ -247,6 +255,9 @@ def _execute_with_config(
             activation=activation,
         )
     else:
+        import ttnn.operations.auto_config.matmul_auto as _selfmod
+        _selfmod._last_selected_config = program_config
+        _selfmod._last_selected_api = "matmul"
         output = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
@@ -731,7 +742,8 @@ def matmul_auto(
         return _default_matmul(input_tensor_a, input_tensor_b, bias, dtype, memory_config, activation)
 
     try:
-        return _original_matmul_auto(
+        import ttnn.operations.auto_config.matmul_auto as _selfmod
+        _result = _original_matmul_auto(
             input_tensor_a,
             input_tensor_b,
             bias=bias,
@@ -742,6 +754,9 @@ def matmul_auto(
             force_program_config=force_program_config,
             benchmark_mode=benchmark_mode,
         )
+        _selfmod._last_selected_config = True
+        _selfmod._last_selected_api = "auto"
+        return _result
     except Exception:
         # Fix 1: Cache this shape as failed -- never retry
         _failed_shape_cache.add(cache_key)
