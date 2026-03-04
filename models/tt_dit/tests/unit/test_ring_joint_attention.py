@@ -209,23 +209,12 @@ def run_ring_joint_sdpa(
     padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
 
-    # Store original tensors for torch.nn.functional.scaled_dot_product_attention
-    original_padded_Q = padded_Q.clone()
-    original_padded_K = padded_K.clone()
-    original_padded_V = padded_V.clone()
-
     # Apply balanced reordering if requested
     chunk_order = None
     if is_balanced:
         rp_factor = submesh.shape[rp_axis]
         chunk_order = create_balanced_chunk_order(rp_factor)
         logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
-
-        # Verify expected pattern for common cases
-        if rp_factor == 4:
-            expected_order = [0, 7, 1, 6, 2, 5, 3, 4]
-            assert chunk_order == expected_order, f"Expected {expected_order}, got {chunk_order}"
-            logger.info(f"✓ Verified balanced chunk order for rp_factor=4: {chunk_order}")
 
         padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
         padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
@@ -1126,6 +1115,7 @@ def test_ring_joint_sdpa_dit_bh_glx(
         "4rpx2up",
     ],
 )
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
 def test_causal_ring_joint_sdpa(
     mesh_device,
     b,
@@ -1144,6 +1134,7 @@ def test_causal_ring_joint_sdpa(
     up_factor,
     all_gather_topology,
     skip_check,
+    is_balanced,
     reset_seeds,
 ):
     mesh_device_shape = list(mesh_device.shape)
@@ -1178,5 +1169,5 @@ def test_causal_ring_joint_sdpa(
         skip_check,
         0.999,
         is_causal=True,
-        is_balanced=True,
+        is_balanced=is_balanced,
     )

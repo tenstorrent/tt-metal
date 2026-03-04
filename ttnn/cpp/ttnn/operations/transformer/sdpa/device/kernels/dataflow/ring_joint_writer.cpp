@@ -139,7 +139,6 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        // DPRINT << "Ring iter WR: " << ring_iter << ENDL();
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -189,26 +188,21 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
-        uint32_t iter_global_q_start = global_q_start;
-        if (is_causal && is_balanced && ring_index != ring_id) {
-            if (ring_index < ring_id) {
-                iter_global_q_start += half_sequence;
-            }
-        }
-
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+
+            // Only truly causal case appear in the iteration with local KV
+            // Other iterations will just skip the conmputation with subsequent KV chunks
             bool causality = (ring_iter == 0 ? is_causal : false);
-            // DPRINT << "Global q_chunk: " << global_q_chunk << ENDL();
 
             if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
                 continue;
             }
 
-            generate_mask<false, 0, true, cb_mask_in>(  // ADD CAUSAL TRUE
+            generate_mask<false, 0, true, cb_mask_in>(
                 Sq_chunk_t,
                 Sk_chunk_t,
                 q_chunk,
@@ -218,7 +212,6 @@ void kernel_main() {
                 ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
                 L,
                 causality);
-            // DPRINT << "Generated mask" << ENDL();
 
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
             Slice out_slice;

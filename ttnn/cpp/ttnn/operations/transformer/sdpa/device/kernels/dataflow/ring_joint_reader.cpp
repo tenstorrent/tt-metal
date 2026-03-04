@@ -140,7 +140,6 @@ void kernel_main() {
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
-        // DPRINT << "Ring iter RD: " << ring_iter << ENDL();
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
@@ -150,6 +149,10 @@ void kernel_main() {
         const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+
+        // In causal non balanced case when processing KV received from other devices:
+        // - skip over KV received from subsequent devices
+        // - do non-causal attention on the KV from preceding devices
         const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
                                          !(is_causal && ring_index < ring_id && !is_balanced);
 
@@ -158,18 +161,21 @@ void kernel_main() {
             continue;
         }
 
-        uint32_t iter_global_q_start = global_q_start;
         uint32_t iter_num_kv_chunks = num_kv_chunks;
-        if (is_causal && is_balanced && ring_index != ring_id) {
-            if (ring_index < ring_id) {
-                iter_global_q_start += half_sequence;
-            } else {
-                iter_num_kv_chunks /= 2;
-            }
+
+        // In causal balanced case processing KV received from other devices:
+        //
+        // We will have two logical chunks of the input sequence, logical indexes are:
+        // ring_index and (seq_len / 2 * num_devices) - ring_index
+        //
+        // With this in mind we have two distinct cases when receiving from other device:
+        // - 1st part of the sequence precedes both chunks on the sender device, 2nd part attends to both
+        // - both chunks preced 2nd part of the sequence in received KV
+        // Indexes are updated accordingly; compute is skipped
+        if (is_causal && is_balanced && ring_index > ring_id) {
+            iter_num_kv_chunks /= 2;
         }
 
-        DPRINT << "RING ITER: " << ring_iter << " RING ID: " << ring_id << " GLOBAL Q START: " << iter_global_q_start
-               << " K END: " << iter_num_kv_chunks << ENDL();
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -179,7 +185,6 @@ void kernel_main() {
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
             if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
-                DPRINT << "SKIPPING COMPUTE FOR Q: " << q_chunk << " HEAD: " << nq << ENDL();
                 continue;
             }
 
@@ -328,5 +333,4 @@ void kernel_main() {
             cb_push_back(cb_v_in, v_chunk_tiles);
         }
     }
-    DPRINT << "READER EXIT" << ENDL();
 }

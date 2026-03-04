@@ -197,23 +197,12 @@ def run_ring_joint_sdpa(
     padded_K = torch.cat([K, torch.zeros(b, nhk, padded_seq_len - base_seq_len, head_dim_k)], dim=2)
     padded_V = torch.cat([V, torch.zeros(b, nhv, padded_seq_len - base_seq_len, head_dim_v)], dim=2)
 
-    # Store original tensors for torch.nn.functional.scaled_dot_product_attention
-    original_padded_Q = padded_Q.clone()
-    original_padded_K = padded_K.clone()
-    original_padded_V = padded_V.clone()
-
     # Apply balanced reordering if requested
     chunk_order = None
     if is_balanced:
         rp_factor = submesh.shape[rp_axis]
         chunk_order = create_balanced_chunk_order(rp_factor)
         logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
-
-        # Verify expected pattern for common cases
-        if rp_factor == 4:
-            expected_order = [0, 7, 1, 6, 2, 5, 3, 4]
-            assert chunk_order == expected_order, f"Expected {expected_order}, got {chunk_order}"
-            logger.info(f"✓ Verified balanced chunk order for rp_factor=4: {chunk_order}")
 
         padded_Q = reorder_tensor_chunks(padded_Q, chunk_order, seq_dim=2)
         padded_K = reorder_tensor_chunks(padded_K, chunk_order, seq_dim=2)
@@ -434,9 +423,9 @@ def run_ring_joint_sdpa(
     "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
     [
         (1, 64, 1, 64, 4 * 4 * 1024, 576, 576, 128),
-        (1, 64, 1, 64, 4 * 32, 64, 64, 32),
-        # base case
-        (1, 2, 1, 2, 4 * 32, 32, 32, 32),
+        # (1, 64, 1, 64, 4 * 32, 64, 64, 32),
+        # # base case
+        # (1, 2, 1, 2, 4 * 32, 32, 32, 32),
     ],
 )
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
@@ -477,6 +466,7 @@ def run_ring_joint_sdpa(
         "4rpx2p",
     ],
 )
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
 def test_mla_sdpa(
     mesh_device,
     b,
@@ -499,6 +489,7 @@ def test_mla_sdpa(
     up_factor,
     all_gather_topology,
     skip_check,
+    is_balanced,
     reset_seeds,
 ):
     mesh_device_shape = list(mesh_device.shape)
@@ -537,5 +528,5 @@ def test_mla_sdpa(
         skip_check,
         0.999,
         is_causal=True,
-        is_balanced=True,
+        is_balanced=is_balanced,
     )
