@@ -329,13 +329,12 @@ def run(args, context: Context):
     # Build lookup map for core info for a given kernel name
     core_lookup = build_core_lookup_map(inspector_data, metal_device_id_mapping)
 
-    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
-    dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
 
     # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
+    locations_to_check = set()
     for (chip_unique_id, x, y), info in core_lookup.items():
         if not info.has_any_info():
             continue
@@ -344,15 +343,23 @@ def run(args, context: Context):
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 
-        # Check all RISC cores at this location for dispatcher kernels
-        noc_block = location._device.get_block(location)
-        for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-            if (
-                dispatcher_core_data.kernel_name is not None
-                and dispatcher_core_data.kernel_name in dispatcher_kernel_names
-            ):
-                dispatch_core_pairs.append((location, risc_name))
+        locations_to_check.add(location)
+
+    def get_dispatch_core_pair(
+        location: OnChipCoordinate, risc_name: str, locations_to_check: set[OnChipCoordinate]
+    ) -> tuple[OnChipCoordinate, str] | None:
+        # Check RISC core with risc_name at this location for dispatcher kernels
+        if location not in locations_to_check:
+            return None
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        if dispatcher_core_data.kernel_name is not None and dispatcher_core_data.kernel_name in dispatcher_kernel_names:
+            return (location, risc_name)
+
+    results = run_checks.run_per_core_check(
+        lambda location, risc_name: get_dispatch_core_pair(location, risc_name, locations_to_check),
+    )
+    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
+    dispatch_core_pairs = [result.result for result in results] if results else []
 
     # Convert to set for fast lookup
     dispatch_cores_set = set(dispatch_core_pairs)
