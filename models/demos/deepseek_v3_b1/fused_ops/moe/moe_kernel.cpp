@@ -940,9 +940,7 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(cb_config);
         }
 #if defined(COMPILE_FOR_NCRISC)
-        DPRINT << "before setting up sharded buffers for reconfigurable CBs\n";
         setup_all_sharded_buffers();
-        DPRINT << "after setting up sharded buffers for reconfigurable CBs\n";
 #endif
 #endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
 
@@ -1346,19 +1344,15 @@ void kernel_main() {
             constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("reduce_sync_noc_x");
             constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("reduce_sync_noc_y");
             uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
-            DPRINT << "Reduce fabric core incrementing reduce sync semaphore\n";
             noc_semaphore_inc(sync_sem_noc_addr, 1);
-            DPRINT << "Reduce fabric core waiting for sender core\n";
         }
 #elif defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {
-            DPRINT << "Sender core waiting for reduce sync semaphore\n";
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
             constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
             volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
             noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
             noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
-            DPRINT << "Sender core done waiting for reduce sync semaphore\n";
         }
 #endif
 #endif
@@ -1367,8 +1361,6 @@ void kernel_main() {
 
     while (true) {
         iteration++;
-
-        DPRINT << "before iteration " << iteration << "\n";
         moe_body();
 
         if constexpr (persistent_mode == 0) {
