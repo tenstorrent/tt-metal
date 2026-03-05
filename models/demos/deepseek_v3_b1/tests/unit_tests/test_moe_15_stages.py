@@ -435,7 +435,7 @@ def test_bcast_moe_two_stage_pipeline(
     indirect=True,
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
-@pytest.mark.parametrize("iterations", [10])
+@pytest.mark.parametrize("iterations", [1024])
 @pytest.mark.timeout(1200)
 def test_persistent_moe_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
@@ -485,7 +485,7 @@ def test_persistent_moe_15_stages(
     embedding_fifo_size = embedding_size_bytes * 2
 
     torch.manual_seed(42)
-    torch_embedding = torch.randn(1, 1, 1, K, dtype=torch.bfloat16)
+    torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
 
     reduce_root_coord = ttnn.MeshCoordinate(0, 0)
 
@@ -692,8 +692,6 @@ def test_persistent_moe_15_stages(
         pipeline_block.run()
         logger.info(f"[rank={my_mesh_id}] pipeline launched")
 
-        ttnn.distributed_context_barrier()
-
         # ── MoE stages: submit persistent kernel ──
         if my_mesh_id >= 1:
             logger.info(f"[rank={my_mesh_id}] submitting persistent MoE kernel")
@@ -735,7 +733,7 @@ def test_persistent_moe_15_stages(
                 downstream_socket=downstream_socket,
             )
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
-            ttnn.distributed_context_barrier()
+        ttnn.distributed_context_barrier()
 
         # ── Stage 0: drive pipeline with multiple tokens ──
         if is_stage0:
