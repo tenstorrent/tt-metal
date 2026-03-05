@@ -144,7 +144,7 @@ class LMHeadSampling:
         selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
 
         if not fuse_mtp:
-            return selected_index.reshape(1, 1)
+            return selected_index.reshape(1, 1), None
 
         # Step 4: Look up token embedding from embedding table
         token_id = selected_index.to(torch.int64).item()
@@ -612,13 +612,11 @@ class LMHeadSampling:
                 mcast_grid_set = ttnn.CoreRangeSet([mcast_grid])
                 num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
-                # MTP: EH matmul cores: from eh_projection_tensor (multiple cores with weight shards)
-                eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
-
                 # Compute per-core bank_id and vc for EH DRAM streaming matmul
                 if enable_mtp:
                     eh_matmul_noc = ttnn.NOC.NOC_0
                     eh_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(eh_matmul_noc)
+                    eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
                     eh_bank_id_core_values = []
                     eh_vc_core_values = []
                     eh_bank_ids = []
@@ -1169,55 +1167,15 @@ class LMHeadSampling:
                         global_sem_addr,
                         global_stage2_sem_addr,
                     ]
-                    # [MTP] All cores consume 3 alignment args, then input_core gets
-                    # MTP CCL broadcast args + embedding DRAM base addr.
+                    # [MTP] All cores consume 3 alignment args + input_core gets embedding_base
                     if enable_mtp:
                         sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
                         mtp_token_addr = int(intermediate_tensor_device.buffer_address())
+                        embedding_tensor_device = embedding_tensors_per_device[device_idx]
                         ncrisc_bcast_common_args += [
                             int(sender_core_phys.x),  # input_core_noc_x
                             int(sender_core_phys.y),  # input_core_noc_y
                             mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
-                        ]
-
-                        # MTP CCL Broadcast runtime args for token distribution
-                        mtp_wait_output_semaphore = mtp_bcast_is_secondary_sender or mtp_bcast_is_receiver
-                        mtp_reset_global_semaphore = mtp_bcast_is_secondary_sender or mtp_bcast_is_receiver
-                        mtp_out_ready_sem_wait_value = 1 * num_links
-
-                        mtp_dst_nodes = []
-                        if mtp_bcast_num_targets_forward > 0 and mtp_bcast_is_sender:
-                            forward_coord = ttnn.MeshCoordinate(row + 1, col)
-                            mtp_dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
-                        if mtp_bcast_num_targets_backward > 0 and mtp_bcast_is_sender:
-                            backward_coord = ttnn.MeshCoordinate(row - 1, col)
-                            mtp_dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
-                        if mtp_bcast_has_secondary_target:
-                            for c in range(mesh_cols):
-                                if c != col:
-                                    secondary_coord = ttnn.MeshCoordinate(row, c)
-                                    mtp_dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-                        mtp_num_connections = len(mtp_dst_nodes)
-                        mtp_ring_index = row
-
-                        ncrisc_bcast_common_args += [
-                            mtp_token_addr,  # tensor_address0 = mtp_token_addr
-                            int(out_ready_sem_addr),  # out_ready_sem_bank_addr (reuse)
-                            int(mtp_wait_output_semaphore),  # wait_output_semaphore
-                            int(mtp_reset_global_semaphore),  # reset_global_semaphore
-                            core_noc_x,  # out_ready_sem_noc0_x
-                            core_noc_y,  # out_ready_sem_noc0_y
-                            mtp_out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                            int(barrier_sem_addr),  # barrier_sem (reuse)
-                            core_noc_x,  # barrier_sem_noc0_x
-                            core_noc_y,  # barrier_sem_noc0_y
-                            mtp_ring_index,  # ring_index
-                            int(secondary_sync_sem_addr),  # secondary_sync_sem (reuse)
-                            mtp_num_connections,  # num_connections
-                        ]
-
-                        embedding_tensor_device = embedding_tensors_per_device[device_idx]
-                        ncrisc_bcast_common_args += [
                             int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
                         ]
                     brisc_bcast_common_args = [
@@ -1553,12 +1511,6 @@ class LMHeadSampling:
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_eh_matmul_core",
-                            core_range=eh_matmul_core_grid,
-                            value=1 if enable_mtp else 0,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_rmsnorm_core",
                             core_range=mcast_sender_core_grid,
                             value=1,
@@ -1588,7 +1540,19 @@ class LMHeadSampling:
                             value=1 if enable_mtp else 0,
                             other_value=0,
                         ),
-                    ],
+                    ]
+                    + (
+                        [
+                            UnifiedCompileTimeCoreDescriptor(
+                                named_compile_time_arg="is_eh_matmul_core",
+                                core_range=eh_matmul_core_grid,
+                                value=1,
+                                other_value=0,
+                            ),
+                        ]
+                        if enable_mtp
+                        else []
+                    ),
                     per_core_compile_time_descriptors=(
                         (
                             []
@@ -1604,22 +1568,18 @@ class LMHeadSampling:
                                 )
                             ]
                         )
-                        + (
-                            []
-                            if not enable_mtp
-                            else [
-                                PerCoreCompileTimeDescriptor(
-                                    named_compile_time_arg="matmul_eh_bank_id",
-                                    core_values=eh_bank_id_core_values,
-                                    other_value=0,
-                                ),
-                                PerCoreCompileTimeDescriptor(
-                                    named_compile_time_arg="matmul_eh_vc",
-                                    core_values=eh_vc_core_values,
-                                    other_value=0,
-                                ),
-                            ]
-                        )
+                        + [
+                            PerCoreCompileTimeDescriptor(
+                                named_compile_time_arg="matmul_eh_bank_id",
+                                core_values=eh_bank_id_core_values if enable_mtp else [],
+                                other_value=0,
+                            ),
+                            PerCoreCompileTimeDescriptor(
+                                named_compile_time_arg="matmul_eh_vc",
+                                core_values=eh_vc_core_values if enable_mtp else [],
+                                other_value=0,
+                            ),
+                        ]
                     ),
                     # Per-core runtime args: mesh argmax senders get BRISC sender metadata.
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
@@ -1718,13 +1678,6 @@ class LMHeadSampling:
                             fabric_node_id, dst_nodes, [0], program, writer_kernel_idx, worker_core
                         )
                         writer_rt_args_ref.extend(fabric_args)
-
-                    # MTP token CCL broadcast fabric routing
-                    if enable_mtp and mtp_num_connections > 0:
-                        mtp_fabric_args = ttnn.setup_routing_plane_connection(
-                            fabric_node_id, mtp_dst_nodes, [0], program, writer_kernel_idx, worker_core
-                        )
-                        writer_rt_args_ref.extend(mtp_fabric_args)
 
                 if not skip_ccl and is_argmax_mesh_sender_core:
                     sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)

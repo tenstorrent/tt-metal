@@ -89,7 +89,7 @@ def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor
                 indices=torch_indices_flat,
                 k=1,
                 p=1.0,
-            ).to(torch.uint32)
+            ).to(torch.uint32)[0]
             for iteration in range(iterations)
         ],
         dim=0,
@@ -117,7 +117,7 @@ def _is_persistent_mode_enabled():
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 1163264,
+            "trace_region_size": 1600000,
         }
     ],
     indirect=True,
@@ -181,7 +181,8 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
 
     # MTP tensors (only used when enable_mtp=True)
-    torch_embedding = torch.randn((n_total, embedding_dim), dtype=torch.bfloat16) if enable_mtp else None
+    # Embedding table must cover all possible token IDs (num_devices * n_total for global indices)
+    torch_embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16) if enable_mtp else None
     torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16) if enable_mtp else None
     torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16) if enable_mtp else None
     torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16) if enable_mtp else None
@@ -190,13 +191,18 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
         torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
 
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, torch_mtp_output = LMHeadSampling.golden(
         torch_a.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
         indices=torch_indices_all,
         k=1,
         p=1.0,
+        fuse_mtp=enable_mtp,
+        embedding_tensor=torch_embedding.float() if enable_mtp else None,
+        h_gamma_tensor=torch_h_gamma.float() if enable_mtp else None,
+        e_gamma_tensor=torch_e_gamma.float() if enable_mtp else None,
+        eh_projection_tensor=torch_eh_proj.float() if enable_mtp else None,
     )
 
     input_a_mem_config = ttnn.MemoryConfig(
@@ -233,8 +239,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     )
 
     # MTP-specific memory configs
-    device = submesh.get_device(ttnn.MeshCoordinate(0, 0))
-    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0) if enable_mtp else None
+    compute_cores = submesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0) if enable_mtp else None
     compute_core_grid = (
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores])
         if enable_mtp
@@ -365,9 +370,8 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         ttnn_embedding = ttnn.from_torch(
             torch_embedding,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=submesh,
-            tile=b_tile,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
         )
@@ -537,29 +541,16 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
 
     # MTP PCC check
     if enable_mtp:
-        # Compute expected MTP output for the final argmax token
-        _, torch_expected_mtp = LMHeadSampling.golden(
-            torch_a.float(),
-            torch_gamma.float(),
-            torch_b.float(),
-            indices=torch_indices_all[0],  # Single device indices
-            k=1,
-            p=1.0,
-            fuse_mtp=True,
-            embedding_tensor=torch_embedding.float(),
-            h_gamma_tensor=torch_h_gamma.float(),
-            e_gamma_tensor=torch_e_gamma.float(),
-            eh_projection_tensor=torch_eh_proj.float(),
-        )
+        assert torch_mtp_output is not None, "MTP output cannot be None"
         final_mtp_shards = ttnn.get_device_tensors(ttnn_mtp_output)
         final_mtp_torch = (
             ttnn.to_torch(final_mtp_shards[final_device_idx])
             .to(torch.float32)
             .reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
         )
-        mtp_passing_pcc, _ = comp_pcc(final_mtp_torch, torch_expected_mtp.float(), 0.99)
+        mtp_passing_pcc, _ = comp_pcc(final_mtp_torch, torch_mtp_output.float(), 0.99)
         if not mtp_passing_pcc:
-            max_diff = (final_mtp_torch - torch_expected_mtp.float()).abs().max()
+            max_diff = (final_mtp_torch - torch_mtp_output.float()).abs().max()
             logger.warning(f"MTP output PCC check failed. Max diff: {max_diff}")
         assert mtp_passing_pcc, "Perf run MTP output PCC check failed"
 
@@ -616,7 +607,7 @@ def test_single_device(
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, _ = LMHeadSampling.golden(
         torch_a.float(), torch_gamma.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0
     )
 
@@ -978,7 +969,6 @@ def test_single_device_mtp(
     assert torch.equal(
         output_index_torch, torch_expected_idx
     ), f"Fused argmax index mismatch. expected={torch_expected_idx.item()}, got={output_index_torch.item()}"
-
     mtp_output_torch = ttnn.to_torch(ttnn_mtp_output).to(torch.float32).reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
     logger.info(f"MTP output shape: {mtp_output_torch.shape}")
     logger.info(f"Expected MTP shape: {torch_expected_mtp.shape}")
@@ -1043,7 +1033,7 @@ def test_single_device_d2h(
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, _ = LMHeadSampling.golden(
         torch_a.float(), torch_gamma.float(), torch_b.float(), indices=torch_indices, k=1, p=1.0
     )
 
@@ -1232,7 +1222,7 @@ def test_multidevice(
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     # Global indices are unique across mesh devices.
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, _ = LMHeadSampling.golden(
         torch_a.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
@@ -1403,7 +1393,7 @@ def test_multidevice(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 1163264,
+            "trace_region_size": 1600000,
         }
     ],
     indirect=True,
@@ -1414,15 +1404,7 @@ def test_multidevice_mtp(
     final_mesh_coord,
     seed,
 ):
-    """4x2 mesh fused LM-head + argmax + MTP fusion with CCL enabled.
-
-    This test verifies multi-device MTP where:
-    1. Input is CCL broadcast from sender device to all devices
-    2. All devices run LM-head matmul and participate in mesh argmax
-    3. The argmax winner token is CCL broadcast from final_mesh_coord to all devices
-    4. All devices run MTP in parallel (embedding lookup, RMSNorm, concat, EH matmul)
-    5. Each device produces its local shard of the MTP output
-    """
+    """4x2 mesh fused LM-head + argmax + MTP fusion with CCL enabled."""
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -1436,11 +1418,12 @@ def test_multidevice_mtp(
 
     M = 1
     K = 7168
-    embedding_dim = 7168
-    mtp_output_dim = 7168
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
+
+    embedding_dim = 7168
+    mtp_output_dim = 7168
     tile_width = 32
     num_dram_banks = 8
     mtp_n_per_core = mtp_output_dim // num_dram_banks
@@ -1463,17 +1446,13 @@ def test_multidevice_mtp(
     final_core = ttnn.CoreCoord(0, 0)
     final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(final_core, final_core)])
 
-    # Get a representative device for DRAM bank core assignment (homogeneous mesh)
-    device = submesh.get_device(ttnn.MeshCoordinate(0, 0))
-
     torch.manual_seed(seed)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
 
-    # MTP tensors
-    torch_embedding = torch.randn((n_total, embedding_dim), dtype=torch.bfloat16)
+    torch_embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
     torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16)
     torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
@@ -1526,13 +1505,19 @@ def test_multidevice_mtp(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
-    # --- MTP specific memory configs ---
-    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+
+    compute_cores = submesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     compute_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
     )
-    eh_shard_grid = ttnn.CoreCoord(submesh.dram_grid_size().x - 1, submesh.dram_grid_size().y - 1)
-    eh_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), eh_shard_grid)})
+    eh_shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(submesh.dram_grid_size().x - 1, submesh.dram_grid_size().y - 1),
+            )
+        }
+    )
     mtp_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -1628,13 +1613,11 @@ def test_multidevice_mtp(
         mesh_mapper=mesh_mapper,
     )
 
-    # MTP tensors - replicated across all devices
     ttnn_embedding = ttnn.from_torch(
         torch_embedding,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=submesh,
-        tile=b_tile,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
@@ -1705,56 +1688,27 @@ def test_multidevice_mtp(
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
         enable_mtp=True,
-        eh_subblock_k=subblock_k,
     )
     ttnn.synchronize_device(submesh)
 
-    # Verify argmax output from final device
-    output_shards = ttnn.get_device_tensors(ttnn_output_index)
+    final_output_shards = ttnn.get_device_tensors(ttnn_output_index)
     final_device_idx = int(final_mesh_coord[0]) * mesh_cols + int(final_mesh_coord[1])
-    final_output_index = ttnn.to_torch(output_shards[final_device_idx]).to(torch.uint32).reshape(1, 1)
-    logger.info(f"Final output index: {final_output_index}")
-    logger.info(f"Expected index: {torch_expected_idx}")
+    final_output_torch = ttnn.to_torch(final_output_shards[final_device_idx]).to(torch.uint32).reshape(1, 1)
     assert torch.equal(
-        final_output_index, torch_expected_idx
-    ), f"Fused mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={final_output_index.item()}"
+        final_output_torch, torch_expected_idx
+    ), f"Fused mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={int(final_output_torch.item())}"
 
-    # Verify MTP output - trim padding from each device's output
-    mtp_output_shards = ttnn.get_device_tensors(ttnn_mtp_output)
-    mtp_outputs_per_device = []
-    for device_idx in range(num_devices):
-        shard_torch = (
-            ttnn.to_torch(mtp_output_shards[device_idx])
-            .to(torch.float32)
-            .reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
-        )
-        mtp_outputs_per_device.append(shard_torch)
-        logger.info(f"Device {device_idx} MTP output shape: {shard_torch.shape}")
-
-    # All devices should produce the same MTP output since they all got the same token
-    # via CCL broadcast and have the same EH projection weights
-    mtp_output_torch = mtp_outputs_per_device[final_device_idx]
-    logger.info(f"Final device MTP output shape: {mtp_output_torch.shape}")
-    logger.info(f"Expected MTP shape: {torch_expected_mtp.shape}")
-
-    mtp_allclose = torch.allclose(mtp_output_torch, torch_expected_mtp.float(), rtol=0.1, atol=0.1)
-    if not mtp_allclose:
-        max_diff = (mtp_output_torch - torch_expected_mtp.float()).abs().max()
-        logger.warning(f"MTP output mismatch on final device. Max diff: {max_diff}")
-
-        # Check if other devices have the same output (verifies CCL broadcast worked)
-        for device_idx in range(num_devices):
-            if device_idx != final_device_idx:
-                other_mtp = mtp_outputs_per_device[device_idx]
-                if torch.allclose(other_mtp, mtp_output_torch, rtol=0.01, atol=0.01):
-                    logger.info(f"Device {device_idx} MTP matches final device")
-                else:
-                    logger.warning(
-                        f"Device {device_idx} MTP differs from final device. "
-                        f"Max diff: {(other_mtp - mtp_output_torch).abs().max()}"
-                    )
-
-    assert mtp_allclose, "MTP output mismatch"
+    final_mtp_shards = ttnn.get_device_tensors(ttnn_mtp_output)
+    final_mtp_torch = (
+        ttnn.to_torch(final_mtp_shards[final_device_idx])
+        .to(torch.float32)
+        .reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
+    )
+    mtp_passing_pcc, _ = comp_pcc(final_mtp_torch, torch_expected_mtp.float(), 0.99)
+    if not mtp_passing_pcc:
+        max_diff = (final_mtp_torch - torch_expected_mtp.float()).abs().max()
+        logger.warning(f"MTP output PCC check failed. Max diff: {max_diff}")
+    assert mtp_passing_pcc, "MTP output PCC check failed"
 
 
 @pytest.mark.parametrize("use_fp32", [True])
@@ -1821,7 +1775,7 @@ def test_d2h(
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, _ = LMHeadSampling.golden(
         torch_a.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
@@ -2085,7 +2039,7 @@ def test_d2d_to_d2h_pipeline(
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, _ = LMHeadSampling.golden(
         torch_a.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
@@ -2405,7 +2359,7 @@ def test_4stage_galaxy_1_iteration(
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
-    torch_expected_idx = LMHeadSampling.golden(
+    torch_expected_idx, _ = LMHeadSampling.golden(
         torch_a.float(),
         torch_gamma.float(),
         torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),

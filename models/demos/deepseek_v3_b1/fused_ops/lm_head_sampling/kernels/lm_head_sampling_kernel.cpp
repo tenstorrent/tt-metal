@@ -71,7 +71,7 @@ struct Core {
     static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
     static constexpr bool enable_mtp = get_named_compile_time_arg_val("enable_mtp") == 1;
-    static constexpr bool is_eh_matmul_core = get_named_compile_time_arg_val("is_eh_matmul_core") == 1;
+    static constexpr bool is_eh_matmul_core = enable_mtp && get_named_compile_time_arg_val("is_eh_matmul_core") == 1;
 };
 
 void kernel_main() {
@@ -560,7 +560,6 @@ void kernel_main() {
                 Core::is_input_core ? get_read_ptr(eh_src_cb) : 0,
                 get_write_ptr(eh_dst_cb),
             };
-            cb_wait_front(eh_src_cb, get_named_compile_time_arg_val("mcast_eh_src_num_pages"));
             deepseek_b1_ops::Mcast::
                 Op<McastEhSenderCTArgs, true, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
                     mcast_eh_sender;
