@@ -8,6 +8,6 @@ transformer_config:
   num_blocks: 32
   vocab_size: 30_000  # LLaMA 3 vocab size, will be rounded up to be divisible by 32*8 (should be 150k but we don't support embedding layer parallelism yet)
   max_sequence_length: 256
-  runner_type: default
+  runner_type: memory_efficient
   theta: 500000.0
   weight_tying: "disabled"

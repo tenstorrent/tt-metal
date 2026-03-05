@@ -17,6 +17,10 @@ cmake.targets = ["_ttml"]
 [tool.scikit-build.install]
 components = ["ttml"]
 
+[tool.scikit-build.cmake.define]
+CMAKE_C_COMPILER = "clang-20"
+CMAKE_CXX_COMPILER = "clang++-20"
+
 [project]
 name = "ttml"
 authors=[

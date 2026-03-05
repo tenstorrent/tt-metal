@@ -233,16 +233,9 @@ def main(config: str):
     shard_dim = 3
     device = ttml.autograd.AutoContext.get_instance().get_device()
     ttnn.distributed_context_barrier()
-    connections_to_test = [
-        (0, 1),
-        (1, 2),
-        (2, 3),
-        (3, 0),
-        (0, 3),
-        (3, 2),
-        (2, 1),
-        (1, 0),
-    ]
+
+    connections_to_test = [(i, (i + 1) % world_size) for i in range(world_size)]
+    connections_to_test += [((i + 1) % world_size, i) for i in range(world_size)]
 
     for sender, receiver in connections_to_test:
         if rank == receiver:

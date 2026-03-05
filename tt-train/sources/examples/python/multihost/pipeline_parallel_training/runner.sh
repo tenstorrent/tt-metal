@@ -1,17 +1,17 @@
 #!/bin/bash
-#SBATCH --partition=bh_pod_4x32_C12
+#SBATCH --partition=bh_sp_5x4x32_C1_C10
 #SBATCH --nodes=4
-#SBATCH --nodelist=bh-glx-c01u02,bh-glx-c02u02,bh-glx-c02u08,bh-glx-c01u08
+#SBATCH --nodelist=bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u08,bh-glx-c02u02
 #SBATCH --job-name=pipeline_parallel_training_batch_1
 #SBATCH --output=pipeline_parallel_training_%j.out
 #SBATCH --error=pipeline_parallel_training_%j.err
 
 # Note: Manually set the workload here
-WORKLOAD="llama405b"
+WORKLOAD="llama8b"
 
 # Common environmental variables
 if [ -z "${TT_METAL_HOME:-}" ]; then
-    TT_METAL_HOME="/data/${USER}/tt-metal"
+    TT_METAL_HOME="/data/${USER}/llama/tt-metal"
 fi
 export TT_METAL_HOME
 export PYTHONPATH="${TT_METAL_HOME}"
