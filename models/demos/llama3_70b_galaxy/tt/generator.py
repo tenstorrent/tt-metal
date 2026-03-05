@@ -337,10 +337,6 @@ class Generator(WarmupForwardMixin):
 
             # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
             tt_logits_batch = ttnn.concat(logits_source, dim=2)
-            # Sample using the sampling module
-            # Logits are in sharded format (before all-gather), same as decode
-            # sampling_params are already padded to 32 by format_sampling_params
-            self.model.switch_mode("decode")
 
             # Setting sampling module up after switch to decode mode
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
