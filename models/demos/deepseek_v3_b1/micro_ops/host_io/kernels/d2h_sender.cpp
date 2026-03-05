@@ -10,7 +10,7 @@
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+    while (!socket_wait_for_pages(socket, num_pages)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
             return false;
@@ -83,11 +83,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
+    uint32_t iteration = 0;
     while (true) {
         // Wait for space in D2H socket
-        DPRINT << "D2H Reserve pages" << ENDL();
+        DPRINT << "D2H Reserve pages iteration " << iteration << ENDL();
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "D2H Reserve pages done" << ENDL();
+        DPRINT << "D2H Reserve pages done iteration " << iteration << ENDL();
         if constexpr (loopback_mode) {
             // Wait for data in CB with termination checks
             if (!cb_wait_for_pages_with_termination(upstream_interface_index, 1, termination_semaphore)) {
@@ -105,11 +106,11 @@ void kernel_main() {
             cb_pop_front(upstream_interface_index, 1);
         } else {
             // Wait for pages in receiver socket with timeout and termination checks
-            DPRINT << "D2H wait for pages with termination" << ENDL();
+            DPRINT << "D2H wait for pages with termination iteration " << iteration << ENDL();
             if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
                 break;
             }
-            DPRINT << "D2H wait for pages with termination done" << ENDL();
+            DPRINT << "D2H wait for pages with termination done iteration " << iteration << ENDL();
             uint32_t read_addr = receiver_socket.read_ptr;
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
@@ -135,6 +136,7 @@ void kernel_main() {
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
         invalidate_l1_cache();
+        iteration++;
     }
 
     update_socket_config(sender_socket);
