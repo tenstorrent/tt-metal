@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 // Prefer to use API rather than internals in this
 // test as we are testing end to end functionality
@@ -183,6 +185,98 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
         ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
     }
 
+    tt::tt_metal::experimental::DestroyAllContexts();
+}
+
+TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
+    // Query hardware state before forking
+    {
+        auto env = std::make_shared<MetaliumEnv>();
+        auto silicon_context_id = tt::tt_metal::experimental::CreateContext(env);
+        EXPECT_EQ(silicon_context_id, SILICON_CONTEXT_ID);
+
+        auto arch = tt::tt_metal::experimental::hal::get_arch(*env);
+        auto l1_size = tt::tt_metal::experimental::hal::get_l1_size(*env);
+        auto num_devices = tt::tt_metal::experimental::GetNumAvailableDevices(env);
+        log_info(tt::LogTest, "Pre-fork: arch={}, L1 size={}, num_devices={}", arch, l1_size, num_devices);
+        EXPECT_GT(l1_size, 0u);
+        EXPECT_GT(num_devices, 0u);
+    }
+
+    // Tear down all state so we can safely fork
+    tt::tt_metal::experimental::DestroyAllContexts();
+
+    int pipe_fd[2];
+    ASSERT_EQ(pipe(pipe_fd), 0) << "pipe() failed";
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        close(pipe_fd[0]);
+        close(pipe_fd[1]);
+        FAIL() << "Failed to fork";
+    }
+
+    if (pid == 0) {
+        // Child: create and verify a mock mesh device
+        close(pipe_fd[1]);
+
+        auto mock_env = std::make_shared<MetaliumEnv>(
+            MetaliumEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2).value()));
+        int mock_context_id = MetalContext::create_instance(mock_env);
+
+        if (mock_context_id < 1 || !MetalContext::instance(mock_context_id).rtoptions().get_mock_enabled()) {
+            _exit(1);
+        }
+
+        if (tt::tt_metal::experimental::hal::get_arch(*mock_env) != tt::ARCH::BLACKHOLE) {
+            _exit(2);
+        }
+
+        auto mock_mesh_shape = MetalContext::instance(mock_context_id).get_system_mesh().shape();
+        auto mock_mesh_device =
+            distributed::MeshDevice::create(mock_context_id, distributed::MeshDeviceConfig(mock_mesh_shape));
+        if (mock_mesh_device->get_devices().size() != 2) {
+            _exit(3);
+        }
+
+        char byte = 0;
+        if (read(pipe_fd[0], &byte, 1) != 1) {
+            _exit(4);
+        }
+        close(pipe_fd[0]);
+
+        _exit(0);
+    }
+
+    // Parent: real device work
+    close(pipe_fd[0]);
+
+    auto silicon_env = std::make_shared<MetaliumEnv>();
+    auto silicon_context_id = tt::tt_metal::experimental::CreateContext(silicon_env);
+    ASSERT_EQ(silicon_context_id, SILICON_CONTEXT_ID);
+
+    auto real_arch = tt::tt_metal::experimental::hal::get_arch(*silicon_env);
+    auto real_l1_size = tt::tt_metal::experimental::hal::get_l1_size(*silicon_env);
+    log_info(tt::LogTest, "Parent (real): arch={}, L1 size={}", real_arch, real_l1_size);
+    EXPECT_GT(real_l1_size, 0u);
+
+    auto mesh_shape = MetalContext::instance(silicon_context_id).get_system_mesh().shape();
+    auto silicon_mesh_device =
+        distributed::MeshDevice::create(silicon_context_id, distributed::MeshDeviceConfig(mesh_shape));
+    EXPECT_GT(silicon_mesh_device->num_devices(), 0u);
+    log_info(tt::LogTest, "Parent: created silicon mesh device with shape {}", silicon_mesh_device->shape().dims());
+
+    // Signal child to exit
+    char byte = 1;
+    ASSERT_EQ(write(pipe_fd[1], &byte, 1), 1) << "write(pipe) failed";
+    close(pipe_fd[1]);
+
+    int status = 0;
+    ASSERT_EQ(waitpid(pid, &status, 0), pid);
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+
+    silicon_mesh_device.reset();
     tt::tt_metal::experimental::DestroyAllContexts();
 }
 
