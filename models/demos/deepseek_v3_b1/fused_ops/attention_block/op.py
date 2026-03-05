@@ -859,7 +859,7 @@ class AttentionBlock:
         mla_ms_in_cb = 39  # Output MS CB for MLA
         mla_out_o_cb = 40  # Output O CB for MLA
         mla_out_ms_cb = 41  # Output MS CB for MLA
-        mla_out_final_cb = 42  # Output final CB for MLA
+        mla_out_final_cb = mla_out_o_cb  # Output final CB for MLA, unused for full fused attention block
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = 43  # Packet buffer for CCL broadcast
@@ -2565,17 +2565,6 @@ class AttentionBlock:
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(mla_out_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
                             ttnn.CBFormatDescriptor(mla_interm_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
-                        ],
-                    )
-                )
-
-                # mla_out_final_cb: output of flash mla
-                mla_cb_descriptors.append(
-                    ttnn.CBDescriptor(
-                        total_size=out0_t * q_tile_size,
-                        core_ranges=mla_input_output_crs,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(mla_out_final_cb, q_df, q_tile_size, q_tile_descriptor),
                         ],
                     )
                 )
