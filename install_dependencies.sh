@@ -350,9 +350,11 @@ prep_redhat_system() {
         return
     fi
 
-    # RHEL/Rocky/Alma: enable EPEL and CRB for devel packages
+    # RHEL/Rocky/Alma/Oracle: enable EPEL and CRB for devel packages
     echo "[INFO] Installing EPEL repository and dnf plugins..."
-    dnf install -y epel-release dnf-plugins-core
+    dnf install -y epel-release dnf-plugins-core 2>/dev/null || \
+        dnf install -y oracle-epel-release-el10 dnf-plugins-core 2>/dev/null || \
+        echo "[WARNING] Could not install EPEL repository"
 
     echo "[INFO] Enabling CRB repository for development packages..."
     dnf config-manager --set-enabled crb 2>/dev/null || \
