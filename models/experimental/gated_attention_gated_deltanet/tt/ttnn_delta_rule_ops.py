@@ -61,8 +61,8 @@ def recurrent_delta_rule_step_ttnn(
 
     # 1. Decay the state: h = h * exp(g_t)
     decay = ttnn.exp(g_t)  # [B, H]
-    decay = ttnn.reshape(decay, [B, H, 1, 1])  # [B, H, 1, 1]
-    h = ttnn.multiply(h, decay)
+    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, 1]
+    h = ttnn.multiply(h, decay)  # keep h in DRAM for matmul PCC stability
 
     # 2. Read from state via matmul: v_read = k^T @ h
     k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, K]
@@ -84,7 +84,7 @@ def recurrent_delta_rule_step_ttnn(
     q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
 
     o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
-    o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
+    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, V]
 
     return o_t, h
 
@@ -170,7 +170,7 @@ def recurrent_gated_delta_rule_ttnn(
         outputs.append(o_t)
 
     # Concat outputs: reshape each [B, H, V] -> [B, H, 1, V] then concat
-    outputs_4d = [ttnn.reshape(o, [B, H, 1, V]) for o in outputs]
+    outputs_4d = [ttnn.reshape(o, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG) for o in outputs]
     o = ttnn.concat(outputs_4d, dim=2)  # [B, H, T, V]
 
     # Transpose back to [B, T, H, V]
