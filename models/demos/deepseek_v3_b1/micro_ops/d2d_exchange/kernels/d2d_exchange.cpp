@@ -147,6 +147,8 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
+    DPRINT << "Starting d2d exchange kernel" << ENDL();
+
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -186,7 +188,6 @@ void kernel_main() {
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
-    uint32_t iteration = 0;
     while (true) {
         socket_reserve_pages(sender_socket, 1);
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
@@ -215,7 +216,6 @@ void kernel_main() {
         } else {
             socket_notify_sender(receiver_socket);
         }
-        iteration++;
     }
 
     update_socket_config(sender_socket);
