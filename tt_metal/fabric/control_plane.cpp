@@ -456,7 +456,7 @@ void ControlPlane::init_control_plane(
     const auto& rtoptions = this->rtoptions_.get();
     auto fabric_config = this->get_fabric_config();
 
-    // Numbert of hosts
+    // Number of hosts
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
@@ -1129,7 +1129,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     const auto& connected_chips_and_eth_cores =
                         this->cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
-                    // If connected_chips_and_eth_cores contains physical_connected_chip_id then atleast one connection
+                    // If connected_chips_and_eth_cores contains physical_connected_chip_id then at least one connection
                     // exists to physical_connected_chip_id
                     bool connections_exist = connected_chips_and_eth_cores.contains(physical_connected_chip_id);
                     TT_FATAL(
@@ -2223,7 +2223,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip = this->cluster_.get().get_fabric_ethernet_channels(*this, physical_chip_id);
 
-    // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+    // TODO: add logic here to disable unused routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
     } else {

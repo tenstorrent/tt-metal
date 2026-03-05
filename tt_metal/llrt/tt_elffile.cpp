@@ -43,7 +43,7 @@ std::string format(std::string m, Args&&...) {
 // NOLINTBEGIN (readability-redundant-access-specifiers)
 // NOLINTBEGIN (cppcoreguidelines-explicit-virtual-function)
 
-// Verify some knowledge of, and compatibilty with, RiscV
+// Verify some knowledge of, and compatibility with, RiscV
 #ifndef EM_RISCV
 #error "Don't know RISCV elf details"
 #endif
@@ -175,7 +175,7 @@ private:
             // case of a zero length section sitting at that
             // boundary. We also take advantage of the (a) fact that
             // sections cannot straddle segment boundaries -- they're
-            // either wholey inside or wholey outside, and (b)
+            // either wholly inside or wholly outside, and (b)
             // unsigned arithmetic.
             if (shdr.sh_addr + shdr.sh_size - seg.address <= seg.membytes) {
                 return &seg;
@@ -721,7 +721,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
     // lui/lo12 pairings. We have to use heuristics to locate the
     // matching relocs and that could get arbitrarily hard. We
     // presume (a) the compiler doesn't duplicate lui insns, and
-    // (b) the lui preceeds the lo12 in program counter
+    // (b) the lui precedes the lo12 in program counter
     // order. Thus we look for a hi20 reloc matching the symbol at
     // a lower offset than the lo12 in question. Fortunately we
     // only need to do this for relocs that need translating, and
