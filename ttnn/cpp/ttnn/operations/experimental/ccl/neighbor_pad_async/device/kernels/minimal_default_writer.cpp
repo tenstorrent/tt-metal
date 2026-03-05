@@ -93,14 +93,10 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
-    // Both H and W writers: open fabric at kernel start when needed.
-    // H writers: always open at start (for data transfer in main loop).
-    // W writers: open at start ONLY for startup barrier (defer data transfer until CB ready).
+    // H writers: always open fabric at start (for data transfer in main loop).
+    // W writers: open at start only when startup barrier is enabled (defer data transfer until CB ready).
     bool fabric_opened = false;
-    if constexpr (!is_w_fabric_writer) {
-        fabric_connection.open();
-        fabric_opened = true;
-    } else if (use_barrier_sem) {
+    if (!is_w_fabric_writer || use_barrier_sem) {
         fabric_connection.open();
         fabric_opened = true;
     }
