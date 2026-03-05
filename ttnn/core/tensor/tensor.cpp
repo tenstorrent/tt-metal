@@ -88,8 +88,9 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
-        mesh_device_ = buffer->device();
+    if (device_storage().is_allocated()) {
+        auto buffer = device_storage().get_mesh_buffer();
+        mesh_device_ = buffer.device();
     }
 }
 
@@ -485,7 +486,7 @@ void memcpy(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, src.device_storage().get_mesh_buffer(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, src.device_storage().get_mesh_buffer_leak_ownership(), blocking);
 }
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
@@ -504,7 +505,7 @@ void memcpy(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<void*>(src))
             .region(region)};
-    queue.enqueue_write_shards(dst.device_storage().get_mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(dst.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
 }
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
@@ -591,7 +592,7 @@ distributed::MeshDevice* Tensor::device() const {
     return nullptr;
 }
 
-const distributed::MeshBuffer& Tensor::mesh_buffer() const { return *device_storage().get_mesh_buffer(); }
+const distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
 
 const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
 
