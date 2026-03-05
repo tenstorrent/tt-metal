@@ -211,7 +211,6 @@ void sub_exp_block_bcast_cols(
             dst_index += tiles_per_column;
 #else
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                // Absolute position in cb_qkt_im
                 uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base + j;
                 sub_tiles_bcast_cols(inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index++);
             }
@@ -637,7 +636,8 @@ static void sdpa_inner_loop_step(
     const bool is_first_iter,
     [[maybe_unused]] const bool apply_mask = false,
     const uint32_t lw_num_padded = 0,
-    const uint32_t lw_partial_tile_idx = 0) {
+    const uint32_t lw_partial_tile_idx = 0,
+    const uint32_t effective_kt_subblocks = 0) {
     constexpr uint32_t sbh = subblock_h;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t qkt_subblock_w = 8 / sbh;
@@ -645,6 +645,10 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t kt_num_full_subblocks = Sk_chunk_t / qkt_subblock_w;
     constexpr uint32_t kt_remainder = Sk_chunk_t % qkt_subblock_w;
     constexpr bool has_partial_subblock = (kt_remainder > 0);
+    // Runtime k-padding skip: when effective_kt_subblocks > 0, only process that many
+    // subblocks in Phase 1 and Phase 2 drain. Skipped subblocks are handled by ring mask.
+    const uint32_t runtime_kt_subblocks = (effective_kt_subblocks > 0) ? effective_kt_subblocks : kt_num_full_subblocks;
+    const bool runtime_has_partial = (effective_kt_subblocks > 0) ? false : has_partial_subblock;
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
     constexpr uint32_t row_tiles = sbh * KT_stride;  // Use KT_stride for cb_qkt_im row width
 
@@ -696,7 +700,7 @@ static void sdpa_inner_loop_step(
 #else
         mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
 #endif
-        for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
+        for (uint32_t kt_subblock = 0; kt_subblock < runtime_kt_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 if constexpr (!uniform_unpack_format) {
@@ -741,25 +745,32 @@ static void sdpa_inner_loop_step(
             }
         }
         // Partial last subblock: only present on the reduced path (effective_Sk % qkt_subblock_w != 0).
+        // Skipped when runtime k-padding skip is active (runtime_has_partial = false).
         if constexpr (has_partial_subblock) {
-            if (q_subblock > 0) {
-                uint32_t prev_q_subblock = q_subblock - 1;
-                if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
+            if (runtime_has_partial) {
+                if (q_subblock > 0) {
+                    uint32_t prev_q_subblock = q_subblock - 1;
+                    if constexpr (!uniform_unpack_format) {
+                        reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
+                    }
+                    sub_exp_block_bcast_cols<
+                        PROFILING_ENABLED,
+                        scale_fp32,
+                        sbh,
+                        kt_remainder,
+                        true,
+                        VectorMode::RC,
+                        true /*blocked_pack*/>(
+                        cb_qkt_im,
+                        cur_max,
+                        cur_sum,
+                        KT_stride,
+                        prev_q_subblock,
+                        kt_num_full_subblocks * qkt_subblock_w);
                 }
-                sub_exp_block_bcast_cols<
-                    PROFILING_ENABLED,
-                    scale_fp32,
-                    sbh,
-                    kt_remainder,
-                    true,
-                    VectorMode::RC,
-                    true /*blocked_pack*/>(
-                    cb_qkt_im, cur_max, cur_sum, KT_stride, prev_q_subblock, kt_num_full_subblocks * qkt_subblock_w);
-            }
-            {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack (partial)");
-                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
+                {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack (partial)");
+                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
 #ifdef ARCH_BLACKHOLE
                 mm_no_mop_init_short(cb_q_in, cb_kt_in, true, kt_remainder, sbh, in0_block_w);
 #else
@@ -783,6 +794,7 @@ static void sdpa_inner_loop_step(
                     kt_index_offset,
                     q_subblock,
                     kt_num_full_subblocks * qkt_subblock_w);
+                }
             }
         }
         // Restore float16b for mask/reduce after Q@KT.
@@ -807,7 +819,7 @@ static void sdpa_inner_loop_step(
             if (apply_mask && (lw_partial_tile_idx > 0 || lw_num_padded > 0)) {
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
-                apply_lightweight_mask_streaming<Sk_chunk_t, sbh>(
+                apply_lightweight_mask_streaming<KT_stride, sbh>(
                     cb_mask_in, cb_qkt_im, q_subblock, lw_num_padded, lw_partial_tile_idx > 0, lw_partial_tile_idx);
                 PACK((llk_pack_reconfig_l1_acc(0)));
             }
@@ -878,7 +890,7 @@ static void sdpa_inner_loop_step(
             // sbh>1 or partial subblock: non-split drain (all sub_exp first, then full V matmul).
             if constexpr (sbh == 1 && !has_partial_subblock) {
                 constexpr uint32_t matmul_inner = qktv_in0_block_w / kt_num_full_subblocks;
-                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                for (uint32_t kt_sub = 0; kt_sub < runtime_kt_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                         cb_qkt_im, cur_max, cur_sum, KT_stride, q_num_subblocks - 1, kt_sub * qkt_subblock_w);
 
@@ -931,18 +943,20 @@ static void sdpa_inner_loop_step(
                 }
             } else {
                 // Non-split drain: drain all sub_exp in-place, then full matmul.
-                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                for (uint32_t kt_sub = 0; kt_sub < runtime_kt_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
                         cb_qkt_im, cur_max, cur_sum, KT_stride, q_num_subblocks - 1, kt_sub * qkt_subblock_w);
                 }
                 if constexpr (has_partial_subblock) {
-                    sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, kt_remainder, true>(
-                        cb_qkt_im,
-                        cur_max,
-                        cur_sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_num_full_subblocks * qkt_subblock_w);
+                    if (runtime_has_partial) {
+                        sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, kt_remainder, true>(
+                            cb_qkt_im,
+                            cur_max,
+                            cur_sum,
+                            KT_stride,
+                            q_num_subblocks - 1,
+                            kt_num_full_subblocks * qkt_subblock_w);
+                    }
                 }
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
@@ -1294,7 +1308,9 @@ template <
     uint32_t cb_lse_out,
     uint32_t cb_prev_out,
     uint32_t cb_out,
-    bool uniform_dataformat = false>
+    bool uniform_dataformat = false,
+    uint32_t local_n_padded_tiles_ct = 0,
+    uint32_t joint_n_padded_tiles_ct = 0>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1319,6 +1335,14 @@ void sdpa_ring_v2(
     const LightweightMaskContext& lw_mask = {}) {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool uniform_format = uniform_dataformat;
+
+    // Runtime k-padding skip: compute effective K subblocks for padded local/joint chunks.
+    // Uses the larger padding (= fewer useful subblocks) for both local and joint.
+    constexpr uint32_t qkt_sbw = 8 / subblock_h;
+    constexpr uint32_t max_padded =
+        (local_n_padded_tiles_ct > joint_n_padded_tiles_ct) ? local_n_padded_tiles_ct : joint_n_padded_tiles_ct;
+    constexpr uint32_t effective_Sk = Sk_chunk_t - max_padded;
+    constexpr uint32_t effective_kt_subs = (effective_Sk + qkt_sbw - 1) / qkt_sbw;
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
@@ -1361,8 +1385,18 @@ void sdpa_ring_v2(
                 }
             }
 
-            // Call streaming step with ring_mode=true (skip normalization, always push)
-            // is_last_iter=false: Q pop and finalization handled by this outer loop.
+            // Runtime k-padding skip: pass effective_kt_subs for local/joint padded chunks
+            bool is_local_n_mask_chunk = local_n_needs_masking && k_chunk == local_n_mask_chunk_id;
+            bool is_joint_n_mask_chunk = ring_iter_needs_joint_n_mask && kv_chunk_is_joint &&
+                                         (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id;
+            bool global_n_also_applies = ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id;
+            uint32_t kt_skip_param = 0;  // 0 = use all subblocks (no skip)
+            if constexpr (max_padded > 0) {
+                if ((is_local_n_mask_chunk && !global_n_also_applies) || is_joint_n_mask_chunk) {
+                    kt_skip_param = effective_kt_subs;
+                }
+            }
+
             sdpa_inner_loop_step<
                 false,  // PROFILING_ENABLED
                 Sq_chunk_t,
@@ -1396,7 +1430,8 @@ void sdpa_ring_v2(
                 is_first,
                 apply_mask,
                 lw_num_padded,
-                lw_partial_tile_idx);
+                lw_partial_tile_idx,
+                kt_skip_param);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
