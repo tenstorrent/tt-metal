@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <map>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/constants.hpp>
@@ -30,6 +31,15 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     const Tensor& output = output_tensor;
     auto pad_value = operation_attributes.pad_value;
 
+    const auto buf_shard_spec = input.buffer()->shard_spec();
+    log_info(
+        tt::LogTest,
+        "Tilize height-sharded input pages: aligned_page_size={} page_size={} tensor2d_shape_in_pages=[{}, {}]",
+        input.buffer()->aligned_page_size(),
+        input.buffer()->page_size(),
+        buf_shard_spec.tensor2d_shape_in_pages[0],
+        buf_shard_spec.tensor2d_shape_in_pages[1]);
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -47,15 +57,60 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     uint32_t output_width = output_shape[-1];
     uint32_t num_batches = output.physical_volume() / (output_height * output_width);
 
-    // const uint32_t input_shard_height = input_shard_spec.shape[0];
+    log_info(
+        tt::LogTest,
+        "Tilize height-sharded shapes: input_logical={} input_padded={} output_logical={} output_padded={} "
+        "num_batches={}",
+        input.logical_shape(),
+        input.padded_shape(),
+        output.logical_shape(),
+        output.padded_shape(),
+        num_batches);
+
+    const uint32_t input_shard_height = input_shard_spec.shape[0];
     const uint32_t input_shard_width = input_shard_spec.shape[1];
     const uint32_t output_shard_height = output_shard_spec.shape[0];
     const uint32_t output_shard_width = output_shard_spec.shape[1];
 
-    const uint32_t tiles_per_row = output_shard_width / TILE_WIDTH;
-    const uint32_t tile_rows = output_shard_height / TILE_HEIGHT;
-    const uint32_t total_tiles_per_core = tiles_per_row * tile_rows * num_batches;
+    const uint32_t output_shard_count = shard_builder::get_sharding_core_count(output);
     const uint32_t global_logical_height = input.padded_shape()[-2];  // Need for batch row stride.
+
+    TT_FATAL(num_batches > 0, "num_batches must be > 0");
+    const uint32_t total_logical_height = global_logical_height * num_batches;
+    const bool shard_is_batch_partition = (num_batches > 1) && (output_shard_height == global_logical_height) &&
+                                          (input_shard_height == output_shard_height) &&
+                                          (output_shard_count == num_batches);
+    TT_FATAL(
+        shard_is_batch_partition || output_shard_height % num_batches == 0,
+        "Output shard height must be divisible by num_batches when sharding within a batch");
+    const uint32_t effective_num_batches = shard_is_batch_partition ? 1 : num_batches;
+    const uint32_t output_shard_height_per_batch =
+        shard_is_batch_partition ? output_shard_height : (output_shard_height / num_batches);
+
+    TT_FATAL(output_shard_height % TILE_HEIGHT == 0, "Output shard height must be TILE_HEIGHT-aligned");
+    TT_FATAL(output_shard_width % TILE_WIDTH == 0, "Output shard width must be TILE_WIDTH-aligned");
+
+    const uint32_t tiles_per_row = output_shard_width / TILE_WIDTH;
+    const uint32_t tile_rows = output_shard_height_per_batch / TILE_HEIGHT;
+    const uint32_t total_tiles_per_core = tiles_per_row * tile_rows * effective_num_batches;
+
+    log_info(
+        tt::LogTest,
+        "Tilize height-sharded params: input_shard_h={} input_shard_w={} output_shard_h={} output_shard_h_per_batch={} "
+        "output_shard_w={} tiles_per_row={} tile_rows={} total_tiles_per_core={} global_logical_height={} "
+        "effective_num_batches={} shard_is_batch_partition={} total_logical_height={}",
+        input_shard_height,
+        input_shard_width,
+        output_shard_height,
+        output_shard_height_per_batch,
+        output_shard_width,
+        tiles_per_row,
+        tile_rows,
+        total_tiles_per_core,
+        global_logical_height,
+        effective_num_batches,
+        shard_is_batch_partition,
+        total_logical_height);
 
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0, program, all_cores, input_single_tile_size, tiles_per_row * 2, input_cb_data_format);
@@ -112,10 +167,39 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
-    const std::vector<CoreCoord> shard_cores = shard_builder::get_shard_cores(output);
+    const tt::tt_metal::IDevice* device = output.device();
+    const auto core_ranges = output.buffer()->shard_spec().grid().ranges();
+    const bool shard_grid_transposed =
+        ((output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+          output_shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
+         ((output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
+          output_shard_spec.orientation == ShardOrientation::COL_MAJOR));
+    const bool is_dram = output.memory_config().is_dram();
+
+    std::vector<CoreCoord> logical_cores;
+    std::vector<CoreCoord> shard_cores;
+    for (const auto& core_range : core_ranges) {
+        if (shard_grid_transposed) {
+            for (uint32_t x_index = core_range.start_coord.x; x_index <= core_range.end_coord.x; x_index++) {
+                for (uint32_t y_index = core_range.start_coord.y; y_index <= core_range.end_coord.y; y_index++) {
+                    CoreCoord logical_core(x_index, y_index);
+                    logical_cores.push_back(logical_core);
+                    shard_cores.push_back(is_dram ? logical_core : device->worker_core_from_logical_core(logical_core));
+                }
+            }
+        } else {
+            for (uint32_t y_index = core_range.start_coord.y; y_index <= core_range.end_coord.y; y_index++) {
+                for (uint32_t x_index = core_range.start_coord.x; x_index <= core_range.end_coord.x; x_index++) {
+                    CoreCoord logical_core(x_index, y_index);
+                    logical_cores.push_back(logical_core);
+                    shard_cores.push_back(is_dram ? logical_core : device->worker_core_from_logical_core(logical_core));
+                }
+            }
+        }
+    }
     const uint32_t shard_count = shard_cores.size();
     const uint32_t input_shard_count = shard_builder::get_sharding_core_count(input);
-    const uint32_t output_shard_count = shard_builder::get_sharding_core_count(output);
     TT_FATAL(
         input_shard_count == shard_count && output_shard_count == shard_count,
         "Input/output shard core counts must match for height-sharded tilize (input={}, output={}, program={})",
@@ -123,7 +207,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         output_shard_count,
         shard_count);
 
-    const auto input_shard_map = shard_builder::generate_run_time_args(input);
     const auto output_shard_map = shard_builder::generate_run_time_args(output);
     auto get_core_index = [](const std::vector<uint32_t>& shard_map, const CoreCoord& core, uint32_t core_count) {
         const uint32_t packed = ((core.x & 0xFF) << 8) | (core.y & 0xFF);
@@ -151,16 +234,19 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     // Per-core RT args.
     for (uint32_t i = 0; i < shard_count; ++i) {
         const auto& core = shard_cores[i];
-        const uint32_t reader_core_index = get_core_index(input_shard_map, core, shard_count);
+        const auto& logical_core = logical_cores[i];
         const uint32_t writer_core_index = get_core_index(output_shard_map, core, shard_count);
 
         // Shard start row per batch
-        const uint32_t shard_start_row = reader_core_index * output_shard_height;
+        const uint32_t shard_start_row = shard_is_batch_partition ? (writer_core_index * output_shard_height)
+                                                                  : (writer_core_index * output_shard_height_per_batch);
         const uint32_t logical_height_core =
-            shard_start_row < global_logical_height
-                ? std::min(output_shard_height, global_logical_height - shard_start_row)
-                : 0;
-        const uint32_t padded_height_core = output_shard_height;
+            shard_is_batch_partition
+                ? output_shard_height_per_batch
+                : (shard_start_row < global_logical_height
+                       ? std::min(output_shard_height_per_batch, global_logical_height - shard_start_row)
+                       : 0);
+        const uint32_t padded_height_core = output_shard_height_per_batch;
 
         // For block Sharding support: Column offset in bytes. For pure HEIGHT, 0.
         const uint32_t start_col_bytes = 0;  // !TODO: later support.
@@ -175,16 +261,16 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             output_shard_width,     // padded_width
             logical_height_core,    // logical_height
             padded_height_core,     // padded_height
-            global_logical_height,
+            shard_is_batch_partition ? total_logical_height : global_logical_height,
             shard_start_row,
             start_col_bytes,  // For block support.
             tiles_per_row,
             tile_rows,
-            num_batches,
+            effective_num_batches,
             packed_pad_value};
 
         shard_builder::extend_sharding_run_time_args(input, reader_rt_args);
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        SetRuntimeArgs(program, reader_kernel_id, logical_core, reader_rt_args);
 
         // Tile offset per core.
         const uint32_t shard_start_tile = writer_core_index * total_tiles_per_core;
@@ -194,7 +280,7 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             shard_start_tile};
 
         shard_builder::extend_sharding_run_time_args(output, writer_rt_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        SetRuntimeArgs(program, writer_kernel_id, logical_core, writer_rt_args);
     }
 
     return cached_program_t(
@@ -204,7 +290,7 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             .writer_kernel_id = writer_kernel_id,
             .cb_src0 = cb_src0,
             .cb_output = cb_output,
-            .cores = shard_cores});
+            .cores = logical_cores});
 }
 
 void TilizeWithValPaddingMultiCoreHeightShardedFactory::override_runtime_arguments(

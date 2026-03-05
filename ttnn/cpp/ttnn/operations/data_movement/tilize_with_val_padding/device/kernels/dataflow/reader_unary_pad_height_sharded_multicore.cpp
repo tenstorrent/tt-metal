@@ -86,7 +86,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         const uint32_t batch_row_base = b * global_logical_height;
 
-        for (uint32_t tr = 0; tr < tile_rows_core) {
+        for (uint32_t tr = 0; tr < tile_rows_core; ++tr) {
             cb_reserve_back(cb_id_0, tiles_per_row);
             uint32_t l1 = get_write_ptr(cb_id_0);
 
