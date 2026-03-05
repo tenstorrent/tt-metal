@@ -43,13 +43,13 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(3);
     constexpr uint32_t Wt = get_compile_time_arg_val(4);
     constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(6);
 
-    constexpr auto s0_args = TensorAccessorArgs<6>();
+    constexpr auto s0_args = TensorAccessorArgs<7>();
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t tile_bytes_input_values = get_tile_size(input_values_cb_index);
 
     const auto s0 = TensorAccessor(s0_args, values_addr, tile_bytes_input_values);
