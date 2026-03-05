@@ -48,7 +48,7 @@ bool RunDeviceMcastWrapAroundTest(
 
     const uint32_t sender_l1_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
                                         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                                    400 * 1024;
+                                    (400 * 1024);
     const uint32_t receiver_l1_addr = sender_l1_addr + data_size_bytes;
 
     std::vector<uint32_t> test_data(data_size_bytes / sizeof(uint32_t));
