@@ -110,6 +110,7 @@ def _is_persistent_mode_enabled():
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("final_mesh_coord", [(1, 1), (1, 0), (2, 1), (2, 0)])
 @pytest.mark.parametrize("num_iters,num_warmup_iters", [(20, 6)])
+@pytest.mark.parametrize("enable_mtp", [False, True])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -121,7 +122,15 @@ def _is_persistent_mode_enabled():
     ],
     indirect=True,
 )
-def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters):
+def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, enable_mtp):
+    """Performance test for LM-head sampling with optional MTP fusion.
+
+    When enable_mtp=True, also runs:
+    - Embedding lookup from argmax output token
+    - h_rmsnorm and e_rmsnorm
+    - Concat [h_norm|e_norm]
+    - EH projection DRAM streaming matmul
+    """
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -139,6 +148,14 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
     seed = 7
+
+    # MTP dimensions
+    embedding_dim = 7168
+    mtp_output_dim = 7168
+    tile_width = 32
+    num_dram_banks = 8
+    mtp_n_per_core = mtp_output_dim // num_dram_banks
+    mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -162,6 +179,17 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
     torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
+
+    # MTP tensors (only used when enable_mtp=True)
+    torch_embedding = torch.randn((n_total, embedding_dim), dtype=torch.bfloat16) if enable_mtp else None
+    torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16) if enable_mtp else None
+    torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16) if enable_mtp else None
+    torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16) if enable_mtp else None
+    torch_eh_proj_padded = None
+    if enable_mtp:
+        torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
+        torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
+
     torch_expected_idx = LMHeadSampling.golden(
         torch_a.float(),
         torch_gamma.float(),
@@ -197,11 +225,50 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         ttnn.ShardSpec(final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
     )
     winner_page_bytes = 16
-    scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
+    scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes + (256 + 8 if enable_mtp else 0)) // 4)
     scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    # MTP-specific memory configs
+    device = submesh.get_device(ttnn.MeshCoordinate(0, 0))
+    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0) if enable_mtp else None
+    compute_core_grid = (
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores])
+        if enable_mtp
+        else None
+    )
+    eh_shard_grid = (
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(submesh.dram_grid_size().x - 1, submesh.dram_grid_size().y - 1),
+                )
+            }
+        )
+        if enable_mtp
+        else None
+    )
+    mtp_output_mem_config = (
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(compute_core_grid, (M, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        if enable_mtp
+        else None
+    )
+    eh_proj_mem_config = (
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(eh_shard_grid, (K + embedding_dim, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        if enable_mtp
+        else None
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
@@ -271,28 +338,76 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         memory_config=indices_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    output_buffers = [
-        ttnn.from_torch(
-            torch.zeros((num_devices, 1, 1), dtype=torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros((num_devices, 1, 1), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=output_index_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_fabric_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=scratch_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # MTP tensors
+    ttnn_embedding = None
+    ttnn_h_gamma = None
+    ttnn_e_gamma = None
+    ttnn_eh_proj = None
+    ttnn_mtp_output = None
+    if enable_mtp:
+        ttnn_embedding = ttnn.from_torch(
+            torch_embedding,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             device=submesh,
-            memory_config=output_index_mem_config,
+            tile=b_tile,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        )
+        ttnn_h_gamma = ttnn.from_torch(
+            torch_h_gamma,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=input_a_mem_config,
+            tile=a_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        )
+        ttnn_e_gamma = ttnn.from_torch(
+            torch_e_gamma,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=input_a_mem_config,
+            tile=a_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        )
+        torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
+        ttnn_eh_proj = ttnn.from_torch(
+            torch_eh_proj_shuffled,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=eh_proj_mem_config,
+            tile=b_tile,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        )
+        ttnn_mtp_output = ttnn.from_torch(
+            torch.zeros((num_devices, M, mtp_padded_dim), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=mtp_output_mem_config,
+            tile=out_tile,
             mesh_mapper=mesh_mapper,
         )
-        for _ in range(num_iters)
-    ]
-    scratch_buffers = [
-        ttnn.from_torch(
-            torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=submesh,
-            memory_config=scratch_mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-        for _ in range(num_iters)
-    ]
 
     out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
@@ -304,23 +419,30 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     submesh.enable_program_cache()
     profiler = BenchmarkProfiler()
 
+    # Initial run to compile
     _ = LMHeadSampling.op(
         input_tensor_mesh,
         intermediate_tensor_mesh,
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
+        output_mtp_tensor=ttnn_mtp_output,
+        embedding_tensor=ttnn_embedding,
+        h_gamma_tensor=ttnn_h_gamma,
+        e_gamma_tensor=ttnn_e_gamma,
+        eh_projection_tensor=ttnn_eh_proj,
         sender_coord=sender_coord,
         indices_tensor=ttnn_indices,
-        output_index_tensor=output_buffers[0],
+        output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=final_core,
         argmax_final_mesh_coord=final_mesh_coord,
         semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
         global_semaphore=stage1_semaphores[0],
         global_stage2_semaphore=stage2_semaphores[0],
-        fabric_scratch_tensor=scratch_buffers[0],
+        fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
+        enable_mtp=enable_mtp,
     )
     ttnn.synchronize_device(submesh)
 
@@ -332,17 +454,23 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
+            output_mtp_tensor=ttnn_mtp_output,
+            embedding_tensor=ttnn_embedding,
+            h_gamma_tensor=ttnn_h_gamma,
+            e_gamma_tensor=ttnn_e_gamma,
+            eh_projection_tensor=ttnn_eh_proj,
             sender_coord=sender_coord,
             indices_tensor=ttnn_indices,
-            output_index_tensor=output_buffers[i % num_iters],
+            output_index_tensor=ttnn_output_index,
             argmax_final_core_coord=final_core,
             argmax_final_mesh_coord=final_mesh_coord,
             semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
             global_semaphore=stage1_semaphores[i % 2],
             global_stage2_semaphore=stage2_semaphores[i % 2],
-            fabric_scratch_tensor=scratch_buffers[i % num_iters],
+            fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
+            enable_mtp=enable_mtp,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -355,50 +483,85 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
+            output_mtp_tensor=ttnn_mtp_output,
+            embedding_tensor=ttnn_embedding,
+            h_gamma_tensor=ttnn_h_gamma,
+            e_gamma_tensor=ttnn_e_gamma,
+            eh_projection_tensor=ttnn_eh_proj,
             sender_coord=sender_coord,
             indices_tensor=ttnn_indices,
-            output_index_tensor=output_buffers[i],
+            output_index_tensor=ttnn_output_index,
             argmax_final_core_coord=final_core,
             argmax_final_mesh_coord=final_mesh_coord,
             semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
             global_semaphore=stage1_semaphores[i % 2],
             global_stage2_semaphore=stage2_semaphores[i % 2],
-            fabric_scratch_tensor=scratch_buffers[i],
+            fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
+            enable_mtp=enable_mtp,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
 
-    profiler.start("lm-head-sampling-mesh-4x2-trace-warmup")
+    mtp_suffix = "+MTP" if enable_mtp else ""
+    profiler.start(f"lm-head-sampling{mtp_suffix}-mesh-4x2-trace-warmup")
     ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
     ttnn.release_trace(submesh, trace_id_warmup)
     ttnn.synchronize_device(submesh)
-    profiler.end("lm-head-sampling-mesh-4x2-trace-warmup")
+    profiler.end(f"lm-head-sampling{mtp_suffix}-mesh-4x2-trace-warmup")
 
     signpost("start")
-    profiler.start("lm-head-sampling-mesh-4x2-trace")
+    profiler.start(f"lm-head-sampling{mtp_suffix}-mesh-4x2-trace")
     ttnn.execute_trace(submesh, trace_id, blocking=False)
     ttnn.release_trace(submesh, trace_id)
     ttnn.synchronize_device(submesh)
-    profiler.end("lm-head-sampling-mesh-4x2-trace")
+    profiler.end(f"lm-head-sampling{mtp_suffix}-mesh-4x2-trace")
     signpost("stop")
 
-    trace_duration_ns = profiler.get_duration("lm-head-sampling-mesh-4x2-trace")
-    warmup_duration_ns = profiler.get_duration("lm-head-sampling-mesh-4x2-trace-warmup")
+    trace_duration_ns = profiler.get_duration(f"lm-head-sampling{mtp_suffix}-mesh-4x2-trace")
+    warmup_duration_ns = profiler.get_duration(f"lm-head-sampling{mtp_suffix}-mesh-4x2-trace-warmup")
     effective_duration_ns = max(0.0, trace_duration_ns - warmup_duration_ns)
     avg_iter_ns = effective_duration_ns / float(max(1, num_iters))
     logger.info(
-        f"LMHead+Argmax mesh(4x2) trace perf: final_mesh_coord={final_mesh_coord}, "
+        f"LMHead+Argmax{mtp_suffix} mesh(4x2) trace perf: final_mesh_coord={final_mesh_coord}, "
         f"iters={num_iters}, total_ns={effective_duration_ns:.2f}, avg_iter_ns={avg_iter_ns:.2f}"
     )
 
-    final_output_shards = ttnn.get_device_tensors(output_buffers[-1])
+    final_output_shards = ttnn.get_device_tensors(ttnn_output_index)
     final_device_idx = int(final_mesh_coord[0]) * mesh_cols + int(final_mesh_coord[1])
     final_output_torch = ttnn.to_torch(final_output_shards[final_device_idx]).to(torch.uint32).reshape(1, 1)
     assert torch.equal(
         final_output_torch, torch_expected_idx
     ), f"Perf run fused mesh argmax mismatch. expected={torch_expected_idx.item()}, got={int(final_output_torch.item())}"
+
+    # MTP PCC check
+    if enable_mtp:
+        # Compute expected MTP output for the final argmax token
+        _, torch_expected_mtp = LMHeadSampling.golden(
+            torch_a.float(),
+            torch_gamma.float(),
+            torch_b.float(),
+            indices=torch_indices_all[0],  # Single device indices
+            k=1,
+            p=1.0,
+            fuse_mtp=True,
+            embedding_tensor=torch_embedding.float(),
+            h_gamma_tensor=torch_h_gamma.float(),
+            e_gamma_tensor=torch_e_gamma.float(),
+            eh_projection_tensor=torch_eh_proj.float(),
+        )
+        final_mtp_shards = ttnn.get_device_tensors(ttnn_mtp_output)
+        final_mtp_torch = (
+            ttnn.to_torch(final_mtp_shards[final_device_idx])
+            .to(torch.float32)
+            .reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
+        )
+        mtp_passing_pcc, _ = comp_pcc(final_mtp_torch, torch_expected_mtp.float(), 0.99)
+        if not mtp_passing_pcc:
+            max_diff = (final_mtp_torch - torch_expected_mtp.float()).abs().max()
+            logger.warning(f"MTP output PCC check failed. Max diff: {max_diff}")
+        assert mtp_passing_pcc, "Perf run MTP output PCC check failed"
 
 
 @pytest.mark.parametrize("use_fp32", [True])
