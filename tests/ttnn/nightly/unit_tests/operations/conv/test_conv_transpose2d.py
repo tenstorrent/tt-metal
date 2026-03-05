@@ -279,10 +279,23 @@ def test_convt2d_dram(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    # for TILE layout, the maximum number of slices for the (16,  16,  16, 256, 128) test case is 1 due to tile boundary constraints
+    adjusted_num_slices = num_slices
+    if (
+        batch_size == 16
+        and input_height == 16
+        and input_width == 16
+        and input_channels == 256
+        and output_channels == 128
+        and layout == ttnn.TILE_LAYOUT
+    ):
+        adjusted_num_slices = 1
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
-        num_slices=0 if auto_slice else num_slices,
+        num_slices=0 if auto_slice else adjusted_num_slices,
     )
+
     if is_blackhole() and config is not None:
         # Blackhole requires different act_block_h to be divisble
         config["act_block_h"] = 32

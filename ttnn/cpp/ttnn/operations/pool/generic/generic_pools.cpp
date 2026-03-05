@@ -742,8 +742,7 @@ static std::vector<Tensor> pool2d_DRAM(
             ttnn::Shape{batch_size, output_height, output_width, channels},
             dram_slice_config_,
             output_layout,
-            input_tensor.device(),
-            false /*conv_bypass*/);
+            input_tensor.device());
     }
 
     // Validate that kernel size can fit in the slices
@@ -874,7 +873,7 @@ static std::vector<Tensor> pool2d_DRAM(
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
 
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config, false /*conv_bypass*/);
+        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
 
     return {dram_output_tensor};
 }
