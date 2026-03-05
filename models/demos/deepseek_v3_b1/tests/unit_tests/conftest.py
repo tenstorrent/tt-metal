@@ -32,7 +32,7 @@ def _reference_layer_state_dict(
     *,
     is_moe: bool,
     seed: int = 42,
-    num_routed_experts: int = 4,
+    num_routed_experts: int = 256,
 ) -> dict[str, torch.Tensor]:
     """Build one layer state_dict in HF key convention with deterministic random weights (Generator)."""
     g = torch.Generator().manual_seed(seed)
@@ -77,23 +77,23 @@ def _reference_layer_state_dict(
         state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.randn(
             7168, _REF_HF_SHARED_GATE_UP[0], generator=g, dtype=torch.bfloat16
         )
-        # Expert weights: deterministic per-expert seeds (gate_seed, up_seed, down_seed) for golden parity
+        # Expert weights: batched RNG (one randn+clamp per projection) then slice into state
         gate_seed = seed + 0
         up_seed = seed + 256
         down_seed = seed + 512
-        for e in range(num_routed_experts):
-            g_gate = torch.Generator().manual_seed(gate_seed + e)
-            g_up = torch.Generator().manual_seed(up_seed + e)
-            g_down = torch.Generator().manual_seed(down_seed + e)
-            state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(
-                2048, _REF_K, generator=g_gate, dtype=torch.bfloat16
-            ).clamp(-2, 2)
-            state[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = torch.randn(
-                2048, _REF_K, generator=g_up, dtype=torch.bfloat16
-            ).clamp(-2, 2)
-            state[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = torch.randn(
-                7168, 2048, generator=g_down, dtype=torch.bfloat16
-            ).clamp(-2, 2)
+        if num_routed_experts > 0:
+            g_gate = torch.Generator().manual_seed(gate_seed)
+            g_up = torch.Generator().manual_seed(up_seed)
+            g_down = torch.Generator().manual_seed(down_seed)
+            gate_all = torch.randn(num_routed_experts, 2048, _REF_K, generator=g_gate, dtype=torch.bfloat16).clamp(
+                -2, 2
+            )
+            up_all = torch.randn(num_routed_experts, 2048, _REF_K, generator=g_up, dtype=torch.bfloat16).clamp(-2, 2)
+            down_all = torch.randn(num_routed_experts, 7168, 2048, generator=g_down, dtype=torch.bfloat16).clamp(-2, 2)
+            for e in range(num_routed_experts):
+                state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = gate_all[e]
+                state[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = up_all[e]
+                state[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = down_all[e]
     else:
         state[f"model.layers.{layer_idx}.mlp.gate_proj.weight"] = torch.randn(
             18432, _REF_K, generator=g, dtype=torch.bfloat16
@@ -148,6 +148,10 @@ def get_reference_model_state_dict():
     When random_weights=True (or USE_RANDOM_WEIGHTS=True): returns a dict of deterministic
     random weights. When random_weights=False: loads from DEEPSEEK_V3_HF_MODEL via
     LazyStateDict (read-only; tests never mutate it).
+
+    Callers should pass the minimum num_routed_experts they need (e.g. 1 for single-device
+    or no routing, 8 for 4x2 mesh with hardcoded expert index, 256 when comparing to
+    full gate-based reference).
 
     Usage:
         get = get_reference_model_state_dict

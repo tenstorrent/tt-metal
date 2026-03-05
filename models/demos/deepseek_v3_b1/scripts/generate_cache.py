@@ -259,72 +259,71 @@ def _verify_layer_on_4x2_grid(
 ) -> bool:
     """Verify all tensors are on device and have correct tensor_topology() for 4x2 mesh. Returns False on first failure."""
     seen_fused: set[int] = set()
+    attn = loaded.attention
+    shared = loaded.shared_expert
+    routed = loaded.routed_expert
     # q_ab_kv_a
-    if not _check_on_device(loaded.q_a_proj.fused_tensor, "q_a_proj.fused_tensor"):
+    if not _check_on_device(attn.q_a_proj.fused_tensor, "q_a_proj.fused_tensor"):
         return False
-    fid = id(loaded.q_a_proj.fused_tensor)
+    fid = id(attn.q_a_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        if not _check_topology(loaded.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1, "q_ab_kv_a"):
+        if not _check_topology(attn.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1, "q_ab_kv_a"):
             return False
     # o_proj_gate_mm_norms
-    if not _check_on_device(loaded.o_proj.fused_tensor, "o_proj.fused_tensor"):
+    if not _check_on_device(attn.o_proj.fused_tensor, "o_proj.fused_tensor"):
         return False
-    fid = id(loaded.o_proj.fused_tensor)
+    fid = id(attn.o_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        if not _check_topology(loaded.o_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1, "o_proj_gate_mm_norms"):
+        if not _check_topology(attn.o_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_1, "o_proj_gate_mm_norms"):
+            return False
+    # MoE gate (optional)
+    if isinstance(loaded, DeepSeekV3MoELayerWeights):
+        if not _check_on_device(loaded.gate.gate_mm.fused_tensor, "gate_mm.fused_tensor"):
+            return False
+        if not _check_on_device(loaded.gate.gate_bias, "gate_bias"):
             return False
     # kv_b12
-    if not _check_on_device(loaded.kv_b1_proj.fused_tensor, "kv_b1_proj.fused_tensor"):
+    if not _check_on_device(attn.kv_b1_proj.fused_tensor, "kv_b1_proj.fused_tensor"):
         return False
-    fid = id(loaded.kv_b1_proj.fused_tensor)
+    fid = id(attn.kv_b1_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        if not _check_topology(loaded.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_0, "kv_b12"):
+        if not _check_topology(attn.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_NONE_0, "kv_b12"):
             return False
     # gate_up
-    if not _check_on_device(loaded.shared_gate_proj.fused_tensor, "shared_gate_proj.fused_tensor"):
+    if not _check_on_device(shared.shared_gate_proj.fused_tensor, "shared_gate_proj.fused_tensor"):
         return False
-    fid = id(loaded.shared_gate_proj.fused_tensor)
+    fid = id(shared.shared_gate_proj.fused_tensor)
     if fid not in seen_fused:
         seen_fused.add(fid)
-        if not _check_topology(loaded.shared_gate_proj.fused_tensor, _PLACEMENTS_SHARD_0_1, "gate_up"):
+        if not _check_topology(shared.shared_gate_proj.fused_tensor, _PLACEMENTS_SHARD_0_1, "gate_up"):
             return False
     # shared_down_proj
-    if not _check_on_device(loaded.shared_down_proj, "shared_down_proj"):
+    if not _check_on_device(shared.shared_down_proj, "shared_down_proj"):
         return False
-    if not _check_topology(loaded.shared_down_proj, _PLACEMENTS_SHARD_0_1, "shared_down_proj"):
+    if not _check_topology(shared.shared_down_proj, _PLACEMENTS_SHARD_0_1, "shared_down_proj"):
         return False
-    # Routed experts
-    if isinstance(loaded, DeepSeekV3DenseLayerWeights):
-        if not _check_on_device(loaded.routed_gate_proj, "routed_gate_proj"):
+    # Routed experts (list of tensors per projection)
+    for i, t in enumerate(routed.routed_gate_proj):
+        if not _check_on_device(t, f"routed_gate_proj[{i}]"):
             return False
-        if not _check_on_device(loaded.routed_up_proj, "routed_up_proj"):
+    for i, t in enumerate(routed.routed_up_proj):
+        if not _check_on_device(t, f"routed_up_proj[{i}]"):
             return False
-        if not _check_on_device(loaded.routed_down_proj, "routed_down_proj"):
+    for i, t in enumerate(routed.routed_down_proj):
+        if not _check_on_device(t, f"routed_down_proj[{i}]"):
             return False
-        if not _check_topology(loaded.routed_gate_proj, _PLACEMENTS_SHARD_0_1, "routed_gate_proj"):
-            return False
-        if not _check_topology(loaded.routed_up_proj, _PLACEMENTS_SHARD_0_1, "routed_up_proj"):
-            return False
-        if not _check_topology(loaded.routed_down_proj, _PLACEMENTS_SHARD_0_1, "routed_down_proj"):
-            return False
-    else:
-        assert isinstance(loaded, DeepSeekV3MoELayerWeights)
-        for e in range(len(loaded.routed_gate_proj)):
-            if not _check_on_device(loaded.routed_gate_proj[e], f"routed_gate_proj[{e}]"):
-                return False
-            if not _check_on_device(loaded.routed_up_proj[e], f"routed_up_proj[{e}]"):
-                return False
-            if not _check_on_device(loaded.routed_down_proj[e], f"routed_down_proj[{e}]"):
-                return False
-            if not _check_topology(loaded.routed_gate_proj[e], _PLACEMENTS_REPLICATE, f"routed_gate_proj[{e}]"):
-                return False
-            if not _check_topology(loaded.routed_up_proj[e], _PLACEMENTS_REPLICATE, f"routed_up_proj[{e}]"):
-                return False
-            if not _check_topology(loaded.routed_down_proj[e], _PLACEMENTS_REPLICATE, f"routed_down_proj[{e}]"):
-                return False
+    routed_placements = (
+        _PLACEMENTS_SHARD_0_1 if isinstance(loaded, DeepSeekV3DenseLayerWeights) else _PLACEMENTS_REPLICATE
+    )
+    if not _check_topology(routed.routed_gate_proj[0], routed_placements, "routed_gate_proj"):
+        return False
+    if not _check_topology(routed.routed_up_proj[0], routed_placements, "routed_up_proj"):
+        return False
+    if not _check_topology(routed.routed_down_proj[0], routed_placements, "routed_down_proj"):
+        return False
     return True
 
 
@@ -475,14 +474,15 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
                 return False
         logger.info("All dense layer files present")
     else:
-        # Full MoE layer: fusion groups + standalone (incl. gate_bias) + routed experts
+        # Full MoE layer: fusion groups + standalone (incl. gate_bias) + stacked routed experts
         for name in ("q_ab_kv_a", "o_proj_gate_mm_norms", "kv_b12", "gate_up"):
             if name not in fusion_groups:
                 logger.error("Missing fusion_groups['{}']", name)
                 return False
             if not _check_file(Path(fusion_groups[name]["tensorbin"]), layer_dir):
                 return False
-        for name in ("shared_down_proj", "gate_bias"):
+        required_standalone_moe = ("shared_down_proj", "gate_bias")
+        for name in required_standalone_moe:
             if name not in standalone_tensors:
                 logger.error("Missing standalone_tensors['{}']", name)
                 return False
@@ -493,19 +493,15 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
         if num_experts != NUM_ROUTED_EXPERTS:
             logger.error("Expected routed_experts.num_experts={}, got {}", NUM_ROUTED_EXPERTS, num_experts)
             return False
+        # Per-expert routed weight files (experts/e_NNN/{gate,up,down}_proj.tensorbin)
         experts_dir = layer_dir / "experts"
-        if not experts_dir.is_dir():
-            logger.error("experts/ directory missing: {}", experts_dir)
-            return False
-        for e in range(NUM_ROUTED_EXPERTS):
+        for e in range(num_experts):
             expert_dir = experts_dir / f"e_{e:03d}"
-            if not expert_dir.is_dir():
-                logger.error("Expert dir missing: {}", expert_dir)
-                return False
-            for fname in ("gate_proj.tensorbin", "up_proj.tensorbin", "down_proj.tensorbin"):
-                if not _check_file(expert_dir / fname, layer_dir):
+            for name in ("gate_proj.tensorbin", "up_proj.tensorbin", "down_proj.tensorbin"):
+                if not _check_file(Path(name), expert_dir):
+                    logger.error("Missing MoE routed file {}", f"experts/e_{e:03d}/{name}")
                     return False
-        logger.info("All MoE layer files present (attn+shared+experts)")
+        logger.info("All MoE layer files present (attn+shared+experts/e_NNN)")
 
     # 3. Optional device load when cache is a complete layer
     if True:

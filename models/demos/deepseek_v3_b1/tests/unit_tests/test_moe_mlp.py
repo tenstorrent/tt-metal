@@ -12,6 +12,7 @@ Run:
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_moe.py -v -s
 """
 
+import time
 from typing import Any, NamedTuple
 
 import pytest
@@ -26,11 +27,41 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_bias_tensor,
-    create_gate_indices_tensor,
     prepare_attention_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
+
+# Gate indices: constant 0..255 on sender core (same layout as gate_bias). Not a weight.
+_GATE_INDICES_SHAPE = (16, 16)
+_NUM_GATE_INDICES = 256
+
+
+def _create_gate_indices_tensor(
+    device: Any,
+    sender_core_grid: ttnn.CoreRangeSet,
+    *,
+    mesh_mapper: Any = None,
+) -> ttnn.Tensor:
+    """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core. Same layout as gate_bias."""
+    indices = torch.arange(_NUM_GATE_INDICES, dtype=torch.int32).reshape(_GATE_INDICES_SHAPE[0], _GATE_INDICES_SHAPE[1])
+    transposed = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
+    shard_spec = ttnn.ShardSpec(
+        sender_core_grid,
+        _GATE_INDICES_SHAPE,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+    return ttnn.from_torch(
+        transposed,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+        tile=ttnn.Tile([16, 16]),
+        **kwargs,
+    )
 
 
 # ============================================================================
@@ -234,7 +265,6 @@ def create_shared_expert_tensors(
     shared_weights = prepare_shared_expert_weights(
         bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
     )
-
     return SharedExpertTensors(
         shared_gate_weights_overlapped=shared_weights.shared_gate_proj,
         shared_up_weights_overlapped=shared_weights.shared_up_proj,
@@ -361,8 +391,8 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
-    ttnn_gate_mm_weights = attn.gate_mm
+    attn, gate = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+    ttnn_gate_mm_weights = gate.gate_mm if gate is not None else None
     ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
         compute_core_grid = ttnn_gate_mm_weights.core_range_set
@@ -417,12 +447,12 @@ def create_routed_expert_tensors(
             num_routed_experts=num_experts,
             move_to_device=True,
         )
-        gate_proj_expert_tensors = routed_weights.routed_gate_proj
-        up_proj_expert_tensors = routed_weights.routed_up_proj
-        down_proj_expert_tensors = routed_weights.routed_down_proj
-        gate_proj_weights = gate_proj_expert_tensors[0]
-        up_proj_weights = up_proj_expert_tensors[0]
-        down_proj_weights = down_proj_expert_tensors[0]
+        gate_proj_weights = routed_weights.routed_gate_proj
+        up_proj_weights = routed_weights.routed_up_proj
+        down_proj_weights = routed_weights.routed_down_proj
+        gate_proj_expert_tensors = None
+        up_proj_expert_tensors = None
+        down_proj_expert_tensors = None
     else:
         # Dense MLP: slice gate/up (7168, 18432) and down (18432, 7168) into 8 experts of 2048 each
         gate_key = f"{layer_key}.mlp.gate_proj.weight"
@@ -449,11 +479,10 @@ def create_routed_expert_tensors(
             num_routed_experts=8,
             move_to_device=True,
         )
-        # DenseRoutedExpertWeights: single tensor per projection (mesh-shaped), no list
         gate_proj_weights = routed_weights.routed_gate_proj
         up_proj_weights = routed_weights.routed_up_proj
         down_proj_weights = routed_weights.routed_down_proj
-        gate_proj_expert_tensors = None  # unused when is_moe=False
+        gate_proj_expert_tensors = None
         up_proj_expert_tensors = None
         down_proj_expert_tensors = None
 
@@ -465,7 +494,7 @@ def create_routed_expert_tensors(
         assert list(ttnn.corerange_to_cores(ttnn_gate_bias.memory_config().shard_spec.grid)) == list(
             ttnn.corerange_to_cores(input_core_grid)
         ), "gate_bias grid must match input_core_grid (MOE_SENDER_GRID_SIZE)"
-        ttnn_gate_indices = create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
+        ttnn_gate_indices = _create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
         # Gate output buffers (scores and indices on sender core)
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(
@@ -702,17 +731,18 @@ def create_reference_mlp_models(state_dict, layer_idx):
 @pytest.mark.requires_grid_size((13, 10))
 def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
-
+    test_t0 = time.perf_counter()
     M = RoutedExpert.M
     K = RoutedExpert.K
 
     logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
 
+    num_routed_experts = 1 if use_hardcoded_expert_index else 256
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         include_global=False,
     )
 
@@ -787,9 +817,9 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         r.ttnn_gate_indices,
         r.gate_output_scores_tensor,
         r.gate_output_indices_tensor,
-        r.gate_proj_weights,
-        r.up_proj_weights,
-        r.down_proj_weights,
+        r.gate_proj_weights[0],
+        r.up_proj_weights[0],
+        r.down_proj_weights[0],
         r.final_output_tensor,
         r.ttnn_rmsnorm_gamma,
         # Shared expert tensors
@@ -898,6 +928,7 @@ def test_moe_fused_with_reduce(
             f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
         )
 
+    test_t0 = time.perf_counter()
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
@@ -906,11 +937,12 @@ def test_moe_fused_with_reduce(
 
     logger.info(f"Testing fused MoE with reduce: K={K}")
 
+    num_routed_experts = 8 if use_hardcoded_expert_index else 256
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         include_global=False,
     )
 
@@ -1050,9 +1082,9 @@ def test_moe_fused_with_reduce(
         r.ttnn_gate_indices,
         r.gate_output_scores_tensor,
         r.gate_output_indices_tensor,
-        r.gate_proj_weights,
-        r.up_proj_weights,
-        r.down_proj_weights,
+        r.gate_proj_weights[0],
+        r.up_proj_weights[0],
+        r.down_proj_weights[0],
         r.final_output_tensor,
         r.ttnn_rmsnorm_gamma,
         # Shared expert tensors
@@ -1193,7 +1225,7 @@ def test_moe_fused_with_reduce(
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
-
+    test_t0 = time.perf_counter()
     M = RoutedExpert.M
     K = RoutedExpert.K
 
@@ -1203,7 +1235,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=1,
         include_global=False,
     )
 
@@ -1273,9 +1305,9 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     ttnn_result_final = MoeOp.op(
         r.ttnn_residual_mcast_src,
         # No routing tensors
-        gate_proj_weights_tensor=r.gate_proj_weights,
-        up_proj_weights_tensor=r.up_proj_weights,
-        down_proj_weights_tensor=r.down_proj_weights,
+        gate_proj_weights_tensor=r.gate_proj_weights[0],
+        up_proj_weights_tensor=r.up_proj_weights[0],
+        down_proj_weights_tensor=r.down_proj_weights[0],
         final_output_tensor=r.final_output_tensor,
         rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
         shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
@@ -1357,6 +1389,7 @@ def test_mlp_with_reduce(
             f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
         )
 
+    test_t0 = time.perf_counter()
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
@@ -1367,11 +1400,13 @@ def test_mlp_with_reduce(
 
     logger.info(f"Testing MoeOp no-routing with reduce: K={K}, use_mlp_weights={use_mlp_weights}")
 
+    # MoE: state dict has per-expert keys; we need 8 experts (one per device on 4x2) for the reduce test.
+    # Dense: state dict has full gate/up/down matrices; num_routed_experts is unused.
     state_dict = get_reference_model_state_dict(
         layer_idx=layer_idx,
         is_moe=is_moe,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256 if is_moe else 4,
+        num_routed_experts=(8 if is_moe else 0),
         include_global=False,
     )
 
@@ -1506,9 +1541,9 @@ def test_mlp_with_reduce(
     ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         # No routing tensors
-        gate_proj_weights_tensor=r.gate_proj_weights,
-        up_proj_weights_tensor=r.up_proj_weights,
-        down_proj_weights_tensor=r.down_proj_weights,
+        gate_proj_weights_tensor=r.gate_proj_weights[0],
+        up_proj_weights_tensor=r.up_proj_weights[0],
+        down_proj_weights_tensor=r.down_proj_weights[0],
         final_output_tensor=r.final_output_tensor,
         rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
         shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
