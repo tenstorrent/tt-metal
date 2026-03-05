@@ -34,4 +34,4 @@ inline bool is_llk_assert_enabled() {
         if (ttml::core::is_llk_assert_enabled()) { \
             GTEST_SKIP() << reason;                \
         }                                          \
-    } while (0);
+    } while (0)
