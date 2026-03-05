@@ -8,15 +8,15 @@ import contextlib
 import re
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, TextIO, Union
+from typing import List, Dict, TextIO
 
 
 @dataclass
 class Field:
     name: str
     type: str
-    struct_idx: Optional[int]
-    array_size_idx: Optional[int]
+    struct_idx: int | None
+    array_size_idx: int | None
 
 
 @dataclass
@@ -66,7 +66,7 @@ class CodeGen:
         self.includes: List[str] = []
         self.enums: List[str] = []
         self.constants: List[str] = []
-        self.scalar_types: Set[str] = set(self.SCALAR_TYPES)
+        self.scalar_types: set[str] = set(self.SCALAR_TYPES)
         self.driver_ns = driver_ns
         self.driver_include_path = driver_include_path
         self.interface_ns = interface_ns
@@ -240,7 +240,7 @@ class CodeGen:
 
     def emit_field_traits(self, struct: Struct):
         for field_id, field in enumerate(struct.fields):
-            args: List[Union[str, int]] = [field.type, field_id]
+            args: List[str | int] = [field.type, field_id]
             if field.struct_idx is None:
                 scalar_or_struct = "Scalar"
             else:
