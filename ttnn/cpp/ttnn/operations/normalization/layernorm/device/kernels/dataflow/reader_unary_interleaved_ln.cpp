@@ -22,6 +22,8 @@ void kernel_main() {
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
     uint32_t W = get_arg_val<uint32_t>(9);
+    uint32_t tile_width = get_arg_val<uint32_t>(10);
+    uint32_t tile_height = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
@@ -57,9 +59,10 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        const auto partial_last_tile_cols = W % tile_width;
         if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
+                cb_in_2, scaler, partial_last_tile_cols, tile_height, tile_width);
         }
     }
 

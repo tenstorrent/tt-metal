@@ -110,8 +110,9 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 
 GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
     auto spec = input.shard_spec().value();
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
-    uint32_t block_h = block_ht * TILE_HEIGHT;
+    uint32_t block_h = block_ht * tile_height;
     bool mcast = M == block_h;
     bool rw = spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = spec.grid.bounding_box();
@@ -746,7 +747,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 
     // Welford-specific compute args
     if (ctx.use_welford) {
-        constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+        const uint32_t tile_width = ctx.tile_width;
         uint32_t last_tile_W = ctx.K - ((ctx.K - tile_width) / tile_width) * tile_width;
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
 

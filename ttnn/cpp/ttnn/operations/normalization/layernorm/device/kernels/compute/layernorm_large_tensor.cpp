@@ -34,6 +34,7 @@ void kernel_main() {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t W = get_compile_time_arg_val(7);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(8);
 
     constexpr uint32_t onetile = 1;
 
@@ -80,10 +81,10 @@ void kernel_main() {
         //         n
 #ifdef FUSE_PRE_ADD
         numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, blk);
+            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, blk, tile_width);
 #else
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_scaler, cb_ex, W, Wt, blk);
+            cb_in, cb_scaler, cb_ex, W, Wt, blk, tile_width);
 #endif
 #endif  // !RMS ifdef end
         // Start of
@@ -91,7 +92,7 @@ void kernel_main() {
         // Var(X) = ∑(x-E[x])^2
         //         -----------
         //              n
-        const bool last_tile_is_partial = W % tt::constants::TILE_WIDTH > 0;
+        const bool last_tile_is_partial = W % tile_width > 0;
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
             cb_wait_front(cb_in, block.full_block_size());

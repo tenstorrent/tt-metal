@@ -10,7 +10,6 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "tt-metalium/constants.hpp"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
@@ -39,6 +38,7 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(25);
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -168,7 +168,7 @@ void kernel_main() {
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
                     // Start Welford's Calculation
-                    uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
+                    uint32_t cols_available = TILE_WIDTH - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                     welford_restore_state(mean_dst, g);
@@ -195,7 +195,7 @@ void kernel_main() {
 
                     // All available columns have been used for this tile, so we don't do any
                     // more groups for this tile.
-                    if (group_offset == tt::constants::TILE_WIDTH) {
+                    if (group_offset == TILE_WIDTH) {
                         break;
                     }
                 }
@@ -343,7 +343,7 @@ void kernel_main() {
                     tile_regs_release();
                     cb_push_back(cb_x, 1);
 
-                    uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
+                    uint32_t cols_available = TILE_WIDTH - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
@@ -366,7 +366,7 @@ void kernel_main() {
 
                     // All available columns have been used for this tile, so we don't do any
                     // more groups for this tile.
-                    if (group_offset == tt::constants::TILE_WIDTH) {
+                    if (group_offset == TILE_WIDTH) {
                         break;
                     }
                 }

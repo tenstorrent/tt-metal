@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "tt-metalium/constants.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
@@ -46,9 +45,11 @@ void kernel_main() {
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
+    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("TILE_WIDTH");
+
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = tt::constants::TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
 
     const uint32_t eps_val = get_arg_val<uint32_t>(2);
     const uint32_t out_addr = get_arg_val<uint32_t>(3);
