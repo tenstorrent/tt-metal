@@ -57,9 +57,15 @@ class MatmulCustomCompressed:
         a_tensor: ttnn.Tensor,
         ct: CompressedTensor,
         output_tensor: ttnn.Tensor,
+        use_constexpr_unroll: bool = True,
     ) -> ttnn.Tensor:
         """
         A [M, K] @ decompress(B_compressed [K, 32]) = output [M, 32].
+
+        Args:
+            use_constexpr_unroll: If True, bake per-tile formats into code as constexpr
+                (zero runtime lookup, but O(K) code size). If False, read formats from
+                assignment tensor in L1 at runtime (compact code, ~3us overhead).
         """
         core_grid = a_tensor.memory_config().shard_spec.grid
         data_tensor = ct.get_data_tensor()
@@ -111,12 +117,21 @@ class MatmulCustomCompressed:
             ("fmt_cta_base", fmt_cta_base),
         ]
 
-        # Build per-core positional CTAs (packed format arrays per shard)
+        defines = []
+        if use_constexpr_unroll:
+            defines.append(("USE_CONSTEXPR_UNROLL", "1"))
+
+        # Build per-core positional CTAs
         all_cores = ttnn.corerange_to_cores(core_grid)
         core_values = []
         for core_coord in all_cores:
             shard_assignment = ct.get_assignment_per_shard(core_coord)
-            ctas = pack_formats_as_ctas(shard_assignment)
+            if use_constexpr_unroll:
+                # Packed: multiple formats per uint32 (for template-unrolled path)
+                ctas = pack_formats_as_ctas(shard_assignment)
+            else:
+                # Flat: one format index per CTA element (for runtime loop path)
+                ctas = [int(x) for x in shard_assignment]
             core_values.append((core_coord, ctas))
         per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
 
@@ -128,6 +143,7 @@ class MatmulCustomCompressed:
             trisc_named_compile_time_args=named_compile_time_args,
             trisc_compile_time_args=[],
             per_core_positional_cta_descriptor=per_core_pos_cta,
+            defines=defines,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
