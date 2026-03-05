@@ -320,7 +320,10 @@ def test_ttnn_dispatch(
     logger.info(f"{weights.shape=}")
     logger.info(f"{indices.shape=}")
 
-    tt_dispatched, tt_metadata = tt_dispatch_module(tt_x, tt_weights, tt_indices, chip_to_n_routed_expert_offset)
+    tt_chip_to_n_routed_expert_offset = TtDispatchModule.shard_offset_tensor(
+        mesh_device, chip_to_n_routed_expert_offset
+    )
+    tt_dispatched, tt_metadata = tt_dispatch_module(tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset)
 
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)

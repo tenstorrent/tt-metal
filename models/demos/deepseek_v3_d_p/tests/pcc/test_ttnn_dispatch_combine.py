@@ -255,7 +255,12 @@ def test_ttnn_dispatch_combine(
 
     # Run TTNN dispatch
     logger.info("Running TTNN dispatch...")
-    tt_dispatched_buffer, tt_metadata = tt_dispatch_module(tt_x, tt_weights, tt_indices, chip_to_n_routed_expert_offset)
+    tt_chip_to_n_routed_expert_offset = TtDispatchModule.shard_offset_tensor(
+        mesh_device, chip_to_n_routed_expert_offset
+    )
+    tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
+        tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset
+    )
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete!")
 
