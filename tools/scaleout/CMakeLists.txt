@@ -4,6 +4,7 @@ add_executable(
     run_cluster_validation
     validation/run_cluster_validation.cpp
     validation/utils/ethernet_link_metrics_serialization.cpp
+    validation/utils/ethernet_link_api.cpp
     validation/utils/cluster_validation_utils.cpp
 )
 
