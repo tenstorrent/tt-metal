@@ -375,6 +375,7 @@ void launch_operation_with_adapter(
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, mesh_workload_hash);
     } else {
+        std::cerr << "[CACHE_MISS] program_hash=" << program_hash << " mesh_workload_hash=" << mesh_workload_hash << std::endl;
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, mesh_workload_hash);
     }
