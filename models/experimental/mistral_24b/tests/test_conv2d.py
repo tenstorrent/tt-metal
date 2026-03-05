@@ -13,7 +13,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from ttnn import ConcatMeshToTensor
 
@@ -27,6 +27,7 @@ def reference_conv2d_patch(model_args):
     return layer
 
 
+@run_for_wormhole_b0_or_blackhole
 @pytest.mark.parametrize(
     "mesh_device",
     [

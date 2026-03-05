@@ -12,10 +12,11 @@ import ttnn
 
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 
 @torch.no_grad()
+@run_for_wormhole_b0_or_blackhole
 @pytest.mark.parametrize(
     "mesh_device",
     [
