@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "modules/grouped_query_attention.hpp"
-#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "serialization/serializable.hpp"
 
@@ -64,7 +63,6 @@ void py_module_types(nb::module_& m) {
 
     // Enable Python subclassing via PyModuleBase trampoline
     nb::class_<ModuleBase, PyModuleBase>(m, "ModuleBase");
-    nb::class_<LinearLayer, ModuleBase>(m, "LinearLayer");
 }
 
 void py_module(nb::module_& m) {
@@ -116,84 +114,6 @@ void py_module(nb::module_& m) {
             nb::arg("module"),
             nb::arg("name"),
             "Override an existing submodule");
-    }
-
-    {
-        auto py_linear_layer = static_cast<nb::class_<LinearLayer, ModuleBase>>(m.attr("LinearLayer"));
-        py_linear_layer.def(
-            nb::init<uint32_t, uint32_t, bool>(),
-            nb::arg("in_features"),
-            nb::arg("out_features"),
-            nb::arg("has_bias") = true);
-        py_linear_layer.def(
-            nb::init<const autograd::TensorPtr&, const autograd::TensorPtr&>(), nb::arg("weight"), nb::arg("bias"));
-        py_linear_layer.def(
-            nb::init<const autograd::TensorPtr&, bool>(), nb::arg("weight"), nb::arg("has_bias") = true);
-        py_linear_layer.def("get_weight", &LinearLayer::get_weight, "Get weight");
-        py_linear_layer.def(
-            "get_weight_numpy",
-            [](const LinearLayer& layer) {
-                auto const w = layer.get_weight();
-                return ttml::nanobind::util::make_numpy_tensor(w->get_value(autograd::PreferredPrecision::FULL));
-            },
-            "Get weight as numpy tensor");
-
-        // Pickle support for LinearLayer
-        py_linear_layer.def(
-            "__getstate__",
-            [](const LinearLayer& layer) {
-                // Get parameters from the layer
-                auto params = layer.parameters();
-
-                // Extract weight tensor
-                auto weight_it = params.find(layer.get_name() + "/weight");
-                if (weight_it == params.end()) {
-                    throw std::runtime_error("LinearLayer weight not found in parameters");
-                }
-                auto weight_numpy = ttml::nanobind::util::make_numpy_tensor(
-                    weight_it->second->get_value(autograd::PreferredPrecision::FULL));
-
-                // Check for bias
-                auto bias_it = params.find(layer.get_name() + "/bias");
-                bool has_bias = (bias_it != params.end());
-
-                nb::dict state;
-                state["weight"] = weight_numpy;
-                state["has_bias"] = has_bias;
-                if (has_bias) {
-                    auto bias_numpy = ttml::nanobind::util::make_numpy_tensor(
-                        bias_it->second->get_value(autograd::PreferredPrecision::FULL));
-                    state["bias"] = bias_numpy;
-                }
-
-                return state;
-            },
-            "Serialize LinearLayer state for pickling");
-
-        py_linear_layer.def(
-            "__setstate__",
-            [](LinearLayer& layer, nb::dict state) {
-                // Extract weight from state
-                auto weight_numpy = nb::cast<nb::ndarray<nb::numpy>>(state["weight"]);
-                bool has_bias = nb::cast<bool>(state["has_bias"]);
-
-                // Create weight tensor from numpy
-                auto weight_tensor = autograd::create_tensor(ttml::nanobind::util::make_metal_tensor(
-                    weight_numpy, tt::tt_metal::Layout::TILE, std::nullopt, nullptr));
-
-                if (has_bias) {
-                    // Create bias tensor from numpy
-                    auto bias_numpy = nb::cast<nb::ndarray<nb::numpy>>(state["bias"]);
-                    auto bias_tensor = autograd::create_tensor(ttml::nanobind::util::make_metal_tensor(
-                        bias_numpy, tt::tt_metal::Layout::TILE, std::nullopt, nullptr));
-
-                    // Use placement new to reconstruct the layer in-place
-                    new (&layer) LinearLayer(weight_tensor, bias_tensor);
-                } else {
-                    new (&layer) LinearLayer(weight_tensor, false);
-                }
-            },
-            "Deserialize LinearLayer state from pickle");
     }
 }
 
