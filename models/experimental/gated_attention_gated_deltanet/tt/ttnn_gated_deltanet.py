@@ -200,9 +200,9 @@ def gated_deltanet_forward_ttnn(
     T = hidden_states.shape[1]
 
     # 1. Linear projections
-    q = ttnn.linear(hidden_states, q_proj_weight)
-    k = ttnn.linear(hidden_states, k_proj_weight)
-    v = ttnn.linear(hidden_states, v_proj_weight)
+    q = ttnn.linear(hidden_states, q_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    k = ttnn.linear(hidden_states, k_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v = ttnn.linear(hidden_states, v_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # 2. Causal conv1d + SiLU
     q = causal_conv1d_ttnn(q, q_conv_weight, q_conv_bias, conv_kernel_size, device)
@@ -221,11 +221,11 @@ def gated_deltanet_forward_ttnn(
         k = ttnn.repeat_interleave(k, repeats, dim=2)
 
     # 4. Compute beta and g
-    beta = ttnn.sigmoid(ttnn.linear(hidden_states, b_proj_weight))
+    beta = ttnn.sigmoid(ttnn.linear(hidden_states, b_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG))
     if allow_neg_eigval:
         beta = ttnn.multiply(beta, 2.0)
 
-    a = ttnn.linear(hidden_states, a_proj_weight)
+    a = ttnn.linear(hidden_states, a_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
     # g = -A * softplus(a + dt_bias)
     a_biased = ttnn.add(a, dt_bias)
     sp = ttnn.softplus(a_biased)
@@ -258,7 +258,7 @@ def gated_deltanet_forward_ttnn(
 
     # 6. Output normalization
     if use_gate and g_proj_weight is not None:
-        gate = ttnn.linear(hidden_states, g_proj_weight)
+        gate = ttnn.linear(hidden_states, g_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
         gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim])
         o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps)
     else:
@@ -266,6 +266,6 @@ def gated_deltanet_forward_ttnn(
 
     # 7. Reshape and project output
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
-    o = ttnn.linear(o, o_proj_weight)
+    o = ttnn.linear(o, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o, new_state
