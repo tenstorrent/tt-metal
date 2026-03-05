@@ -18,10 +18,17 @@
 
 namespace tt::tt_metal {
 
-// 341 = (4096/(3 * sizeof(uint32_t)), where
-// - 4096 - packet size in dispatch
-// - 3 - number of kernels per tensix
-constexpr uint32_t max_runtime_args = 341;
+
+// Returns the effective maximum number of runtime arguments, including any watcher count words.
+// Implemented in the runtime; forward declaration here keeps this header self-contained.
+std::uint32_t get_effective_max_runtime_args() noexcept;
+
+// Deprecated compatibility alias for legacy code that used tt::tt_metal::max_runtime_args.
+// Prefer tt::tt_metal::get_effective_max_runtime_args() instead.
+[[deprecated("Use tt::tt_metal::get_effective_max_runtime_args() instead.")]]
+inline std::uint32_t max_runtime_args() noexcept {
+    return get_effective_max_runtime_args();
+}
 
 using KernelHandle = std::uint32_t;
 

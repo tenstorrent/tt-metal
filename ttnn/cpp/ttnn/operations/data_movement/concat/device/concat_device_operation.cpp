@@ -192,8 +192,12 @@ using namespace tt::constants;
 // Calculate maximum tensors per concat based on runtime args limit
 uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
     // Runtime args are limited by available L1 kernel config memory.
-    // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
-    // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
+    // There is a physical dispatch-word limit of 341 uint32_t entries (internal limit in kernel.cpp),
+    // but this is not a general user-arg limit: when watcher asserts are enabled, count-word prefixes
+    // and internal bookkeeping consume part of this budget and reduce the number of user-supplied args.
+    // Concat kernels are compiled with NUM_RUNTIME_ARGS=256, which is the intended upper bound for the
+    // user-visible runtime-arg payload for these kernels (the effective usable count may be lower when
+    // watcher asserts are enabled).
     //
     // NOTE: The limit applies to the COMBINED total of compile-time + runtime args.
     //
