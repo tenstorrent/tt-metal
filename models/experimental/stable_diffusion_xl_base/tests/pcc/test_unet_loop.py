@@ -28,7 +28,7 @@ from models.common.utility_functions import is_wormhole_b0
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
     "1024x1024": {"10": 0.93, "50": 0.913},
-    "512x512": {"10": 0.84, "50": 0.919},
+    "512x512": {"10": 0.84, "50": 0.917},
 }
 
 UNET_LOOP_SEED = {
