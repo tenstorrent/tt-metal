@@ -60,7 +60,8 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t num_heads,
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const bool use_falcon7b_backend) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
@@ -78,13 +79,11 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t sequence_size = input_shape[1];
     const uint32_t sequence_size_padded = padded_input_shape[1];
 
-    // Falcon7B has a specific configuration: 71 Q heads, 1 KV head, head_dim=64
-    // Total hidden dim: 71*64 + 1*64 + 1*64 = 4672
-    // Only use the Falcon7B-specific backend when the input matches this exact configuration.
-    // Other GQA configurations (num_kv_heads != num_heads) should use the generic nlp_create_qkv_heads.
-    constexpr uint32_t FALCON7B_HIDDEN_DIM = 4672;
-    if (num_kv_heads.has_value() && !input_tensor_kv.has_value() && padded_input_shape[2] == FALCON7B_HIDDEN_DIM &&
-        num_heads == 71 && num_kv_heads.value() == 1) {
+    if (use_falcon7b_backend) {
+        TT_FATAL(
+            num_kv_heads.has_value() && !input_tensor_kv.has_value(),
+            "Invalid configuration: use_falcon7b_backend requires num_kv_heads to be set and no separate KV tensor.");
+
         TT_FATAL(
             !transpose_key,
             "Invalid configuration: Transpose is set to true, but this is not supported when separate num_kv_heads is "
