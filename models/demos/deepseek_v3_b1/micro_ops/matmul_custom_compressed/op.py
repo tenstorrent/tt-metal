@@ -147,7 +147,6 @@ class MatmulCustomCompressed:
             defines.append(("USE_CONSTEXPR_UNROLL", "1"))
             named_compile_time_args.append(("fmt_cta_base", 0))
 
-            # Build per-core positional CTAs for constexpr path
             all_cores = ttnn.corerange_to_cores(core_grid)
             core_values = []
             for core_coord in all_cores:
@@ -157,7 +156,6 @@ class MatmulCustomCompressed:
             per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
         else:
             # Runtime path: create packed pairs tensor in L1
-            # Build packed pairs per core, assemble into sharded tensor
             all_cores = ttnn.corerange_to_cores(core_grid)
             num_pairs = num_tiles_k * out_w // 2
             shard_data = []
@@ -166,7 +164,6 @@ class MatmulCustomCompressed:
                 pairs = pack_pairs_as_ctas(shard_assignment)
                 shard_data.extend(pairs)
 
-            # Create sharded uint32 tensor: one shard per core, num_pairs words each
             num_cores = len(all_cores)
             fmt_torch = torch.tensor(shard_data, dtype=torch.int32).reshape(num_cores, num_pairs)
             fmt_shard_spec = ttnn.ShardSpec(core_grid, [1, num_pairs * 4], ttnn.ShardOrientation.ROW_MAJOR)
