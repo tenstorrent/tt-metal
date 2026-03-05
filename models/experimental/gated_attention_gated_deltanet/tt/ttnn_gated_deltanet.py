@@ -108,6 +108,8 @@ def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
         return _causal_conv1d_fir(x, weight, bias, kernel_size, device)
 
     # conv1d requires ROW_MAJOR NLC input
+    # Move to L1 before untilize to avoid UntilizeDeviceOperation (in0:dram_interleaved)
+    x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     # Causal left-padding: prepend (K-1) zeros along the time dim
