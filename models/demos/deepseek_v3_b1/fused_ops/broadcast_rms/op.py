@@ -168,8 +168,8 @@ class BroadcastRMSNorm:
                 bcast_worker_core = bcast_config.get_worker_core(coord)
                 bcast_worker_core_set = bcast_config.get_worker_core_set(coord)
 
-                rmsnorm_worker_core = bcast_worker_core
-                rmsnorm_worker_core_set = bcast_worker_core_set
+                # rmsnorm_worker_core same as bcast_worker_core
+                # rmsnorm_worker_core_set same as bcast_worker_core_set
 
                 fused_worker_core_set = (
                     bcast_worker_core_set  # Currently the same core(s) run both broadcast and RMSNorm
@@ -244,11 +244,9 @@ class BroadcastRMSNorm:
 
                 bcast_cb_descriptor = bcast_config.get_cb_descriptor(coord)
 
-                kernel_defines = []
-                if skip_ccl:
-                    kernel_defines.append(("SKIP_CCL", "1"))
-                if use_socket:
-                    kernel_defines.append(("ENABLE_SOCKET_READER", "1"))
+                # Broadcast contributes the current define set. If this fused op
+                # adds extra defines later, merge/de-dupe at the op layer.
+                kernel_defines = bcast_config.get_kernel_defines(coord)
 
                 # Unified kernel descriptor for fused op
                 unified_kernel = UnifiedKernelDescriptor(

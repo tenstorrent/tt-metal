@@ -136,6 +136,15 @@ class BroadcastConfig:
     def has_bypass_socket_reader(self):
         return False
 
+    def get_kernel_defines(self, coord):
+        # Returns only broadcast-owned defines.
+        # If callers need additional op-specific defines in future, merge/de-dupe
+        # outside this config layer (prefer a shared utils helper).
+        defines = []
+        if self.uses_socket(coord):
+            defines.append(("ENABLE_SOCKET_READER", "1"))
+        return defines
+
     def _resolve_chunk_size(self, chunk_size_bytes):
         max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
         if chunk_size_bytes is None:
@@ -308,7 +317,7 @@ class BroadcastConfig:
     def get_writer_named_ct_args(self, coord):
         d = self._per_device[coord]
         return [
-            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_tensor0_page_size", self.tensor0_page_size),
@@ -323,7 +332,7 @@ class BroadcastConfig:
     def get_reader_named_ct_args(self, coord):
         d = self._per_device[coord]
         return [
-            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
@@ -620,6 +629,15 @@ class BypassBroadcastConfig:
     def has_bypass_socket_reader(self):
         return self.socket is not None
 
+    def get_kernel_defines(self, coord):
+        # Returns only broadcast-owned defines.
+        # If callers need additional op-specific defines in future, merge/de-dupe
+        # outside this config layer (prefer a shared utils helper).
+        defines = [("SKIP_CCL", "1")]
+        if self.uses_socket(coord):
+            defines.append(("ENABLE_SOCKET_READER", "1"))
+        return defines
+
     def is_root(self, coord):
         return coord == self.root_coord
 
@@ -629,7 +647,7 @@ class BypassBroadcastConfig:
     def get_writer_named_ct_args(self, coord):
         d = self._per_device[coord]
         return [
-            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_tensor0_page_size", self.tensor0_page_size),
@@ -644,7 +662,7 @@ class BypassBroadcastConfig:
     def get_reader_named_ct_args(self, coord):
         d = self._per_device[coord]
         return [
-            ("bcast_cb0_id", self.cb_ids["bcast_data"]),
+            ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
@@ -658,7 +676,7 @@ class BypassBroadcastConfig:
         if num_pages_to_read <= 0:
             raise ValueError("target_num_pages must be greater than zero")
         return [
-            ("bcast_cb0_id", int(target_cb)),
+            ("bcast_data_cb_id", int(target_cb)),
             ("bcast_num_pages_to_read", num_pages_to_read),
             ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),

@@ -75,7 +75,7 @@ uint32_t per_core_rta_arg_idx = 0;
     // CTArgs type aliases (required for Op templates)
     // CCL Broadcast CTArgs type alias
 using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
-    get_named_compile_time_arg_val("bcast_cb0_id"),
+    get_named_compile_time_arg_val("bcast_data_cb_id"),
     get_named_compile_time_arg_val("bcast_num_pages_to_read"),
     get_named_compile_time_arg_val("bcast_tensor0_page_size"),
     get_named_compile_time_arg_val("bcast_num_neighbors"),
@@ -298,17 +298,17 @@ if constexpr (!Core::skip_ccl) {
 #elif defined(COMPILE_FOR_BRISC)
 
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender")>;
+using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+    get_named_compile_time_arg_val("bcast_data_cb_id"),
+    get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+    get_named_compile_time_arg_val("bcast_is_sender")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+// CCL Broadcast reader runtime args (only populated when not skip_ccl)
+deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
-    if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
-    }
+if constexpr (!Core::skip_ccl) {
+    bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
+}
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op

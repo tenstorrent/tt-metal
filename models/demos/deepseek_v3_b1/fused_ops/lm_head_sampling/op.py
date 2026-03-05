@@ -793,7 +793,9 @@ class LMHeadSampling:
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================
-                kernel_defines = [("SKIP_CCL", "1")] if skip_ccl else []
+                # Broadcast contributes the current define set. If this fused op
+                # adds extra defines later, merge/de-dupe at the op layer.
+                kernel_defines = bcast_config.get_kernel_defines(coord)
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/lm_head_sampling/kernels/lm_head_sampling_kernel.cpp",
                     core_ranges=all_cores,

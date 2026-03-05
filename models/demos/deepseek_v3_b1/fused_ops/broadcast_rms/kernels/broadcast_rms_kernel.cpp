@@ -27,7 +27,7 @@ void kernel_main() {
     uint32_t per_core_rta_arg_idx = 0;
 #if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
         get_named_compile_time_arg_val("bcast_num_neighbors"),
@@ -64,7 +64,7 @@ void kernel_main() {
 
 #if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_use_socket")>;

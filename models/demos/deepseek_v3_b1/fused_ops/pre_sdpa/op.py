@@ -2296,6 +2296,9 @@ class PreSDPA:
                         "per_core_ncrisc_tail_args": per_core_ncrisc_tail_args,
                         "per_core_brisc_args": per_core_brisc_args,
                         "per_core_trisc_args": per_core_trisc_args,
+                        # Broadcast contributes the current define set. If this fused op
+                        # adds extra defines later, merge/de-dupe at the op layer.
+                        "kernel_defines": bcast_config.get_kernel_defines(coord),
                         "input_cb_descriptor": in_cb_descriptor,
                         "output_cb_descriptor": final_output_cb_descriptor,
                         "cbs_list": cbs_list,
@@ -2412,6 +2415,7 @@ class PreSDPA:
                     brisc_args=ctx["per_core_brisc_args"],
                     trisc_args=ctx["per_core_trisc_args"],
                 ),
+                defines=ctx["kernel_defines"],
                 noc_mode=noc_mode,
             )
 

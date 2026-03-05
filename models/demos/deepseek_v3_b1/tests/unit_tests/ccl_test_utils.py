@@ -28,8 +28,7 @@ def build_broadcast_test_inputs(
     mesh_device,
     mesh_rows,
     mesh_cols,
-    sender_row,
-    sender_col,
+    sender_coord,
     output_shape,
     input_shard_shape,
     tensor_mem_layout,
@@ -47,6 +46,8 @@ def build_broadcast_test_inputs(
     """
     Build common broadcast test inputs with configurable placement/mapping.
 
+    Sender is specified via sender_coord=ttnn.MeshCoordinate(...).
+
     Returns:
         BroadcastTestInputs with sender torch tensor, input/output mesh tensors, and semaphores.
     """
@@ -63,6 +64,9 @@ def build_broadcast_test_inputs(
 
     if output_mesh_mapper not in ("replicate", "shard_dim0"):
         raise ValueError(f"Unsupported output_mesh_mapper: {output_mesh_mapper}")
+
+    sender_row = int(sender_coord[0])
+    sender_col = int(sender_coord[1])
 
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(bcast_core, bcast_core)})
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)

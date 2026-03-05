@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t per_core_rta_arg_idx = 0;
     // Writer CTArgs
     using BcastCTArgs = Broadcast::WriterCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
         get_named_compile_time_arg_val("bcast_num_neighbors"),
@@ -43,7 +43,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     // Reader CTArgs
     using BcastCTArgs = Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_is_sender")>;
 
