@@ -8,23 +8,20 @@
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <optional>
+#include <vector>
 
 namespace ttnn::operations::experimental::moe_gpt {
 
 struct ExecuteMoEGPT {
-    static ttnn::Tensor invoke(
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& expert_indices,
+        const ttnn::Tensor& expert_scores,
+        const ttnn::Tensor& expert_mapping,
         const ttnn::Tensor& w0_w1_tensor,
         const ttnn::Tensor& w2_tensor,
-        const ttnn::Tensor& output_tensor,
-        const uint32_t num_experts,
-        bool enable_dram_output = false,
-        std::optional<ttnn::Tensor> dram_output_tensor = std::nullopt,
-        std::optional<ttnn::Tensor> sparse_buffer = std::nullopt,
-        std::optional<ttnn::Tensor> expert_indices = std::nullopt,
-        std::optional<ttnn::Tensor> expert_scores = std::nullopt,
-        std::optional<ttnn::Tensor> expert_mapping = std::nullopt,
-        std::optional<ttnn::Tensor> tilize_output = std::nullopt,
+        uint32_t output_height_shard_dim = 4,
+        uint32_t output_width_shard_dim = 3,
         std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 
