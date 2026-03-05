@@ -535,6 +535,7 @@ def gen_compute_golden(
 def verify_compute(
     iteration,
     mesh_device,
+    cluster_axis,
     tt_compute_tensor,
     compute_golden,
     devices,
@@ -546,8 +547,19 @@ def verify_compute(
     batch,
     hidden_size,
 ):
-    # TODO (AM) this device order concat is only valid for cluster_axis == 1
-    raw_output = ttnn.to_torch(tt_compute_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    if cluster_axis == 0:
+        device_shards = [
+            ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_compute_tensor)
+        ]
+        ordered_shards = []
+        for ir in range(mesh_shape[1]):
+            for ic in range(mesh_shape[0]):
+                ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
+        raw_output = torch.cat(ordered_shards, dim=0)
+
+    else:
+        raw_output = ttnn.to_torch(tt_compute_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
     # (D * all cores, E/D, T/D, H) -> (D, all cores, E/D, T/D, H)
     # note this shape does not yet match the layout of the underlying data.
     raw_shape = list(raw_output.shape)
@@ -598,9 +610,21 @@ def verify_compute(
     return eq
 
 
-def verify_dispatch(iteration, mesh_device, tt_dispatch_tensor, torch_dispatch_golden):
-    # TODO (AM) this device order concat is only valid for cluster_axis == 1
-    torch_dispatch_output = ttnn.to_torch(tt_dispatch_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+def verify_dispatch(iteration, mesh_device, cluster_axis, tt_dispatch_tensor, torch_dispatch_golden):
+    if cluster_axis == 0:
+        device_shards = [
+            ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_dispatch_tensor)
+        ]
+        ordered_shards = []
+        for ir in range(mesh_shape[1]):
+            for ic in range(mesh_shape[0]):
+                ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
+        torch_dispatch_output = torch.cat(ordered_shards, dim=0)
+
+    else:
+        torch_dispatch_output = ttnn.to_torch(
+            tt_dispatch_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        )
 
     torch_dispatch_golden_ref, torch_dispatch_golden_map = torch_dispatch_golden
     ref_shape = torch_dispatch_golden_ref.shape
@@ -626,9 +650,21 @@ def verify_dispatch(iteration, mesh_device, tt_dispatch_tensor, torch_dispatch_g
     return eq
 
 
-def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_golden):
-    # TODO (AM) this device order concat is only valid for cluster_axis == 1
-    torch_combine_output = ttnn.to_torch(tt_combine_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+def verify_combine(iteration, mesh_device, cluster_axis, tt_combine_tensor, torch_combine_golden):
+    if cluster_axis == 0:
+        device_shards = [
+            ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_combine_tensor)
+        ]
+        ordered_shards = []
+        for ir in range(mesh_shape[1]):
+            for ic in range(mesh_shape[0]):
+                ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
+        torch_combine_output = torch.cat(ordered_shards, dim=0)
+
+    else:
+        torch_combine_output = ttnn.to_torch(
+            tt_combine_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        )
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
@@ -1471,13 +1507,14 @@ def test_optimized_moe_decode_block(
         logger.info(f"Validating iteration: {iteration}")
 
         if not verify_dispatch(
-            iteration, mesh_device, tt_dispatch_tensors[iteration], torch_dispatch_goldens[iteration]
+            iteration, mesh_device, cluster_axis, tt_dispatch_tensors[iteration], torch_dispatch_goldens[iteration]
         ):
             all_iterations_passed = False
 
         if not verify_compute(
             iteration,
             mesh_device,
+            cluster_axis,
             tt_compute_tensors[iteration],
             torch_compute_goldens[iteration],
             devices,
@@ -1491,7 +1528,9 @@ def test_optimized_moe_decode_block(
         ):
             all_iterations_passed = False
 
-        if not verify_combine(iteration, mesh_device, tt_combine_tensors[iteration], torch_combine_goldens[iteration]):
+        if not verify_combine(
+            iteration, mesh_device, cluster_axis, tt_combine_tensors[iteration], torch_combine_goldens[iteration]
+        ):
             all_iterations_passed = False
 
         if not verify_output(

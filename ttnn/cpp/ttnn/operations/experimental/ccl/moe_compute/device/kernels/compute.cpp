@@ -10,10 +10,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
-// DEBUG
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/debug/dprint_pages.h"
-
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -317,13 +313,6 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
-
-                //                 fill_tile_init();
-                //                 fill_tile(0, 1.0 * (expert_id +1));
-                //                 fill_tile(1, 1.0 * (expert_id +1));
-                //                 fill_tile(2, 1.0 * (expert_id +1));
-                //                 fill_tile(3, 1.0 * (expert_id +1));
-
                 tile_regs_commit();
 
                 tile_regs_wait();
