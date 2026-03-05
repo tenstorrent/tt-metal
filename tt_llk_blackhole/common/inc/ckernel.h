@@ -193,19 +193,44 @@ inline void mmio_register_write(register_space_e space, std::uint32_t addr, std:
     reg_base[regaddr]           = data;
 }
 
+// SemaphoreAccess layout in RISCV T0/T1/T2 address space (starting at PC_BUF_BASE):
+//
+//   uint32_t Padding[PC_BUF_SEMAPHORE_BASE];
+//   uint32_t SemaphoreAccess[8];  // Not a plain variable; has exotic read/write behaviours (see below).
+//
+// Reads:  return Semaphores[i].Value;
+//
+// Writes: atomic {
+//           if (new_val & 1)  { if (Value > 0)  Value -= 1; }  // SEMGET
+//           else              { if (Value < 15) Value += 1; }  // SEMPOST
+//         }
+
 inline std::uint8_t semaphore_read(const std::uint8_t index)
 {
+    LLK_ASSERT(index < semaphore::NUM_SEMAPHORES, "Semaphore index out of bounds.");
     return pc_buf_base[PC_BUF_SEMAPHORE_BASE + index];
 }
 
+// Releases one token on the semaphore (SEMPOST).
+// Writes 0 (LSB clear) to SemaphoreAccess[index], triggering the hardware to atomically increment
+// Semaphores[index].Value by 1. The value is capped at 15; writing when already at 15 would silently
+// have no effect, so the assert guards against that misuse.
 inline void semaphore_post(const std::uint8_t index)
 {
-    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 0;
+    LLK_ASSERT(index < semaphore::NUM_SEMAPHORES, "Semaphore index out of bounds.");
+    LLK_ASSERT(semaphore_read(index) < semaphore::SEMAPHORE_MAX_VALUE, "Semaphore must not be already at max value.");
+    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 0; // LSB clear → SEMPOST: increment (cap at 15)
 }
 
+// Acquires one token from the semaphore (SEMGET).
+// Writes 1 (LSB set) to SemaphoreAccess[index], triggering the hardware to atomically decrement
+// Semaphores[index].Value by 1. The value is floored at 0; writing when already at 0 would silently
+// have no effect, so the assert guards against that misuse.
 inline void semaphore_get(const std::uint8_t index)
 {
-    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1;
+    LLK_ASSERT(index < semaphore::NUM_SEMAPHORES, "Semaphore index out of bounds.");
+    LLK_ASSERT(semaphore_read(index) > 0, "Semaphore must not be already at 0.");
+    pc_buf_base[PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set → SEMGET: decrement (only if > 0)
 }
 
 // Tensix thread semaphore post optionally stalled
