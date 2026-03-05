@@ -222,7 +222,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // q - [B, NHQ, Sq, DH_qk]
     // k - [B, 1, Sk, DH_qk]
     // v - [B, NVH, Sk, DH_v]
-    // k head is in latent space, and is reused accross all q heads
+    // k head is in latent space, and is reused across all q heads
 
     // Paged cache parameters when in chunked mode
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
