@@ -28,8 +28,7 @@
    - 4.2 D2H Latency
    - 4.3 H2D Throughput
    - 4.4 H2D Latency
-   - 4.5 Ping / Jitter
-   - 4.6 Multi-Chip Throughput
+   - 4.5 Multi-Chip Throughput
 5. [Interpreting Results](#5-interpreting-results)
 6. [Running the Benchmarks](#6-running-the-benchmarks)
 7. [Benchmark Suite Reference](#7-benchmark-suite-reference)
@@ -38,22 +37,9 @@
 
 ## 1. Background  -  H2D / D2H PCIe Sockets
 
-Tenstorrent uses the word "socket" for several distinct streaming-FIFO abstractions. This section defines each type so the scope of this document is unambiguous.
+> **"Socket" here is not a POSIX/network socket.** Tenstorrent uses the term for hardware-level streaming FIFOs. This report covers only the PCIe variants: `H2DSocket` (host to device) and `D2HSocket` (device to host), both in `tt_metal/api/tt-metalium/experimental/sockets/`. Device-to-device communication uses `MeshSocket` over TT-Fabric (Ethernet) and is out of scope; see `mesh_socket.hpp` and the TT-Fabric tech report.
 
-**PCIe sockets (this document)** are a streaming FIFO abstraction for moving data across the PCIe link between a host CPU and a Tenstorrent AI core. They hide the low-level details of PCIe TLB mapping, NOC address encoding, and flow-control signaling behind a simple `write` / `read` + `barrier` API. Two directions exist: `H2DSocket` (Host-to-Device) and `D2HSocket` (Device-to-Host). Both are implemented in `tt_metal/api/tt-metalium/experimental/sockets/`.
-
-**Device-to-Device sockets (`MeshSocket`)** are an entirely different class of socket that move data between AI cores on the same or different MeshDevices over TT-Fabric (Ethernet links), with no host CPU involvement in the data path. The host configures sender/receiver core pairs via `SocketConfig` and `MeshSocket::create_socket_pair()`; `MeshSocket` then handles all flow control and data movement on-device over TT-Fabric. `MeshSocket` is implemented in `tt_metal/api/tt-metalium/experimental/sockets/mesh_socket.hpp` and documented separately. **Nothing in this report applies to `MeshSocket`.**
-
-> **Naming note  -  "socket" here does not mean a POSIX/network socket.**
-> The term is used in the Tenstorrent-specific sense of a hardware-level streaming channel. It has nothing to do with TCP/UDP sockets, Berkeley sockets, or any OS networking API.
->
-> Summary of Tenstorrent socket types:
->
-> - **H2DSocket / D2HSocket** (this document)  -  PCIe, host <-> device.
-> - **MeshSocket**  -  TT-Fabric (Ethernet), device <-> device. Out of scope here.
-> - **TT-Fabric / Ethernet sockets (lower-level)**  -  the underlying fabric used by `MeshSocket`. See [`tech_reports/TT-Fabric/TT-Fabric-Architecture.md`](../../../tech_reports/TT-Fabric/TT-Fabric-Architecture.md) and [`tech_reports/Programming_Multiple_Meshes/`](../../../tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md).
-
-Two PCIe socket types are covered in this report:
+`H2DSocket` and `D2HSocket` hide PCIe TLB mapping, NOC address encoding, and flow-control signaling behind a simple `write` / `read` + `barrier` API:
 
 | Type | Direction | Host-side API | Device-side API |
 |------|-----------|---------------|-----------------|
@@ -81,7 +67,7 @@ The FIFO is parameterised by two quantities that directly control performance:
 | AI clock | **1.35 GHz** (used throughout for cycles -> us conversion) |
 | L1 per core | **1464 KB** (governs maximum socket page size and buffer allocation) |
 | PCIe link  -  high-bandwidth chips (ASIC 6 per tray, 4 total) | **Gen 4 x8** (~16 GB/s unidirectional theoretical; measured values in S.4) |
-| PCIe link  -  low-bandwidth chips (all others, 28 total) | **Gen 4 x1** (requires KMD >= 2.7  -  see S.4 hardware overview; measured values in S.4.6) |
+| PCIe link  -  low-bandwidth chips (all others, 28 total) | **Gen 4 x1** (requires KMD >= 2.7  -  see S.4 hardware overview; measured values in S.4.5) |
 
 Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`](../../../tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md); AI clock (1.35 GHz) from [`GEMM_FLOPS.md`](../../../tech_reports/GEMM_FLOPS/GEMM_FLOPS.md); PCIe link bandwidth from benchmark measurements in this report.
 
@@ -92,12 +78,12 @@ Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`
 | Scenario | Direction | Driver | Bottleneck |
 |----------|-----------|--------|------------|
 | **Weight loading**  -  loading tokenised batches from host dataloader into device L1/DRAM before each step | **H2D** | Host-side data pipeline writes to socket | PCIe Gen 4 x8 ceiling (~16 GB/s on high-bandwidth chips). Choose `HOST_PUSH` for lowest latency, `DEVICE_PULL` to offload CPU. |
-| **Activation / gradient offloading**  -  streaming activations or gradients out to host RAM to free device DRAM (e.g., during FSDP or gradient checkpointing) | **D2H** | Device kernel writes to host pinned buffer | PCIe Gen 4 x8 (~16 GB/s, high-bandwidth chips only). Low-bandwidth chips have significantly lower host-facing bandwidth (see S.4.6)  -  **do not use low-bandwidth chips for high-throughput offloading**. |
+| **Activation / gradient offloading**  -  streaming activations or gradients out to host RAM to free device DRAM (e.g., during FSDP or gradient checkpointing) | **D2H** | Device kernel writes to host pinned buffer | PCIe Gen 4 x8 (~16 GB/s, high-bandwidth chips only). Low-bandwidth chips have significantly lower host-facing bandwidth (see S.4.5)  -  **do not use low-bandwidth chips for high-throughput offloading**. |
 | **Loss / logit collection**  -  reading per-step loss scalars or logit tensors from the device for host-side logging or early stopping | **D2H** | Device kernel writes small result tensors | Latency-bound (small pages). Use large page sizes even for small payloads (pad to 4 KB+) to amortise protocol overhead. |
 | **Pipeline stage I/O**  -  feeding the **first stage** of a pipeline-parallel model from a CPU-resident dataset server | **H2D** | Dataset server writes to socket into Stage 0 device | Similar to data ingestion. The socket forms the CPU->device boundary of the pipeline. Downstream stage-to-stage communication should use **Ethernet sockets** (not PCIe sockets). |
 | **Telemetry / profiling streams**  -  continuously streaming device-side cycle counter data or custom metrics to a host monitoring process | **D2H** | Device writer kernel sends fixed-size telemetry records | Very latency-sensitive. Use small, fixed page sizes and a large FIFO. Run on a high-bandwidth chip (ASIC 6). |
 
-> **Rule of thumb:** Any scenario that requires moving more than a few MB per second between host and device must land on one of the **4 high-bandwidth chips** (ASIC 6 per tray, Gen 4 x8 PCIe). All 28 low-bandwidth chips are significantly bandwidth-constrained for host-facing socket I/O (see S.4.6), which is insufficient for streaming training data or large activation offloads at training speed.
+> **Rule of thumb:** Any scenario that requires moving more than a few MB per second between host and device must land on one of the **4 high-bandwidth chips** (ASIC 6 per tray, Gen 4 x8 PCIe). All 28 low-bandwidth chips are significantly bandwidth-constrained for host-facing socket I/O (see S.4.5), which is insufficient for streaming training data or large activation offloads at training speed.
 
 ---
 
@@ -436,17 +422,17 @@ noc_async_write_barrier();
 Not all chips on a Tenstorrent tray are equal from a host-connectivity standpoint. In a 32-chip Blackhole Galaxy system, **all 32 chips are directly MMIO-mapped**  -  each has its own physical PCIe connection to the host root complex. However, chips fall into two classes based on the **bandwidth** of that connection:
 
 - **High-bandwidth chips (ASIC 6 per tray, 4 total):** Gen 4 x8 PCIe link to the host root complex.
-- **Low-bandwidth chips (all others, 28 total):** Gen 4 x1 PCIe link (requires KMD >= 2.7 for correct link speed; see note below). Measured peak throughput values for these chips are presented in S.4.6.
+- **Low-bandwidth chips (all others, 28 total):** Gen 4 x1 PCIe link (requires KMD >= 2.7 for correct link speed; see note below). Measured peak throughput values for these chips are presented in S.4.5.
 
 > **KMD >= 2.7 required for correct PCIe link speeds on low-bandwidth chips.**
 > Linux kernels 6.5 through 6.12 contain a quirk that can force all PCIe links to **Gen 1 (2.5 GT/s, ~250 MB/s)** during hot-plug enumeration on Blackhole Galaxy systems. KMD 2.7 detects this condition and retrains each link to its full speed. Linux 6.13+ does not have this quirk. Benchmark results for the 28 low-bandwidth chips in this report are only valid when running KMD >= 2.7; numbers collected on earlier KMD versions reflect Gen 1 performance (~250 MB/s) rather than the true Gen 4 x1 ceiling (~2 GB/s). See [ttkmd-2.7.0 release notes](https://github.com/tenstorrent/tt-kmd/releases/tag/ttkmd-2.7.0) for details.
 
 The **4 high-bandwidth chips** (one per tray, ASIC Location 6) have a full Gen 4 x8 link to the host PCIe root complex. Data written by the device kernel over NOC reaches host RAM in a single PCIe hop at full link bandwidth.
 
-The **28 low-bandwidth chips** each have their own direct (not tunnelled) PCIe link to the host  -  there is no chip-to-chip relay. Their peak host-facing bandwidth is significantly lower than the high-bandwidth chips regardless of page size, FIFO size, or transfer mode (see S.4.6 for measured values).
+The **28 low-bandwidth chips** each have their own direct (not tunnelled) PCIe link to the host  -  there is no chip-to-chip relay. Their peak host-facing bandwidth is significantly lower than the high-bandwidth chips regardless of page size, FIFO size, or transfer mode (see S.4.5 for measured values).
 
 > **This asymmetry is the single most important architectural fact for workload layout.**
-> Any workload that requires high-bandwidth streaming to or from the host  -  gradient checkpointing, activation offloading, weight streaming  -  must target one of the 4 high-bandwidth chips (ASIC 6 per tray). The 28 low-bandwidth chips are significantly bandwidth-constrained for host-facing socket I/O regardless of tuning (see S.4.6 for measured values).
+> Any workload that requires high-bandwidth streaming to or from the host  -  gradient checkpointing, activation offloading, weight streaming  -  must target one of the 4 high-bandwidth chips (ASIC 6 per tray). The 28 low-bandwidth chips are significantly bandwidth-constrained for host-facing socket I/O regardless of tuning (see S.4.5 for measured values).
 
 Due to this asymmetry, the benchmarks in this report show two distinct performance regimes: high-bandwidth chips saturate the PCIe link with low latency, while low-bandwidth chips hit a hard throughput ceiling orders of magnitude lower and incur significantly higher round-trip latency, regardless of page size or FIFO tuning.
 
@@ -456,103 +442,89 @@ Due to this asymmetry, the benchmarks in this report show two distinct performan
 
 ### 4.1 D2H Throughput
 
-**`d2h_throughput.png`**  -  Throughput (GB/s) vs page size at the maximum FIFO size. Each line is one total-transfer-data size (16 KB -> 1 GB). Shows how throughput saturates as pages get larger and as more data is moved.
+Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a **Gen 4 x1 low-bandwidth chip** to expose the performance gulf between the two classes.
 
-![D2H Throughput vs Page Size](charts/d2h_throughput.png)
+**Throughput vs page size at maximum FIFO size.** Each line is one total-transfer-data size. Shows how throughput saturates as pages get larger and as more data is transferred in a single run.
+
+![D2H Throughput vs Page Size - Gen 4 x8](asdasd/x8_d2h_throughput.png)
+
+![D2H Throughput vs Page Size - Gen 4 x1](asdasd/x1_d2h_throughput.png)
 
 ---
 
-**`d2h_tp_vs_fifo.png`**  -  Throughput vs socket FIFO size at the maximum total-data size. Each line is one page size. The key chart for choosing a FIFO size: throughput climbs steeply with FIFO size then plateaus once back-pressure disappears.
+**Throughput vs page size at maximum total-data size, spread across all FIFO sizes.** The shaded band shows the min-max range; solid line is median, dashed is mean. Use this to see how sensitive throughput is to FIFO size at each page size.
 
-![D2H Throughput vs FIFO Size](charts/d2h_tp_vs_fifo.png)
+![D2H Throughput Mean/Spread vs Page Size - Gen 4 x8](asdasd/x8_d2h_throughput_mean.png)
+
+![D2H Throughput Mean/Spread vs Page Size - Gen 4 x1](asdasd/x1_d2h_throughput_mean.png)
+
+---
+
+**Throughput vs socket FIFO size at maximum total-data size.** Each line is one page size. The key chart for choosing a FIFO size: throughput climbs steeply then plateaus once the FIFO is large enough that the sender is never back-pressured.
+
+![D2H Throughput vs FIFO Size - Gen 4 x8](asdasd/x8_d2h_tp_vs_fifo.png)
+
+![D2H Throughput vs FIFO Size - Gen 4 x1](asdasd/x1_d2h_tp_vs_fifo.png)
 
 ---
 
 ### 4.2 D2H Latency
 
-**`d2h_latency.png`**  -  Round-trip latency (us) vs page size, one line per FIFO size. p50 is shown as a solid line; min/max as dashed. Log-log scale makes both the protocol-overhead floor (small pages) and the DMA-time slope (large pages) visible.
+**Round-trip latency (us) vs page size, showing min/median/max across all FIFO sizes.** Log-log scale makes both the protocol-overhead floor (small pages) and the DMA-time slope (large pages) visible.
 
-![D2H Round-Trip Latency vs Page Size](charts/d2h_latency.png)
+![D2H Round-Trip Latency - Gen 4 x8](asdasd/x8_d2h_latency.png)
+
+![D2H Round-Trip Latency - Gen 4 x1](asdasd/x1_d2h_latency.png)
 
 ---
 
 ### 4.3 H2D Throughput
 
-**`h2d_throughput.png`**  -  H2D throughput vs page size for both `HOST_PUSH` and `DEVICE_PULL`, at the maximum FIFO and maximum total-data size. The primary chart for comparing the two transfer modes head-to-head on throughput.
+**Throughput vs page size, `HOST_PUSH` vs `DEVICE_PULL` overlaid.** Measured at the maximum FIFO size and maximum total-data size (median across repeated configurations). The primary chart for comparing the two transfer modes head-to-head.
 
-![H2D Throughput vs Page Size  -  HOST_PUSH vs DEVICE_PULL](charts/h2d_throughput.png)
+![H2D Throughput vs Page Size - Gen 4 x8](asdasd/x8_h2d_throughput.png)
+
+![H2D Throughput vs Page Size - Gen 4 x1](asdasd/x1_h2d_throughput.png)
 
 ---
 
-**`h2d_tp_vs_fifo.png`**  -  H2D throughput vs FIFO size, `HOST_PUSH` (left) and `DEVICE_PULL` (right) in separate panels. Each line is one page size. Shows whether the two modes need the same FIFO depth to reach their respective plateaus.
+**Throughput vs page size at maximum total-data size, `HOST_PUSH` and `DEVICE_PULL` in separate panels.** The shaded band shows min-max across all FIFO sizes; solid line is median, dashed is mean. Shows how much FIFO size matters for each mode.
 
-![H2D Throughput vs FIFO Size  -  HOST_PUSH vs DEVICE_PULL](charts/h2d_tp_vs_fifo.png)
+![H2D Throughput Mean/Spread vs Page Size - Gen 4 x8](asdasd/x8_h2d_throughput_mean.png)
+
+![H2D Throughput Mean/Spread vs Page Size - Gen 4 x1](asdasd/x1_h2d_throughput_mean.png)
+
+---
+
+**Throughput vs socket FIFO size at maximum total-data size, `HOST_PUSH` (left) and `DEVICE_PULL` (right).** Each line is one page size. Shows whether the two modes need the same FIFO depth to reach their respective throughput plateaus.
+
+![H2D Throughput vs FIFO Size - Gen 4 x8](asdasd/x8_h2d_tp_vs_fifo.png)
+
+![H2D Throughput vs FIFO Size - Gen 4 x1](asdasd/x1_h2d_tp_vs_fifo.png)
+
+---
+
+**Throughput vs page size at maximum FIFO size, `HOST_PUSH` (left) and `DEVICE_PULL` (right).** Each line is one total-transfer-data size. Analogous to the D2H throughput chart but split by mode so the convergence of throughput with transfer size is visible for each.
+
+![H2D Throughput at Max FIFO vs Page Size - Gen 4 x8](asdasd/x8_h2d_tp_at_max_fifo.png)
+
+![H2D Throughput at Max FIFO vs Page Size - Gen 4 x1](asdasd/x1_h2d_tp_at_max_fifo.png)
 
 ---
 
 ### 4.4 H2D Latency
 
-**`h2d_latency.png`**  -  H2D round-trip latency vs page size, `HOST_PUSH` vs `DEVICE_PULL` overlaid on one axis (p50 solid, min/max dashed). The single most useful chart for mode selection: shows which mode has lower latency and how the gap evolves with page size.
+**Round-trip latency (us) vs page size, `HOST_PUSH` (left) and `DEVICE_PULL` (right) in separate panels.** Each panel shows min/median/max across all FIFO sizes on a log-log scale. The primary chart for mode selection: lower latency at small pages favours `HOST_PUSH`; the gap narrows as page size grows.
 
-![H2D Round-Trip Latency  -  HOST_PUSH vs DEVICE_PULL](charts/h2d_latency.png)
+![H2D Round-Trip Latency - Gen 4 x8](asdasd/x8_h2d_latency.png)
 
----
-
-### 4.5 Ping / Jitter
-
-**`d2h_ping_timeseries.png`**  -  D2H pure-signalling latency plotted iteration-by-iteration (no data DMA). Exposes tail-latency spikes from OS scheduler interference, PCIe power-state transitions, or NUMA effects. p50 and mean reference lines are overlaid.
-
-![D2H Pure Ping: Per-Iteration Latency](charts/d2h_ping_timeseries.png)
+![H2D Round-Trip Latency - Gen 4 x1](asdasd/x1_h2d_latency.png)
 
 ---
 
-**`h2d_ping_timeseries.png`**  -  H2D pure-signalling latency per iteration, `HOST_PUSH` and `DEVICE_PULL` overlaid. Directly compares the flow-control protocol overhead between the two modes with no DMA noise.
-
-![H2D Pure Ping: Per-Iteration Latency  -  HOST_PUSH vs DEVICE_PULL](charts/h2d_ping_timeseries.png)
-
----
-
-### 4.6 Multi-Chip Throughput
+### 4.5 Multi-Chip Throughput
 
 > **Charts pending re-run with KMD >= 2.7.** Initial measurements for the 28 low-bandwidth chips were collected while those links were running at **Gen 1 (2.5 GT/s)** due to a Linux kernel 6.5-6.12 quirk (see S.4 hardware overview). KMD 2.7 retrains all links to Gen 4 speed; results will be updated once benchmarks are re-run on a KMD 2.7 system.
-
-**`mc_d2h_throughput_heatmap.png`**  -  Heatmap of D2H peak throughput (GB/s) across every chip on the system. Rows = chips (identified by Tray ID / ASIC Location), columns = FIFO sizes (1 MB -> 256 MB), fixed at 256 KB pages and 1 GB total transfer. Reveals per-chip performance variation across the tray.
-
-<!-- FIXME: shelved  -  re-run after PCIe link config is validated
-![D2H Multi-Chip Throughput Heatmap  -  All Chips x FIFO Size](charts/mc_d2h_throughput_heatmap.png)
--->
-
----
-
-**`mc_d2h_throughput_vs_fifo.png`**  -  Line chart version of the multi-chip sweep: throughput vs FIFO size, one line per chip. Makes it easy to see which chips plateau earlier or higher than others.
-
-<!-- FIXME: shelved  -  re-run after PCIe link config is validated
-![D2H Multi-Chip Throughput vs FIFO Size](charts/mc_d2h_throughput_vs_fifo.png)
--->
-
----
-
-**`h2d_mc_d2h_throughput_heatmap.png`**  -  Heatmap of H2D (DEVICE\_PULL) peak throughput (GB/s) across every chip on the system. Fixed at 256 KB pages across FIFO sizes 256 KB, 512 KB, 1 MB. Directly comparable to the D2H heatmap above  -  the throughput gap between high-bandwidth and low-bandwidth chips is visible in both directions.
-
-<!-- FIXME: shelved  -  re-run after PCIe link config is validated
-![H2D Multi-Chip Throughput Heatmap  -  All Chips x FIFO Size](charts/h2d_mc_d2h_throughput_heatmap.png)
--->
-
----
-
-**`h2d_mc_d2h_throughput_vs_fifo.png`**  -  Line chart version of the H2D multi-chip sweep: DEVICE\_PULL throughput vs FIFO size, one line per chip.
-
-<!-- FIXME: shelved  -  re-run after PCIe link config is validated
-![H2D Multi-Chip Throughput vs FIFO Size](charts/h2d_mc_d2h_throughput_vs_fifo.png)
--->
-
----
-
-**`h2d_mc_d2h_throughput_bar.png`**  -  Grouped bar chart of the H2D multi-chip sweep: one group per FIFO size, one bar per chip. An alternative view that makes magnitude differences between chips easier to compare at a glance.
-
-<!-- FIXME: shelved  -  re-run after PCIe link config is validated
-![H2D Multi-Chip Throughput Bar Chart  -  All Chips x FIFO Size](charts/h2d_mc_d2h_throughput_bar.png)
--->
 
 ---
 
@@ -581,13 +553,13 @@ Latency grows with page size because more data must traverse PCIe. For small pag
 
 Large gaps between `avg_us` and `p99_us` indicate interference from the OS scheduler, PCIe power management, or NUMA effects. The warmup is designed to minimise this for early iterations, but OS preemption can still spike individual iterations. Training teams should budget for p99 latency, not average, when sizing timeout windows or synchronisation barriers.
 
-The per-iteration ping plots (**S.4.5**) expose this jitter directly  -  any iteration that spikes significantly above the median is a scheduling artefact, not a hardware limit.
+Any iteration that spikes significantly above the median is a scheduling artefact, not a hardware limit.
 
 ### Per-chip throughput variation
 
-As described in **S.4** (hardware overview), the throughput gap between high-bandwidth and low-bandwidth chips does not improve with larger pages or larger FIFOs  -  it is a PCIe physical-layer constraint (see S.4.6 for measured values).
+As described in **S.4** (hardware overview), the throughput gap between high-bandwidth and low-bandwidth chips does not improve with larger pages or larger FIFOs  -  it is a PCIe physical-layer constraint (see S.4.5 for measured values).
 
-Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  see **S.4.6** (`mc_d2h_throughput_heatmap.png`) for the measured spread across your specific system.
+Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  see **S.4.5** for the measured spread across your specific system once multi-chip charts are available.
 
 ---
 
