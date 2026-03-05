@@ -63,16 +63,19 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
 }
 
 // =============================================================================
-// Forward GELU - Piecewise CDF Approximation (NEW)
+// Forward GELU - Piecewise CDF Approximation
 // =============================================================================
 // GELU(x) = x * Phi(x) where Phi(x) = 0.5*(1+erf(x/sqrt(2))) is the CDF
 //
 // Strategy: approximate Phi(x) via piecewise polynomials, then multiply by x.
 // This ensures GELU(0) = 0 exactly and handles linear growth naturally.
 //
-// Saturation thresholds verified by exhaustive BF16 sweep (DAZ+FTZ model):
+// Saturation thresholds verified by exhaustive BF16 sweep with RNE rounding
+// (round-to-nearest-even, matching hardware pack behavior per
+// tech_reports/data_formats/data_formats.md):
 // - Zero saturation: x <= -13.1875 (GELU(x) rounds to 0 in BF16)
-// - Identity saturation: x >= 5.375 (GELU(x) rounds to x in BF16)
+// - Identity saturation: x >= 3.0 (GELU(x) rounds to x in BF16 with RNE)
+//   Mathematical threshold is ~2.78 but we use 3.0 for clean polynomial boundary
 // =============================================================================
 
 // Degree-16 CDF polynomial for Phi(x) over [-3, 3]
@@ -108,40 +111,16 @@ constexpr float GELU_CDF_LEFT_C6 = 8.395823421e-05f;
 constexpr float GELU_CDF_LEFT_C7 = 2.329905868e-05f;
 constexpr float GELU_CDF_LEFT_C8 = 2.286483037e-06f;
 
-// Degree-8 CDF polynomial for Phi(x) over [3, 5.375]
-constexpr float GELU_CDF_RIGHT_C0 = -2.074564169e-01f;
-constexpr float GELU_CDF_RIGHT_C1 = 1.901193653e+00f;
-constexpr float GELU_CDF_RIGHT_C2 = -1.316398922e+00f;
-constexpr float GELU_CDF_RIGHT_C3 = 5.232226143e-01f;
-constexpr float GELU_CDF_RIGHT_C4 = -1.304963828e-01f;
-constexpr float GELU_CDF_RIGHT_C5 = 2.090219391e-02f;
-constexpr float GELU_CDF_RIGHT_C6 = -2.098689052e-03f;
-constexpr float GELU_CDF_RIGHT_C7 = 1.207102739e-04f;
-constexpr float GELU_CDF_RIGHT_C8 = -3.043728055e-06f;
-
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
 
-    // Identity saturation: x >= 5.375
-    v_if(x >= 5.375f) { result = x; }
-    // Right CDF region [3, 5.375): GELU(x) = x * Phi_right(x)
-    v_elseif(x >= 3.0f) {
-        sfpi::vFloat phi = PolynomialEvaluator::eval(
-            x,
-            GELU_CDF_RIGHT_C0,
-            GELU_CDF_RIGHT_C1,
-            GELU_CDF_RIGHT_C2,
-            GELU_CDF_RIGHT_C3,
-            GELU_CDF_RIGHT_C4,
-            GELU_CDF_RIGHT_C5,
-            GELU_CDF_RIGHT_C6,
-            GELU_CDF_RIGHT_C7,
-            GELU_CDF_RIGHT_C8);
-        result = x * phi;
-    }
+    // Identity saturation: x >= 3.0
+    // With RNE rounding, GELU(x) rounds to x for all BF16 values x >= ~2.78.
+    // We use 3.0 as a clean boundary matching the core polynomial endpoint.
+    v_if(x >= 3.0f) { result = x; }
     // Core CDF region [-3, 3): GELU(x) = x * Phi_core(x)
     v_elseif(x >= -3.0f) {
         sfpi::vFloat phi = PolynomialEvaluator::eval(
@@ -183,7 +162,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         result = x * phi;
     }
     // Exp-based region (-13.1875, -5): asymptotic formula
-    // GELU(x) = -exp(-x^2/2) / sqrt(2*pi) * (1 - 1/x^2 + 3/x^4)
+    // GELU(x) ≈ -exp(-x^2/2) / sqrt(2*pi) * (1 - 1/x^2 + 3/x^4)
     v_elseif(x > -13.1875f) {
         constexpr float NEG_INV_SQRT_2PI = -0.3989422804014327f;
 
