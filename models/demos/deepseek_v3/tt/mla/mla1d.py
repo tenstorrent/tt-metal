@@ -695,7 +695,10 @@ class MLA1D(AbstractModule):
         }
 
         # Output L1 WIDTH sharded memory config for qkv_a (shard spec computed by the op)
-        qkv_a_out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+        qkv_a_out_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
 
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -737,7 +740,10 @@ class MLA1D(AbstractModule):
         }
 
         # Output L1 WIDTH sharded memory config for wq_b (shard spec computed by the op)
-        wq_b_out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+        wq_b_out_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -899,7 +905,10 @@ class MLA1D(AbstractModule):
         }
 
         # Output L1 WIDTH sharded memory config for wo (shard spec computed by the op)
-        wo_out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+        wo_out_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
