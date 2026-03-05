@@ -13,6 +13,8 @@ Goals:
 
 import torch
 
+from models.demos.deepseek_v3_d_p.tt.moe.common import get_gate_outputs
+
 
 class TorchDispatchModule(torch.nn.Module):
     """Expert-centric MoE dispatch module."""
@@ -61,18 +63,6 @@ class TorchDispatchModule(torch.nn.Module):
         self.dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
         self.dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
-        ###
-        # prep data for efficient dispatch: count tokens per expert per chip to compute offsets for where to write in the dispatched buffer
-        self.chip_to_n_routed_expert_counter = torch.zeros(
-            (self.num_chips, self.n_routed_experts), dtype=torch.int32
-        )  # amount of tokens dispatched to each expert from each chip
-        self.chip_to_n_routed_expert_offset = torch.zeros(
-            (self.num_chips, self.n_routed_experts), dtype=torch.int32
-        )  # base offset for each expert from each chip in the dispatched buffer
-        self.chip_to_routed_expert_tokens = torch.zeros(
-            (self.num_chips, self.experts_per_chip), dtype=torch.int32
-        )  # total tokens dispatched to each expert per chip
-
     def _dispatch_single_rank(
         self,
         x: torch.Tensor,
@@ -83,21 +73,16 @@ class TorchDispatchModule(torch.nn.Module):
         # Reset buffers
         dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
         dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
-        chip_to_n_routed_expert_counter = torch.zeros((self.num_chips, self.n_routed_experts), dtype=torch.int32)
 
-        # Count tokens per expert per chip
-        for chip in range(self.num_chips):
-            for token in range(self.seq_len_per_chip):
-                for topk_indice in range(self.num_experts_per_tok):
-                    routed_expert = indices[chip, token, topk_indice]
-                    chip_to_n_routed_expert_counter[chip, routed_expert] += 1
-
-        # Compute offsets
-        cum_sum = torch.cumsum(chip_to_n_routed_expert_counter, dim=0)
-        chip_to_n_routed_expert_offset = torch.vstack(
-            [torch.zeros([1, self.n_routed_experts], dtype=torch.int32), cum_sum[:-1]]
+        # Compute gate outputs (offsets and token counts)
+        chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, _ = get_gate_outputs(
+            indices,
+            self.num_chips,
+            self.n_routed_experts,
+            self.experts_per_chip,
+            self.seq_len_per_chip,
+            self.num_experts_per_tok,
         )
-        chip_to_routed_expert_tokens = cum_sum[-1].view(self.num_chips, self.experts_per_chip).to(torch.int32)
 
         # Dispatch tokens and metadata
         for chip in range(self.num_chips):
