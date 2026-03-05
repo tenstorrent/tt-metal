@@ -11,7 +11,7 @@ from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import compute_constants, initialize_test_inputs
+from models.demos.deepseek_v3_d_p.tt.moe.common import compute_constants, get_gate_outputs, initialize_test_inputs
 
 
 @pytest.mark.parametrize(
@@ -62,11 +62,21 @@ def test_torch_dispatch_combine(
         seq_len_per_chip=seq_len_per_chip,
     )
 
+    # Compute gate outputs before dispatch
+    chip_to_n_routed_expert_offset, experts_counter, cum_sum = get_gate_outputs(
+        indices,
+        num_chips,
+        n_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+    )
+
     # Forward pass through dispatch module
     logger.info(f"{x.shape=}")
     logger.info(f"{weights.shape=}")
     logger.info(f"{indices.shape=}")
-    dispatched, metadata, experts_counter = dispatch_module(x, weights, indices)
+    dispatched, metadata = dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
 
     torch.set_printoptions(profile="full")
     logger.info(f"{experts_counter.shape=}")

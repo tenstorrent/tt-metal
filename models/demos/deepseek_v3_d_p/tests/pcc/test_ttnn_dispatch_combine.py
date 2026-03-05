@@ -15,6 +15,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
     create_fabric_router_config,
+    get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -242,17 +243,25 @@ def test_ttnn_dispatch_combine(
         topology=topology,
     )
 
+    # Compute gate outputs (offsets and token counts) before dispatch
+    chip_to_n_routed_expert_offset, experts_tok_counter, cum_sum = get_gate_outputs(
+        indices,
+        num_chips_sp,
+        n_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+    )
+
     # Run TTNN dispatch
     logger.info("Running TTNN dispatch...")
-    tt_dispatched_buffer, tt_metadata, experts_tok_counter, offsets, cum_sum = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices
-    )
+    tt_dispatched_buffer, tt_metadata = tt_dispatch_module(tt_x, tt_weights, tt_indices, chip_to_n_routed_expert_offset)
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete!")
 
     logger.info(f"Dispatch outputs: {experts_tok_counter.shape=}")
     logger.info(f"  {experts_tok_counter=}")
-    logger.info(f"  {offsets.shape=}, {offsets=}")
+    logger.info(f"  {chip_to_n_routed_expert_offset.shape=}, {chip_to_n_routed_expert_offset=}")
     logger.info(f"  {cum_sum.shape=}, {cum_sum=}")
 
     # Convert counter to TTNN tensor for combine module

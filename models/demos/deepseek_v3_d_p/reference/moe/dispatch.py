@@ -13,8 +13,6 @@ Goals:
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tt.moe.common import get_gate_outputs
-
 
 class TorchDispatchModule(torch.nn.Module):
     """Expert-centric MoE dispatch module."""
@@ -68,21 +66,15 @@ class TorchDispatchModule(torch.nn.Module):
         x: torch.Tensor,
         weights: torch.Tensor,
         indices: torch.Tensor,
+        chip_to_n_routed_expert_offset: torch.Tensor,
     ):
         """Dispatch tokens for a single EP rank."""
         # Reset buffers
         dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
         dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
-        # Compute gate outputs (offsets and token counts)
-        chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, _ = get_gate_outputs(
-            indices,
-            self.num_chips,
-            self.n_routed_experts,
-            self.experts_per_chip,
-            self.seq_len_per_chip,
-            self.num_experts_per_tok,
-        )
+        # Make a mutable copy of offsets for dispatch loop
+        offset_copy = chip_to_n_routed_expert_offset.clone()
 
         # Dispatch tokens and metadata
         for chip in range(self.num_chips):
@@ -91,7 +83,7 @@ class TorchDispatchModule(torch.nn.Module):
                     routed_expert = indices[chip, token, topk_indice]
                     expert_chip = routed_expert // self.experts_per_chip
                     expert_index_within_chip = routed_expert % self.experts_per_chip
-                    dst_index = chip_to_n_routed_expert_offset[chip, routed_expert]
+                    dst_index = offset_copy[chip, routed_expert]
 
                     dispatched_buffer[expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
                     dispatched_metadata[expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
@@ -107,15 +99,16 @@ class TorchDispatchModule(torch.nn.Module):
                         + [0] * (self.metadata_len - 5),
                         dtype=dispatched_metadata.dtype,
                     )
-                    chip_to_n_routed_expert_offset[chip, routed_expert] += 1
+                    offset_copy[chip, routed_expert] += 1
 
-        return dispatched_buffer, dispatched_metadata, chip_to_routed_expert_tokens
+        return dispatched_buffer, dispatched_metadata
 
     def forward(
         self,
         x: torch.Tensor,
         weights: torch.Tensor,
         indices: torch.Tensor,
+        chip_to_n_routed_expert_offset: torch.Tensor,
     ):
         """
         Route tokens from their original positions to expert-specific buffers distributed across chips.
@@ -128,29 +121,29 @@ class TorchDispatchModule(torch.nn.Module):
             weights: Router weights of shape (num_ep_ranks, num_chips, seq_len, num_experts_per_tok) or
                      (num_chips, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
+            chip_to_n_routed_expert_offset: Base offset for each expert from each chip
+                Shape: (num_chips, n_routed_experts) - from get_gate_outputs()
 
         Returns:
             If num_ep_ranks == 1:
                 dispatched: shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
                 metadata: shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-                experts_counter: shape (num_chips, experts_per_chip)
             If num_ep_ranks > 1:
                 dispatched: shape (num_ep_ranks, num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
                 metadata: shape (num_ep_ranks, num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-                experts_counter: shape (num_chips, experts_per_chip) - same for all ranks since indices are shared
         """
         # Handle weights with num_ep_ranks dimension: (num_ep_ranks, num_chips, seq_len, num_experts_per_tok)
         if weights.dim() == 4 and weights.shape[0] == self.num_ep_ranks:
             # Process all EP ranks and stack results
             dispatched_list = []
             metadata_list = []
-            experts_counter = None
             for r in range(self.num_ep_ranks):
-                dispatched, metadata, counter = self._dispatch_single_rank(x, weights[r], indices)
+                dispatched, metadata = self._dispatch_single_rank(
+                    x, weights[r], indices, chip_to_n_routed_expert_offset
+                )
                 dispatched_list.append(dispatched)
                 metadata_list.append(metadata)
-                experts_counter = counter  # Same for all ranks since indices are shared
-            return torch.stack(dispatched_list), torch.stack(metadata_list), experts_counter
+            return torch.stack(dispatched_list), torch.stack(metadata_list)
 
         assert (
             self.num_chips == x.shape[0] == weights.shape[0] == indices.shape[0]
@@ -162,4 +155,4 @@ class TorchDispatchModule(torch.nn.Module):
             self.num_experts_per_tok == indices.shape[-1]
         ), f"Last dimension of indices must match num_experts_per_tok {self.num_experts_per_tok}, got {indices.shape[-1]}"
 
-        return self._dispatch_single_rank(x, weights, indices)
+        return self._dispatch_single_rank(x, weights, indices, chip_to_n_routed_expert_offset)

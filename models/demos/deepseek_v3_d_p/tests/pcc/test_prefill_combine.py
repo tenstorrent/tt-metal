@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchMod
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
     create_fabric_router_config,
+    get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -191,16 +192,26 @@ def test_ttnn_combine(
             hidden_dim=hidden_dim,
         )
 
+    # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
+    chip_to_n_routed_expert_offset, experts_tok_counter, cum_sum = get_gate_outputs(
+        indices,
+        num_chips_sp,
+        n_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+    )
+
     # Run dispatch for each EP rank with rank-specific weights
     dispatched_buffer_per_rank = []
     dispatched_metadata_per_rank = []
     experts_tok_counter_per_rank = []
     for r in range(num_chips_rep):
         torch_dispatch = create_torch_dispatch()
-        dispatched_buffer, dispatched_metadata, experts_tok_counter = torch_dispatch(x, weights[r], indices)
+        dispatched_buffer, dispatched_metadata = torch_dispatch(x, weights[r], indices, chip_to_n_routed_expert_offset)
         dispatched_buffer_per_rank.append(dispatched_buffer)
         dispatched_metadata_per_rank.append(dispatched_metadata)
-        experts_tok_counter_per_rank.append(experts_tok_counter)
+        experts_tok_counter_per_rank.append(experts_tok_counter)  # Same for all ranks
         logger.info(f"Torch dispatch rank {r}: {dispatched_buffer.shape=}, {dispatched_metadata.shape=}")
 
     logger.info("Torch dispatch outputs (4D):")

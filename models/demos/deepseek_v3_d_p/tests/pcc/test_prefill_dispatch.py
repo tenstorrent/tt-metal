@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchMod
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
     create_fabric_router_config,
+    get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -304,15 +305,25 @@ def test_ttnn_dispatch(
         topology=topology,
     )
 
+    # Compute gate outputs (offsets and token counts) before dispatch
+    chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, cum_sum = get_gate_outputs(
+        indices,
+        num_chips_sp,
+        n_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+    )
+
     # Forward pass through TTNN dispatch
     logger.info(f"{x.shape=}")
     logger.info(f"{weights.shape=}")
     logger.info(f"{indices.shape=}")
 
-    tt_dispatched, tt_metadata, counter, offsets, cum_sum = tt_dispatch_module(tt_x, tt_weights, tt_indices)
+    tt_dispatched, tt_metadata = tt_dispatch_module(tt_x, tt_weights, tt_indices, chip_to_n_routed_expert_offset)
 
     # Run torch reference for all EP ranks at once
-    torch_dispatched, torch_metadata, torch_counter = torch_dispatch_module(x, weights, indices)
+    torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
     logger.info(f"Torch dispatch: {torch_dispatched.shape=}, {torch_metadata.shape=}")
 
     # Convert TTNN outputs to torch for comparison
@@ -340,8 +351,8 @@ def test_ttnn_dispatch(
     logger.info(f"{torch_dispatched[0][0][0][0][0]=} | {torch_dispatched[0][1][0][0][0]=}")
     logger.info(f"{tt_out_metadata[0][0][0][0][0:4]=} | {tt_out_metadata[0][1][0][0][0:4]=}")
     logger.info(f"{torch_metadata[0][0][0][0][0:4]=} | {torch_metadata[0][1][0][0][0:4]=}")
-    logger.info(f"{counter.shape=}, {counter=}")
-    logger.info(f"{offsets.shape=}, {offsets=}")
+    logger.info(f"{chip_to_routed_expert_tokens.shape=}, {chip_to_routed_expert_tokens=}")
+    logger.info(f"{chip_to_n_routed_expert_offset.shape=}, {chip_to_n_routed_expert_offset=}")
     logger.info(f"{cum_sum.shape=}, {cum_sum=}")
 
     # Verify dispatched data matches reference (each EP rank against its torch reference)
@@ -353,7 +364,7 @@ def test_ttnn_dispatch(
         metadata = torch_metadata[r]
         for dst_chip_id in range(num_chips_sp):
             for expert_id in range(experts_per_chip):
-                count = counter[dst_chip_id, expert_id].item()
+                count = chip_to_routed_expert_tokens[dst_chip_id, expert_id].item()
                 out = tt_out_dispatched[r, dst_chip_id, expert_id, :count, :]
                 ref = dispatched[dst_chip_id, expert_id, :count, :]
                 if torch.allclose(out, ref, atol=1e-6):
@@ -378,7 +389,7 @@ def test_ttnn_dispatch(
         metadata = torch_metadata[r]
         for dst_chip_id in range(num_chips_sp):
             for expert_id in range(experts_per_chip):
-                count = counter[dst_chip_id, expert_id].item()
+                count = chip_to_routed_expert_tokens[dst_chip_id, expert_id].item()
                 out = tt_out_metadata[r, dst_chip_id, expert_id, :count, 1:4]
                 ref = metadata[dst_chip_id, expert_id, :count, 1:4]
 
