@@ -528,7 +528,7 @@ def test_metal_device_id_mapping_none_result_has_descriptive_error():
             return None
 
     with pytest.raises(triage.TTTriageError, match="getMetalDeviceIdMappings.*None|returned no data"):
-        MetalDeviceIdMapping(FakeInspectorData())
+        MetalDeviceIdMapping(FakeInspectorData(), [])
 
 
 def test_metal_device_id_mapping_malformed_result_has_descriptive_error():
@@ -537,7 +537,7 @@ def test_metal_device_id_mapping_malformed_result_has_descriptive_error():
             return object()
 
     with pytest.raises(triage.TTTriageError, match="malformed result type|missing 'mappings'"):
-        MetalDeviceIdMapping(FakeInspectorData())
+        MetalDeviceIdMapping(FakeInspectorData(), [])
 
 
 def test_summarize_failure_message_prefers_root_cause_line():
