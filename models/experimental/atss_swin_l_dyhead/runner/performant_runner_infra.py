@@ -69,12 +69,6 @@ class ATSSPerformanceRunnerInfra:
             input_tensor = preprocess(img)
             self.torch_input_tensor = input_tensor.unsqueeze(0)
 
-            # Verify shape matches expected dimensions
-            expected_shape = (batch_size * self.num_devices, 3, self.resolution[0], self.resolution[1])
-            if self.torch_input_tensor.shape != expected_shape:
-                logger.warning(
-                    f"Input shape mismatch. Expected: {expected_shape}, Got: {self.torch_input_tensor.shape}"
-                )
         else:
             self.torch_input_tensor = torch.randn(
                 (self.batch_size, 3, self.resolution[0], self.resolution[1]), dtype=torch.float32
