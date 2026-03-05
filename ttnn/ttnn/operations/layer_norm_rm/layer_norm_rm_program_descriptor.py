@@ -324,8 +324,19 @@ def create_program_descriptor(
     # Reader compile-time args:
     #   [0] stick_size (bytes per RM row)
     #   [1+] TensorAccessorArgs(input_tensor)
+    #   [N] has_gamma (0 or 1)
+    #   [N+1] has_beta (0 or 1)
+    #   [N+2+] TensorAccessorArgs(gamma) if has_gamma
+    #   [M+] TensorAccessorArgs(beta) if has_beta
     reader_ct_args = [stick_size]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Record index where has_gamma flag goes
+    reader_ct_args.append(has_gamma)
+    reader_ct_args.append(has_beta)
+    if gamma is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    if beta is not None:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
 
     # Writer compile-time args:
     #   [0] stick_size
@@ -336,9 +347,9 @@ def create_program_descriptor(
 
     # Compute compile-time args:
     #   [0] Wt
-    #   [1] num_rows (= nblocks_per_core, set per-core in RT args but we pass max here as CT)
-    #       Note: compute uses runtime args for num_blocks, CT arg [1] can be max for DST planning
-    compute_ct_args = [Wt]
+    #   [1] has_gamma
+    #   [2] has_beta
+    compute_ct_args = [Wt, has_gamma, has_beta]
 
     # ===== 6. RUNTIME ARGS (per core) =====
     reader_rt_args = ttnn.RuntimeArgs()

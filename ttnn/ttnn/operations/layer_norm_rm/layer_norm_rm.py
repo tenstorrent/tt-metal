@@ -46,6 +46,15 @@ def layer_norm_rm(
 
     device = input_tensor.device()
 
+    # Convert gamma/beta from RM to TILE layout for compute kernel access.
+    # Tilizing on host avoids complex RM-to-tile conversion in the reader kernel.
+    gamma_tile = None
+    beta_tile = None
+    if gamma is not None:
+        gamma_tile = ttnn.to_layout(gamma, ttnn.TILE_LAYOUT)
+    if beta is not None:
+        beta_tile = ttnn.to_layout(beta, ttnn.TILE_LAYOUT)
+
     # Output: same shape as input, bfloat16, RM, DRAM interleaved
     output_shape = [input_tensor.shape[i] for i in range(len(input_tensor.shape))]
     output_tensor = ttnn.allocate_tensor_on_device(
@@ -56,14 +65,14 @@ def layer_norm_rm(
         ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, gamma, beta, epsilon)
+    program_descriptor = create_program_descriptor(input_tensor, output_tensor, gamma_tile, beta_tile, epsilon)
 
     # Build tensor list; output MUST be last
     io_tensors = [input_tensor]
-    if gamma is not None:
-        io_tensors.append(gamma)
-    if beta is not None:
-        io_tensors.append(beta)
+    if gamma_tile is not None:
+        io_tensors.append(gamma_tile)
+    if beta_tile is not None:
+        io_tensors.append(beta_tile)
     io_tensors.append(output_tensor)
 
     return ttnn.generic_op(io_tensors, program_descriptor)
