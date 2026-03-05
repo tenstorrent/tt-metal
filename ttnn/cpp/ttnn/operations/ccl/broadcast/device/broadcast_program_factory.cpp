@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/broadcast/device/broadcast_program_factory.hpp"
+#include "ttnn/execution_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
@@ -29,7 +30,8 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_id =
+        ttnn::execution_context::get_effective_sub_device_id(mesh_device, operation_attributes.sub_device_id);
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 

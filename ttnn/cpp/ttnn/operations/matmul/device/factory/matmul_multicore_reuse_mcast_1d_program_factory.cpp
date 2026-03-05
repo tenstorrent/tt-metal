@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/execution_context.hpp"
 #include <algorithm>
 #include <utility>
 
@@ -1923,9 +1924,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
-    auto subdevice_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto effective_sd_id = ttnn::execution_context::get_effective_sub_device_id(device, sub_device_id);
+    auto subdevice_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sd_id);
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }

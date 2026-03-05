@@ -130,6 +130,7 @@ target_sources(
         core/config.cpp
         core/core.cpp
         core/device.cpp
+        core/execution_context.cpp
         core/device_operation_detail.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp

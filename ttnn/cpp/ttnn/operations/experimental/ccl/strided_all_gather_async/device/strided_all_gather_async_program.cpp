@@ -13,6 +13,7 @@
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/execution_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/math.hpp"
@@ -53,7 +54,7 @@ uint32_t strided_default_workers(
     uint32_t ring_size,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link) {
-    auto d_id = mesh_device.get_sub_device_ids().at(0);
+    auto d_id = ttnn::execution_context::get_current_sub_device_id(const_cast<MeshDevice*>(&mesh_device));
     auto core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, d_id);
     uint32_t num_cores = core_range_set.num_cores();
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of

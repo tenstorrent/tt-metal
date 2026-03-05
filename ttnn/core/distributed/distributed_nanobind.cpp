@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/execution_context.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "distribution_mode.hpp"
 
@@ -249,6 +250,8 @@ void py_module(nb::module_& mod) {
         .def("is_local", &SystemMeshDescriptor::is_local)
         .def("all_local", &SystemMeshDescriptor::all_local);
 
+    nb::class_<ttnn::execution_context::CurrentSubDeviceGuard>(mod, "CurrentSubDeviceGuard");
+
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
@@ -290,6 +293,26 @@ void py_module(nb::module_& mod) {
 
            Returns:
                CoreCoord: The compute grid size of the first device in the device mesh.
+       )doc")
+        .def(
+            "set_current_sub_device",
+            [](MeshDevice& self, SubDeviceId sub_device_id) {
+                return ttnn::execution_context::set_current_sub_device(&self, sub_device_id);
+            },
+            nb::arg("sub_device_id"),
+            R"doc(
+           Set the current sub device for TTNN execution context. Operations will use this sub device when they do not
+           receive an explicit sub_device_id. Returns an RAII guard that restores the previous current sub device when
+           destroyed.
+
+           Prefer the context manager: ``with ttnn.sub_device(device, sub_device_id): ...``. Use this method only when
+           you need to manage the guard's lifetime explicitly (e.g. custom control flow).
+
+           Args:
+               sub_device_id (SubDeviceId or int): The sub device ID to set as current.
+
+           Returns:
+               CurrentSubDeviceGuard: Restores the previous current sub device when destroyed.
        )doc")
         .def(
             "dram_grid_size",
