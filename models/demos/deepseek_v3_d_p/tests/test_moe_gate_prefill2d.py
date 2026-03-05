@@ -28,7 +28,7 @@ class MoEGateConfig:
     ccl_config = {}
     mm_configs = {}
 
-    dim: int = 7168 // 2
+    dim: int = 7168
     max_seq_len = 4096
     n_routed_experts: int = 256
     n_shared_experts: int = 2
