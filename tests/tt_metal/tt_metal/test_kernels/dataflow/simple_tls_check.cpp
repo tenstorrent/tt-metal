@@ -4,10 +4,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "simple_tls_check_defines.h"
 
-uint32_t shared_global_1 = 5;
-uint32_t uninitialized_global_1;
-thread_local uint32_t thread_local_1;
-thread_local uint32_t uninitialized_thread_local_1;
+uint32_t shared_global = 5;
+uint32_t uninitialized_global;
+thread_local uint32_t thread_local_var;
+thread_local uint32_t uninitialized_thread_local_var;
 
 void kernel_main() {
     const uintptr_t signal_address = get_arg_val<uint32_t>(0);
@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(2);
     const uint32_t base_l1_result_addr = get_arg_val<uint32_t>(3);
 
-    const uint32_t kernel_id = 1;
+    constexpr uint32_t kernel_id = get_named_compile_time_arg_val("kernel_id");
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
 
@@ -36,23 +36,23 @@ void kernel_main() {
     volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)((uintptr_t)signal_address);
     while (*signal_addr != hartid);
 
-    uint32_t global_start = shared_global_1;
-    shared_global_1 = shared_global_1 + 1;
-    uint32_t global_end = shared_global_1;
-    uint64_t global_addr = (uint64_t)(&shared_global_1);
+    uint32_t global_start = shared_global;
+    shared_global = shared_global + 1;
+    uint32_t global_end = shared_global;
+    uint64_t global_addr = (uint64_t)(&shared_global);
 
-    uint32_t uninitialized_global_start = uninitialized_global_1;
-    uninitialized_global_1 = uninitialized_global_1 + 1;
-    uint32_t uninitialized_global_end = uninitialized_global_1;
+    uint32_t uninitialized_global_start = uninitialized_global;
+    uninitialized_global = uninitialized_global + 1;
+    uint32_t uninitialized_global_end = uninitialized_global;
 
-    uint32_t thread_local_start = thread_local_1;
-    thread_local_1 = thread_local_1 + 1;
-    uint32_t thread_local_end = thread_local_1;
-    uint64_t thread_local_addr = (uint64_t)(&thread_local_1);
+    uint32_t thread_local_start = thread_local_var;
+    thread_local_var = thread_local_var + 1;
+    uint32_t thread_local_end = thread_local_var;
+    uint64_t thread_local_addr = (uint64_t)(&thread_local_var);
 
-    uint32_t uninitialized_thread_local_start = uninitialized_thread_local_1;
-    uninitialized_thread_local_1 = uninitialized_thread_local_1 + 1;
-    uint32_t uninitialized_thread_local_end = uninitialized_thread_local_1;
+    uint32_t uninitialized_thread_local_start = uninitialized_thread_local_var;
+    uninitialized_thread_local_var = uninitialized_thread_local_var + 1;
+    uint32_t uninitialized_thread_local_end = uninitialized_thread_local_var;
 
     volatile tt_l1_ptr uint32_t* result = (tt_l1_ptr uint32_t*)((uintptr_t)l1_result_addr);
     result[TLS_CHECK_KERNEL_ID] = kernel_id;
