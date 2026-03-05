@@ -11,7 +11,9 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.moe import MoE
+from models.demos.deepseek_v3.tt.moe import (  # flag by default to use new Gate; set it in test_moe.py; by default use new gate
+    MoE,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -71,7 +73,7 @@ def test_forward_pass(
 
     # Get state dict from actual model - pass directly to convert_weights
     if hasattr(reference_model.gate, "e_score_correction_bias"):
-        reference_model.gate.e_score_correction_bias.data = torch.zeros_like(
+        reference_model.gate.e_score_correction_bias.data = torch.randn_like(
             reference_model.gate.e_score_correction_bias.data
         )
     state_dict = add_inv_scale_to_state_dict(

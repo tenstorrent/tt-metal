@@ -8,7 +8,6 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.reference_utils import topk_bitonic
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
@@ -129,6 +128,84 @@ class MoEGate(AbstractModule):
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
+
+        grid = cfg["mesh_device"].compute_with_storage_grid_size()
+        input_shard_shape = (16, 16)
+        logits_shard_shape = (32, 32)
+        output_shard_shape = (32, 32)
+        input_tile = ttnn.Tile(input_shard_shape)
+        logits_tile = ttnn.Tile(logits_shard_shape)
+        output_tile = ttnn.Tile(output_shard_shape)
+        core_grid = ttnn.num_cores_to_corerangeset(
+            batch_size_per_device,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        )
+
+        input_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            input_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+        )
+
+        # currently we cannot convert the tile size of logits to 16*16, but the memory layout is the same since the length is 256
+        logits_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            logits_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        logits_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, logits_shard_spec
+        )
+
+        output_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+
+        # create the output buffer
+        torch_output = torch.zeros((batch_size, 32, 32), dtype=torch.bfloat16)
+        output_tensor = ttnn.from_torch(
+            torch_output,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
+            memory_config=output_mem_config,
+            tile=output_tile,
+        )
+
+        torch_input_indices = torch.arange(16 * 16, dtype=torch.int32)
+        torch_input_indices = torch_input_indices.unsqueeze(0).expand(batch_size, -1)
+        torch_input_indices = torch_input_indices.reshape((batch_size, 16, 16))
+        torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
+        ttnn_input_indices = ttnn.from_torch(
+            torch_input_indices,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
+            memory_config=input_mem_config,
+            tile=input_tile,
+        )
+
+        torch_output_indices = torch.zeros((batch_size, 32, 32), dtype=torch.uint16)
+        ttnn_output_indices = ttnn.from_torch(
+            torch_output_indices,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
+            memory_config=output_mem_config,
+            tile=output_tile,
+        )
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -303,47 +380,6 @@ class MoEGate(AbstractModule):
 
         logits = ttnn.reshape(logits, reshaped_input_shape)
 
-        grid = cfg["mesh_device"].compute_with_storage_grid_size()
-        input_shard_shape = (16, 16)
-        logits_shard_shape = (32, 32)
-        output_shard_shape = (32, 32)
-        input_tile = ttnn.Tile(input_shard_shape)
-        logits_tile = ttnn.Tile(logits_shard_shape)
-        output_tile = ttnn.Tile(output_shard_shape)
-        core_grid = ttnn.num_cores_to_corerangeset(
-            batch_size_per_device,
-            ttnn.CoreCoord(grid.x, grid.y),
-            row_wise=True,
-        )
-
-        input_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            input_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
-        )
-
-        # currently we cannot convert the tile size of logits to 16*16, but the memory layout is the same since the length is 256
-        logits_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            logits_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        logits_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, logits_shard_spec
-        )
-
-        output_shard_spec = ttnn.ShardSpec(
-            core_grid,
-            output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
-        )
-
         # change the memory config of the logits
         logits = ttnn.to_memory_config(logits, memory_config=logits_mem_config)
 
@@ -352,43 +388,6 @@ class MoEGate(AbstractModule):
         scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
         scores_correction_bias = ttnn.reshape(scores_correction_bias, (batch_size_per_device, 16, 16))
         scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_mem_config)
-
-        # create the output buffer
-        torch_output = torch.zeros((batch_size, 32, 32), dtype=torch.bfloat16)
-        output_tensor = ttnn.from_torch(
-            torch_output,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-            memory_config=output_mem_config,
-            tile=output_tile,
-        )
-
-        torch_input_indices = torch.arange(16 * 16, dtype=torch.int32)
-        torch_input_indices = torch_input_indices.unsqueeze(0).expand(batch_size, -1)
-        torch_input_indices = torch_input_indices.reshape((batch_size, 16, 16))
-        torch_input_indices = torch.transpose(torch_input_indices, -2, -1).to(torch.uint16)
-        ttnn_input_indices = ttnn.from_torch(
-            torch_input_indices,
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-            memory_config=input_mem_config,
-            tile=input_tile,
-        )
-
-        torch_output_indices = torch.zeros((batch_size, 32, 32), dtype=torch.uint16)
-        ttnn_output_indices = ttnn.from_torch(
-            torch_output_indices,
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-            memory_config=output_mem_config,
-            tile=output_tile,
-        )
 
         eps = 1e-20
         scaling_factor = 2.5
@@ -414,53 +413,6 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return cls.forward(x, cfg)
-
-    @classmethod
-    def topk_fallback_op(
-        cls,
-        input: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        k: int,
-        dim: int,
-        largest: bool,
-        sorted: bool,
-        use_bitonic_sort: bool,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # convert ttnn mesh tensor to torch tensor
-        logger.info(f"topk_fallback_op: input shape: {input.shape}")
-        torch_input = ttnn.to_torch(
-            input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        if use_bitonic_sort:
-            topk_fn = topk_bitonic
-        else:
-            topk_fn = torch.topk
-
-        torch_topk_scores, torch_topk_indices = topk_fn(torch_input, k=k, dim=dim, largest=largest, sorted=sorted)
-
-        ttnn_topk_scores = ttnn.from_torch(
-            torch_topk_scores,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        ttnn_topk_indices = ttnn.from_torch(
-            torch_topk_indices,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.uint16,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_topk_scores, ttnn_topk_indices
 
     @classmethod
     def linear_fallback_op(

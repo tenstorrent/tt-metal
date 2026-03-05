@@ -15,6 +15,42 @@ os.environ.setdefault("MESH_DEVICE", "TG")
 THRESHOLD = 0.5
 THRESHOLD_PERCENTAGE = 0.03
 
+old_moe_gate_prefill_dict = {
+    "SliceDeviceOperation": 13,
+    "MatmulDeviceOperation": 12,
+    "BinaryNgDeviceOperation": 12,
+    "RepeatDeviceOperation": 7,
+    "AllGatherAsyncDeviceOperation": 6,
+    "ReshapeViewDeviceOperation": 6,
+    "FillPadDeviceOperation": 6,
+    "TilizeDeviceOperation": 4,
+    "UntilizeWithUnpaddingDeviceOperation": 4,
+    "TransposeDeviceOperation": 3,
+    "TilizeWithValPaddingDeviceOperation": 3,
+    "TopKDeviceOperation": 3,
+    "LayerNormDeviceOperation": 2,
+    "FastReduceNCDeviceOperation": 2,
+    "LayerNormPostAllGatherDeviceOperation": 2,
+    "LayerNormPreAllGatherDeviceOperation": 2,
+    "UntilizeDeviceOperation": 2,
+    "ConcatDeviceOperation": 2,
+    "ReduceDeviceOperation": 2,
+    "ReduceScatterMinimalAsyncDeviceOperation": 2,
+    "RotaryEmbeddingLlamaDeviceOperation": 2,
+    "PadDeviceOperation": 2,
+    "TypecastDeviceOperation": 1,
+    "SDPAOperation": 1,
+    "PagedFillCacheDeviceOperation": 1,
+    "UnaryDeviceOperation": 1,
+    "GatherDeviceOperation": 1,
+    "ScatterDeviceOperation": 1,
+    "PermuteDeviceOperation": 1,
+    "AllToAllDispatchDeviceOperation": 1,
+    "FullDeviceOperation": 1,
+    "AllToAllCombineDeviceOperation": 1,
+}
+new_moe_gate_prefill_dict = {}
+
 
 @pytest.fixture(autouse=True)
 def ensure_devices():
@@ -45,9 +81,7 @@ def test_moe_gate_perf(
     galaxy_type,
 ):
     subdir = "deepseek_moe_gate_perf"
-    command = (
-        "pytest models/demos/deepseek_v3/tests/test_moe_gate.py::test_forward_pass[True-True-True-decode-128] -xvs"
-    )
+    command = "pytest models/demos/deepseek_v3/tests/test_decoder_block.py::test_forward_pass[mode_prefill_seq_128_batch_1-MoEDecoderBlock2D-model.layers.3-3-run_test_forward_pass_decoder2d-device_params0]"
     cols = ["DEVICE KERNEL"]
 
     profiler = BenchmarkProfiler()
@@ -66,17 +100,13 @@ def test_moe_gate_perf(
     measured_max = 0
     measured_avg = 0
     measured_std = 0
+    current_value_dict = old_moe_gate_prefill_dict.copy()
     for op in results.keys():
-        if op == "SliceDeviceOperation":
-            measured_min += 3 * results[op][cols[0]]["MIN"]
-            measured_max += 3 * results[op][cols[0]]["MAX"]
-            measured_avg += 3 * results[op][cols[0]]["AVG"]
-            measured_std += 3 * results[op][cols[0]]["STD"]
-        else:
-            measured_min += results[op][cols[0]]["MIN"]
-            measured_max += results[op][cols[0]]["MAX"]
-            measured_avg += results[op][cols[0]]["AVG"]
-            measured_std += results[op][cols[0]]["STD"]
+        assert op in current_value_dict, f"Operation {op} not found in current_value_dict"
+        measured_min += current_value_dict[op] * results[op][cols[0]]["MIN"]
+        measured_max += current_value_dict[op] * results[op][cols[0]]["MAX"]
+        measured_avg += current_value_dict[op] * results[op][cols[0]]["AVG"]
+        measured_std += current_value_dict[op] * results[op][cols[0]]["STD"]
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
@@ -88,7 +118,7 @@ def test_moe_gate_perf(
     benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_deepseek_wq_kv_a_sequence",
+        run_type=f"tg_deepseek_moe_perf",
         ml_model_name="deepseek-v3-tg",
     )
 

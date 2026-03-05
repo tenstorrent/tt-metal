@@ -8,7 +8,6 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.reference_utils import topk_bitonic
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
@@ -303,15 +302,12 @@ class MoEGate(AbstractModule):
         # logits = ttnn.reshape(logits, reshaped_input_shape)
 
         # create the bias
-        scores_correction_bias = ttnn.from_torch(
-            torch.zeros((1, 1, batch_size, 256)),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        scores_correction_bias = ttnn.typecast(cfg["add_score_correction_bias"]["input_tensor_b"], ttnn.bfloat16)
+        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
+        scores_correction_bias = ttnn.to_memory_config(
+            scores_correction_bias, memory_config=cfg["add_score_correction_bias"]["memory_config"]
         )
-
+        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
         eps = 1e-20
         scaling_factor = 2.5
         enable_sigmoid = True
@@ -324,7 +320,7 @@ class MoEGate(AbstractModule):
             topk_groups=4,
             n_activated_experts=8,
             route_scale=torch.rand(1).item() + 0.1,
-            epsilon=1e-20,
+            epsilon=eps,
         )
 
         return topk_experts_scores_normalized, topk_experts_indices
@@ -336,53 +332,6 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return cls.forward(x, cfg)
-
-    @classmethod
-    def topk_fallback_op(
-        cls,
-        input: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        k: int,
-        dim: int,
-        largest: bool,
-        sorted: bool,
-        use_bitonic_sort: bool,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # convert ttnn mesh tensor to torch tensor
-        logger.info(f"topk_fallback_op: input shape: {input.shape}")
-        torch_input = ttnn.to_torch(
-            input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        if use_bitonic_sort:
-            topk_fn = topk_bitonic
-        else:
-            topk_fn = torch.topk
-
-        torch_topk_scores, torch_topk_indices = topk_fn(torch_input, k=k, dim=dim, largest=largest, sorted=sorted)
-
-        ttnn_topk_scores = ttnn.from_torch(
-            torch_topk_scores,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        ttnn_topk_indices = ttnn.from_torch(
-            torch_topk_indices,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.uint16,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_topk_scores, ttnn_topk_indices
 
     @classmethod
     def linear_fallback_op(
