@@ -163,9 +163,6 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
 
-    DPRINT << "Start H2D Receiver Embedding Kernel" << ENDL();
-    DPRINT << "use_fabric: " << static_cast<uint32_t>(use_fabric) << ENDL();
-
     if constexpr (use_fabric) {
         // Safe to use downstream_enc here: Fabric being enabled means that a socket will be used for downstream
         // communication
@@ -177,8 +174,6 @@ void kernel_main() {
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
 
-        DPRINT << "Downstream encoding: " << downstream_enc.d2d.downstream_mesh_id << " "
-               << downstream_enc.d2d.downstream_chip_id << ENDL();
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
@@ -206,11 +201,9 @@ void kernel_main() {
         invalidate_l1_cache();
 
         // Wait for pages in H2D socket
-        DPRINT << "H2D wait for pages with termination iteration " << iteration << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        DPRINT << "H2D wait for pages with termination done iteration " << iteration << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -245,9 +238,7 @@ void kernel_main() {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
-            DPRINT << "H2D Reserve pages downstream iteration " << iteration << ENDL();
             socket_reserve_pages(sender_socket, 1);
-            DPRINT << "H2D Reserve pages downstream done iteration " << iteration << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
@@ -257,13 +248,10 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
-            DPRINT << "H2D Send pages downstream done iteration " << iteration << ENDL();
         }
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
-        DPRINT << "H2D Notify sender iteration " << iteration << ENDL();
         socket_notify_sender(receiver_socket);
-        DPRINT << "H2d Notify sender done iteration " << iteration << ENDL();
         invalidate_l1_cache();
         iteration++;
     }

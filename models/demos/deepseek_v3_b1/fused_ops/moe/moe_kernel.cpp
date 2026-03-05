@@ -933,18 +933,13 @@ void kernel_main() {
     uint32_t iteration = 0;
 
     auto moe_body = [&]() {
-        DPRINT << "Start MOE Kernel iteration " << iteration << ENDL();
 #if defined(COMPILE_FOR_BRISC) && defined(ENABLE_BCAST)
-        DPRINT << "Persistent mode: " << persistent_mode << ENDL();
         if constexpr (persistent_mode != 0) {
             constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
-            DPRINT << "Is bcast sender: " << static_cast<uint32_t>(is_bcast_sender) << ENDL();
             if constexpr (is_bcast_sender && Core::is_sender_core) {
-                DPRINT << "Waiting for semaphore" << ENDL();
                 auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
                 noc_semaphore_wait(next_iter_sem, 1);
                 noc_semaphore_set(next_iter_sem, 0);
-                DPRINT << "Semaphore set" << ENDL();
             }
         }
 #endif
@@ -1328,27 +1323,6 @@ void kernel_main() {
             deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
             reduce_op(moe.routed.reduce_rt_args);
         }
-#endif
-#if defined(ENABLE_BCAST) && defined(ENABLE_REDUCE_TO_ONE)
-        // Reduce fabric cores signal sender core that fabric sends are done.
-        // Sender core NCRISC waits before starting next iteration's bcast.
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::is_reduce_fabric_core) {
-            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("bcast_reduce_sync_sem_addr");
-            constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("bcast_reduce_sync_noc_x");
-            constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("bcast_reduce_sync_noc_y");
-            uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
-            noc_semaphore_inc(sync_sem_noc_addr, 1);
-        }
-#elif defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_sender_core) {
-            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("bcast_reduce_sync_sem_addr");
-            constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("bcast_reduce_sync_num_fabric_cores");
-            volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
-            noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
-            noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
-        }
-#endif
 #endif
 
         // Reduce fabric cores signal sender core that fabric sends are done.
