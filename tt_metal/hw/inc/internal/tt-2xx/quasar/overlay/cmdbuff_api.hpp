@@ -340,7 +340,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def setup_trids_static_cmdbuf_1                                                                                \
      *                                                                                                                 \
      * @brief Function for configuring transaction ID based on macros defined in this file                             \
-     * If wrapping feature for transaction ID is enabled, specified ID is used as offset                                \
+     * If wrapping feature for transaction ID is enabled, specified ID is used as offset                               \
      *                                                                                                                 \
      * @param trid_offset Transaction ID, if wrapping is enabled this serves as transaction ID offset                  \
      * @param wrapping Enables wrapping feature for transaction IDs                                                    \
@@ -432,7 +432,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      *                                                                                                                 \
      * @brief Function for configuring snoop and flush bit of transaction                                              \
      *                                                                                                                 \
-     * @param snoop_bit Enables destination NIU for cache snoop mechanisms                                              \
+     * @param snoop_bit Enables destination NIU for cache snoop mechanisms                                             \
      * @param flush_bit Enables destination NIU to commit all parts of the flit before committing the next packet      \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
