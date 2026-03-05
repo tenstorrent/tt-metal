@@ -134,6 +134,11 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
     bh_quietbox_2: 250
+    bh_llmbox_qbgh02: 1200
+    bh_llmbox_qbgh03: 1200
+    bh_llmbox_qbgh04: 1200
+    bh_quietbox_2_qbge01: 1200
+    bh_quietbox_2_qbge03: 1200
   sweep:
     wh_n150: 15
     wh_llmbox_perf: 30
