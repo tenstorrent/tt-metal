@@ -33,7 +33,7 @@
   model: llama3_8b_dp
   skus:
     wh_galaxy:
-      timeout: 27
+      timeout: 1
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
 
