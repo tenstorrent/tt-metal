@@ -160,7 +160,6 @@ struct Broadcast {
             }
 
 #elif defined(COMPILE_FOR_NCRISC)
-            DPRINT << "BCAST OP STARTED" << ENDL();
             // ================================================================
             // NCRISC - bcast writer
             // ================================================================
@@ -333,7 +332,6 @@ struct Broadcast {
 
                 noc_async_write_barrier();
             }
-            DPRINT << "BCAST OP ENDED" << ENDL();
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC - No-op (CCL broadcast is dataflow only)

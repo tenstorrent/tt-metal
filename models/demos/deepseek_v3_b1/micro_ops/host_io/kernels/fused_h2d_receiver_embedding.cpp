@@ -196,7 +196,6 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
-    uint32_t iteration = 0;
     while (true) {
         invalidate_l1_cache();
 
@@ -253,7 +252,6 @@ void kernel_main() {
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
         invalidate_l1_cache();
-        iteration++;
     }
 
     update_socket_config(receiver_socket);

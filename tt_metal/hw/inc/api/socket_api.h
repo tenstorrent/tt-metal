@@ -277,7 +277,6 @@ bool socket_wait_for_pages(
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         num_bytes += socket.fifo_total_size - socket.fifo_curr_size;
     }
-
     volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
