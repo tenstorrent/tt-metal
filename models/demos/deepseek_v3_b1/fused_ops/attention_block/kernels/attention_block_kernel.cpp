@@ -1199,6 +1199,17 @@ void kernel_main() {
 #endif
 
     DPRINT << " DONE ARGS" << ENDL();
+
+    // pop_src = true (rmsnorm output is consumed after mcast)
+    deepseek_b1_ops::Mcast::Op<
+        McastCTArgs,
+        Core::is_input_core,
+        Core::is_matmul2_core,
+        Core::is_matmul_core || Core::is_dkv_matmul_core,
+        true>
+        mcast;
+    mcast.init(mcast_args);
+
     // ========================================================================
     // CCL Broadcast (optional, skip if single-device mode)
     // ========================================================================
@@ -1233,15 +1244,6 @@ void kernel_main() {
     }
     DPRINT << " DONE RMSNORM" << ENDL();
 
-    // pop_src = true (rmsnorm output is consumed after mcast)
-    deepseek_b1_ops::Mcast::Op<
-        McastCTArgs,
-        Core::is_input_core,
-        Core::is_matmul2_core,
-        Core::is_matmul_core || Core::is_dkv_matmul_core,
-        true>
-        mcast;
-    mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST");
         // Mcast: NCRISC sends from input core, BRISC receives on matmul cores, TRISC no-op
