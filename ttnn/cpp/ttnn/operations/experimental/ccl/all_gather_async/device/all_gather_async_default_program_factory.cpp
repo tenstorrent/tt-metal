@@ -382,6 +382,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
+    TT_FATAL(
+        packet_size_bytes >= l1_scratch_cb_page_size_bytes,
+        "Fabric packet size ({} bytes) must be >= tensor page size ({} bytes). "
+        "Increase max_packet_payload_size_bytes in FabricRouterConfig.",
+        packet_size_bytes,
+        l1_scratch_cb_page_size_bytes);
 
     // scatter-write currently supports 4 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 4;
@@ -481,15 +487,30 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
 
     uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-    TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-    TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
-    uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t TILE_SIZE = 32;
+    // Only check tile alignment for the dimension being all-gathered
+    uint32_t rank = input_tensor_shape.rank();
+    if (dim == rank - 1) {
+        TT_FATAL(
+            !(input_tensor_shape[-1] % TILE_SIZE),
+            "Input tensor width must be tile-aligned when all-gathering along width");
+        TT_FATAL(
+            !(output_tensor_shape[-1] % TILE_SIZE),
+            "Output tensor width must be tile-aligned when all-gathering along width");
+    } else if (dim == rank - 2) {
+        TT_FATAL(
+            !(input_tensor_shape[-2] % TILE_SIZE),
+            "Input tensor height must be tile-aligned when all-gathering along height");
+        TT_FATAL(
+            !(output_tensor_shape[-2] % TILE_SIZE),
+            "Output tensor height must be tile-aligned when all-gathering along height");
+    }
 
-    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
-    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_SIZE;
+    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_SIZE;
 
-    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
-    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_SIZE;
+    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_SIZE;
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;

@@ -4,12 +4,54 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 from loguru import logger
+
+
+def _parse_host(hostname):
+    """Parse hostname into (host_num, u_num) or None if unrecognised."""
+    match = re.search(r"(\d+)u(\d{2})$", hostname)
+    if not match:
+        logger.warning(
+            f"Hostname '{hostname}' does not match pattern '<digits>u<2 digits>'; placing last in canonical order"
+        )
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def sort_hosts_canonical(hosts):
+    """
+    Sort hostnames into canonical pipeline order (snake/zigzag):
+    low_host u08, low_host u02, high_host u02, high_host u08.
+    Example: c09u08, c09u02, c10u02, c10u08.
+
+    Within even-indexed host-number groups (0th, 2nd, …) u is descending (08 before 02).
+    Within odd-indexed host-number groups (1st, 3rd, …) u is ascending (02 before 08).
+    """
+    parsed = [(h, _parse_host(h)) for h in hosts]
+    unrecognised = [h for h, p in parsed if p is None]
+    recognised = [(h, p) for h, p in parsed if p is not None]
+
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    for h, (host_num, u_num) in recognised:
+        groups[host_num].append((u_num, h))
+
+    result = []
+    for group_idx, host_num in enumerate(sorted(groups)):
+        entries = groups[host_num]
+        reverse = group_idx % 2 == 0
+        entries.sort(key=lambda e: e[0], reverse=reverse)
+        result.extend(h for _, h in entries)
+
+    result.extend(unrecognised)
+    return result
 
 
 def generate_slice_to_pcie_device_mapping(
@@ -157,11 +199,18 @@ def generate_pipeline_config_files(
                 f"Hostfile has {len(allocated_hosts)} hosts but pipeline config has {len(config_hosts)} unique hosts"
             )
             sys.exit(1)
+        # Sort allocated hosts into canonical order (low_u08, low_u02, high_u02, high_u08)
+        # so that they match config_hosts order regardless of hostfile ordering.
+        allocated_hosts = sort_hosts_canonical(allocated_hosts)
         host_map = dict(zip(config_hosts, allocated_hosts))
         logger.info(f"Remapping hosts: {host_map}")
         for entry in config["stage_to_slice_mapping"].values():
             entry["host"] = host_map[entry["host"]]
         config_hosts = allocated_hosts
+
+    logger.info("Host index -> hostname mapping (for debugging):")
+    for idx, hostname in enumerate(config_hosts):
+        logger.info(f"  Host {idx}: {hostname}")
 
     host_vector = config_hosts
     physical_mapping_file = "slice_to_pcie_device_mapping.yaml"
@@ -185,7 +234,8 @@ if __name__ == "__main__":
         "--hostfile",
         type=str,
         default=None,
-        help="File with one hostname per line. Overrides hosts in pipeline config (matched by order of appearance).",
+        help="File with one hostname per line. Overrides hosts in pipeline config. "
+        "Hosts are sorted into canonical order (low_u08, low_u02, high_u02, high_u08) before matching.",
     )
     parser.add_argument(
         "--worker-tt-metal-home",

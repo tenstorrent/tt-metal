@@ -38,6 +38,8 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "metal_device_id_mapping"],
 )
 
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+
 
 @dataclass
 class DumpWaitGlobalsData:
@@ -329,13 +331,12 @@ def run(args, context: Context):
     # Build lookup map for core info for a given kernel name
     core_lookup = build_core_lookup_map(inspector_data, metal_device_id_mapping)
 
-    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
-    dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
 
     # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
+    locations_to_check = set()
     for (chip_unique_id, x, y), info in core_lookup.items():
         if not info.has_any_info():
             continue
@@ -344,8 +345,16 @@ def run(args, context: Context):
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 
-        # Check all RISC cores at this location for dispatcher kernels
+        locations_to_check.add(location)
+
+    def get_dispatch_core_pairs(
+        location: OnChipCoordinate, locations_to_check: set[OnChipCoordinate]
+    ) -> list[tuple[OnChipCoordinate, str]] | None:
+        # Check RISC core with risc_name at this location for dispatcher kernels
+        if location not in locations_to_check:
+            return None
         noc_block = location._device.get_block(location)
+        dispatch_core_pairs = []
         for risc_name in noc_block.risc_names:
             dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
             if (
@@ -353,6 +362,19 @@ def run(args, context: Context):
                 and dispatcher_core_data.kernel_name in dispatcher_kernel_names
             ):
                 dispatch_core_pairs.append((location, risc_name))
+        return dispatch_core_pairs
+
+    # Getting dispatch core pairs needs to be run through RunChecks since there we handle TimeoutDeviceRegisterError that otherwise would break triage
+    results = run_checks.run_per_block_check(
+        lambda location: get_dispatch_core_pairs(location, locations_to_check),
+        block_filter=BLOCK_TYPES_TO_CHECK,
+    )
+
+    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
+    dispatch_core_pairs = []
+    if results:
+        for result in results:
+            dispatch_core_pairs.append(result.result)
 
     # Convert to set for fast lookup
     dispatch_cores_set = set(dispatch_core_pairs)
@@ -365,7 +387,6 @@ def run(args, context: Context):
             return None
         return read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, core_lookup)
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     return run_checks.run_per_core_check(
         filtered_read_wait_globals,
         block_filter=BLOCK_TYPES_TO_CHECK,
