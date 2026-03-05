@@ -85,6 +85,7 @@ def gen_torch_expert_mapping_tensor(experts_per_cluster, dispatch_devices, devic
 
 def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
     tokens = []
+    # factor = -256
     factor = 1
     for _ in range(batch):
         for _ in range(seq):
@@ -92,6 +93,8 @@ def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
                 # if scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) * factor)
                 factor += 1
+                if factor == 0:
+                    factor += 1
             else:
                 tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)))
     res = torch.cat(tokens, dim=0)
@@ -438,10 +441,15 @@ def gen_combine_golden(
     return torch_combine_ref_tensor
 
 
-def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_golden):
+def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_combine_golden):
+    # TODO: (GR) remove hardcoding
+    tt_combine_tensor = ttnn.reshape(tt_combine_tensor, [8, 1, 32, 7168])
     torch_combine_output = ttnn.to_torch(
-        tt_combine_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+        tt_combine_tensor,
+        dtype=torch.bfloat16,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)),
     )
+    torch_combine_output = torch_combine_output.reshape(8, 4096, 7168)
 
     torch.set_printoptions(
         threshold=float("inf"),  # Print all elements (no truncation)
@@ -451,12 +459,14 @@ def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_gold
     )
 
     print("REFERENCE")
-    # print(torch_combine_golden[0, 0:64, 0:4])
+    print(torch_combine_golden[0, 0:512, 0:4])
 
     ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
 
     print("TT")
-    # print(torch_combine_output[0, 0:512, 0:4])
+    # [8, 32, 7168] local
+    # [8, 4096, 7168] global
+    print(torch_combine_output[0, 0:512, 0:4])
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
@@ -649,7 +659,6 @@ def test_optimized_moe_decode_block(
         precision=10,  # Decimal places for floats
         # sci_mode=False,          # Disable scientific notation
     )
-    print(torch_expert_mapping[0, :])
 
     # ------------------------------------------------------------------------
     # Matmul weights
@@ -1216,7 +1225,8 @@ def test_optimized_moe_decode_block(
             tt_output_tensors.append(tt_output)
             tt_combine_tensors.append(tt_combine_output)
 
-            # (128, 512, 7168)
+            # (128, 512, 7168) global
+            # (1, 512, 7168) per device
             torch_temp = ttnn.to_torch(
                 temp, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
             )
@@ -1254,7 +1264,9 @@ def test_optimized_moe_decode_block(
     for iteration in range(num_iterations):
         logger.info(f"Validating iteration: {iteration}")
 
-        if not verify_combine(iteration, mesh_device, tt_combine_tensors[iteration], torch_combine_goldens[iteration]):
+        if not verify_combine(
+            iteration, mesh_device, mesh_shape, tt_combine_tensors[iteration], torch_combine_goldens[iteration]
+        ):
             all_iterations_passed = False
 
         if not verify_output(
