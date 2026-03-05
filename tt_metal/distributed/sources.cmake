@@ -1,0 +1,27 @@
+set(DISTRIBUTED_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed_coordinate_translator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_command_queue_base.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dummy_mesh_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fd_mesh_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sd_mesh_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device_view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_event.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_socket_serialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_trace.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh_translation_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multihost/distributed_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/h2d_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
+)

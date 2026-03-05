@@ -1,4 +1,6 @@
-add_executable(watcher_dump ${CMAKE_CURRENT_SOURCE_DIR}/watcher_dump.cpp)
+include(sources.cmake)
+
+add_executable(watcher_dump ${WATCHER_DUMP_SOURCES})
 target_link_libraries(
     watcher_dump
     PRIVATE
@@ -12,7 +14,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tt_metal/common
         ${PROJECT_SOURCE_DIR}/tests
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        .
 )
 set_target_properties(
     watcher_dump

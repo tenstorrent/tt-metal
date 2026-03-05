@@ -1,0 +1,1 @@
+set(WATCHER_DUMP_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/watcher_dump.cpp)
