@@ -8,6 +8,9 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/debug/dprint_pages.h"
+#include "api/debug/dprint_tensix.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -38,6 +41,8 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_debug = tt::CBIndex::c_5;
+    constexpr auto cb_debug2 = tt::CBIndex::c_6;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
@@ -65,8 +70,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
         4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 18
     // blocks per expert = 18 * 8 / 2 = 72
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A / 2;  // 72
+    constexpr uint32_t w0_w1_blocks_per_expert = moe_gpt_ring::W0_B0_W1_B1_BLOCKS_PER_EXPERT;
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;                     // 2
@@ -75,7 +79,7 @@ void kernel_main() {
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 90 / 10 = 9
     // blocks for 4 output tiles: 4 * 9 / 2 = 18
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;  // 18
-    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;        // 36
+    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_B2_BLOCKS_PER_EXPERT;     // 36
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -133,20 +137,48 @@ void kernel_main() {
                 expert_id * num_w0_w1_tiles_h;  // expert 0: 0, expert 1: 90, expert 2: 180, expert 3: 270
 
             tile_regs_acquire();
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+            uint32_t k_tracker = 0;
+            // clean up 13 later 91/7 = 13
+            for (uint32_t block_id = 0; block_id < 13; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-
+                cb_push_back(cb_debug, 1);
+                cb_reserve_back(cb_debug, 1);
+                cb_wait_front(cb_debug, 1);
+                cb_pop_front(cb_debug, 1);
+                // DPRINT << "new block "<< block_id << ENDL();
                 for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                    matmul_block(
-                        cb_s2c_in,
-                        cb_r2c_w0_w1,
-                        in0_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    // DPRINT <<"k dim: " << k_tracker <<ENDL();
+
+                    // UNPACK(tt::compute::common::print_full_tile(cb_s2c_in,in0_index , true));
+                    // in0_index++;
+                    // copy_tile_init(cb_s2c_in);
+                    // copy_tile(cb_r2c_w0_w1, k,0);
+                    // // copy_tile_init(cb_r2c_w0_w1);
+                    // copy_tile(cb_r2c_w0_w1, k +1,1);
+                    // copy_tile(cb_s2c_in, in0_index,2);
+                    // DPRINT << "W0: "<<ENDL();
+                    // dprint_tensix_dest_reg(0);
+                    // DPRINT << "W1: "<<ENDL();
+                    // dprint_tensix_dest_reg(1);
+                    // DPRINT << "in: "<<ENDL();
+                    // dprint_tensix_dest_reg(2);
+                    if (k_tracker == num_w0_w1_tiles_h) {
+                        break;
+                    }
+                    // matmul_block(
+                    //     cb_s2c_in,
+                    //     cb_r2c_w0_w1,
+                    //     in0_index++,
+                    //     /*in1_index=*/k,
+                    //     /*idst=*/0,
+                    //     /*transpose=*/false,
+                    //     /*ct_dim=*/4,
+                    //     /*rt_dim=*/1,
+                    //     /*kt_dim=*/1);
+                    // k_tracker++;
+                }
+                if (k_tracker == num_w0_w1_tiles_h) {
+                    // add matmul bias logic here
                 }
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
@@ -155,10 +187,10 @@ void kernel_main() {
 
             // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
             // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-            TTI_SEMWAIT(
+            PACK(TTI_SEMWAIT(
                 p_stall::STALL_TDMA | p_stall::STALL_CFG,
                 semaphore::t6_sem(semaphore::MATH_PACK),
-                p_stall::STALL_ON_ZERO);
+                p_stall::STALL_ON_ZERO));
 
             // Make SFPU access the appropriate half of the destination registers
             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
@@ -198,31 +230,42 @@ void kernel_main() {
             uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
 
             tile_regs_acquire();
+            uint32_t k_tracker = 0;
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+            // 90/13
+            for (uint32_t block_id = 0; block_id < 13; ++block_id) {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    if (dm1_tiles_remaining == 0) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        cb_wait_front(cb_w2c_rdy, 1);
-                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
-                        in2_offset = in2_buf * tiles_per_step;
-                        in2_index = in2_offset;
+                    if (k_tracker == num_w0_w1_tiles_h) {
+                        break;
                     }
-                    dm1_tiles_remaining--;
+                    if (dm1_tiles_remaining == 0) {
+                        // cb_pop_front(cb_w2c_rdy, 1);
+                        // cb_wait_front(cb_w2c_rdy, 1);
+                        // dm1_tiles_remaining =
+                        // moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step]; in2_buf = (in2_buf
+                        // >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5 in2_offset = in2_buf * tiles_per_step;
+                        // in2_index = in2_offset;
+                    }
+                    // dm1_tiles_remaining--;
+                    DPRINT << "k dim: " << k_tracker << ENDL();
 
-                    matmul_block(
-                        cb_s2c_in2,
-                        cb_r2c_w2,
-                        in2_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    UNPACK(tt::compute::common::print_full_tile(cb_r2c_w2, k, true));
+                    // matmul_block(
+                    //     cb_s2c_in2,
+                    //     cb_r2c_w2,
+                    //     in2_index++,
+                    //     /*in1_index=*/k,
+                    //     /*idst=*/0,
+                    //     /*transpose=*/false,
+                    //     /*ct_dim=*/4,
+                    //     /*rt_dim=*/1,
+                    //     /*kt_dim=*/1);
+                    k_tracker++;
+                }
+                if (k_tracker == num_w0_w1_tiles_h) {
+                    // add matmul bias logic here
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }

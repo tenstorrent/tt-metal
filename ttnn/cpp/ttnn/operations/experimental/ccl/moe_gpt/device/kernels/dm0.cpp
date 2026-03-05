@@ -53,6 +53,8 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_debug = tt::CBIndex::c_5;
+    constexpr auto cb_debug2 = tt::CBIndex::c_6;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
@@ -65,8 +67,8 @@ void kernel_main() {
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Constants for MoEGPT
-    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
-    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 90
+    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_PLUS_BIAS_H;  // 90
+    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_PLUS_BIAS_H;        // 90
 
     const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
     const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
@@ -80,26 +82,23 @@ void kernel_main() {
     constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;           // 2
     constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;             // 10
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20
-    // 4 * (90 / 10) / 2 = 18
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 18
     // 18 * 8 / 2 = 72
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A / 2;  // 72
+    constexpr uint32_t w0_w1_blocks_per_expert = moe_gpt_ring::W0_B0_W1_B1_BLOCKS_PER_EXPERT;
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;                     // 2
     constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;                       // 10
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 90 / 10 = 9
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 9 / 2 = 18
-    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;               // 36
+    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_B2_BLOCKS_PER_EXPERT;            // 36
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_w1_tile_size;
     constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_w1_tile_size;
+    DPRINT << "w0_w1_bytes_per_txn" << w0_w1_bytes_per_txn << ENDL();
+    DPRINT << "w0_w1_tiles_per_txn" << w0_w1_tiles_per_txn << ENDL();
+    DPRINT << "w0_w1_tile_size" << w0_w1_tile_size << ENDL();
     constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
@@ -155,12 +154,17 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
+        DPRINT << "w0_w1_blocks_per_expert" << w0_w1_blocks_per_expert << ENDL();
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
+            DPRINT << "READING 0: BLOCK: " << block_id << ENDL();
+            DPRINT << "ADDR 0: " << w0_w1_dram_read_offset << ENDL();
+
             noc_async_read_set_trid(trid_to_issue);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
             w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
+            DPRINT << "ADDR 1: " << w0_w1_dram_read_offset << ENDL();
 
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn, trid_to_issue);
@@ -189,6 +193,7 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         uint32_t w2_dram_read_offset = w2_expert_offset;
 
+        DPRINT << "w2_blocks_per_expert" << w2_blocks_per_expert << ENDL();
         for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
             noc_async_read_set_trid(trid_to_issue);

@@ -34,8 +34,8 @@ from models.common.utility_functions import comp_pcc, comp_allclose
 from models.demos.gpt_oss.tt.experts_throughput.weights import (
     _FUSED_MAX_TILES_PER_CORE as MAX_W0_W1_TILES_PER_CORE,
     _FUSED_PAD_CORES as PAD_CORES,
-    _prepare_w0_w1_tensor as prepare_w0_w1_tensor,
-    _prepare_w2_tensor as prepare_w2_tensor,
+    _prepare_w0_b0_w1_b1_tensor as prepare_w0_b0_w1_b1_tensor,
+    _prepare_w2_b2_tensor as prepare_w2_b2_tensor,
 )
 
 from tracy.process_model_log import (
@@ -53,24 +53,58 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, E, M, K)
     """
-    torch_input = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
-    torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
+    torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
+    indices = torch.arange(K, dtype=torch.bfloat16)
+    indices = indices.view(1, 1, 1, K).expand_as(torch_input)
+    # torch_input = indices.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
     return torch_input
 
 
 def create_torch_w0(L, E, K, N):
     """Create torch w0 weight tensor of shape (L, E, K, N)."""
-    return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    indices = torch.arange(K, dtype=torch.bfloat16)
+    # indices[-32:] = -1
+    return indices.view(1, 1, K, 1).expand_as(temp)
+
+
+def create_torch_b0(L, E, N):
+    # Shape: (L, E, 1, 2880) -> (L, E, 32, 2880)
+    bias = torch.rand((L, E, 1, N), dtype=torch.bfloat16)
+    bias = torch.nn.functional.pad(bias, (0, 0, 0, 31))  # (L, E, 32, 2880)
+    return bias
+
+
+def create_torch_b1(L, E, N):
+    # Shape: (L, E, 1, 2880) -> (L, E, 32, 2880)
+    bias = torch.rand((L, E, 1, N), dtype=torch.bfloat16)
+    bias = torch.nn.functional.pad(bias, (0, 0, 0, 31))  # (L, E, 32, 2880)
+    return bias
+
+
+def create_torch_b2(L, E, N):
+    # Shape: (L, E, 1, 2880) -> (L, E, 32, 2880)
+    bias = torch.rand((L, E, 1, N), dtype=torch.bfloat16)
+    bias = torch.nn.functional.pad(bias, (0, 0, 0, 31))  # (L, E, 32, 2880)
+    return bias
 
 
 def create_torch_w1(L, E, K, N):
     """Create torch w1 weight tensor of shape (L, E, K, N)."""
-    return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    # return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    indices = torch.arange(K, dtype=torch.bfloat16)
+    # indices[-32:] = -1
+    return -1 * (indices.view(1, 1, K, 1).expand_as(temp))
 
 
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
-    return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    # return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    temp = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    indices = torch.arange(N, dtype=torch.bfloat16)
+    # indices[-32:] = -1
+    return indices.view(1, 1, N, 1).expand_as(temp)
 
 
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):
@@ -179,7 +213,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # 4 groups (8 max tiles / 2 per group), K=2880 height, 128 = 4 tiles width
     # ------------------------------------------------------------------------
     groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2  # 4
-    w0_w1_shard_height = L * E * groups_per_core * K
+    w0_w1_shard_height = L * E * groups_per_core * (K + 32)
     w0_w1_shard_width = 4 * ttnn.TILE_SIZE
 
     w0_w1_shard_spec = ttnn.ShardSpec(
@@ -194,7 +228,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # 2 groups, N=2880 height, 128 = 4 tiles width
     # 90/10 = 9 exact, no N-dimension padding needed.
     # ------------------------------------------------------------------------
-    w2_shard_height = L * E * 2 * N
+    w2_shard_height = L * E * 2 * (N + 32)
     w2_shard_width = 4 * ttnn.TILE_SIZE
 
     w2_shard_spec = ttnn.ShardSpec(
@@ -211,23 +245,37 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
         torch_w0 = create_torch_w0(L, E, K, N)
         torch_w1 = create_torch_w1(L, E, K, N)
         torch_w2 = create_torch_w2(L, E, N, K)
+        torch_b0 = create_torch_b0(L, E, N)
+        torch_b1 = create_torch_b1(L, E, N)
+        torch_b2 = create_torch_b2(L, E, K)
 
         # Prepare w0_w1 tensor (interleaved, and reordered)
-        torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
+        torch_w0_b0_w1_b1_reordered = prepare_w0_b0_w1_b1_tensor(
+            torch_w0, torch_b0, torch_w1, torch_b1, L, E, K, N, ring2cores
+        )
 
-        tt_w0_w1 = ttnn.from_torch(
-            torch_w0_w1_reordered,
+        tt_w0_b0_w1_b1 = ttnn.from_torch(
+            torch_w0_b0_w1_b1_reordered,
             dtype=w0_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=w0_w1_mem_config,
         )
 
-        # Prepare w2 tensor (padded and reordered)
-        torch_w2_reordered = prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores)
+        # torch.set_printoptions(profile="full")
+        # torch.set_printoptions(sci_mode=False)
+        # print(f"Extracted first shard")
+        # for k in range(0,4):
+        #     for i in range(0,2):
+        #         for j in range(0, 128):
+        # with open(f"tensor_shard_expert.txt", "w") as f:
+        #     f.write(str(torch_w0_b0_w1_b1_reordered[0,0,0,0,:,0]))
 
-        tt_w2 = ttnn.from_torch(
-            torch_w2_reordered, dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=w2_mem_config
+        # Prepare w2 tensor (padded and reordered)
+        torch_w2_b2_reordered = prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, K, ring2cores)
+
+        tt_w2_b2 = ttnn.from_torch(
+            torch_w2_b2_reordered, dtype=w0_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=w2_mem_config
         )
     else:
         tt_input = ttnn.empty(
@@ -237,14 +285,14 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=input_sharded_mem_config,
         )
-        tt_w0_w1 = ttnn.empty(
+        tt_w0_b0_w1_b1 = ttnn.empty(
             [num_dram_banks] + w0_w1_shard_spec.shape,
             dtype=w0_dtype,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=w0_w1_mem_config,
         )
-        tt_w2 = ttnn.empty(
+        tt_w2_b2 = ttnn.empty(
             [num_dram_banks] + w2_shard_spec.shape,
             dtype=w0_dtype,
             device=device,
@@ -270,8 +318,8 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
         _tt_output = ttnn.experimental.moe_gpt(
             tt_input,
-            w0_w1_tensor=tt_w0_w1,
-            w2_tensor=tt_w2,
+            w0_w1_tensor=tt_w0_b0_w1_b1,
+            w2_tensor=tt_w2_b2,
             output_tensor=tt_input,
             num_experts=E,
             layer_id=layer_id,

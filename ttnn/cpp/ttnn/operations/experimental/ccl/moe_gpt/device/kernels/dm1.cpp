@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "moe_gpt_ring_common.h"
 
+#include "api/debug/dprint_pages.h"
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
@@ -119,6 +120,8 @@ void kernel_main() {
     // Set state for the semaphore write
     noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
         neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
+
+    tt::data_movement::common::print_bf16_pages(get_read_ptr(cb_s2c_in), 1024, 90);
 
     //-------------------------------------------------------------------------
     // Expert loop

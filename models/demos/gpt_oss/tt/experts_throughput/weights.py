@@ -313,24 +313,33 @@ def _tiles_for_core(ring_pos: int) -> int:
     return 7 if ring_pos in _FUSED_PAD_CORES else 8
 
 
-def _prepare_w0_w1_tensor(
+def _prepare_w0_b0_w1_b1_tensor(
     torch_w0: torch.Tensor,
+    torch_b0: torch.Tensor,
     torch_w1: torch.Tensor,
+    torch_b1: torch.Tensor,
     L: int,
     E: int,
     K: int,
     N: int,
     ring2cores: dict,
 ) -> torch.Tensor:
-    """Interleave, shard, and pad w0/w1 weights for the fused MoE kernel.
+    """Interleave, shard, and pad w0/w1 weights (with bias) for the fused MoE kernel.
 
-    Takes w0 (gate) and w1 (up) weights of shape ``(L, E, K, N)`` and produces
-    a tensor of shape ``(12, L, E, 4, K, 128)`` ready for DRAM HEIGHT_SHARDED
-    placement.
+    Takes w0 (gate) and w1 (up) weights of shape ``(L, E, K, N)`` along with
+    their bias tensors of shape ``(L, E, K_b, N)`` and produces a tensor of
+    shape ``(12, L, E, 4, K_new, 128)`` ready for DRAM HEIGHT_SHARDED placement,
+    where ``K_new = K + K_b`` (e.g. 2880 + 32 = 2912).
+
+    Each core receives a shard of ``(L, E, K_new, _FUSED_MAX_TILES_PER_CORE)``
+    column tiles, with zero-padding applied to cores that receive fewer than
+    ``_FUSED_MAX_TILES_PER_CORE`` real column tiles.
 
     Args:
         torch_w0: Gate weight tensor ``(L, E, K, N)``.
+        torch_b0: Gate bias tensor ``(L, E, K_b, N)``.
         torch_w1: Up weight tensor ``(L, E, K, N)``.
+        torch_b1: Up bias tensor ``(L, E, K_b, N)``.
         L: Number of layers.
         E: Number of experts.
         K: Input / hidden dimension (2880).
@@ -338,59 +347,72 @@ def _prepare_w0_w1_tensor(
         ring2cores: Ring-position → ``(core_coord, dram_bank_id, pad_flag)`` mapping.
 
     Returns:
-        Tensor of shape ``(num_cores, L, E, groups_per_core, K, 4*TILE_SIZE)``.
+        Tensor of shape ``(num_cores, L, E, groups_per_core, K_new, 4*TILE_SIZE)``.
     """
     num_cores = len(ring2cores)
+    torch_w0_b0 = torch.cat([torch_w0, torch_b0], dim=2)
+    torch_w1_b1 = torch.cat([torch_w1, torch_b1], dim=2)
+    K_new = torch_w0_b0.shape[2]  # K + K_b, e.g. 2912
     Nt = N // ttnn.TILE_SIZE
 
-    w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
-    w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
-    stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
-    torch_w0_w1_interleaved = stacked.view(L, E, K, Nt, 2 * ttnn.TILE_SIZE)
-    torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
+    w0_b0_chunks = torch_w0_b0.view(L, E, K_new, Nt, ttnn.TILE_SIZE)
+    w1_b1_chunks = torch_w1_b1.view(L, E, K_new, Nt, ttnn.TILE_SIZE)
+    stacked = torch.stack([w0_b0_chunks, w1_b1_chunks], dim=4)
+    w0_b0_w1_b1_interleaved = stacked.view(L, E, K_new, Nt, 2 * ttnn.TILE_SIZE)
+    w0_b0_w1_b1_permuted = w0_b0_w1_b1_interleaved.permute(0, 1, 3, 2, 4)
 
     each_shard = []
     start_tile = 0
     for ring_pos in range(num_cores):
         num_tiles = _tiles_for_core(ring_pos)
-        shard = torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :]
+        shard = w0_b0_w1_b1_permuted[:, :, start_tile : start_tile + num_tiles, :, :]
         start_tile += num_tiles
 
         if num_tiles < _FUSED_MAX_TILES_PER_CORE:
             pad_tiles = _FUSED_MAX_TILES_PER_CORE - num_tiles
-            padding = torch.zeros(L, E, pad_tiles, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
+            padding = torch.zeros(L, E, pad_tiles, K_new, 2 * ttnn.TILE_SIZE, dtype=torch_w0.dtype)
             shard = torch.cat([shard, padding], dim=2)
 
         each_shard.append(shard)
 
-    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
+    w0_b0_w1_b1_reordered = torch.cat(each_shard, dim=2)
     groups_per_core = _FUSED_MAX_TILES_PER_CORE // 2  # 4
 
-    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, num_cores, _FUSED_MAX_TILES_PER_CORE, K, 2 * ttnn.TILE_SIZE)
+    all_groups_per_bank = w0_b0_w1_b1_reordered.view(
+        L, E, num_cores, _FUSED_MAX_TILES_PER_CORE, K_new, 2 * ttnn.TILE_SIZE
+    )
     all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)
 
-    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, 2, K, 2 * ttnn.TILE_SIZE)
-    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
-    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(num_cores, L, E, groups_per_core, K, 4 * ttnn.TILE_SIZE)
+    w0_b0_w1_b1_pair_2_tiles = all_groups_per_bank.view(num_cores, L, E, groups_per_core, 2, K_new, 2 * ttnn.TILE_SIZE)
+    w0_b0_w1_b1_pair_2_tiles = w0_b0_w1_b1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
+    w0_b0_w1_b1_paired = w0_b0_w1_b1_pair_2_tiles.reshape(num_cores, L, E, groups_per_core, K_new, 4 * ttnn.TILE_SIZE)
 
-    return torch_w0_w1_paired
+    # indices = torch.arange(K_new, dtype=w0_b0_w1_b1_paired.dtype)
+    # indices[-32:] = -1
+    # w0_b0_w1_b1_paired = indices.view(1, 1, 1, 1, K_new, 1).expand_as(w0_b0_w1_b1_paired)
+
+    return w0_b0_w1_b1_paired
 
 
-def _prepare_w2_tensor(
+def _prepare_w2_b2_tensor(
     torch_w2: torch.Tensor,
+    torch_b2: torch.Tensor,
     L: int,
     E: int,
     N: int,
     K: int,
     ring2cores: dict,
 ) -> torch.Tensor:
-    """Shard, pad, and reorder w2 weights for the fused MoE kernel.
+    """Shard, pad, and reorder w2 weights (with bias) for the fused MoE kernel.
 
-    Takes w2 (down) weight of shape ``(L, E, N, K)`` and produces a tensor of
-    shape ``(12, L, E, 2, N, 128)`` ready for DRAM HEIGHT_SHARDED placement.
+    Takes w2 (down) weight of shape ``(L, E, N, K)`` and its bias tensor of
+    shape ``(L, E, N_b, K)`` and produces a tensor of shape
+    ``(12, L, E, 2, N_new, 128)`` ready for DRAM HEIGHT_SHARDED placement,
+    where ``N_new = N + N_b`` (e.g. 2880 + 32 = 2912).
 
     Args:
         torch_w2: Down weight tensor ``(L, E, N, K)``.
+        torch_b2: Down bias tensor ``(L, E, N_b, K)``.
         L: Number of layers.
         E: Number of experts.
         N: Intermediate dimension (2880).
@@ -398,9 +420,11 @@ def _prepare_w2_tensor(
         ring2cores: Ring-position → ``(core_coord, dram_bank_id, pad_flag)`` mapping.
 
     Returns:
-        Tensor of shape ``(num_cores, L, E, 2, N, 4*TILE_SIZE)``.
+        Tensor of shape ``(num_cores, L, E, 2, N_new, 4*TILE_SIZE)``.
     """
     num_cores = len(ring2cores)
+    torch_w2_b2 = torch.cat([torch_w2, torch_b2], dim=2)
+    N_new = torch_w2_b2.shape[2]  # N + N_b, e.g. 2912
     each_shard = []
 
     start_col = 0
@@ -408,23 +432,23 @@ def _prepare_w2_tensor(
         (_, _, pad_flag) = ring2cores[ring_pos]
 
         if pad_flag:
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
             start_col += 4 * ttnn.TILE_SIZE
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 3 * ttnn.TILE_SIZE])
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 3 * ttnn.TILE_SIZE])
             start_col += 3 * ttnn.TILE_SIZE
-            each_shard.append(torch.zeros(L, E, N, 1 * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
+            each_shard.append(torch.zeros(L, E, N_new, 1 * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
         else:
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
             start_col += 4 * ttnn.TILE_SIZE
-            each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
+            each_shard.append(torch_w2_b2[:, :, :, start_col : start_col + 4 * ttnn.TILE_SIZE])
             start_col += 4 * ttnn.TILE_SIZE
 
-    torch_w2_reordered = torch.cat(each_shard, dim=-1)
-    all_groups_per_bank = torch_w2_reordered.view(L, E, N, num_cores, 2, 4 * ttnn.TILE_SIZE)
+    w2_b2_reordered = torch.cat(each_shard, dim=-1)
+    all_groups_per_bank = w2_b2_reordered.view(L, E, N_new, num_cores, 2, 4 * ttnn.TILE_SIZE)
     all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
 
-    Nt = N // ttnn.TILE_SIZE
-    N_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
+    Nt = N_new // ttnn.TILE_SIZE
+    w2_b2_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
 
     core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
     chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
@@ -438,13 +462,18 @@ def _prepare_w2_tensor(
         for chunk_id in core_chunk_order:
             start_pos = chunk_start_positions[chunk_id]
             end_pos = chunk_start_positions[chunk_id + 1]
-            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
+            this_chunk = w2_b2_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
             each_chunk.append(this_chunk)
         each_shard.append(torch.cat(each_chunk, dim=3))
         core_chunk_order = core_chunk_order.roll(1)
 
-    N_reordered = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
-    return N_reordered
+    w2_b2_paired = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
+
+    torch.set_printoptions(profile="full")
+    torch.set_printoptions(sci_mode=False)
+    with open(f"w2.txt", "w") as f:
+        f.write(str(w2_b2_paired[0, 0, 0, 0, :, 0]))
+    return w2_b2_paired
 
 
 def _build_ring2cores(device) -> dict:
