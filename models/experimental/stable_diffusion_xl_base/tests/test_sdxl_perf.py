@@ -128,7 +128,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 369_666_097,
+        "blackhole": 708_023_460,  # Used to be 369_666_097, group_norm welford disabled caused regression
     },
     "vae_decode_512x512": {
         "wormhole": 171_560_642,
