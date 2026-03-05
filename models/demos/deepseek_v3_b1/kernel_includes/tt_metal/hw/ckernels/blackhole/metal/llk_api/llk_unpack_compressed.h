@@ -31,6 +31,14 @@ constexpr uint32_t TILE_SIZES[] = {
     0,     // bfp0: no data
 };
 
+// Tile sizes pre-shifted for CB address arithmetic (>> cb_addr_shift, i.e. >> 4)
+constexpr uint32_t TILE_SIZES_SHIFTED[] = {
+    1088 >> 4,  // bfp8: 68
+    576 >> 4,   // bfp4: 36
+    320 >> 4,   // bfp2: 20
+    0,          // bfp0
+};
+
 // DataFormat values for each compressed format index
 constexpr uint32_t DATA_FORMATS[] = {
     static_cast<uint32_t>(DataFormat::Bfp8_b),
