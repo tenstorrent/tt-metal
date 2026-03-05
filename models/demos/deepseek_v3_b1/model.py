@@ -39,7 +39,7 @@ import ttnn
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
-# Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Use 64 to work across devices.
+# Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 
 

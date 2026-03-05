@@ -12,6 +12,7 @@ Run:
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_moe.py -v -s
 """
 
+import time
 from typing import Any, NamedTuple
 
 import pytest
@@ -26,11 +27,41 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_bias_tensor,
-    create_gate_indices_tensor,
     prepare_attention_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
 )
+
+# Gate indices: constant 0..255 on sender core (same layout as gate_bias). Not a weight.
+_GATE_INDICES_SHAPE = (16, 16)
+_NUM_GATE_INDICES = 256
+
+
+def _create_gate_indices_tensor(
+    device: Any,
+    sender_core_grid: ttnn.CoreRangeSet,
+    *,
+    mesh_mapper: Any = None,
+) -> ttnn.Tensor:
+    """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core. Same layout as gate_bias."""
+    indices = torch.arange(_NUM_GATE_INDICES, dtype=torch.int32).reshape(_GATE_INDICES_SHAPE[0], _GATE_INDICES_SHAPE[1])
+    transposed = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
+    shard_spec = ttnn.ShardSpec(
+        sender_core_grid,
+        _GATE_INDICES_SHAPE,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+    return ttnn.from_torch(
+        transposed,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+        tile=ttnn.Tile([16, 16]),
+        **kwargs,
+    )
 
 
 # ============================================================================
@@ -162,6 +193,7 @@ def create_shared_expert_tensors(
     Returns:
         SharedExpertTensors with all ttnn tensors, torch tensors, and validation data.
     """
+    t0 = time.perf_counter()
     k_parallel = SharedExpert.K_PARALLEL
     n_parallel = SharedExpert.N_PARALLEL
     K_down = SharedExpert.N_PARALLEL * 32  # 256
@@ -231,10 +263,13 @@ def create_shared_expert_tensors(
     torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
+    t1 = time.perf_counter()
     shared_weights = prepare_shared_expert_weights(
         bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
     )
+    logger.info("  create_shared_expert_tensors: prepare_shared_expert_weights took {:.2f}s", time.perf_counter() - t1)
 
+    logger.info("  create_shared_expert_tensors total: {:.2f}s", time.perf_counter() - t0)
     return SharedExpertTensors(
         shared_gate_weights_overlapped=shared_weights.shared_gate_proj,
         shared_up_weights_overlapped=shared_weights.shared_up_proj,
@@ -291,6 +326,7 @@ def create_routed_expert_tensors(
     Returns:
         RoutedExpertTensors with all ttnn tensors, torch tensors, expert dicts, and dimensions.
     """
+    t0 = time.perf_counter()
     # MoE router: [1, 7168] x [7168, 256] with 8 cores
     M = RoutedExpert.M
     K = RoutedExpert.K
@@ -361,8 +397,10 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
-    ttnn_gate_mm_weights = attn.gate_mm
+    t1 = time.perf_counter()
+    attn, gate = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+    logger.info("  create_routed_expert_tensors: prepare_attention_weights took {:.2f}s", time.perf_counter() - t1)
+    ttnn_gate_mm_weights = gate.gate_mm if gate is not None else None
     ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
         compute_core_grid = ttnn_gate_mm_weights.core_range_set
@@ -400,6 +438,7 @@ def create_routed_expert_tensors(
             bias_key = f"{layer_key}.mlp.gate.e_score_correction_bias"
             torch_gate_mm_weights = state_dict[gate_key].T.contiguous()
             torch_bias = state_dict[bias_key].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+        t2 = time.perf_counter()
         for e in range(num_experts):
             # HF layout: gate/up (out,in)=(2048,7168), down (7168,2048); golden wants (1,1,K,N)
             w_g = state_dict[f"{layer_key}.mlp.experts.{e}.gate_proj.weight"].T.contiguous()
@@ -408,7 +447,13 @@ def create_routed_expert_tensors(
             up_proj_weights_dict[e] = w_u.reshape(1, 1, gate_proj_K, gate_proj_N)
             w_d = state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous()
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
+        logger.info(
+            "  create_routed_expert_tensors: expert_weights_dict loop ({} experts) took {:.2f}s",
+            num_experts,
+            time.perf_counter() - t2,
+        )
 
+        t3 = time.perf_counter()
         routed_weights = prepare_routed_expert_weights(
             bdw,
             state_dict,
@@ -417,14 +462,20 @@ def create_routed_expert_tensors(
             num_routed_experts=num_experts,
             move_to_device=True,
         )
-        gate_proj_expert_tensors = routed_weights.routed_gate_proj
-        up_proj_expert_tensors = routed_weights.routed_up_proj
-        down_proj_expert_tensors = routed_weights.routed_down_proj
-        gate_proj_weights = gate_proj_expert_tensors[0]
-        up_proj_weights = up_proj_expert_tensors[0]
-        down_proj_weights = down_proj_expert_tensors[0]
+        gate_proj_weights = routed_weights.routed_gate_proj
+        up_proj_weights = routed_weights.routed_up_proj
+        down_proj_weights = routed_weights.routed_down_proj
+        gate_proj_expert_tensors = None
+        up_proj_expert_tensors = None
+        down_proj_expert_tensors = None
+        logger.info(
+            "  create_routed_expert_tensors: prepare_routed_expert_weights (MoE, {} experts) took {:.2f}s",
+            num_experts,
+            time.perf_counter() - t3,
+        )
     else:
         # Dense MLP: slice gate/up (7168, 18432) and down (18432, 7168) into 8 experts of 2048 each
+        t2 = time.perf_counter()
         gate_key = f"{layer_key}.mlp.gate_proj.weight"
         up_key = f"{layer_key}.mlp.up_proj.weight"
         down_key = f"{layer_key}.mlp.down_proj.weight"
@@ -449,20 +500,26 @@ def create_routed_expert_tensors(
             num_routed_experts=8,
             move_to_device=True,
         )
-        # DenseRoutedExpertWeights: single tensor per projection (mesh-shaped), no list
         gate_proj_weights = routed_weights.routed_gate_proj
         up_proj_weights = routed_weights.routed_up_proj
         down_proj_weights = routed_weights.routed_down_proj
-        gate_proj_expert_tensors = None  # unused when is_moe=False
+        gate_proj_expert_tensors = None
         up_proj_expert_tensors = None
         down_proj_expert_tensors = None
+        logger.info(
+            "  create_routed_expert_tensors: dense path (expert dict + prepare_routed) took {:.2f}s",
+            time.perf_counter() - t2,
+        )
 
     if enable_routing:
         assert is_moe, "enable_routing=True is only supported with MoE weights"
         # Gate bias/indices from prepare_weights helpers.
         raw_bias = state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"]
-        ttnn_gate_bias = create_gate_bias_tensor(raw_bias, device, input_core_grid, mesh_mapper=mesh_mapper)
-        ttnn_gate_indices = create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
+        ttnn_gate_bias = create_gate_bias_tensor(raw_bias, device, move_to_device=True)
+        assert list(ttnn.corerange_to_cores(ttnn_gate_bias.memory_config().shard_spec.grid)) == list(
+            ttnn.corerange_to_cores(input_core_grid)
+        ), "gate_bias grid must match input_core_grid (MOE_SENDER_GRID_SIZE)"
+        ttnn_gate_indices = _create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
         # Gate output buffers (scores and indices on sender core)
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(
@@ -516,6 +573,12 @@ def create_routed_expert_tensors(
             **from_torch_kwargs,
         )
 
+    logger.info(
+        "  create_routed_expert_tensors total: {:.2f}s (is_moe={}, num_experts={})",
+        time.perf_counter() - t0,
+        is_moe,
+        num_experts,
+    )
     return RoutedExpertTensors(
         ttnn_residual_mcast_src=ttnn_residual_mcast_src,
         ttnn_rmsnorm_gamma=ttnn_rmsnorm_gamma,
@@ -699,22 +762,26 @@ def create_reference_mlp_models(state_dict, layer_idx):
 @pytest.mark.requires_grid_size((13, 10))
 def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
-
+    test_t0 = time.perf_counter()
     M = RoutedExpert.M
     K = RoutedExpert.K
 
-    logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
+    logger.info("Testing fused MoE: K={}, use_hardcoded_expert_index={}", K, use_hardcoded_expert_index)
 
+    t1 = time.perf_counter()
+    num_routed_experts = 1 if use_hardcoded_expert_index else 256
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         include_global=False,
     )
+    logger.info("  get_reference_model_state_dict took {:.2f}s", time.perf_counter() - t1)
 
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
-    logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
+    logger.info("Phase 1: create_routed_expert_tensors...")
+    t2 = time.perf_counter()
     r = create_routed_expert_tensors(
         device,
         use_hardcoded_expert_index,
@@ -722,8 +789,11 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
+    logger.info("  create_routed_expert_tensors took {:.2f}s", time.perf_counter() - t2)
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    logger.info("Phase 1: create_shared_expert_tensors...")
+    t3 = time.perf_counter()
     s = create_shared_expert_tensors(
         device,
         M,
@@ -733,6 +803,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
+    logger.info("  create_shared_expert_tensors took {:.2f}s", time.perf_counter() - t3)
 
     # ── Create sdpa_kv_cache_buffer for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -777,6 +848,8 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 
     moe_semaphores = MoeOp.create_semaphores(device)
     num_iterations = TestConfig.NUM_ITERATIONS
+    logger.info("Phase 2: MoeOp.op ({} iterations)...", num_iterations)
+    t4 = time.perf_counter()
     ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,
@@ -784,9 +857,9 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         r.ttnn_gate_indices,
         r.gate_output_scores_tensor,
         r.gate_output_indices_tensor,
-        r.gate_proj_weights,
-        r.up_proj_weights,
-        r.down_proj_weights,
+        r.gate_proj_weights[0],
+        r.up_proj_weights[0],
+        r.down_proj_weights[0],
         r.final_output_tensor,
         r.ttnn_rmsnorm_gamma,
         # Shared expert tensors
@@ -804,7 +877,12 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"Fused routed+shared gate/up: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
+    logger.info(
+        "  MoeOp.op took {:.2f}s ({} iterations, reconfig={})",
+        time.perf_counter() - t4,
+        num_iterations,
+        reconfig_moe_cbs,
+    )
 
     # Read back routed expert results
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
@@ -819,6 +897,8 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     )
 
     # Compute fused MoE golden (routed + shared expert + eltwise add)
+    logger.info("Phase 3: MoeOp.golden (reference)...")
+    t5 = time.perf_counter()
     torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden(
         r.torch_input,
         shared_gate_weights=s.torch_gate_weights,
@@ -835,6 +915,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         scaling_factor=r.gate_scaling_factor,
         use_hardcoded_expert_index=use_hardcoded_expert_index,
     )
+    logger.info("  MoeOp.golden took {:.2f}s", time.perf_counter() - t5)
 
     # Verify routed expert gate
     output_indices_top8 = output_indices_torch[0, :8]
@@ -857,10 +938,10 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         ), "Routed expert: gate scores mismatch"
 
     passing, pcc = comp_pcc(torch_expected_final, output_final_valid, 0.97)
-    logger.info(f"Fused MoE PCC: {pcc}")
+    logger.info("Fused MoE PCC: {}", pcc)
     assert passing, f"Fused MoE PCC check failed: {pcc}"
 
-    logger.info(f"Fused MoE test PASSED! (PCC={pcc})")
+    logger.info("Fused MoE test PASSED! (PCC={}, total {:.2f}s)", pcc, time.perf_counter() - test_t0)
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -895,24 +976,30 @@ def test_moe_fused_with_reduce(
             f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
         )
 
+    test_t0 = time.perf_counter()
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
-    logger.info(f"Created submesh with shape: {submesh.shape}")
+    logger.info("Created submesh with shape: {}", submesh.shape)
 
     M = RoutedExpert.M
     K = RoutedExpert.K
 
-    logger.info(f"Testing fused MoE with reduce: K={K}")
+    logger.info("Testing fused MoE with reduce: K={}", K)
 
+    num_routed_experts = 8 if use_hardcoded_expert_index else 256
+    t1 = time.perf_counter()
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         include_global=False,
     )
+    logger.info("  get_reference_model_state_dict took {:.2f}s", time.perf_counter() - t1)
 
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    logger.info("create_routed_expert_tensors (4x2)...")
+    t2 = time.perf_counter()
     r = create_routed_expert_tensors(
         submesh,
         use_hardcoded_expert_index,
@@ -922,8 +1009,11 @@ def test_moe_fused_with_reduce(
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
+    logger.info("  create_routed_expert_tensors took {:.2f}s", time.perf_counter() - t2)
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    logger.info("create_shared_expert_tensors (4x2)...")
+    t3 = time.perf_counter()
     s = create_shared_expert_tensors(
         submesh,
         M,
@@ -934,6 +1024,7 @@ def test_moe_fused_with_reduce(
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
+    logger.info("  create_shared_expert_tensors took {:.2f}s", time.perf_counter() - t3)
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -1040,6 +1131,8 @@ def test_moe_fused_with_reduce(
     # ── Run fused MoE op with reduce (looping inside kernel) ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = TestConfig.NUM_ITERATIONS
+    logger.info("MoeOp.op (with reduce, {} iterations)...", num_iterations)
+    t4 = time.perf_counter()
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,
@@ -1047,9 +1140,9 @@ def test_moe_fused_with_reduce(
         r.ttnn_gate_indices,
         r.gate_output_scores_tensor,
         r.gate_output_indices_tensor,
-        r.gate_proj_weights,
-        r.up_proj_weights,
-        r.down_proj_weights,
+        r.gate_proj_weights[0],
+        r.up_proj_weights[0],
+        r.down_proj_weights[0],
         r.final_output_tensor,
         r.ttnn_rmsnorm_gamma,
         # Shared expert tensors
@@ -1072,7 +1165,12 @@ def test_moe_fused_with_reduce(
         noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
+    logger.info(
+        "  MoeOp.op took {:.2f}s ({} iterations, reconfig={})",
+        time.perf_counter() - t4,
+        num_iterations,
+        reconfig_moe_cbs,
+    )
 
     # ── Verify results ──
     # Read gate scores/indices from device (needed for per-device golden)
@@ -1182,7 +1280,7 @@ def test_moe_fused_with_reduce(
         logger.info(f"Reference MoE comparison PCC: {pcc_ref}")
         assert passing_ref, f"Reference MoE comparison PCC failed: {pcc_ref}"
 
-    logger.info("Fused MoE with reduce test PASSED!")
+    logger.info("Fused MoE with reduce test PASSED! (total {:.2f}s)", time.perf_counter() - test_t0)
 
 
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
@@ -1190,21 +1288,25 @@ def test_moe_fused_with_reduce(
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
-
+    test_t0 = time.perf_counter()
     M = RoutedExpert.M
     K = RoutedExpert.K
 
-    logger.info(f"Testing MoeOp with enable_routing=False: K={K}")
+    logger.info("Testing MoeOp with enable_routing=False: K={}", K)
 
+    t1 = time.perf_counter()
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=1,
         include_global=False,
     )
+    logger.info("  get_reference_model_state_dict took {:.2f}s", time.perf_counter() - t1)
 
     # ── Create MLP tensors (no routing) ──
+    logger.info("create_routed_expert_tensors (no routing)...")
+    t2 = time.perf_counter()
     r = create_routed_expert_tensors(
         device,
         enable_routing=False,
@@ -1212,8 +1314,11 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
+    logger.info("  create_routed_expert_tensors took {:.2f}s", time.perf_counter() - t2)
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    logger.info("create_shared_expert_tensors...")
+    t3 = time.perf_counter()
     s = create_shared_expert_tensors(
         device,
         M,
@@ -1223,6 +1328,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
     )
+    logger.info("  create_shared_expert_tensors took {:.2f}s", time.perf_counter() - t3)
 
     # ── Create SDPA buffers for CB memory overlap ──
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
@@ -1267,12 +1373,14 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     # ── Run MoeOp with enable_routing=False ──
     moe_semaphores = MoeOp.create_semaphores(device)
     num_iterations = TestConfig.NUM_ITERATIONS
+    logger.info("MoeOp.op (no routing, {} iterations)...", num_iterations)
+    t4 = time.perf_counter()
     ttnn_result_final = MoeOp.op(
         r.ttnn_residual_mcast_src,
         # No routing tensors
-        gate_proj_weights_tensor=r.gate_proj_weights,
-        up_proj_weights_tensor=r.up_proj_weights,
-        down_proj_weights_tensor=r.down_proj_weights,
+        gate_proj_weights_tensor=r.gate_proj_weights[0],
+        up_proj_weights_tensor=r.up_proj_weights[0],
+        down_proj_weights_tensor=r.down_proj_weights[0],
         final_output_tensor=r.final_output_tensor,
         rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
         shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
@@ -1289,7 +1397,12 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
         noc_mode=noc_mode,
     )
     ttnn.synchronize_device(device)
-    logger.info(f"MoeOp no-routing: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
+    logger.info(
+        "  MoeOp.op took {:.2f}s ({} iterations, reconfig={})",
+        time.perf_counter() - t4,
+        num_iterations,
+        reconfig_moe_cbs,
+    )
 
     # ── Read back and validate ──
     output_final_torch = ttnn.to_torch(ttnn_result_final)
@@ -1316,10 +1429,10 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     )
 
     passing, pcc = comp_pcc(torch_expected, output_final_valid, 0.97)
-    logger.info(f"MoeOp no-routing PCC: {pcc}")
+    logger.info("MoeOp no-routing PCC: {}", pcc)
     assert passing, f"MoeOp no-routing PCC check failed: {pcc}"
 
-    logger.info(f"MoeOp no-routing test PASSED! (PCC={pcc})")
+    logger.info("MoeOp no-routing test PASSED! (PCC={}, total {:.2f}s)", pcc, time.perf_counter() - test_t0)
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -1354,26 +1467,32 @@ def test_mlp_with_reduce(
             f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
         )
 
+    test_t0 = time.perf_counter()
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
-    logger.info(f"Created submesh with shape: {submesh.shape}")
+    logger.info("Created submesh with shape: {}", submesh.shape)
 
     M = RoutedExpert.M
     K = RoutedExpert.K
     is_moe = not use_mlp_weights
     layer_idx = DENSE_LAYER_IDX if use_mlp_weights else ROUTED_EXPERT_LAYER_IDX
 
-    logger.info(f"Testing MoeOp no-routing with reduce: K={K}, use_mlp_weights={use_mlp_weights}")
+    logger.info("Testing MoeOp no-routing with reduce: K={}, use_mlp_weights={}", K, use_mlp_weights)
 
+    num_routed_experts = 8 if is_moe else 4
+    t1 = time.perf_counter()
     state_dict = get_reference_model_state_dict(
         layer_idx=layer_idx,
         is_moe=is_moe,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256 if is_moe else 4,
+        num_routed_experts=num_routed_experts,
         include_global=False,
     )
+    logger.info("  get_reference_model_state_dict took {:.2f}s", time.perf_counter() - t1)
 
     # ── Create MLP tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    logger.info("create_routed_expert_tensors (no routing, 4x2)...")
+    t2 = time.perf_counter()
     r = create_routed_expert_tensors(
         submesh,
         mesh_mapper=mesh_mapper,
@@ -1383,8 +1502,11 @@ def test_mlp_with_reduce(
         is_moe=is_moe,
         layer_idx=layer_idx,
     )
+    logger.info("  create_routed_expert_tensors took {:.2f}s", time.perf_counter() - t2)
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    logger.info("create_shared_expert_tensors (4x2)...")
+    t3 = time.perf_counter()
     s = create_shared_expert_tensors(
         submesh,
         M,
@@ -1395,6 +1517,7 @@ def test_mlp_with_reduce(
         is_moe=is_moe,
         layer_idx=layer_idx,
     )
+    logger.info("  create_shared_expert_tensors took {:.2f}s", time.perf_counter() - t3)
 
     # ── Create SDPA buffers for CB memory overlap ──
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -1500,12 +1623,14 @@ def test_mlp_with_reduce(
     # ── Run MoeOp with enable_routing=False and reduce ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
     num_iterations = TestConfig.NUM_ITERATIONS
+    logger.info("MoeOp.op (no routing, reduce, {} iterations)...", num_iterations)
+    t4 = time.perf_counter()
     ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         # No routing tensors
-        gate_proj_weights_tensor=r.gate_proj_weights,
-        up_proj_weights_tensor=r.up_proj_weights,
-        down_proj_weights_tensor=r.down_proj_weights,
+        gate_proj_weights_tensor=r.gate_proj_weights[0],
+        up_proj_weights_tensor=r.up_proj_weights[0],
+        down_proj_weights_tensor=r.down_proj_weights[0],
         final_output_tensor=r.final_output_tensor,
         rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
         shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
@@ -1526,7 +1651,12 @@ def test_mlp_with_reduce(
         noc_mode=noc_mode,
     )
     ttnn.synchronize_device(submesh)
-    logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
+    logger.info(
+        "  MoeOp.op took {:.2f}s ({} iterations, reconfig={})",
+        time.perf_counter() - t4,
+        num_iterations,
+        reconfig_moe_cbs,
+    )
 
     # ── Verify results ──
     # Compute per-device golden with per-device TP shards of shared expert weights
@@ -1616,7 +1746,7 @@ def test_mlp_with_reduce(
         )
 
     passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.975)
-    logger.info(f"Reference MLP comparison PCC: {pcc_ref}")
+    logger.info("Reference MLP comparison PCC: {}", pcc_ref)
     assert passing_ref, f"Reference MLP comparison PCC failed: {pcc_ref}"
 
-    logger.info("MoeOp no-routing with reduce test PASSED!")
+    logger.info("MoeOp no-routing with reduce test PASSED! (total {:.2f}s)", time.perf_counter() - test_t0)
