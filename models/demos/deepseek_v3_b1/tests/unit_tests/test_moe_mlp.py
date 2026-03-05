@@ -461,7 +461,10 @@ def create_routed_expert_tensors(
         assert is_moe, "enable_routing=True is only supported with MoE weights"
         # Gate bias/indices from prepare_weights helpers.
         raw_bias = state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"]
-        ttnn_gate_bias = create_gate_bias_tensor(raw_bias, device, input_core_grid, mesh_mapper=mesh_mapper)
+        ttnn_gate_bias = create_gate_bias_tensor(raw_bias, device, move_to_device=True)
+        assert list(ttnn.corerange_to_cores(ttnn_gate_bias.memory_config().shard_spec.grid)) == list(
+            ttnn.corerange_to_cores(input_core_grid)
+        ), "gate_bias grid must match input_core_grid (MOE_SENDER_GRID_SIZE)"
         ttnn_gate_indices = create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
         # Gate output buffers (scores and indices on sender core)
         tile_1x16 = ttnn.Tile((1, 16))
