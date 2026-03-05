@@ -116,206 +116,190 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
-    if constexpr (use_single_chunk_deferred_norm && use_streaming_compute) {
-        // Single Q-chunk deferred normalization: process all ring iterations in one call,
-        // accumulating across ring boundaries with exponential rescaling.
-        sdpa_ring_v2_single_chunk<
-            Sq_chunk_t,
-            Sk_chunk_t,
-            0,  // Skt — not used for ring
-            DHt,
-            DHt,  // vDHt = DHt for ring
-            scale_fp32,
-            qk_subblock_h,
-            cb_q_in,
-            cb_k_in,
-            cb_v_in,
-            cb_qk_im,
-            cb_identity_scale_in,
-            cb_exp_max_diff,
-            cb_col_identity,
-            cb_recip_scratch,
-            cb_mask_in,
-            cb_scale_in,
-            cb_out,
-            uniform_dataformat,
-            ring_size,
-            local_padded_N,
-            local_padded_Nt,
-            logical_n,
-            logical_nt,
-            Lt,
-            L,
-            num_local_k_chunks,
-            num_joint_k_chunks,
-            needs_lightweight_mask,
-            neginf_tile_idx,
-            local_n_padded_tiles,
-            joint_n_padded_tiles,
-            global_n_partial_col,
-            joint_l_partial_col,
-            global_n_partial_tile_idx,
-            joint_l_partial_tile_idx,
-            RingSDPAOpIndexer>(
-            global_q_start,
-            global_q_end,
-            cb_out_im_A,
-            cb_out_im_B,
-            cb_max_A,
-            cb_max_B,
-            cb_sum_A,
-            cb_sum_B,
-            fused_op_indexer);
-    } else {
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-            const bool do_joint_kv = ring_id == ring_size - 1;
-            const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+    // Accumulator state — persists across ring iterations for deferred norm,
+    // re-initialized per Q chunk for the standard path.
+    RingAccumulatorState acc_state = {cb_sum_A, cb_sum_B, cb_max_A, cb_max_B, cb_out_im_A, cb_out_im_B, true};
 
-            // First, find out if this ring iter processes any KV chunks.
-            const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-            const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-            const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-            const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-            const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+        const bool do_joint_kv = ring_id == ring_size - 1;
+        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-            if (!ring_iter_does_work) {
-                continue;
-            }
+        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
-            const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
-            // Note the > and <=. This means there is real length of logical_n within this ring iter.
-            const bool global_n_is_within_ring_iter =
-                global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
-            const bool global_n_needs_masking =
-                global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-            const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-            const uint32_t global_n_mask_chunk_id =
-                global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        if (!ring_iter_does_work) {
+            continue;
+        }
 
-            // LOCAL N MASK
-            const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-            const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
+        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
+        const bool global_n_is_within_ring_iter =
+            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
+        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
+        const uint32_t global_n_mask_chunk_id = global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-            // JOINT L MASK
-            const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-            const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-            const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
+        const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
 
-            // Build lightweight mask context for this ring iteration
-            LightweightMaskContext lw_mask;
-            lw_mask.enabled = needs_lightweight_mask;
-            lw_mask.neginf_tile_idx = neginf_tile_idx;
-            lw_mask.local_n_padded_tiles = local_n_padded_tiles;
-            lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
-            lw_mask.global_n_partial_col = global_n_partial_col;
-            lw_mask.joint_l_partial_col = joint_l_partial_col;
-            lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
-            lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
-            if (ring_iter_needs_global_n_mask) {
-                const uint32_t unpadded_in_chunk =
-                    global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
-                const uint32_t valid_tiles =
-                    (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-                lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
-            }
+        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
+        const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-            if constexpr (use_streaming_compute) {
-                sdpa_ring_v2<
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    0,  // Skt — not used for ring
-                    DHt,
-                    DHt,  // vDHt = DHt for ring
-                    scale_fp32,
-                    qk_subblock_h,
-                    cb_q_in,
-                    cb_k_in,
-                    cb_v_in,
-                    cb_qk_im,
-                    cb_identity_scale_in,
-                    cb_exp_max_diff,
-                    cb_col_identity,
-                    cb_recip_scratch,
-                    cb_mask_in,
-                    cb_scale_in,
-                    cb_lse_in,
-                    cb_lse_out,
-                    cb_prev_out,
-                    cb_out,
-                    uniform_dataformat>(
-                    global_q_start,
-                    global_q_end,
-                    num_kv_chunks,
-                    ring_iter,
-                    ring_id,
-                    num_local_k_chunks,
-                    local_padded_Nt,
-                    logical_nt,
-                    ring_iter_needs_global_n_mask,
-                    ring_iter_needs_joint_n_mask,
-                    local_n_needs_masking,
-                    global_n_mask_chunk_id,
-                    local_n_mask_chunk_id,
-                    joint_n_mask_chunk_id,
-                    cb_out_im_A,
-                    cb_out_im_B,
-                    cb_max_A,
-                    cb_max_B,
-                    cb_sum_A,
-                    cb_sum_B,
-                    lw_mask);
-            } else {
-                sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
-                    qk_in0_block_w,
-                    qk_subblock_w,
-                    qk_subblock_h,
-                    qk_in0_num_subblocks,
-                    qk_in1_num_subblocks,
-                    qk_num_blocks,
-                    out_in0_block_w,
-                    out_subblock_w,
-                    out_subblock_h,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_num_blocks,
-                    global_q_start,
-                    global_q_end,
-                    0,
-                    num_kv_chunks,
-                    q_chunk_tiles,
-                    k_chunk_tiles,
-                    qk_chunk_tiles,
-                    out_chunk_tiles,
-                    ring_iter,
-                    ring_id,
-                    num_local_k_chunks,
-                    local_padded_Nt,
-                    logical_nt,
-                    ring_iter_needs_global_n_mask,
-                    ring_iter_needs_joint_n_mask,
-                    local_n_needs_masking,
-                    global_n_mask_chunk_id,
-                    local_n_mask_chunk_id,
-                    joint_n_mask_chunk_id,
-                    cb_q_in,
-                    cb_k_in,
-                    cb_v_in,
-                    cb_mask_in,
-                    cb_col_identity,
-                    cb_out_im_A,
-                    cb_out_im_B,
-                    cb_max_A,
-                    cb_max_B,
-                    cb_sum_A,
-                    cb_sum_B,
-                    cb_exp_max_diff,
-                    cb_lse_in,
-                    cb_lse_out,
-                    cb_prev_out,
-                    cb_out,
-                    lw_mask);
-            }
+        LightweightMaskContext lw_mask;
+        lw_mask.enabled = needs_lightweight_mask;
+        lw_mask.neginf_tile_idx = neginf_tile_idx;
+        lw_mask.local_n_padded_tiles = local_n_padded_tiles;
+        lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
+        lw_mask.global_n_partial_col = global_n_partial_col;
+        lw_mask.joint_l_partial_col = joint_l_partial_col;
+        lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
+        lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
+        if (ring_iter_needs_global_n_mask) {
+            const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+            const uint32_t valid_tiles =
+                (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
+        }
+
+        const bool is_last_ring_iter = (ring_iter == ring_size - 1);
+
+        if constexpr (use_streaming_compute && use_single_chunk_deferred_norm) {
+            sdpa_ring_v2<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                0,
+                DHt,
+                DHt,
+                scale_fp32,
+                qk_subblock_h,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_mask_in,
+                cb_scale_in,
+                cb_lse_in,
+                cb_lse_out,
+                cb_prev_out,
+                cb_out,
+                uniform_dataformat,
+                true,     // deferred_norm
+                cb_out>(  // cb_normalized_out = cb_out
+                global_q_start,
+                global_q_end,
+                num_kv_chunks,
+                ring_iter,
+                ring_id,
+                num_local_k_chunks,
+                local_padded_Nt,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                ring_iter_needs_joint_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                joint_n_mask_chunk_id,
+                acc_state,
+                is_last_ring_iter,
+                lw_mask);
+        } else if constexpr (use_streaming_compute) {
+            sdpa_ring_v2<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                0,
+                DHt,
+                DHt,
+                scale_fp32,
+                qk_subblock_h,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_mask_in,
+                cb_scale_in,
+                cb_lse_in,
+                cb_lse_out,
+                cb_prev_out,
+                cb_out,
+                uniform_dataformat>(
+                global_q_start,
+                global_q_end,
+                num_kv_chunks,
+                ring_iter,
+                ring_id,
+                num_local_k_chunks,
+                local_padded_Nt,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                ring_iter_needs_joint_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                joint_n_mask_chunk_id,
+                acc_state,
+                false,  // is_last_ring_iter = false (non-deferred path)
+                lw_mask);
+        } else {
+            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
+                qk_in0_block_w,
+                qk_subblock_w,
+                qk_subblock_h,
+                qk_in0_num_subblocks,
+                qk_in1_num_subblocks,
+                qk_num_blocks,
+                out_in0_block_w,
+                out_subblock_w,
+                out_subblock_h,
+                out_in0_num_subblocks,
+                out_in1_num_subblocks,
+                out_num_blocks,
+                global_q_start,
+                global_q_end,
+                0,
+                num_kv_chunks,
+                q_chunk_tiles,
+                k_chunk_tiles,
+                qk_chunk_tiles,
+                out_chunk_tiles,
+                ring_iter,
+                ring_id,
+                num_local_k_chunks,
+                local_padded_Nt,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                ring_iter_needs_joint_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                joint_n_mask_chunk_id,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_mask_in,
+                cb_col_identity,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B,
+                cb_exp_max_diff,
+                cb_lse_in,
+                cb_lse_out,
+                cb_prev_out,
+                cb_out,
+                lw_mask);
         }
     }
 }
