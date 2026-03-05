@@ -61,23 +61,33 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
+    const std::string kernel_path = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp";
     KernelHandle data_movement_kernel_0 = experimental::quasar::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_1.cpp",
+        kernel_path,
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 4, .is_legacy_kernel = is_legacy_kernel});
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 4,
+            .named_compile_args = {{"kernel_id", 1}},
+            .is_legacy_kernel = is_legacy_kernel});
 
     KernelHandle data_movement_kernel_1 = experimental::quasar::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_2.cpp",
+        kernel_path,
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 3, .is_legacy_kernel = is_legacy_kernel});
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 3,
+            .named_compile_args = {{"kernel_id", 2}},
+            .is_legacy_kernel = is_legacy_kernel});
 
     KernelHandle data_movement_kernel_2 = experimental::quasar::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check_3.cpp",
+        kernel_path,
         core,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .is_legacy_kernel = is_legacy_kernel});
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1,
+            .named_compile_args = {{"kernel_id", 3}},
+            .is_legacy_kernel = is_legacy_kernel});
 
     // signal_address, dram_dst_address, dram_dst_bank_id, l1_result_addr, kernel_id
     SetRuntimeArgs(
