@@ -3,16 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Single-device test for moe_gpt op (fused tilize → matmul → combine pipeline).
+Test for moe_gpt op (fused tilize → matmul → combine pipeline).
 
 Tests the full fused path:
   tilize → W0/W1 matmul → SwiGLU → A2A ring → W2 matmul → untilize → combine
 
-Dimensions (gpt-oss 20b, single device):
+Runs on a 1x1 mesh (single device) or larger meshes (e.g. 4x8 galaxy).
+On single device, all inputs are replicated (identical). On multi-device,
+each device processes its own local experts based on linearized_mesh_coord.
+
+Dimensions (gpt-oss 20b):
     M = 32 (tokens per device)
     K = 2880 (hidden_size) -> 90 tiles
     N = 2880 (intermediate_size) -> 90 tiles
-    E = 4 (experts on this device)
+    E = 4 (experts per device)
     experts_total = 16 (across 4 simulated devices)
     total_tokens = M * (experts_total / E) = 128 (sparse buffer rows)
     selected_experts_k = 4
@@ -195,13 +199,93 @@ def tilize_reference(sparse_buffer, expert_indices, expert_mapping, device_idx, 
     return output, per_expert_counts
 
 
+def verify_device_output(
+    tt_output_result,
+    device_idx,
+    sparse_torch,
+    indices_torch,
+    expert_mapping_torch,
+    torch_w0,
+    torch_w1,
+    torch_w2,
+    E,
+    M,
+    K,
+    total_tokens,
+    tokens_per_chunk,
+):
+    """
+    Verify a single device's combine output against the torch reference.
+    Returns (passing, per_expert_counts).
+    """
+    ref_tilized, per_expert_counts = tilize_reference(
+        sparse_torch,
+        indices_torch,
+        expert_mapping_torch,
+        device_idx,
+        E,
+        tokens_per_chunk,
+    )
+
+    all_passing = True
+    for e in range(E):
+        count = per_expert_counts[e]
+        if count == 0:
+            logger.info(f"  Device {device_idx} Expert {e}: no tokens routed, skipping")
+            continue
+
+        # Gather tilized tokens for this expert
+        start_row = e * total_tokens
+        expert_input = ref_tilized[start_row : start_row + count, :]  # [count, K]
+
+        # Multi-chunk: combine cores only hold the LAST chunk's output (each chunk
+        # overwrites the same shard).  Extract the last chunk's tokens for reference.
+        num_chunks = (count + tokens_per_chunk - 1) // tokens_per_chunk
+        last_chunk_start = (num_chunks - 1) * tokens_per_chunk
+        last_chunk_tokens = min(count - last_chunk_start, tokens_per_chunk)
+
+        # Pad to tile height (32) for comparison with hardware output
+        padded_input = torch.zeros(M, K, dtype=torch.bfloat16)
+        padded_input[:last_chunk_tokens, :] = expert_input[last_chunk_start : last_chunk_start + last_chunk_tokens, :]
+
+        # Torch reference: W0/W1 matmul + SwiGLU + W2 matmul
+        with torch.no_grad():
+            gate = padded_input @ torch_w0[0, e]  # [M, N]
+            up = padded_input @ torch_w1[0, e]  # [M, N]
+            swiglu_out = swiglu_reference(gate, up)  # [M, N]
+            reference = swiglu_out @ torch_w2[0, e]  # [M, K]
+
+        # Extract device result for this expert from output
+        # Each expert occupies M rows: [e*M : (e+1)*M, :]
+        tt_expert_result = tt_output_result[e * M : (e + 1) * M, :]  # [M, K]
+
+        metrics = get_accuracy_metrics(reference, tt_expert_result)
+        pcc = metrics["pcc"]
+        rmse = metrics["relative_rmse"]
+
+        chunks_str = f"{num_chunks} chunk{'s' if num_chunks > 1 else ''}"
+        if pcc < PCC_THRESHOLD:
+            all_passing = False
+            logger.warning(
+                f"  Device {device_idx} Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} "
+                f"({count} tokens, {chunks_str}) FAILED"
+            )
+        else:
+            logger.info(
+                f"  Device {device_idx} Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} "
+                f"({count} tokens, {chunks_str}) Passed"
+            )
+
+    return all_passing, per_expert_counts
+
+
 # ---------------------------------------------------------------------------
 # Test body
 # ---------------------------------------------------------------------------
 
 
 def run_test_moe_gpt_tilize_matmul(
-    device,
+    mesh_device,
     M,
     K,
     N,
@@ -222,9 +306,11 @@ def run_test_moe_gpt_tilize_matmul(
 
     num_devices = experts_total // E
     total_tokens = M * num_devices
+    num_mesh_devices = mesh_device.get_num_devices()
 
     logger.info(f"Tilize-matmul integration test configuration:")
     logger.info(f"  num_devices (simulated): {num_devices}")
+    logger.info(f"  mesh_devices: {num_mesh_devices}")
     logger.info(f"  tokens_per_device (M): {M}, total_tokens: {total_tokens}")
     logger.info(f"  experts_per_device (E): {E}, experts_total: {experts_total}")
     logger.info(f"  hidden_size (K): {K}, intermediate_size (N): {N}")
@@ -233,9 +319,9 @@ def run_test_moe_gpt_tilize_matmul(
     cluster_axis = 0
 
     # ------------------------------------------------------------------
-    # Matmul core infrastructure
+    # Matmul core infrastructure (queried from first device, same on all)
     # ------------------------------------------------------------------
-    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(0)
+    in0_core_coords = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(0)
     core2dram = {core_coords: dram_bank_id for dram_bank_id, core_coords in enumerate(in0_core_coords)}
     in0_num_cores = len(in0_core_coords)
 
@@ -275,27 +361,30 @@ def run_test_moe_gpt_tilize_matmul(
     torch_w1 = create_torch_w1(L, E, K, N)
     torch_w2 = create_torch_w2(L, E, N, K)
 
-    # Prepare weight tensors
+    # Prepare weight tensors (replicated on all mesh devices)
     torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered,
         dtype=w_dtype,
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     torch_w2_reordered = prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores)
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered,
         dtype=w_dtype,
-        device=device,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # ------------------------------------------------------------------
-    # Tilize inputs (controlled routing: 32 tokens per expert)
+    # Tilize inputs (controlled routing for device 0's experts)
+    # All devices get the same inputs; each processes its own local experts.
     # ------------------------------------------------------------------
     device_idx = 0
     expert_mapping_torch = gen_expert_mapping(experts_total, num_devices)
@@ -317,30 +406,34 @@ def run_test_moe_gpt_tilize_matmul(
     tt_sparse = ttnn.from_torch(
         sparse_torch,
         dtype=ttnn.bfloat16,
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_indices = ttnn.from_torch(
         indices_torch,
         dtype=ttnn.uint16,
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_scores = ttnn.from_torch(
         scores_torch,
         dtype=ttnn.bfloat16,
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_mapping = ttnn.from_torch(
         expert_mapping_torch,
         dtype=ttnn.uint16,
-        device=device,
+        device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # ------------------------------------------------------------------
@@ -360,68 +453,35 @@ def run_test_moe_gpt_tilize_matmul(
     tt_output = outputs[4]
 
     # ------------------------------------------------------------------
-    # Read back output
+    # Verify output per device
     # ------------------------------------------------------------------
-    tt_output_result = ttnn.to_torch(tt_output)
-    # Reshape from sharded to flat: [E * M, K]
-    tt_output_result = tt_output_result.reshape(-1, K)[: E * M, :]
-
-    # ------------------------------------------------------------------
-    # Torch reference: tilize → per-expert W0/W1 matmul → SwiGLU → W2
-    # ------------------------------------------------------------------
-    ref_tilized, per_expert_counts = tilize_reference(
-        sparse_torch,
-        indices_torch,
-        expert_mapping_torch,
-        device_idx,
-        E,
-        tokens_per_chunk,
-    )
-
-    logger.info(f"  Per-expert token counts: {per_expert_counts}")
-
+    device_tensors = ttnn.get_device_tensors(tt_output)
     all_passing = True
-    for e in range(E):
-        count = per_expert_counts[e]
-        if count == 0:
-            logger.info(f"  Expert {e}: no tokens routed, skipping")
-            continue
 
-        # Gather tilized tokens for this expert
-        start_row = e * total_tokens
-        expert_input = ref_tilized[start_row : start_row + count, :]  # [count, K]
+    for dev_idx in range(len(device_tensors)):
+        tt_output_result = ttnn.to_torch(device_tensors[dev_idx])
+        # Reshape from sharded to flat: [E * M, K]
+        tt_output_result = tt_output_result.reshape(-1, K)[: E * M, :]
 
-        # Multi-chunk: combine cores only hold the LAST chunk's output (each chunk
-        # overwrites the same shard).  Extract the last chunk's tokens for reference.
-        num_chunks = (count + tokens_per_chunk - 1) // tokens_per_chunk
-        last_chunk_start = (num_chunks - 1) * tokens_per_chunk
-        last_chunk_tokens = min(count - last_chunk_start, tokens_per_chunk)
+        passing, per_expert_counts = verify_device_output(
+            tt_output_result,
+            dev_idx,
+            sparse_torch,
+            indices_torch,
+            expert_mapping_torch,
+            torch_w0,
+            torch_w1,
+            torch_w2,
+            E,
+            M,
+            K,
+            total_tokens,
+            tokens_per_chunk,
+        )
 
-        # Pad to tile height (32) for comparison with hardware output
-        padded_input = torch.zeros(M, K, dtype=torch.bfloat16)
-        padded_input[:last_chunk_tokens, :] = expert_input[last_chunk_start : last_chunk_start + last_chunk_tokens, :]
-
-        # Torch reference: W0/W1 matmul + SwiGLU + W2 matmul
-        with torch.no_grad():
-            gate = padded_input @ torch_w0[0, e]  # [M, N]
-            up = padded_input @ torch_w1[0, e]  # [M, N]
-            swiglu_out = swiglu_reference(gate, up)  # [M, N]
-            reference = swiglu_out @ torch_w2[0, e]  # [M, K]
-
-        # Extract device result for this expert from output
-        # Each expert occupies M rows: [e*M : (e+1)*M, :]
-        tt_expert_result = tt_output_result[e * M : (e + 1) * M, :]  # [M, K]
-
-        metrics = get_accuracy_metrics(reference, tt_expert_result)
-        pcc = metrics["pcc"]
-        rmse = metrics["relative_rmse"]
-
-        chunks_str = f"{num_chunks} chunk{'s' if num_chunks > 1 else ''}"
-        if pcc < PCC_THRESHOLD:
+        logger.info(f"  Device {dev_idx} per-expert token counts: {per_expert_counts}")
+        if not passing:
             all_passing = False
-            logger.warning(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens, {chunks_str}) FAILED")
-        else:
-            logger.info(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens, {chunks_str}) Passed")
 
     return all_passing
 
@@ -440,12 +500,17 @@ def run_test_moe_gpt_tilize_matmul(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((1, 1), id="1x1")],
+    indirect=True,
+)
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("E, experts_total", [(4, 16)])
 @pytest.mark.parametrize("selected_experts_k", [4])
 def test_moe_gpt_tilize_matmul_single_device(
-    device,
+    mesh_device,
     M,
     K,
     N,
@@ -455,7 +520,7 @@ def test_moe_gpt_tilize_matmul_single_device(
     device_params,
 ):
     passing = run_test_moe_gpt_tilize_matmul(
-        device=device,
+        mesh_device=mesh_device,
         M=M,
         K=K,
         N=N,
@@ -476,6 +541,11 @@ def test_moe_gpt_tilize_matmul_single_device(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((1, 1), id="1x1")],
+    indirect=True,
+)
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("E, experts_total", [(4, 16)])
@@ -489,7 +559,7 @@ def test_moe_gpt_tilize_matmul_single_device(
     ids=["2chunks_1_1_0", "3chunks_1_0_0"],
 )
 def test_moe_gpt_tilize_matmul_multi_chunk(
-    device,
+    mesh_device,
     M,
     K,
     N,
@@ -500,7 +570,7 @@ def test_moe_gpt_tilize_matmul_multi_chunk(
     device_params,
 ):
     passing = run_test_moe_gpt_tilize_matmul(
-        device=device,
+        mesh_device=mesh_device,
         M=M,
         K=K,
         N=N,
@@ -522,6 +592,11 @@ def test_moe_gpt_tilize_matmul_multi_chunk(
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((1, 1), id="1x1")],
+    indirect=True,
+)
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("selected_experts_k", [4])
@@ -535,7 +610,7 @@ def test_moe_gpt_tilize_matmul_multi_chunk(
     ids=["64tok_all_local", "96tok_all_local", "128tok_all_local"],
 )
 def test_moe_gpt_tilize_matmul_all_local(
-    device,
+    mesh_device,
     M,
     K,
     N,
@@ -545,7 +620,7 @@ def test_moe_gpt_tilize_matmul_all_local(
     device_params,
 ):
     passing = run_test_moe_gpt_tilize_matmul(
-        device=device,
+        mesh_device=mesh_device,
         M=M,
         K=K,
         N=N,

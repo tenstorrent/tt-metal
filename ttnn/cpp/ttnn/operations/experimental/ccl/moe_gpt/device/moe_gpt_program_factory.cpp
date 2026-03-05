@@ -64,7 +64,7 @@ MoEGPTMeshWorkloadFactory::cached_mesh_workload_t MoEGPTMeshWorkloadFactory::cre
 ttnn::device_operation::CachedProgram<MoEGPTMeshWorkloadFactory::shared_variables_t>
 MoEGPTMeshWorkloadFactory::create_at(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& /*mesh_coordinate*/,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet&) {
@@ -457,10 +457,12 @@ MoEGPTMeshWorkloadFactory::create_at(
         uint32_t experts_per_device = num_experts;
         uint32_t num_devices = experts / experts_per_device;
 
-        // TODO: derive linearized_mesh_coord from device position in mesh
-        uint32_t linearized_mesh_coord = 0;
-        uint32_t mesh_rows = 1;
-        uint32_t mesh_cols = 1;
+        const auto& mesh_view = device->get_view();
+        uint32_t linearized_mesh_coord =
+            ttnn::operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
+        auto mesh_shape = mesh_view.shape();
+        uint32_t mesh_rows = mesh_shape[0];
+        uint32_t mesh_cols = mesh_shape[1];
         uint32_t cluster_axis = operation_attributes.cluster_axis.value_or(0);
 
         // --- 2 Tilize cores (dynamically selected to avoid matmul cores) ---
