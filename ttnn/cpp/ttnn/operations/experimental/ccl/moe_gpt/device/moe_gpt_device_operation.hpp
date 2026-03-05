@@ -20,7 +20,7 @@ struct MoEGPTDeviceOperation {
     using tensor_args_t = moe_gpt::tensor_args_t;
     using spec_return_value_t = moe_gpt::spec_return_value_t;
     using tensor_return_value_t = moe_gpt::tensor_return_value_t;
-    using program_factory_t = std::variant<program::MoEGPTProgramFactory>;
+    using program_factory_t = std::variant<program::MoEGPTMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -32,17 +32,13 @@ struct MoEGPTDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
+        const Tensor& expert_indices,
+        const Tensor& expert_scores,
+        const Tensor& expert_mapping,
         const Tensor& w0_w1_tensor,
         const Tensor& w2_tensor,
-        const Tensor& output_tensor,
-        const uint32_t num_experts,
-        bool enable_dram_output = false,
-        std::optional<Tensor> dram_output_tensor = std::nullopt,
-        std::optional<Tensor> sparse_buffer = std::nullopt,
-        std::optional<Tensor> expert_indices = std::nullopt,
-        std::optional<Tensor> expert_scores = std::nullopt,
-        std::optional<Tensor> expert_mapping = std::nullopt,
-        std::optional<Tensor> tilize_output = std::nullopt,
+        uint32_t output_height_shard_dim = 4,
+        uint32_t output_width_shard_dim = 3,
         std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 

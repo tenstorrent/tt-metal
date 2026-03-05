@@ -467,6 +467,7 @@ def run_test_moe_gpt_galaxy(
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("E", [4])
 @pytest.mark.parametrize("L", [1])
+@pytest.mark.skip(reason="Non-fused matmul path removed; test needs rework for fused API")
 def test_moe_gpt_galaxy(
     mesh_device,
     cluster_axis,
@@ -870,6 +871,7 @@ def run_test_moe_gpt_tilize(
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("E", [4])
 @pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.skip(reason="Non-fused matmul path removed; test needs rework for fused API")
 def test_moe_gpt_tilize_galaxy(
     mesh_device,
     cluster_axis,

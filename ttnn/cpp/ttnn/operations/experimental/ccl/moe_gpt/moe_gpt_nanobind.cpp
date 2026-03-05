@@ -5,6 +5,7 @@
 #include "moe_gpt_nanobind.hpp"
 
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "moe_gpt.hpp"
@@ -19,34 +20,26 @@ void bind_moe_gpt(nb::module_& mod) {
         Experimental, high-performance MoE operation for GPT.
 
         Args:
-            input_tensor: Input tensor (sharded)
+            input_tensor: Sparse token buffer for tilize phase
+            expert_indices: Expert routing indices
+            expert_scores: Expert routing scores
+            expert_mapping: Expert-to-device mapping
             w0_w1_tensor: Interleaved tensors for first and second matmul
             w2_tensor: Weight tensor for third matmul
-            output_tensor: Output tensor (sharded)
-            num_experts: Number of experts per layer
-            enable_dram_output: Write matmul output to DRAM (default: false)
-            dram_output_tensor: Optional pre-allocated DRAM tensor for output (created internally if not provided)
-            sparse_buffer: Optional sparse token buffer for tilize phase
-            expert_indices: Optional expert index tensor for tilize phase
-            expert_scores: Optional expert score tensor for tilize phase
-            expert_mapping: Optional expert-to-device mapping for tilize phase
-            tilize_output: Optional pre-allocated DRAM tensor for tilize output
+            output_height_shard_dim: Height dimension of combine core grid (default: 4)
+            output_width_shard_dim: Width dimension of combine core grid (default: 3)
             cluster_axis: Optional cluster axis for multi-device dispatch
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
             nb::kw_only(),
+            nb::arg("expert_indices"),
+            nb::arg("expert_scores"),
+            nb::arg("expert_mapping"),
             nb::arg("w0_w1_tensor"),
             nb::arg("w2_tensor"),
-            nb::arg("output_tensor"),
-            nb::arg("num_experts"),
-            nb::arg("enable_dram_output") = false,
-            nb::arg("dram_output_tensor") = nb::none(),
-            nb::arg("sparse_buffer") = nb::none(),
-            nb::arg("expert_indices") = nb::none(),
-            nb::arg("expert_scores") = nb::none(),
-            nb::arg("expert_mapping") = nb::none(),
-            nb::arg("tilize_output") = nb::none(),
+            nb::arg("output_height_shard_dim") = 4,
+            nb::arg("output_width_shard_dim") = 3,
             nb::arg("cluster_axis") = nb::none(),
         });
 }
