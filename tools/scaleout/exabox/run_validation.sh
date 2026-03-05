@@ -9,7 +9,7 @@ Run cluster validation commands for multiple iterations.
 
 Required Options:
     --hosts <host-list>                     Comma-separated list of hosts
-    --image <docker-image>                  Docker image to use
+    --image <docker-image>                  Docker image to use ("none" to use local build)
 
 Optional:
     --cabling-descriptor-path <path>        Path to cabling descriptor file
@@ -19,6 +19,7 @@ Optional:
     --iterations <number>                   Number of times to run the full validation sequence (default: 50)
                                             Each iteration runs run_cluster_validation with 10 internal iterations
     --output <directory>                    Output directory for log files (default: validation_output)
+    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
     --help                                  Display this help message and exit
 
 Example:
@@ -35,6 +36,7 @@ CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
 OUTPUT_DIR="validation_output"
+RERUN_ON_RETRAIN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -90,6 +92,14 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --rerun-on-retrain)
+            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
+                echo "Error: --rerun-on-retrain does not accept a value"
+                exit 1
+            fi
+            RERUN_ON_RETRAIN=true
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -117,6 +127,32 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     show_help
     exit 1
 fi
+
+run_cluster_validation() {
+    if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+        local descriptor_args=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    else
+        local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
+    fi
+
+    if [[ $DOCKER_IMAGE == "none" ]]; then
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --tag-output \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --send-traffic \
+            --num-iterations 10
+    else
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --host "$HOSTS" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${descriptor_args[@]}" \
+            --send-traffic \
+            --num-iterations 10
+    fi
+}
 
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
@@ -149,17 +185,31 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
         echo ""
         echo "Running cluster validation..."
-        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-            --empty-entrypoint \
-            --host "$HOSTS" \
-            ./build/tools/scaleout/run_cluster_validation \
-            --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
-            --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
-            --send-traffic \
-            --num-iterations 10
+        run_cluster_validation
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
+
+    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
+        OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
+
+        mkdir -p "$OUTPUT_DIR_RETRY"
+
+        LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
+
+        {
+            echo "=========================================="
+            echo "Iteration: $i - retry due to retrained links"
+            echo "Timestamp: $(date)"
+            echo "=========================================="
+            echo ""
+
+            echo "Re-running cluster validation..."
+            run_cluster_validation
+            echo "Iteration $i retry completed at $(date)"
+            echo "=========================================="
+        } 2>&1 | tee "$LOG_FILE_RETRY"
+    fi
 
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
