@@ -29,7 +29,7 @@ constexpr auto embedding_args = TensorAccessorArgs<14>();
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+    while (!socket_wait_for_pages(socket, num_pages)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
             return false;
@@ -201,11 +201,16 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
+    uint32_t iteration = 0;
     while (true) {
+        invalidate_l1_cache();
+
         // Wait for pages in H2D socket
+        DPRINT << "H2D wait for pages with termination iteration " << iteration << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "H2D wait for pages with termination done iteration " << iteration << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -240,9 +245,9 @@ void kernel_main() {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
-            DPRINT << "H2D Reserve pages downstream" << ENDL();
+            DPRINT << "H2D Reserve pages downstream iteration " << iteration << ENDL();
             socket_reserve_pages(sender_socket, 1);
-            DPRINT << "H2D Reserve pages downstream done" << ENDL();
+            DPRINT << "H2D Reserve pages downstream done iteration " << iteration << ENDL();
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
@@ -252,14 +257,15 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
-            DPRINT << "H2D Send pages downstream done" << ENDL();
+            DPRINT << "H2D Send pages downstream done iteration " << iteration << ENDL();
         }
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
-        DPRINT << "H2D Notify sender" << ENDL();
+        DPRINT << "H2D Notify sender iteration " << iteration << ENDL();
         socket_notify_sender(receiver_socket);
-        DPRINT << "H2d Notify sender done" << ENDL();
+        DPRINT << "H2d Notify sender done iteration " << iteration << ENDL();
         invalidate_l1_cache();
+        iteration++;
     }
 
     update_socket_config(receiver_socket);

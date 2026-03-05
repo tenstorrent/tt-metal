@@ -23,7 +23,7 @@ constexpr bool use_fabric_on_sender = get_compile_time_arg_val(9);
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+    while (!socket_wait_for_pages(socket, num_pages)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
             return false;
@@ -196,18 +196,19 @@ void kernel_main() {
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
+    uint32_t iteration = 0;
     while (true) {
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "Waiting for pages with termination" << ENDL();
+        DPRINT << "Waiting for pages with termination iteration " << iteration << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        DPRINT << "Pages with termination received" << ENDL();
+        DPRINT << "Pages with termination received iteration " << iteration << ENDL();
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
-        DPRINT << "Send pages downstream" << ENDL();
+        DPRINT << "Send pages downstream iteration " << iteration << ENDL();
 
         send_pages_over_socket(
             sender_socket,
@@ -218,19 +219,20 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
-        DPRINT << "Send pages downstream done" << ENDL();
+        DPRINT << "Send pages downstream done iteration " << iteration << ENDL();
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
-            DPRINT << "Send notifications downstream" << ENDL();
+            DPRINT << "Send notifications downstream iteration " << iteration << ENDL();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            DPRINT << "Send notifications upstream done" << ENDL();
+            DPRINT << "Send notifications upstream done iteration " << iteration << ENDL();
         } else {
             socket_notify_sender(receiver_socket);
         }
+        iteration++;
     }
 
     update_socket_config(sender_socket);
