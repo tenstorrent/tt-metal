@@ -100,26 +100,56 @@ def gen_controlled_sparse_buffer(
     experts_total,
     selected_experts_k,
     device_idx,
+    tokens_per_expert=None,
+    all_local_experts=False,
 ):
     """
-    Generate sparse buffer with exactly total_tokens / experts_per_device
-    tokens per local expert (one chunk each).
+    Generate sparse buffer with controlled token-to-expert routing.
 
-    Token t is assigned to local expert (t % experts_per_device).  This
-    guarantees even distribution and exactly 1 chunk per expert when
-    tokens_per_chunk == total_tokens / experts_per_device.
+    Modes:
+      - tokens_per_expert=None, all_local_experts=False:
+          Even distribution, 1 local expert per token.
+      - tokens_per_expert=[...], all_local_experts=False:
+          Uneven distribution, 1 local expert per token. Sum must equal total_tokens.
+      - all_local_experts=True:
+          Every token routes to ALL local experts (tokens_per_expert ignored).
+          Each k-slot is filled with a local expert. Requires selected_experts_k >= experts_per_device.
     """
     expert_indices = torch.zeros(total_tokens, selected_experts_k, dtype=torch.int32)
     non_local_experts = [e for e in range(experts_total) if e // experts_per_device != device_idx]
 
-    for t in range(total_tokens):
-        local_expert = t % experts_per_device
-        global_expert = device_idx * experts_per_device + local_expert
+    if all_local_experts:
+        assert selected_experts_k >= experts_per_device
+        local_globals = [device_idx * experts_per_device + le for le in range(experts_per_device)]
+        for t in range(total_tokens):
+            for k in range(experts_per_device):
+                expert_indices[t, k] = local_globals[k]
+            # Fill remaining slots with non-local experts (if selected_experts_k > experts_per_device)
+            remaining = selected_experts_k - experts_per_device
+            if remaining > 0:
+                others = random.sample(non_local_experts, remaining)
+                for k, eid in enumerate(others):
+                    expert_indices[t, experts_per_device + k] = eid
+    else:
+        if tokens_per_expert is None:
+            tokens_per_expert = [total_tokens // experts_per_device] * experts_per_device
 
-        expert_indices[t, 0] = global_expert
-        others = random.sample(non_local_experts, selected_experts_k - 1)
-        for k, eid in enumerate(others):
-            expert_indices[t, k + 1] = eid
+        assert len(tokens_per_expert) == experts_per_device
+        assert sum(tokens_per_expert) == total_tokens
+
+        # Build assignment: token t -> local expert based on tokens_per_expert distribution
+        token_to_local_expert = []
+        for local_e, count in enumerate(tokens_per_expert):
+            token_to_local_expert.extend([local_e] * count)
+
+        for t in range(total_tokens):
+            local_expert = token_to_local_expert[t]
+            global_expert = device_idx * experts_per_device + local_expert
+
+            expert_indices[t, 0] = global_expert
+            others = random.sample(non_local_experts, selected_experts_k - 1)
+            for k, eid in enumerate(others):
+                expert_indices[t, k + 1] = eid
 
     expert_scores = torch.rand(total_tokens, selected_experts_k, dtype=torch.bfloat16) + 1e-5
     expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
@@ -178,6 +208,8 @@ def run_test_moe_gpt_tilize_matmul(
     E,
     selected_experts_k,
     experts_total,
+    tokens_per_expert=None,
+    all_local_experts=False,
 ):
     """
     Integration test: tilize → W0/W1 matmul → SwiGLU → A2A → W2 → combine (fused mode).
@@ -274,6 +306,8 @@ def run_test_moe_gpt_tilize_matmul(
         experts_total,
         selected_experts_k,
         device_idx,
+        tokens_per_expert=tokens_per_expert,
+        all_local_experts=all_local_experts,
     )
 
     logger.info(f"  sparse_buffer shape: {sparse_torch.shape}")
@@ -357,9 +391,15 @@ def run_test_moe_gpt_tilize_matmul(
         start_row = e * total_tokens
         expert_input = ref_tilized[start_row : start_row + count, :]  # [count, K]
 
+        # Multi-chunk: combine cores only hold the LAST chunk's output (each chunk
+        # overwrites the same shard).  Extract the last chunk's tokens for reference.
+        num_chunks = (count + tokens_per_chunk - 1) // tokens_per_chunk
+        last_chunk_start = (num_chunks - 1) * tokens_per_chunk
+        last_chunk_tokens = min(count - last_chunk_start, tokens_per_chunk)
+
         # Pad to tile height (32) for comparison with hardware output
         padded_input = torch.zeros(M, K, dtype=torch.bfloat16)
-        padded_input[:count, :] = expert_input
+        padded_input[:last_chunk_tokens, :] = expert_input[last_chunk_start : last_chunk_start + last_chunk_tokens, :]
 
         # Torch reference: W0/W1 matmul + SwiGLU + W2 matmul
         with torch.no_grad():
@@ -376,11 +416,12 @@ def run_test_moe_gpt_tilize_matmul(
         pcc = metrics["pcc"]
         rmse = metrics["relative_rmse"]
 
+        chunks_str = f"{num_chunks} chunk{'s' if num_chunks > 1 else ''}"
         if pcc < PCC_THRESHOLD:
             all_passing = False
-            logger.warning(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens) FAILED")
+            logger.warning(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens, {chunks_str}) FAILED")
         else:
-            logger.info(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens) Passed")
+            logger.info(f"  Expert {e}: PCC={pcc:.6f} RMSE={rmse:.6f} ({count} tokens, {chunks_str}) Passed")
 
     return all_passing
 
@@ -424,3 +465,93 @@ def test_moe_gpt_tilize_matmul_single_device(
     )
 
     assert passing, "Tilize-matmul integration PCC check failed for one or more experts"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("M", [32])
+@pytest.mark.parametrize("K, N", [(2880, 2880)])
+@pytest.mark.parametrize("E, experts_total", [(4, 16)])
+@pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.parametrize(
+    "tokens_per_expert",
+    [
+        [64, 32, 32, 0],  # Expert 0 gets 2 chunks, expert 3 gets none
+        [96, 32, 0, 0],  # Expert 0 gets 3 chunks, experts 2-3 get none
+    ],
+    ids=["2chunks_1_1_0", "3chunks_1_0_0"],
+)
+def test_moe_gpt_tilize_matmul_multi_chunk(
+    device,
+    M,
+    K,
+    N,
+    E,
+    experts_total,
+    selected_experts_k,
+    tokens_per_expert,
+    device_params,
+):
+    passing = run_test_moe_gpt_tilize_matmul(
+        device=device,
+        M=M,
+        K=K,
+        N=N,
+        E=E,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+        tokens_per_expert=tokens_per_expert,
+    )
+
+    assert passing, "Multi-chunk tilize-matmul PCC check failed for one or more experts"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("M", [32])
+@pytest.mark.parametrize("K, N", [(2880, 2880)])
+@pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.parametrize(
+    "E, experts_total",
+    [
+        (4, 8),  # 2 devices -> 64 total tokens, all to all 4 local -> 64/expert (2 chunks)
+        (4, 12),  # 3 devices -> 96 total tokens, all to all 4 local -> 96/expert (3 chunks)
+    ],
+    ids=["64tok_all_local", "96tok_all_local"],
+)
+def test_moe_gpt_tilize_matmul_all_local(
+    device,
+    M,
+    K,
+    N,
+    E,
+    experts_total,
+    selected_experts_k,
+    device_params,
+):
+    passing = run_test_moe_gpt_tilize_matmul(
+        device=device,
+        M=M,
+        K=K,
+        N=N,
+        E=E,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+        all_local_experts=True,
+    )
+
+    assert passing, "All-local-experts tilize-matmul PCC check failed for one or more experts"

@@ -175,12 +175,14 @@ void kernel_main() {
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
-    // Per-expert: W0/W1 reads (per-chunk) then W2 reads
+    // Per-expert: W0/W1 reads (per-chunk) then W2 reads (per-chunk)
+    // Both W0/W1 and W2 are re-read for each chunk because compute does a
+    // full matmul pipeline per chunk (SwiGLU → A2A → W2).
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
 
-        // Phase 1: Per-chunk W0/W1 weight reads (same weights re-read for each chunk)
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            // Phase 1: W0/W1 weight reads (same weights re-read for each chunk)
             uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
@@ -207,28 +209,28 @@ void kernel_main() {
                 }
                 txns_in_flight = true;
             }
-        }
 
-        // Phase 2: W2 weight reads for this expert
-        uint32_t w2_dram_read_offset = w2_expert_offset;
+            // Phase 2: W2 weight reads (same weights re-read for each chunk)
+            uint32_t w2_dram_read_offset = w2_expert_offset;
 
-        for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
-            noc_async_read_set_trid(trid_to_issue);
-            noc_async_read_one_packet_with_state_with_trid<false, true>(
-                dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
-            w2_dram_read_offset += w2_bytes_per_txn;
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
+                noc_async_read_set_trid(trid_to_issue);
+                noc_async_read_one_packet_with_state_with_trid<false, true>(
+                    dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
+                w2_dram_read_offset += w2_bytes_per_txn;
 
-            noc_async_read_one_packet_with_state_with_trid<false, true>(
-                dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue] + w2_bytes_per_txn, trid_to_issue);
-            w2_dram_read_offset += w2_bytes_per_txn;
+                noc_async_read_one_packet_with_state_with_trid<false, true>(
+                    dram_noc_addr, w2_dram_read_offset, slot_addr[slot_to_issue] + w2_bytes_per_txn, trid_to_issue);
+                w2_dram_read_offset += w2_bytes_per_txn;
 
-            ADVANCE_SLOT(slot_to_issue);
-            ADVANCE_TRID(trid_to_issue);
+                ADVANCE_SLOT(slot_to_issue);
+                ADVANCE_TRID(trid_to_issue);
 
-            noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-            ADVANCE_TRID(trid_to_wait);
-            cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+                noc_async_read_barrier_with_trid(trid_to_wait);
+                cb_push_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                ADVANCE_TRID(trid_to_wait);
+                cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block * 2);
+            }
         }
 
         w0_w1_expert_offset += w0_w1_total_size_per_expert;
