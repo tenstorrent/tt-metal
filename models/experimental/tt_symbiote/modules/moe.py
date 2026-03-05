@@ -1386,33 +1386,29 @@ class TTNNMoE(TTNNModule):
 
     def preprocess_weights_impl(self):
         self._gate_weight_tt = ttnn.from_torch(
-            self._gate_weight_torch.T.contiguous(),  # (hidden_size, n_experts) bfloat16
+            self._gate_weight_torch.T.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
         )
+        self.route_tokens_to_experts.preprocess_weights()
 
     def move_weights_to_device_impl(self):
-        # No mesh_mapper → replicate to all devices
         self._gate_weight_tt = ttnn.to_device(self._gate_weight_tt, self.device)
+        self.route_tokens_to_experts.move_weights_to_device()
+        self._gate_compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Forward pass: all-gather → gate → experts (handles dispatch/combine) → reduce-scatter → add shared.
-
-        Args:
-            x: Input tensor with shape (batch_size_per_device, 1, seq_len, hidden_size)
-
-        Returns:
-            Output tensor with same shape as input
-        """
         self.num_devices = self.device.get_num_devices()
         self.num_dispatch_devices = self.device.shape[0]
         self.num_experts_per_device = even_int_div(self.config.n_routed_experts, self.num_devices)
-        # Store original input for shared experts
         residual = x
 
-        # 1. All-gather to revert tensor parallelism
         x = ttnn.experimental.all_gather_async(
             x,
             dim=-1,
@@ -1422,7 +1418,6 @@ class TTNNMoE(TTNNModule):
             topology=ttnn.Topology.Linear,
         )
 
-        # 2. MoE gate routing
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if x.dtype != ttnn.float32:
@@ -1433,25 +1428,16 @@ class TTNNMoE(TTNNModule):
             x_f32,
             self._gate_weight_tt,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            ),
+            compute_kernel_config=self._gate_compute_cfg,
         )
         if x_f32 is not x:
             ttnn.deallocate(x_f32)
-        # Convert back to bfloat16 for router (ttnn.sigmoid / ttnn.topk require bf16)
         router_logits = ttnn.typecast(router_logits_f32, ttnn.bfloat16)
         ttnn.deallocate(router_logits_f32)
 
         T = router_logits.shape[-2]
         router_logits = ttnn.reshape(router_logits, ttnn.Shape((T, self.n_routed_experts)))
 
-        # Call router forward
-        self.route_tokens_to_experts.preprocess_weights()
-        self.route_tokens_to_experts.move_weights_to_device()
         topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts.forward(router_logits)
 
         x = ttnn.unsqueeze(x, 1)  # Add experts dimension for compatibility with experts module

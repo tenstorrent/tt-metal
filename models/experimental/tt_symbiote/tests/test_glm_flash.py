@@ -30,6 +30,7 @@ from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
 )
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 assert transformers.__version__.startswith(
     "5."
@@ -106,6 +107,7 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     nn_to_ttnn = {
         model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,
         model.model.layers[1].mlp.__class__: TTNNMoE,
+        model.model.layers[0].input_layernorm.__class__: TTNNDistributedRMSNorm,
     }
     nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,
