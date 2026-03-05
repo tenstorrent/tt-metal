@@ -31,6 +31,8 @@ void kernel_main() {
 
 #ifdef TILIZE_FUSED
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t metadata_count_semaphore_base_id =
+        get_named_compile_time_arg_val("metadata_count_semaphore_base_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
 #endif
 
@@ -165,13 +167,12 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
     noc_semaphore_wait_min(metadata_ready_semaphore_ptr, 1);
 
-    // Decode per-expert token counts from encoded metadata
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
-    constexpr uint32_t BITS_PER_EXPERT = 7;
-    constexpr uint32_t EXPERT_MASK = 0x7Fu;
+    // Read per-expert token counts from dedicated semaphores
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * e)) & EXPERT_MASK;
+        volatile tt_l1_ptr uint32_t* count_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+        uint32_t num_tokens = *count_sem_ptr;
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
