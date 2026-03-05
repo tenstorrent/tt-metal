@@ -37,7 +37,6 @@ struct MoEGPTFusedDeviceOperation {
         const Tensor& w0_w1_tensor,
         const Tensor& w2_tensor,
         uint32_t num_experts,
-        uint32_t layer_id,
         uint32_t experts_per_device);
 };
 

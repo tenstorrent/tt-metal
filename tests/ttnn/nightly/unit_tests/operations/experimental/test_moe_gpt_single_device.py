@@ -398,7 +398,6 @@ def run_test_moe_gpt_matmul(
             w2_tensor=tt_w2,
             output_tensor=tt_input,
             num_experts=E,
-            layer_id=layer_id,
             # Future kwargs (uncomment as op gains support):
             # sparse_buffer=tt_sparse_buffer,
             # expert_indices=tt_expert_indices,
@@ -785,7 +784,6 @@ def run_test_moe_gpt_tilize(
         w2_tensor=tt_w2,
         output_tensor=tt_input,
         num_experts=E,
-        layer_id=0,
         sparse_buffer=tt_sparse,
         expert_indices=tt_indices,
         expert_scores=tt_scores,
@@ -1151,7 +1149,6 @@ def run_test_moe_gpt_tilize_matmul(
         w2_tensor=tt_w2,
         output_tensor=tt_input,
         num_experts=E,
-        layer_id=0,
         enable_dram_output=True,
         dram_output_tensor=tt_combine_output,
         sparse_buffer=tt_sparse,

@@ -12,7 +12,6 @@ namespace ttnn::operations::experimental::moe_gpt {
 
 struct operation_attributes_t {
     uint32_t num_experts{};
-    uint32_t layer_id{};
     bool enable_dram_output{false};
     std::optional<uint32_t> cluster_axis;
 };

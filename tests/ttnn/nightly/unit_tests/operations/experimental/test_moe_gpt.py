@@ -274,7 +274,6 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             w2_tensor=tt_w2,
             output_tensor=tt_input,
             num_experts=E,
-            layer_id=layer_id,
         )
 
         # Output is produced in-place on the input tensor
@@ -516,7 +515,6 @@ def run_test_moe_gpt_dram_output(device, M, K, N, E, L):
             w2_tensor=tt_w2,
             output_tensor=tt_input,
             num_experts=E,
-            layer_id=layer_id,
             enable_dram_output=True,
         )
 

@@ -54,7 +54,6 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
     auto matmul_core_range_set = tt::tt_metal::CoreRangeSet(matmul_cores);
 
     const uint32_t experts_per_device = operation_attributes.experts_per_device;
-    const uint32_t layer_id = operation_attributes.layer_id;
 
     //=========================================================================
     // Tilize (gather) cores: 3 cores at CoreRange({5,0},{5,2})
@@ -173,7 +172,7 @@ MoEGPTFusedProgramFactory::cached_program_t MoEGPTFusedProgramFactory::create(
     //=========================================================================
     std::unordered_map<std::string, uint32_t> named_compile_args = {
         {"num_experts", experts_per_device},
-        {"layer_id", layer_id},
+        {"layer_id", 0u},
         {"num_cores", num_cores},
         {"enable_dram_output", 0u},
         {"height_shard_dim", 4u},

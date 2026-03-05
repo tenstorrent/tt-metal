@@ -12,7 +12,6 @@ namespace ttnn::operations::experimental::moe_gpt_fused {
 
 struct operation_attributes_t {
     uint32_t num_experts{};
-    uint32_t layer_id{};
     uint32_t experts_per_device{4};
 };
 
