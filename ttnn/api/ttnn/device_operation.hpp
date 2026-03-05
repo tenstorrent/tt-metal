@@ -187,7 +187,7 @@ template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
-    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload) {
     // Generate runtime_id (always, for dispatcher)
