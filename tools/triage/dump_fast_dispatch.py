@@ -347,7 +347,7 @@ def run(args, context: Context):
 
         locations_to_check.add(location)
 
-    def get_dispatch_core_pair(
+    def get_dispatch_core_pairs(
         location: OnChipCoordinate, locations_to_check: set[OnChipCoordinate]
     ) -> list[tuple[OnChipCoordinate, str]] | None:
         # Check RISC core with risc_name at this location for dispatcher kernels
@@ -364,8 +364,9 @@ def run(args, context: Context):
                 dispatch_core_pairs.append((location, risc_name))
         return dispatch_core_pairs
 
+    # Getting dispatch core pairs needs to be run through RunChecks since there we handle TimeoutDeviceRegisterError that otherwise would break triage
     results = run_checks.run_per_block_check(
-        lambda location: get_dispatch_core_pair(location, locations_to_check),
+        lambda location: get_dispatch_core_pairs(location, locations_to_check),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
