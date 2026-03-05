@@ -62,43 +62,50 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     uint32_t ncrisc_rt_arg_idx = 0;
+    uint32_t per_core_rta_arg_idx = 0;
     // --- NCRISC: CCL broadcast writer + mcast receiver + sharded buffer setup ---
 
     // CCL Broadcast CTArgs type alias
+#if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
-        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("bcast_range_hops_forward"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+        get_named_compile_time_arg_val("bcast_num_neighbors"),
+        get_named_compile_time_arg_val("bcast_num_links"),
+        get_named_compile_time_arg_val("bcast_is_root"),
+        get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
+        get_named_compile_time_arg_val("bcast_num_chunks")>;
+#endif
 
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    constexpr uint32_t bcast_writer_common_rt_count = 5;
+#if !defined(SKIP_CCL)
     if constexpr (!Core::skip_ccl) {
+        uint32_t bcast_rta_num_args = 0;
+        uint32_t bcast_rta_offset = 0;
+        if constexpr (Core::is_input_core) {
+            bcast_rta_num_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            bcast_rta_offset = per_core_rta_arg_idx;
+            per_core_rta_arg_idx += bcast_rta_num_args;
+        }
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // tensor_address0
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // wait_output_semaphore
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // reset_global_semaphore
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // barrier_sem
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // ring_index
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // num_connections (computed from len(dst_nodes))
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // my_noc_x
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // my_noc_y
+            {
+                get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // sem_bank_addrs[0]
+                get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // sem_bank_addrs[1] (dummy when num_links=1)
+            },
+            bcast_rta_offset,
+            bcast_rta_num_args,
         };
+    }
+#endif
+    if constexpr (Core::skip_ccl) {
+        ncrisc_rt_arg_idx = bcast_writer_common_rt_count;
     }
 
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
@@ -147,13 +154,29 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     uint32_t brisc_rt_arg_idx = 0;
     // --- BRISC: CCL broadcast reader + mcast sender ---
+#if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender")>;
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_use_socket")>;
+#endif
 
-    // CCL Broadcast reader runtime args (empty payload by design)
+    // CCL Broadcast reader runtime args.
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    constexpr uint32_t bcast_reader_common_rt_count = 3;
+#if !defined(SKIP_CCL)
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+            get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_config_addr
+            get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_page_size
+            get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_num_pages
+        };
+    }
+#endif
+    if constexpr (Core::skip_ccl) {
+        brisc_rt_arg_idx = bcast_reader_common_rt_count;
+    }
 
     // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
     // loopback=false because sender does not consume its own multicast data
@@ -190,9 +213,11 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
+#if !defined(SKIP_CCL)
     // CCL Broadcast CTArgs (no-op for TRISC)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+#endif
 
     // Mcast is a no-op on TRISC (data movement handled by NCRISC/BRISC)
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
@@ -236,6 +261,7 @@ void kernel_main() {
     // After this phase, every device has the input in its intermediate tensor
     // (which backs CB 0 / mcast_src).
     // ========================================================================
+#if !defined(SKIP_CCL)
     if constexpr (!Core::skip_ccl) {
         deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
         {
@@ -243,6 +269,7 @@ void kernel_main() {
             bcast(bcast_args);
         }
     }
+#endif
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.

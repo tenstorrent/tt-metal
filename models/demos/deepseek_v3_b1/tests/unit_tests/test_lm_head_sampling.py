@@ -24,15 +24,13 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -141,37 +139,26 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_coord[0],
+        sender_col=sender_coord[1],
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=False,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -787,37 +774,26 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_coord[0],
+        sender_col=sender_coord[1],
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=False,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -1013,37 +989,26 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2h(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_coord[0],
+        sender_col=sender_coord[1],
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=False,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -1275,37 +1240,26 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_coord[0],
+        sender_col=sender_coord[1],
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=False,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
