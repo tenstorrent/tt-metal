@@ -96,8 +96,7 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  # Exclude MeshDevice1x4FabricFixture.TestGenericOpAllGather: consistently fails on T3000 with fabric/Ethernet issues (Glean analysis)
-  ./build/test/ttnn/unit_tests_ttnn --gtest_filter="*-MeshDevice1x4FabricFixture.TestGenericOpAllGather"
+  ./build/test/ttnn/unit_tests_ttnn
   ./build/test/ttnn/unit_tests_ttnn_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
