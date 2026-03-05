@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
-#include "api/debug/dprint.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -570,7 +569,7 @@ void generate_causal_sliding_window_mask(
             }
         }
         for (uint32_t k_tile = 0; k_tile < Sk_chunk_t; ++k_tile) {
-            uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;  // TODO: ADD RING OFFSET PER DEVICE
+            uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;
             uint32_t global_k_tile = Sk_chunk_t * k_chunk + k_tile;
 
             // Determine the masking pattern for this tile
@@ -980,7 +979,6 @@ void generate_mask(
     const uint32_t unpadded_Sk_mask_1,
     const bool is_causal) {
     if (is_causal || sliding_window_size > 0) {
-        // DPRINT << "ENTERED CAUSALITY BRANCH" << ENDL();
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
             // Bump it up to the chunk start

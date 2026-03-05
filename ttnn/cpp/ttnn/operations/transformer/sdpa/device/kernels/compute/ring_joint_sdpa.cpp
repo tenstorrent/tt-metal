@@ -11,7 +11,6 @@
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
