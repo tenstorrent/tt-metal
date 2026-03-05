@@ -108,17 +108,17 @@ inline uint16_t host_debug_file_hash(const char* str) {
 
 // Host-side copy of debug_msg_hash for resolving message hashes.
 // Must match the device-side constexpr version in dev_msgs.h.
-inline uint8_t host_debug_msg_hash(const char* str) {
+inline uint16_t host_debug_msg_hash(const char* str) {
     uint32_t hash = 2166136261u;
     while (*str) {
         hash ^= static_cast<uint32_t>(*str++);
         hash *= 16777619u;
     }
-    return static_cast<uint8_t>(hash ^ (hash >> 8) ^ (hash >> 16) ^ (hash >> 24));
+    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
 }
 
 // Resolve a message hash back to the original string by scanning source files for ASSERT_MSG calls.
-inline std::string resolve_msg_from_hash(uint8_t msg_hash) {
+inline std::string resolve_msg_from_hash(uint16_t msg_hash) {
     static const std::vector<std::string> search_dirs = {
         "tt_metal/hw/inc/",
         "tt_metal/hw/inc/api/debug/",
@@ -163,7 +163,7 @@ inline std::string resolve_msg_from_hash(uint8_t msg_hash) {
             continue;
         }
     }
-    return fmt::format("unknown message (hash=0x{:02x})", msg_hash);
+    return fmt::format("unknown message (hash=0x{:04x})", msg_hash);
 }
 
 // Resolve a file_id hash back to a filename by scanning known source directories.
@@ -197,9 +197,14 @@ inline std::string resolve_file_from_hash(uint16_t file_id) {
                 if (ext != ".h" && ext != ".hpp" && ext != ".cpp") {
                     continue;
                 }
-                std::string path_str = path.string();
-                if (host_debug_file_hash(path_str.c_str()) == file_id) {
-                    return path_str;
+                // Hash both absolute and relative paths to match however __FILE__ was expanded.
+                std::string rel_path_str = path.string();
+                if (host_debug_file_hash(rel_path_str.c_str()) == file_id) {
+                    return rel_path_str;
+                }
+                std::string abs_path_str = std::filesystem::absolute(path).string();
+                if (abs_path_str != rel_path_str && host_debug_file_hash(abs_path_str.c_str()) == file_id) {
+                    return rel_path_str;  // Return the shorter relative path for display
                 }
             }
         } catch (const std::filesystem::filesystem_error&) {
@@ -213,7 +218,7 @@ inline std::string resolve_file_from_hash(uint16_t file_id) {
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num and file_id are used in the message
 inline std::string get_debug_assert_message(
-    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint16_t file_id = 0, uint8_t extra_info = 0) {
+    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint16_t file_id = 0, uint16_t extra_info = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped: {
             std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id) : "unknown file";
