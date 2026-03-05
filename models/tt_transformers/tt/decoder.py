@@ -233,7 +233,10 @@ class TransformerBlock(LightweightModule):
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
 
-        # Attention takes replicated inputs and produces fractured outputs
+        # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
+        if batch_size > 1:
+            attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
+
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
@@ -244,7 +247,6 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
-            batch_size=batch_size,
         )
         # To match the batch-related reshape inside the attention module
         # Use the batch_size parameter instead of inferring from shape[-3]

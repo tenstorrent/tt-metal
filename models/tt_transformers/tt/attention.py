@@ -892,10 +892,10 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        batch_size=1,
     ):
         # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
-        # Following 70B Galaxy: concat before QKV matmul, then reshape back to batch after
+        # concat before QKV matmul, then reshape back to batch after
+        batch_size = x_11SH.shape[0]
         if batch_size > 1:
             # Concatenate batch dimension into sequence for matmul compatibility
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -1189,7 +1189,6 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        batch_size=1,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1200,7 +1199,6 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
-                batch_size=batch_size,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
