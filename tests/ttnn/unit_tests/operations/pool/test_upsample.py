@@ -10,9 +10,8 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_llk_assert
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.common.utility_functions import skip_with_llk_assert
 
 TILE_WIDTH = 32
 
