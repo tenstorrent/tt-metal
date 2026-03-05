@@ -89,7 +89,6 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
-        use_model_parllelism=False,
     ):
         """
         Initialize GPT-OSS model
@@ -121,20 +120,7 @@ class Model:
         self.mesh_config = mesh_config or MeshConfig(
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
-        print("Mesh Config = ", self.mesh_config, "use_model_parallelism = ", use_model_parllelism)
-        if use_model_parllelism:
-            self.mp_submeshes = []
-            self.mesh_config = MeshConfig(
-                mesh_device.shape,
-                decode=ModeConfig(mp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1, tp=1),
-                mp_enabled=True,
-            )
-            print("Model parallelism enabled: adjusting mesh config to use columns for TP and rows for EP/SP")
-            for i in range(mesh_device.shape[1]):
-                self.mp_submeshes.append(
-                    mesh_device.create_submesh(ttnn.MeshShape(mesh_device.shape[0], 1), ttnn.MeshCoordinate(0, i))
-                )
-            print("Submeshes = ", self.mp_submeshes, "model_config = ", self.mesh_config)
+
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
         self.rope_setup = create_rope_setup(
@@ -282,7 +268,6 @@ class Model:
         create_kv_cache=True,
         users_row_sharded=False,
         use_throughput_experts=False,
-        use_model_parallelism=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -305,7 +290,6 @@ class Model:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
-            use_model_parllelism=use_model_parallelism,
         )
 
         # Add tt_transformers compatible attributes
@@ -363,8 +347,6 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
-            ttnn.ReadDeviceProfiler(self.mesh_device)
-
         logits = hidden_states
 
         if get_last_token != -1:
