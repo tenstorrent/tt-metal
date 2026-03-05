@@ -188,7 +188,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;  // ?
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value()
                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
                                               : tt::DataFormat::Float16_b;
@@ -275,8 +275,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
 
-    // TT_FATAL(fp32_dest_acc_en, "DEBUG: Force enable fp32 acc");
-
     bool large_tensor_needed = false;
     // The following constants were chosen empirically to
     // maximize the buffer size while still fitting the
@@ -362,52 +360,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         in0_t = block_size;
         out0_t = block_size;
     }
-
-    // DEBUG: Print all buffer sizes (both block_size, number of elements, and byte sizes)
-
-    // print block size
-    std::cout << "block_size: " << block_size << std::endl;
-
-    std::cout << "in0_t: " << in0_t << " (elements: " << in0_t * in_single_tile_size
-              << ", bytes: " << in0_t * in_single_tile_size * a.element_size() << ")" << std::endl;
-    if (b.has_value()) {
-        std::cout << "in1_t: " << in1_t << " (elements: " << in1_t * inb_single_tile_size
-                  << ", bytes: " << in1_t * inb_single_tile_size * b.value().element_size() << ")" << std::endl;
-    }
-    std::cout << "out0_t: " << out0_t << " (elements: " << out0_t * out_single_tile_size
-              << ", bytes: " << out0_t * out_single_tile_size * output.element_size() << ")" << std::endl;
-    std::cout << "im0_t: " << im0_t << " (elements: " << im0_t * single_tile_size
-              << ", bytes: " << im0_t * single_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "im3_t: " << im3_t << " (elements: " << im3_t * single_tile_size
-              << ", bytes: " << im3_t * single_tile_size * a.element_size() << ")" << std::endl;
-    if (gamma.has_value()) {
-        std::cout << "in5_t (gamma): " << in5_t << " (elements: " << in5_t * gamma_single_tile_size
-                  << ", bytes: " << in5_t * gamma_single_tile_size * gamma.value().element_size() << ")" << std::endl;
-    }
-    if (beta.has_value()) {
-        std::cout << "in6_t (beta): " << in6_t << " (elements: " << in6_t * beta_single_tile_size
-                  << ", bytes: " << in6_t * beta_single_tile_size * beta.value().element_size() << ")" << std::endl;
-    }
-    std::cout << "im6_t: " << im6_t << " (elements: " << im6_t * single_tile_size
-              << ", bytes: " << im6_t * single_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "im5_t: " << im5_t << " (elements: " << im5_t * single_tile_size
-              << ", bytes: " << im5_t * single_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "im4_t: " << im4_t << " (elements: " << im4_t * single_tile_size
-              << ", bytes: " << im4_t * single_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "im1_t: " << im1_t << " (elements: " << im1_t * single_tile_size
-              << ", bytes: " << im1_t * single_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "in2_t: " << in2_t << " (elements: " << in2_t * bfloat16_tile_size
-              << ", bytes: " << in2_t * bfloat16_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "in3_t: " << in3_t << " (elements: " << in3_t * bfloat16_tile_size
-              << ", bytes: " << in3_t * bfloat16_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "im2_t: " << im2_t << " (elements: " << im2_t * single_tile_size
-              << ", bytes: " << im2_t * single_tile_size * a.element_size() << ")" << std::endl;
-    std::cout << "reciprocal_CB_size_bytes: " << reciprocal_CB_size_bytes << " (bytes: " << reciprocal_CB_size_bytes
-              << ")" << std::endl;
-    std::cout << "in_rm_size: " << in_rm_tiles << " (elements: " << in_rm_tiles * in_single_tile_size
-              << ", bytes: " << in_rm_size << ")" << std::endl;
-    std::cout << "out_rm_size: " << out_rm_tiles << " (elements: " << out_rm_tiles * out_single_tile_size
-              << ", bytes: " << out_rm_size << ")" << std::endl;
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True.  Without it, UNPACK's SRCA register file is 16-bit and
@@ -504,26 +456,26 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     }
 
     // Select reader kernel path
-    // TODO: Remove lambda
-    const auto* reader_kernel_path = [&]() -> const char* {
-        if (input_is_row_major) {
-            return large_tensor_needed ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                         "reader_unary_interleaved_ln_large_tensor_rm_input.cpp"
-                                       : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                         "reader_unary_interleaved_ln_rm_input.cpp";
-        }
-        if (large_tensor_needed) {
-            return use_welford_and_not_rms_norm
-                       ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                         "reader_unary_interleaved_ln_large_tensor_welford.cpp"
-                       : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                         "reader_unary_interleaved_ln_large_tensor.cpp";
-        }
-        return use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                      "reader_unary_interleaved_ln_rm_gb.cpp"
-                                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                      "reader_unary_interleaved_ln.cpp";
-    }();
+    const char* reader_kernel_path = nullptr;
+    if (input_is_row_major) {
+        reader_kernel_path = large_tensor_needed
+                                 ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                   "reader_unary_interleaved_ln_large_tensor_rm_input.cpp"
+                                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                   "reader_unary_interleaved_ln_rm_input.cpp";
+    } else if (large_tensor_needed) {
+        reader_kernel_path = use_welford_and_not_rms_norm
+                                 ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                   "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+                                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                   "reader_unary_interleaved_ln_large_tensor.cpp";
+    } else {
+        reader_kernel_path = use_row_major_kernel
+                                 ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                   "reader_unary_interleaved_ln_rm_gb.cpp"
+                                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                   "reader_unary_interleaved_ln.cpp";
+    }
 
     // Build compute args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
@@ -589,15 +541,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
         uint32_t tile_offset = curr_row * Wt;
 
-        // For rm_input readers, arg[3] is row_offset (actual row index, not tile offset).
+        // For rm_input readers, arg[3] is start_row (absolute starting row for this core).
         // For tile readers, arg[3] is tile_offset (curr_row * Wt).
-        const uint32_t reader_arg3 = input_is_row_major ? curr_row * TILE_HEIGHT : tile_offset;
+        const uint32_t reader_start = input_is_row_major ? curr_row * TILE_HEIGHT : tile_offset;
 
         std::vector<uint32_t> reader_args = {
             a_addr,
             num_tile_rows_per_core,
             Wt,
-            reader_arg3,
+            reader_start,
             packed_one_value,
             std::bit_cast<uint32_t>(eps),
             gamma_dram_addr,
@@ -611,10 +563,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
-        // For the RM output writer arg[3] is the starting tile-row index (curr_row),
+        // For the RM output writer arg[3] is start_tile_row (starting tile-row index for this core),
         // not the flat tile offset, because the RM writer computes row addresses directly.
-        const uint32_t writer_arg3 = input_is_row_major ? curr_row : tile_offset;
-        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_arg3};
+        const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
+        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_start};
         if (input_is_row_major) {
             writer_args.push_back(H_logical);  // arg[4]
         }

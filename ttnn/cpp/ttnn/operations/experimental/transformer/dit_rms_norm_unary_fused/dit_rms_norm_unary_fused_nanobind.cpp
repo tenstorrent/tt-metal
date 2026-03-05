@@ -32,7 +32,7 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
         Parameters
         ----------
         input_tensor : ttnn.Tensor
-            Input tensor. Must be in TILE layout on device.
+            Input tensor. If interleaved, then can be TILE or ROW_MAJOR layout. If sharded, then must be TILE layout.
 
         epsilon : float, default: 1e-5
             Small constant added to the variance for numerical stability.
