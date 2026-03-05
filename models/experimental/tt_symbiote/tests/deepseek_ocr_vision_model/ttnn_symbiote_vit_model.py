@@ -510,8 +510,8 @@ class TTNNNoTPAttention(TTNNModule):
 
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            q_chunk_size=max(256, seqlen),
-            k_chunk_size=max(256, seqlen),
+            q_chunk_size=max(128, seqlen),
+            k_chunk_size=max(128, seqlen),
             exp_approx_mode=False,
         )
 
