@@ -65,7 +65,7 @@ Read these files **once at the start**, in this order:
 2. **`{op_path}/{op_name}_program_descriptor.py`** — Verify CB IDs, page sizes, runtime args
 3. **`{op_path}/kernels/*.cpp`** — Current stub state
 4. **`.claude/references/ttnn-cb-memory-fundamentals.md`** — CB sync rules
-5. **Helper headers** referenced in op_design.md Part 2 (in `ttnn/cpp/ttnn/kernel_lib/`)
+5. **Helper headers** referenced in op_design.md Part 2 (in `ttnn/cpp/ttnn/kernel_lib/`). Helpers include tilize(), untilize(), reduce(), binary ops, and dest helpers. You are HIGHLY ENCOURAGED to use helpers. YOU SHOULD NOT DEFAULT TO RAW CALLS UNLESS ABSOLUTELY NECESSARY
 
 You read these ONCE. You already have them in context for all subsequent stages.
 
