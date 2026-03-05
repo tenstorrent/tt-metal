@@ -52,6 +52,7 @@ SUMMARY_CSV_FIELDS = [
     "timestamp",
     "log_file",
     "domain",
+    "hosts",
     "test_passed",
     "num_hosts",
     "warnings_count",
@@ -77,6 +78,7 @@ class LogAnalysis:
 
     filepath: str
     content: str = ""
+    hosts: str = ""
     all_passed: bool = False
     num_hosts: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -218,6 +220,7 @@ def output_csv(analysis: LogAnalysis, csv_path: str, csv_prefix: str | None = No
         "timestamp": ts,
         "log_file": log_basename,
         "domain": DOMAIN_FABRIC,
+        "hosts": analysis.hosts,
         "test_passed": analysis.all_passed,
         "num_hosts": analysis.num_hosts,
         "warnings_count": len(analysis.warnings),
@@ -264,6 +267,7 @@ def main():
 
     log_file = validate_file_exists(args.path)
     analysis = analyze_log_file(str(log_file))
+    analysis.hosts = args.hosts or ""
 
     if args.csv:
         output_csv(analysis, args.csv, csv_prefix=args.csv_prefix)

@@ -126,6 +126,12 @@ def build_base_argparser(description: str) -> argparse.ArgumentParser:
             '(e.g. --csv-prefix "run42_3" produces dispatch_test_run42_3_summary.csv).'
         ),
     )
+    parser.add_argument(
+        "--hosts",
+        type=str,
+        metavar="HOSTS",
+        help="Comma-separated list of hosts the test ran on (written to CSV output).",
+    )
     return parser
 
 

@@ -1305,7 +1305,7 @@ def main():
     parser.add_argument("directory", nargs="?", default="validation_output", help="Log directory")
     parser.add_argument("--all", action="store_true", help="Show all details")
     parser.add_argument("--histogram", action="store_true", help="Show link histogram")
-    parser.add_argument("--hosts", action="store_true", help="Show host summary")
+    parser.add_argument("--host-summary", action="store_true", help="Show host summary")
     parser.add_argument("--timeline", action="store_true", help="Show timeline")
     parser.add_argument("--errors", action="store_true", help="Show error messages")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
@@ -1323,6 +1323,10 @@ def main():
         sys.exit(1)
 
     analyses = [analyze_log_file(str(f)) for f in log_files]
+    if args.hosts:
+        cli_hosts = [h.strip() for h in args.hosts.split(",") if h.strip()]
+        for a in analyses:
+            a.metadata.hosts = cli_hosts
     metrics = calculate_metrics(analyses)
 
     if args.csv:
@@ -1337,7 +1341,7 @@ def main():
             print_details(analyses)
         if args.histogram:
             print_link_histogram(analyses)
-        if args.hosts or args.all:
+        if args.host_summary or args.all:
             print_host_summary(analyses)
         if args.timeline or args.all:
             print_timeline(analyses)
