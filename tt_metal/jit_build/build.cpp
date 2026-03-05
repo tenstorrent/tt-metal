@@ -115,6 +115,29 @@ void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& c
     }
 }
 
+// Copy generated header/source files from the NFS kernel directory to the
+// corresponding scratch directory so the compiler can find them via -I..
+// Only regular files are copied (not subdirectories like trisc0/, erisc/).
+void copy_genfiles_to_scratch(const std::string& nfs_dir, const std::string& scratch_dir) {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(nfs_dir, ec)) {
+        if (ec || !entry.is_regular_file(ec) || ec) {
+            continue;
+        }
+        auto dst = fs::path(scratch_dir) / entry.path().filename();
+        std::error_code copy_ec;
+        fs::copy_file(entry.path(), dst, fs::copy_options::overwrite_existing, copy_ec);
+        if (copy_ec) {
+            log_warning(
+                tt::LogBuildKernels,
+                "Failed to copy generated file {} to {}: {}",
+                entry.path().string(),
+                dst.string(),
+                copy_ec.message());
+        }
+    }
+}
+
 }  // namespace
 
 std::string get_default_root_path() {
@@ -755,6 +778,17 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     if (use_scratch) {
         work_dir = fmt::format("{}{}{}/", this->scratch_path_, kernel_name, this->target_name_);
         jit_build::utils::safe_create_directories(work_dir);
+
+        if (settings) {
+            // Generated headers (kernel_includes.hpp, chlkc_descriptors.h, etc.)
+            // are written to NFS by jit_build_genfiles_* before build() runs.
+            // The compiler finds them via -I.. relative to the target dir.
+            // Copy them to scratch so they're resolvable from the scratch work_dir.
+            std::string nfs_genfiles_dir = fmt::format("{}{}", this->out_path_, kernel_name);
+            std::string scratch_genfiles_dir = fmt::format("{}{}", this->scratch_path_, kernel_name);
+            jit_build::utils::safe_create_directories(scratch_genfiles_dir);
+            copy_genfiles_to_scratch(nfs_genfiles_dir, scratch_genfiles_dir);
+        }
     }
 
     // If no link targets are provided, use the current build state as the only link target
