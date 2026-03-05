@@ -1085,6 +1085,10 @@ def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
 
 
+def run_for_wormhole_b0_or_blackhole(reason_str="only runs for Wormhole B0 or Blackhole"):
+    return ti_skip(not (is_wormhole_b0() or is_blackhole()), reason=reason_str)
+
+
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
     return ti_skip(ttnn.get_num_devices() != n, reason=reason_str)
 

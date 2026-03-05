@@ -124,7 +124,6 @@ def test_mochi_diffusers_pipeline():
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.timeout("2400")
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_tt_mochi_pipeline(
     mesh_device: ttnn.MeshDevice,
