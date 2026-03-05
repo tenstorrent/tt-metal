@@ -190,7 +190,8 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    bool program_cache_hit = false) {
+    bool program_cache_hit = false,
+    tt::stl::hash::hash_t program_hash_override = 0) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
@@ -198,7 +199,14 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
-        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value, program_cache_hit);
+        mesh_device,
+        workload,
+        mesh_device_operation_t{},
+        operation_attributes,
+        tensor_args,
+        tensor_return_value,
+        program_cache_hit,
+        program_hash_override);
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
@@ -246,7 +254,13 @@ void handle_mesh_adapter_cache_hit(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                cached_mesh_workload.workload,
+                true,
+                program_hash);
         });
 }
 
@@ -325,10 +339,22 @@ void create_and_cache_mesh_workload(
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, false);
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    workload,
+                    false,
+                    program_hash);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload, false);
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    cached_workload.workload,
+                    false,
+                    program_hash);
             }
         });
 }
@@ -349,17 +375,14 @@ void launch_operation_with_adapter(
 
     auto& program_cache = mesh_device->get_program_cache();
     auto program_hash = 0;
-    auto mesh_workload_hash = 0;
     bool program_cache_hit = false;
 
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
         // Use device_operation's compute_program_hash if available
-        program_hash = detail::compute_program_hash<MeshDeviceOperationAdapter<mesh_device_operation_t>>(
-            operation_attributes, tensor_args);
-        mesh_workload_hash =
+        program_hash =
             mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-        program_cache_hit = program_cache.contains(mesh_workload_hash);
+        program_cache_hit = program_cache.contains(program_hash);
         if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
@@ -373,11 +396,10 @@ void launch_operation_with_adapter(
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, mesh_workload_hash);
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     } else {
-        std::cerr << "[CACHE_MISS] program_hash=" << program_hash << " mesh_workload_hash=" << mesh_workload_hash << std::endl;
         create_and_cache_mesh_workload<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, mesh_workload_hash);
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     }
 }
 
