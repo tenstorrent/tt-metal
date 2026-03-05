@@ -226,11 +226,7 @@ void kernel_main() {
             uint64_t noc_addr_ex = remote_noc_addrs[block] | l1_read_addr_ex;
             uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes
                                                                                        : num_tiles_per_worker_bytes;
-            if constexpr (num_tiles_per_worker_bytes <= NOC_MAX_BURST_SIZE) {
-                noc_async_read_one_packet(noc_addr_ex, l1_write_addr_ex_global, num_tiles_scaler * num_tiles_bytes);
-            } else {
-                noc_async_read(noc_addr_ex, l1_write_addr_ex_global, num_tiles_scaler * num_tiles_bytes);
-            }
+            noc_async_read(noc_addr_ex, l1_write_addr_ex_global, num_tiles_scaler * num_tiles_bytes);
             l1_write_addr_ex_global += num_tiles_scaler * num_tiles_bytes;
         }
         noc_async_read_barrier();
