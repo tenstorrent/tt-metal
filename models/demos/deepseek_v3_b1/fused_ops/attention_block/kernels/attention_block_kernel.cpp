@@ -1220,7 +1220,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RMSNORM");
         // pop_input = true (input is consumed after RMSNorm)
-        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
+        deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
         rmsnorm(rmsnorm_args);
     }
     DPRINT << " DONE RMSNORM" << ENDL();
@@ -1550,31 +1550,32 @@ void kernel_main() {
                 ccl_sender_reader(ccl_sender_args);
             }
 
-            // if constexpr (Core::is_ccl_receiver_core) {
-            //     DeviceZoneScopedN("CCL_RECEIVER_WAIT");
-
-            //     deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs>
-            //     ccl_receiver_reader; ccl_receiver_reader(ccl_receiver_args);
-            // }
+            if constexpr (Core::is_ccl_receiver_core) {
+                DeviceZoneScopedN("CCL_RECEIVER_WAIT");
+                // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
+                // Should avoid this and not pop in RMSNorm
+                deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
+                ccl_receiver_reader(ccl_receiver_args);
+            }
 
 #elif defined(COMPILE_FOR_BRISC)
-            // if constexpr (Core::is_ccl_sender_core) {
-            //     DeviceZoneScopedN("CCL_SENDER_SEND");
+            if constexpr (Core::is_ccl_sender_core) {
+                DeviceZoneScopedN("CCL_SENDER_SEND");
 
-            //     deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-            //     ccl_sender_writer(ccl_sender_args);
-            // }
-            // // CCL Receiver BRISC is no-op
+                deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
+                ccl_sender_writer(ccl_sender_args);
+            }
+            // CCL Receiver BRISC is no-op
 
 #elif defined(COMPILE_FOR_TRISC)
-            // if constexpr (Core::is_ccl_receiver_core) {
-            //     DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
+            if constexpr (Core::is_ccl_receiver_core) {
+                DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
 
-            //     deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
-            //         ccl_receiver_compute;
-            //     ccl_receiver_compute(ccl_receiver_args);
-            // }
-            // // CCL Sender TRISC is no-op
+                deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
+                    ccl_receiver_compute;
+                ccl_receiver_compute(ccl_receiver_args);
+            }
+            // CCL Sender TRISC is no-op
 #endif
     }
 }

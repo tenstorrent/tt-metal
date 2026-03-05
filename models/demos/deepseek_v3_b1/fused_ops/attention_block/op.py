@@ -214,8 +214,9 @@ class AttentionBlock:
         attention_block_output_tensor,
         # Shared semaphores, and some default values
         attention_block_semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=1,
+        bcast_cluster_axis=0,
+        bcast_secondary_cluster_axis=1,
+        reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
         sdpa_scale_fp32=1.0,
         num_links=1,
@@ -242,8 +243,9 @@ class AttentionBlock:
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
             semaphores: List of global semaphores [out_ready, barrier, secondary_sync] for CCL
-            cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
-            secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
+            bcast_cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
+            bcast_secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
+            reduce_cluster_axis: Primary axis for CCL reduce (0=row, 1=col)
             num_links: Number of fabric links for CCL
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
@@ -697,19 +699,19 @@ class AttentionBlock:
         # ========================================================================
         gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
         gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
-        gather3_dst_num_pages = num_matmul5_cores * matmul5_out_w_per_core  # 112 * 2 = 224 pages
+        gather3_dst_num_pages = num_tiles  # Same as input tensor
         gather3_noc0_num_senders = num_matmul5_cores
         gather3_noc1_num_senders = 0
 
         # ========================================================================
         # CCL parameters: [1, 7168] all-reduce
         # ========================================================================
-        # Using 1x32 tiles to match gather3 output format (for tile-compatible reduction)
-        # 7168 elements = 224 tiles of 1x32 (32 elements each)
-        ccl_num_tiles = gather3_dst_num_pages  # 224 tiles of 1x32
-        ccl_page_size_bytes = tile_1x32_size  # 1x32 tile size
-        ccl_num_pages = gather3_dst_num_pages  # 224 pages of 1x32
-        ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 224 * 64 = 14336 bytes
+        # Using 32x32 tiles to match gather3 output format (for tile-compatible reduction)
+        # 7168 elements = 7 tiles of 32x32 (1024 elements each)
+        ccl_num_tiles = gather3_dst_num_pages  # 7 tiles of 32x32
+        ccl_page_size_bytes = tile_size  # 32x32 tile size
+        ccl_num_pages = gather3_dst_num_pages  # 7 pages of 32x32
+        ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 7 * 2048 = 14336 bytes
         ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
         l1_alignment = 16
 
@@ -1838,12 +1840,12 @@ class AttentionBlock:
                 else:
                     is_sender = (row == sender_row) and (col == sender_col)
                     is_secondary_sender = (
-                        secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
+                        bcast_secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
                     )
                     is_receiver = not is_sender and not is_secondary_sender
 
                 # Ring index along the cluster axis
-                ring_index = row if cluster_axis == 0 else col
+                ring_index = row if reduce_cluster_axis == 0 else col
                 is_first_chip = ring_index == 0
 
                 # Determine CCL neighbor and semaphores based on position (only when CCL is enabled)
@@ -1854,11 +1856,11 @@ class AttentionBlock:
 
                 # Calculate neighbor coordinate
                 if is_first_chip:
-                    neighbor_row = row + 1 if cluster_axis == 0 else row
-                    neighbor_col = col if cluster_axis == 0 else col + 1
+                    neighbor_row = row + 1 if reduce_cluster_axis == 0 else row
+                    neighbor_col = col if reduce_cluster_axis == 0 else col + 1
                 else:
-                    neighbor_row = row - 1 if cluster_axis == 0 else row
-                    neighbor_col = col if cluster_axis == 0 else col - 1
+                    neighbor_row = row - 1 if reduce_cluster_axis == 0 else row
+                    neighbor_col = col if reduce_cluster_axis == 0 else col - 1
 
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
@@ -1908,7 +1910,7 @@ class AttentionBlock:
                 num_targets_backward = ring_index
 
                 # Determine if this device has secondary axis connections
-                has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
+                has_secondary_target = is_sender and (mesh_cols > 1) and (bcast_secondary_cluster_axis is not None)
 
                 # Calculate mcast distances
                 start_distance_forward = 1 if num_targets_forward > 0 else 0
@@ -2673,6 +2675,8 @@ class AttentionBlock:
                 gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     gather3_dst_cb, post_sdpa_gather3_output_tensor_device
                 )
+                gather3_dst_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+                gather3_dst_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
                 post_sdpa_cb_list = [
                     matmul4_in0_cb_descriptor,
@@ -2690,14 +2694,14 @@ class AttentionBlock:
                 ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=ccl_sender_in_cb,
                     data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul4_out_tile_descriptor,
+                    page_size=tile_size,
+                    tile=tile_descriptor,
                 )
                 ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     ccl_sender_in_cb,
                     sdpa_kv_cache_buffer_device,
                     address_offset=running_address_offset,
-                    total_size=ccl_num_pages * tile_1x32_size,
+                    total_size=ccl_num_pages * tile_size,
                 )
                 ccl_sender_in_cb_descriptor.format_descriptors = [ccl_sender_in_cb_format]
                 running_address_offset += ccl_sender_in_cb_descriptor.total_size
@@ -2709,23 +2713,25 @@ class AttentionBlock:
                     ccl_remote_data_cb, intermediate_tensor_device
                 )
                 ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
+                ccl_remote_data_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+                ccl_remote_data_cb_descriptor.format_descriptors[0].page_size = cb_page_size
                 post_sdpa_cb_list.append(ccl_remote_data_cb_descriptor)
 
                 # CB 11: CCL temp scratch buffer (not backed by tensor)
                 ccl_temp_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=ccl_temp_cb,
                     data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul4_out_tile_descriptor,
+                    page_size=cb_page_size,
+                    tile=tile_descriptor,
                 )
                 ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     ccl_temp_cb,
                     sdpa_kv_cache_buffer_device,
-                    address_offset=running_address_offset,
-                    total_size=ccl_num_tiles * tile_1x32_size,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
+                    total_size=ccl_num_tiles * tile_size,
                 )
                 ccl_temp_cb_descriptor.format_descriptors = [ccl_temp_cb_format]
-                running_address_offset += ccl_temp_cb_descriptor.total_size
+                sdpa_kv_cache_running_offset_mcast_core += ccl_temp_cb_descriptor.total_size
                 post_sdpa_cb_list.append(ccl_temp_cb_descriptor)
 
                 # CB 12: CCL output (from sharded tensor)
@@ -2733,6 +2739,8 @@ class AttentionBlock:
                     attention_block_output_cb, attention_block_output_tensor_device
                 )
                 attention_block_output_cb_descriptor.core_ranges = gather_core_grid
+                attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
+                attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
                 # CB 13: CCL packet headers
                 ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
@@ -3730,8 +3738,9 @@ class AttentionBlock:
         attention_block_output_tensor,
         # Shared semaphores, and some default values
         attention_block_semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=1,
+        bcast_cluster_axis=0,
+        bcast_secondary_cluster_axis=1,
+        reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
         sdpa_scale_fp32=1.0,
         num_links=1,
@@ -3795,8 +3804,9 @@ class AttentionBlock:
             attention_block_output_tensor,
             # Shared semaphores, and some default values
             attention_block_semaphores,
-            cluster_axis,
-            secondary_cluster_axis,
+            bcast_cluster_axis,
+            bcast_secondary_cluster_axis,
+            reduce_cluster_axis,
             sdpa_cluster_axis,
             sdpa_scale_fp32,
             num_links,
