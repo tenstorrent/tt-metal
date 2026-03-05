@@ -1433,16 +1433,6 @@ void kernel_main() {
                 DPRINT << " DONE SDPA REDUCE WORKER" << ENDL();
                 if constexpr (Core::is_sdpa_forwarder_core) {
                     deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
-#if defined(COMPILE_FOR_NCRISC)
-                    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-                    noc_semaphore_set(sem_ptr, 2);
-#elif defined(COMPILE_FOR_BRISC)
-                    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
-                    noc_semaphore_wait(sem_ptr, 2);
-                    noc_semaphore_set(sem_ptr, 0);
-#endif
                     sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
                 }
 #if defined(COMPILE_FOR_NCRISC)
