@@ -4764,9 +4764,6 @@ class MoeOp:
         # ==================================================================
         # Setup
         # ==================================================================
-        import sys
-
-        sys.stdout.reconfigure(line_buffering=True)
         moe = MoeOp(
             shared_residual_mcast_src_tensor,
             gate_mm_weights_tensor=gate_mm_weights_tensor,
