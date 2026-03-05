@@ -1646,8 +1646,8 @@ void sdpa_inner_loop(
     const uint32_t cb_prev_out,
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {},
-    const bool is_causal,
-    const bool is_balanced) {
+    const bool is_causal = false,
+    const bool is_balanced = false) {
     uint32_t KV_chunks_processed_in_iter = 0;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
