@@ -92,9 +92,9 @@ target_include_directories(
     impl
     PUBLIC
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/debug
-        ${CMAKE_CURRENT_SOURCE_DIR}/profiler
+        .
+        debug
+        profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         ${CMAKE_CURRENT_BINARY_DIR}
 )

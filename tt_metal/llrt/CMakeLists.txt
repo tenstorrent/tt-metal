@@ -28,7 +28,7 @@ target_link_libraries(
         TT::Metalium::Common
         tt-logger::tt-logger
 )
-target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(llrt PUBLIC .)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
 
 include(GNUInstallDirs)

@@ -1,6 +1,6 @@
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/watcher_dump)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_runner)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/mem_bench)
+add_subdirectory(watcher_dump)
+add_subdirectory(lightmetal_runner)
+add_subdirectory(mem_bench)
 
 include(sources.cmake)
 

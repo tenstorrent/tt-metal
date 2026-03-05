@@ -33,7 +33,7 @@ target_sources(
     PUBLIC
         FILE_SET api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
+        BASE_DIRS api ${CMAKE_CURRENT_BINARY_DIR}/api
         FILES ${TT_METAL_PUBLIC_API}
     PRIVATE
         ${TT_METAL_SOURCES}
@@ -72,7 +72,6 @@ target_sources(
     INTERFACE
         FILE_SET jit_api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${JITAPI_FILES} ${FABRIC_HW_INC} ${COMPUTE_KERNEL_API} ${TT_LLK_HEADERS}
 )
 

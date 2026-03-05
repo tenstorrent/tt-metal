@@ -513,7 +513,6 @@ target_sources(
     PUBLIC
         FILE_SET jit_api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${blackhole_kernels} ${wormhole_kernels} ${HW_JIT_API_HEADERS}
         FILE_SET toolchain
         TYPE HEADERS

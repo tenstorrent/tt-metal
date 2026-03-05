@@ -5,7 +5,7 @@ include(sources.cmake)
 # FIXME: Don't want to be reaching above to project dir
 # Prefer a library target to be explicit about the dependency in CMake
 set(HAL_INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    .
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
     ${PROJECT_SOURCE_DIR}/tt_metal/llrt

@@ -16,7 +16,6 @@ target_sources(
     INTERFACE
         FILE_SET jit_api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${FIRMWARE_JIT_API_FILES}
 )
 
