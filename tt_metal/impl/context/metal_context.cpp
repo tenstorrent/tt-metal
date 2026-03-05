@@ -31,6 +31,7 @@
 #include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
+#include "common/filesystem_utils.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
@@ -874,7 +875,7 @@ void MetalContext::initialize_control_plane_impl() {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
         TT_FATAL(
-            std::filesystem::exists(mesh_graph_desc_path),
+            tt::filesystem::safe_exists(mesh_graph_desc_path).value_or(false),
             "Custom mesh graph descriptor file not found: {}",
             mesh_graph_desc_path.string());
 
@@ -898,7 +899,7 @@ void MetalContext::initialize_control_plane_impl() {
 
         TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
         TT_FATAL(
-            std::filesystem::exists(mesh_graph_desc_path),
+            tt::filesystem::safe_exists(mesh_graph_desc_path).value_or(false),
             "Mesh graph descriptor file not found: {}",
             mesh_graph_desc_path.string());
         this->construct_control_plane(mesh_graph_desc_path);
