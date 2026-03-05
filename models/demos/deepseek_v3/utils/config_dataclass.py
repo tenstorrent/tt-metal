@@ -128,6 +128,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     num_workers_per_link: int | None = None
+    use_broadcast: bool | None = None
 
 
 @dataclass
