@@ -67,6 +67,7 @@ def create_fabric_router_config(max_payload_size):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
+            "worker_l1_size": 1368064,
             "trace_region_size": 573440,
         }
     ],

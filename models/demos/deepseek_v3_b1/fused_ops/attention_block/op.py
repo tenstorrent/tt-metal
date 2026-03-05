@@ -12,7 +12,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
-from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
+from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _get_element_size_bytes, _round_up
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
     get_max_page_size_and_num_pages,
@@ -3028,10 +3028,10 @@ class AttentionBlock:
                     # TRISC per-core runtime args (common args: pos_addr)
                     mla_trisc_args = [
                         do_reduce,
-                        0,  # do_output, set to 0 in fused
+                        is_output_core,  # do_output, set to 0 in fused
                         cur_batch,
                         core_num_in_reduce,
-                        1,  # is_sender_after_reduce, set to 1 in fused
+                        is_sender_after_reduce,  # is_sender_after_reduce, set to 1 in fused
                     ]
                     for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
                         mla_trisc_args.extend([role_code, partner_s_block_idx])
@@ -3400,7 +3400,7 @@ class AttentionBlock:
                     kv_cache_intermed_cb_descriptor,
                     kv_cache_input_cb_descriptor,
                     *mla_cb_descriptors,
-                    *post_sdpa_cb_list,
+                    # *post_sdpa_cb_list,
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
@@ -3885,6 +3885,7 @@ class AttentionBlock:
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================
+            """
             if ctx["sdpa"]:
                 print_sdpa = mesh_coord == ttnn.MeshCoordinate(0, 0)
                 sdpa = ctx["sdpa"]
@@ -4045,7 +4046,7 @@ class AttentionBlock:
                 extend_fabric_args(receiver_ncrisc_rt_args_ref, receiver_fabric_args)
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
                     print(f"after extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
-
+            """
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)

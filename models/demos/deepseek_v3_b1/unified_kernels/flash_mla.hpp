@@ -673,11 +673,13 @@ struct FlashMLADecode {
                 exp_tile_init<exp_approx_mode, false, scale_fp32>();
                 if (num_cores_to_wait > 0) {
                     reconfig_data_format_srca<false, true>(cb_ms_in);
+                    DPRINT << " FLASH MLA SDPA TAIL num_cores_to_wait=" << num_cores_to_wait << ENDL();
                     for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
                         sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                             cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);
                     }
                     if (is_sender_after_reduce) {
+                        DPRINT << " FLASH MLA SDPA TAIL is_sender_after_reduce" << ENDL();
                         sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                             cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_o);
                         PACK(

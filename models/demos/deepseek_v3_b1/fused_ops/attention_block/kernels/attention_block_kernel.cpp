@@ -279,6 +279,7 @@ void kernel_main() {
 
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
 
+#if 0  // DEBUG: post-SDPA args unused while block is commented out
     // Matmul4 CTArgs
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
@@ -331,6 +332,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_sender_idx"),
     };
 
+#endif  // DEBUG (end of first post-SDPA block)
     // ========================================================================o
     // All CCLs are placed after other ops setup due to appended fabric rtas
     // ========================================================================
@@ -376,6 +378,7 @@ void kernel_main() {
         DPRINT << " BCAST ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
 
+#if 0   // DEBUG: remaining post-SDPA args unused while block is commented out
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ReaderCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -468,6 +471,7 @@ void kernel_main() {
         };
         DPRINT << " CCL RECEIVER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
+#endif  // DEBUG
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -674,6 +678,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("vDHt"),
         get_named_compile_time_arg_val("mla_out_o_cb")>;
 
+#if 0  // DEBUG: post-SDPA args unused while block is commented out
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul5CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
@@ -722,6 +727,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_dst_num_pages"),
     };
 
+#endif  // DEBUG (end of first post-SDPA block)
     // ========================================================================o
     // All CCLs are placed after other ops setup due to appended fabric rtas
     // ========================================================================
@@ -738,6 +744,7 @@ void kernel_main() {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
     }
 
+#if 0   // DEBUG: remaining post-SDPA args unused while block is commented out
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::WriterCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -837,6 +844,7 @@ void kernel_main() {
         per_core_rta_arg_idx += fabric_args_offset;
         DPRINT << " CCL SENDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
+#endif  // DEBUG
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -1057,6 +1065,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("mla_out_ms_cb"),
         get_named_compile_time_arg_val("mla_out_final_cb")>;
 
+#if 0   // DEBUG: post-SDPA args unused while block is commented out
     // Matmul4 CTArgs
     using Matmul4CTArgs =
         deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul4_out_w_per_core")>;
@@ -1086,11 +1095,13 @@ void kernel_main() {
 
     // Gather3 compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs gather3_args{};
+#endif  // DEBUG (end of first post-SDPA block)
 
     // CCL Broadcast CTArgs (no-op for TRISC)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
 
+#if 0   // DEBUG: remaining post-SDPA args unused while block is commented out
     using SdpaReduceWorkerCTArgs = deepseek_b1_ops::SdpaReduceWorker::ComputeCTArgs<
         get_named_compile_time_arg_val("sdpa_cb_local_l"),
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -1130,6 +1141,7 @@ void kernel_main() {
     using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
     // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
+#endif  // DEBUG
 
     deepseek_compute_kernel_init();
 #endif
@@ -1298,7 +1310,7 @@ void kernel_main() {
             mcast2;
         mcast2(mcast2_args);
     }
-    //    mcast.teardown();
+    mcast.teardown();
 
     DPRINT << " DONE MCAST2" << ENDL();
     // ========================================================================
@@ -1421,6 +1433,7 @@ void kernel_main() {
         }
     }
     DPRINT << " DONE FLASH MLA" << ENDL();
+#if 0  // DEBUG: commented out to isolate FlashMLA tree reduction hang
     {
         // ========================================================================
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
@@ -1575,4 +1588,5 @@ void kernel_main() {
              // CCL Sender TRISC is no-op
 #endif
     }
+#endif  // DEBUG
 }

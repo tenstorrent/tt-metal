@@ -467,16 +467,20 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
         cb_pop_front(cb_prev_ms, 1);
         cb_pop_front(cb_worker_ms, 1);
     }
+    DPRINT << "DONE COPY TILE" << ENDL();
     MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
+    DPRINT << "DONE MAX SUB EXP ADD TILE" << ENDL();
     // Initialize SRCB reuse for L tile broadcast multiply
     // TODO: Optimize init sequence with copy_tile
     sdpa_mul_bcast_col_reuse_tiles_init<block_size, dense>(cb_l_for_init);
     sdpa_bcast_col_reuse_preamble<normalize>();
 
     // Not final reduction: pack out stats and release regs
+    DPRINT << "DONE PREAMBLE" << ENDL();
     if constexpr (!normalize) {
         tile_regs_commit();
         cb_reserve_back(cb_cur_ms, 1);
+        DPRINT << "DONE RESERVE" << ENDL();
         tile_regs_wait();
         pack_tile(dst_reg_2, cb_cur_ms);
         cb_push_back(cb_cur_ms, 1);
