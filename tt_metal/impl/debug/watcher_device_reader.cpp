@@ -89,6 +89,15 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 core_type);
             return names[processor_index];
         }
+        case HalProgrammableCoreType::DRAM: {
+            static const char* const names[] = {"drisc"};
+            TT_FATAL(
+                processor_index < 1,
+                "Watcher data corrupted, unexpected processor index {} on core {}",
+                processor_index,
+                core_type);
+            return names[processor_index];
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("unsupported core type");
     }
     TT_THROW("unreachable");
