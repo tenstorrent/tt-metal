@@ -7,8 +7,6 @@
 #include <concepts>
 #include <optional>
 #include <random>
-#include <iostream>
-#include <iomanip>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -191,7 +189,8 @@ void enqueue_mesh_workload(
     [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload) {
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    bool program_cache_hit = false) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
@@ -199,7 +198,7 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
-        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value, false);
+        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value, program_cache_hit);
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
@@ -247,7 +246,7 @@ void handle_mesh_adapter_cache_hit(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
         });
 }
 
@@ -328,10 +327,10 @@ void create_and_cache_mesh_workload(
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, false);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload, false);
             }
         });
 }
