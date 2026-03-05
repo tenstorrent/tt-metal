@@ -22,7 +22,7 @@ void bind_slice_reshard_async(nb::module_& mod) {
         mod,
         R"doc(
 
-        Slice a multi-device tensor, and then reshard the tensor across devices.  The slice is computed in the space of the aggregate multi-device tensor, not in each device tensor individually.  The use case for this is when the input tensor is padded, and then after various operations changes in size in the dimension it is sharded on.  This could lead to unneccessary amounts of padding, so the padding is trimmed, and the resulting slice of the aggregate input tensor is resharded across devices.
+        Slice a multi-device tensor, and then reshard the tensor across devices.  The slice is computed in the space of the aggregate multi-device tensor, not in each device tensor individually.  The use case for this is when the input tensor is padded, and then after various operations changes in size in the dimension it is sharded on.  This could lead to unnecessary amounts of padding, so the padding is trimmed, and the resulting slice of the aggregate input tensor is resharded across devices.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.

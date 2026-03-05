@@ -184,6 +184,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
             /*cluster_axis=*/std::nullopt,
             /*use_optimal_ccl_for_llama=*/false,
             /*use_all_gather_async_llama_sharded=*/false,
+            /*use_all_gather_async_via_broadcast*/ false,
             barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,

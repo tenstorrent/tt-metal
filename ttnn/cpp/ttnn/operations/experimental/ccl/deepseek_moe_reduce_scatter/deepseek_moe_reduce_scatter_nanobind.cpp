@@ -24,7 +24,7 @@ void bind_deepseek_moe_reduce_scatter(nb::module_& mod) {
         Reduce-scatter operation across devices along a selected dimension and optional cluster axis. This operation reduces the mesh tensor across the devices in the mesh, along the specified dimension. It then scatters the reduced tensor back to the devices in the mesh, along the same dimension. When cluster axis is specified, we reduce and scatter along the cluster axis. When it is not specified, then we reduce and scatter across all devices in the mesh.
 
         Args:
-            input_tensors (List of ttnn.Tensor): the input tensors, which when concatted together on the scatter dim repesent the single logical input tensor.
+            input_tensors (List of ttnn.Tensor): the input tensors, which when concatted together on the scatter dim represent the single logical input tensor.
             output_memory_config (ttnn.MemoryConfig): output memory configuration.
             dim (int): dimension along which to scatter.
 
