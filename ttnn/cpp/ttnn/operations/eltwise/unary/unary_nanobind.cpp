@@ -1672,6 +1672,12 @@ void bind_unary_composite_float_with_default(
             nb::arg("memory_config") = nb::none()});
 }
 
+namespace {
+Tensor logit_wrapper(const Tensor& t, std::optional<float> eps, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::logit(t, eps, memory_config, std::nullopt);
+}
+}  // namespace
+
 void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1710,9 +1716,7 @@ void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     ttnn::bind_function<"logit">(
         mod,
         doc.c_str(),
-        &unary_3param_to_4param_wrapper<static_cast<Tensor (*)(
-            const Tensor&, std::optional<float>, const std::optional<MemoryConfig>&, const std::optional<Tensor>&)>(
-            &ttnn::logit)>,
+        &logit_wrapper,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("eps") = nb::none(),
