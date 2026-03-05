@@ -530,6 +530,17 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     explicit_rank_scoped_keys = {
         key for key in RANK_SCOPED_PATH_ENV_VARS if key in config.global_env or key in binding.env_overrides
     }
+
+    # Ensure TT_METAL_CACHE has a value so rank scoping always applies.
+    # Without this, unset TT_METAL_CACHE falls through to the C++ default
+    # ($HOME/.cache/tt-metal-cache/) which is shared across all ranks on NFS,
+    # causing ESTALE when SFPI JIT builds race on the same inodes.
+    # The C++ side (rtoptions.cpp) appends /tt-metal-cache via normalize_path(),
+    # so we set the parent directory here to match the default hierarchy.
+    if "TT_METAL_CACHE" not in env and "TT_METAL_CACHE" not in explicit_rank_scoped_keys:
+        home = os.environ.get("HOME", "")
+        env["TT_METAL_CACHE"] = f"{home}/.cache" if home else "/tmp"
+
     # Isolate cache/log paths per rank to avoid shared-path collisions.
     apply_rank_scoped_paths(env, binding.rank, explicit_keys=explicit_rank_scoped_keys)
 

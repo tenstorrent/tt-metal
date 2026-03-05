@@ -119,6 +119,37 @@ def test_mpi_export_uses_name_only_for_complex_dispatch_timeout_command(monkeypa
     assert "TT_VISIBLE_DEVICES=0,1" in exported_tokens
 
 
+def test_rank_environment_provides_default_cache_when_unset(monkeypatch, tmp_path):
+    """When TT_METAL_CACHE is not in the parent environment, ttrun must provide a
+    default so that apply_rank_scoped_paths can isolate it per rank.  Without this,
+    all ranks fall back to the shared C++ default and race on NFS."""
+    monkeypatch.delenv("TT_METAL_CACHE", raising=False)
+    monkeypatch.setenv("HOME", "/home/testuser")
+
+    binding = RankBinding(rank=1, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+    rank_suffix = f"{socket.gethostname()}_rank_1"
+
+    assert "TT_METAL_CACHE" in env
+    assert env["TT_METAL_CACHE"] == f"/home/testuser/.cache/{rank_suffix}"
+
+
+def test_rank_environment_provides_default_cache_when_unset_no_home(monkeypatch, tmp_path):
+    """When both TT_METAL_CACHE and HOME are unset, fall back to /tmp."""
+    monkeypatch.delenv("TT_METAL_CACHE", raising=False)
+    monkeypatch.delenv("HOME", raising=False)
+
+    binding = RankBinding(rank=2, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+    rank_suffix = f"{socket.gethostname()}_rank_2"
+
+    assert env["TT_METAL_CACHE"] == f"/tmp/{rank_suffix}"
+
+
 def test_rank_environment_scopes_cache_and_logs_path_per_rank(monkeypatch, tmp_path):
     monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
     monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
