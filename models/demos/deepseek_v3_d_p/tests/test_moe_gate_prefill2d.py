@@ -210,14 +210,11 @@ def test_forward_pass(
     ttnn.deallocate(tt_topk_weights)
     ttnn.deallocate(tt_topk_indices)
     ttnn.deallocate(tt_logits)
-    ttnn.deallocate(tt_logits)
+    ttnn.deallocate(dispatch_offsets)
 
     # Proper teardown
-    if parent_mesh:
-        ttnn.close_mesh_device(submesh)  # close submesh first
-        ttnn.close_mesh_device(parent_mesh)
-    else:
-        ttnn.close_mesh_device(submesh)
+    if mesh2d:
+        ttnn.close_mesh_device(mesh2d)
 
 
 if __name__ == "__main__":
