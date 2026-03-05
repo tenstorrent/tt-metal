@@ -259,7 +259,14 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
             build_env.build_env.get_firmware_binary_root());
         return;
     }
+    log_info(
+        tt::LogBuildKernels, "Building firmware for device {} with build key {}", device_id, build_env.build_key());
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+    log_info(
+        tt::LogBuildKernels,
+        "Done building firmware for device {} with build key {}",
+        device_id,
+        build_env.build_key());
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(
