@@ -27,6 +27,7 @@ def _run_matmul_custom_compressed(
     num_cores=1,
     threshold=0.993,
     pcc_threshold=0.98,
+    use_constexpr_unroll=True,
 ):
     """Helper: run custom compressed A @ decompress(B_compressed).
 
@@ -103,7 +104,7 @@ def _run_matmul_custom_compressed(
     )
 
     # Run custom compressed matmul
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, use_constexpr_unroll=use_constexpr_unroll)
 
     output_torch = ttnn.to_torch(ttnn_result)
     assert output_torch.shape == (M, N), f"Expected shape ({M}, {N}), got {output_torch.shape}"
@@ -156,3 +157,11 @@ def test_matmul_custom_compressed_multicore_mixed_13cores(device):
 def test_matmul_custom_compressed_multicore_mixed_32cores(device):
     """[1, 7168] x [7168, 2048], mixed bfp8+bfp4, 32 cores."""
     _run_matmul_custom_compressed(device, 1, 7168, 64 * 32, formats=["bfp8", "bfp4"], num_cores=32)
+
+
+# --- Runtime path (no constexpr unroll) ---
+
+
+def test_matmul_custom_compressed_runtime_large_uniform(device):
+    """[1, 7168] x [7168, 32], bfp8. Runtime path, DeepSeek shape."""
+    _run_matmul_custom_compressed(device, 1, 7168, 32, formats=["bfp8"], use_constexpr_unroll=False)

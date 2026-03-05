@@ -123,6 +123,67 @@ FORCE_INLINE void custom_mm_compressed_block_constexpr(
 }
 
 // ---------------------------------------------------------------------------
+// Constexpr array, runtime loop (compact code, fast array access)
+//
+// Format array is passed as constexpr CTAs (same as above), but the loop
+// is a regular for-loop instead of template-unrolled. This gives compact
+// code size (~1.5KB vs ~10KB) while avoiding slow volatile L1 pointer reads.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Extract format index from packed constexpr array at runtime index.
+ */
+template <size_t NUM_PACKED>
+FORCE_INLINE uint32_t _get_packed_format_(const std::array<uint32_t, NUM_PACKED>& fmt_packed, uint32_t tile_idx) {
+    return (fmt_packed[tile_idx / TILES_PER_UINT32] >> ((tile_idx % TILES_PER_UINT32) * ASSIGN_BITS)) & ASSIGN_MASK;
+}
+
+/**
+ * @brief Custom MM block with constexpr format array but runtime loop.
+ *
+ * Same interface as custom_mm_compressed_block_constexpr but uses a for-loop
+ * instead of template unrolling. Compact code, array lives in local memory.
+ */
+template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_TILES, const std::array<uint32_t, NUM_TILES>& FMT_FLAT>
+FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
+    uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
+    UNPACK(({
+        volatile uint* cfg = get_cfg_pointer();
+        uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
+
+        wait_for_next_context(1);
+        reset_config_context();
+
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = addr_in0;
+        TT_MOP(0, (KT_DIM / 2) - 1, 0);
+
+        uint32_t address_a = addr_in1;
+        constexpr uint32_t num_pairs = KT_DIM * CT_DIM / 2;
+
+        // FMT_FLAT: one format index per CTA element (no packing)
+        for (uint32_t pair = 0; pair < num_pairs; pair++) {
+            uint32_t k0 = pair * 2;
+            uint32_t fmt0 = FMT_FLAT[k0];
+            uint32_t fmt1 = FMT_FLAT[k0 + 1];
+
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+            address_a += TILE_SIZES_SHIFTED[fmt0];
+            semaphore_post(semaphore::UNPACK_SYNC);
+
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+            address_a += TILE_SIZES_SHIFTED[fmt1];
+            semaphore_post(semaphore::UNPACK_SYNC);
+        }
+    }));
+    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+}
+
+// ---------------------------------------------------------------------------
 // Runtime version (for fallback / ct_dim>1)
 // ---------------------------------------------------------------------------
 
