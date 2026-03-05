@@ -43,37 +43,39 @@ class MoEGatePrefill:
         return ttnn.all_reduce(
             x,
             cluster_axis=1,  # self.ccl_config["CLUSTER_AXIS"],
-            num_links=4,  # self.ccl_config["NUM_LINKS"],
-            topology=self.ccl_config["COL_TOPOLOGY"],
+            num_links=2,  # self.ccl_config["NUM_LINKS"],
+            topology=ttnn.Topology.Linear,  # self.ccl_config["COL_TOPOLOGY"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
-    def all_gather_for_dispatch(self, x: ttnn.Tensor):
-        return ttnn.all_gather(
-            x,
-            cluster_axis=0,  # self.ccl_config["CLUSTER_AXIS"],
-            num_links=4,  # self.ccl_config["NUM_LINKS"],
-            topology=self.ccl_config["ROW_TOPOLOGY"],
-        )
-
-    def get_local_expert_histogram(self, local_onehot_experts):
-        for token in range(self.seq_len_per_chip):
-            for topk_indice in range(self.topk):
-                routed_expert = local_expert_indices[token, topk_indice]
-                local_histogram[0, routed_expert] += 1
-
-        return local_histogram
 
     def get_onehot_expert_selection(self, global_expert_indices):
         global_onehot_experts = ttnn.zeros(
             shape=[self.seq_len_per_chip, self.n_routed_experts],
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
             device=global_expert_indices.device(),
         )
-
-        global_updates = ttnn.full_like(global_onehot_experts, fill_value=1.0)
-        global_onehot_experts = ttnn.scatter_add(global_onehot_experts, 1, global_expert_indices, global_updates)
+        global_updates = ttnn.ones_like(global_onehot_experts)
+        global_onehot_experts = ttnn.scatter(
+            global_onehot_experts, 1, global_expert_indices, global_updates, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         return global_onehot_experts
+
+    def cumulative_sum_across_columns(self, input_tensor: ttnn.Tensor):
+        input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
+        gathered = ttnn.all_gather(
+            input_tensor,
+            dim=0,
+            cluster_axis=0,
+            num_links=4,
+            topology=ttnn.Topology.Linear,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        reshaped = ttnn.reshape(gathered, (self.mesh2d.shape[1], self.n_routed_experts))
+        cumsum_result = ttnn.cumsum(reshaped, dim=0)
+
+        return cumsum_result
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         logits = self.all_reduce(self.linear(x))
@@ -89,14 +91,9 @@ class MoEGatePrefill:
         )
         global_onehot_experts = self.get_onehot_expert_selection(ttnn_top_k_experts_indices)
         expert_histograms = ttnn.sum(global_onehot_experts, dim=0)
+        dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
 
-        self.get_local_expert_histogram(per_device_onehot_experts[0])
-
-        return (
-            ttnn_scores,
-            ttnn_top_k_experts_indices,
-            logits,
-        )
+        return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
 
     def __call__(self, x):
         return self.forward(x)
