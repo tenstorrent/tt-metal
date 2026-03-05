@@ -150,16 +150,14 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
                     val = val.T.contiguous()
                 # conv1d weights stay on host; ttnn.conv1d handles device placement
                 if key.endswith("_conv_weight"):
-                    ttnn_params[key] = ttnn.from_torch(
-                        val,
-                        dtype=ttnn.bfloat16,
-                    )
+                    ttnn_params[key] = ttnn.from_torch(val, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
                 else:
                     ttnn_params[key] = ttnn.from_torch(
                         val,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                         device=device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
             else:
                 ttnn_params[key] = val

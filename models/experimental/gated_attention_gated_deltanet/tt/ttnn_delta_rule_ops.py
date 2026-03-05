@@ -288,9 +288,9 @@ def recurrent_delta_rule_step_ttnn(
     outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    q_row = ttnn.reshape(q_t, [B, H, 1, K])
+    q_row = ttnn.reshape(q_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     o_t = ttnn.matmul(q_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o_t = ttnn.reshape(o_t, [B, H, V])
+    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o_t, h
 
