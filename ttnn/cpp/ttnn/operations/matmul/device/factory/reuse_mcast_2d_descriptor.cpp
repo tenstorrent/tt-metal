@@ -75,7 +75,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
 
     const auto ashape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_w = transpose_a ? 0 : ashape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? ashape_logical[-1] % in0_tile.get_width() : 0;
 
     Buffer* in0_buffer = a.buffer();
     Buffer* in1_buffer = b.buffer();
@@ -125,7 +126,9 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     const bool in0_block_sharded = in0_memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool in0_height_sharded = in0_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in0_is_sharded = in0_block_sharded || in0_height_sharded;
-    const bool in1_is_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool in1_is_width_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool in1_is_height_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
@@ -228,7 +231,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
                 device->worker_core_from_logical_core({0, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(
+                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
             in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({start_core_x, 0}).x;
@@ -236,7 +240,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
                 device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, 0}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(
+                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
         }
         // Set in0 sender/receiver cores to be maximum
@@ -343,9 +348,15 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
 
     uint32_t num_dram_banks = 0;
     uint32_t per_core_N_storage = 0;
+    uint32_t batches_per_bank = 0;
     if (in1_is_sharded && in1_is_dram) {
         num_dram_banks = device->num_dram_channels();
-        per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        if (in1_is_width_sharded) {
+            per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        } else {
+            uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
+            batches_per_bank = in1_shard_height_in_tiles / K;
+        }
     }
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
@@ -374,6 +385,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
             (uint32_t)in0_block_num_tiles,
             (uint32_t)(in0_block_num_tiles * in0_single_tile_size),
             (uint32_t)in0_last_ktile_w,
+            (uint32_t)in0_last_ktile_h,
             (uint32_t)num_blocks,
             (uint32_t)out_num_blocks_x,
             (uint32_t)out_num_blocks_y,
@@ -400,6 +412,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
             in0_block_h,
             in0_block_num_tiles,
             (uint32_t)in0_last_ktile_w,
+            (uint32_t)in0_last_ktile_h,
             0u,
             in0_shard_width_in_tiles,
             in0_shard_height_in_tiles,
@@ -466,8 +479,13 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         TensorAccessorArgs(*bias_buffer).append_to(in1_sender_writer_compile_time_args);
     }
     if (in1_is_sharded && in1_is_dram) {
-        in1_sender_writer_compile_time_args.push_back(per_core_N_storage * in0_block_w);
-        in1_sender_writer_compile_time_args.push_back(per_core_N_storage * in1_single_tile_size);
+        if (in1_is_width_sharded) {
+            in1_sender_writer_compile_time_args.push_back(per_core_N_storage * in0_block_w);
+            in1_sender_writer_compile_time_args.push_back(per_core_N_storage * in1_single_tile_size);
+        } else {
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)(K * N));
+            in1_sender_writer_compile_time_args.push_back((std::uint32_t)batches_per_bank);
+        }
     }
 
     // -- Compile time args for in0 receiver --
@@ -568,7 +586,11 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     }
     if (in1_is_sharded) {
         if (in1_is_dram) {
-            in1_sender_writer_defines.emplace_back("IN1_DRAM_SHARDED", "1");
+            if (in1_is_width_sharded) {
+                in1_sender_writer_defines.emplace_back("IN1_DRAM_WIDTH_SHARDED", "1");
+            } else {
+                in1_sender_writer_defines.emplace_back("IN1_DRAM_HEIGHT_SHARDED", "1");
+            }
         } else {
             in1_sender_writer_defines.emplace_back("IN1_SHARDED", "1");
         }
@@ -1118,7 +1140,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
                         in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x);
                 }
 
-                if (in1_is_sharded && in1_is_dram) {
+                if (in1_is_sharded && in1_is_dram && in1_is_width_sharded) {
                     uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
                     vc = vc == 3 ? 0 : vc + 1;
                     mm_in1_sender_writer_args.push_back(vc);

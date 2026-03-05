@@ -65,7 +65,8 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     uint32_t N = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
 
     const auto ashape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_w = transpose_a ? 0 : ashape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? ashape_logical[-1] % in0_tile.get_width() : 0;
 
     // ---- Derived parameters ----
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
@@ -328,6 +329,7 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
         (uint32_t)per_core_M_per_batch,
         (uint32_t)in0_block_num_tiles,
         (uint32_t)in0_last_ktile_w,
+        (uint32_t)in0_last_ktile_h,
         (uint32_t)num_blocks,
         (uint32_t)bcast_batch,
         (uint32_t)(M * K),
