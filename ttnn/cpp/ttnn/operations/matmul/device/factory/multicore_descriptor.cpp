@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -182,8 +183,11 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     });
 
     // Reader kernel
-    uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w};
+    bool transpose_a = operation_attributes.transpose_a;
+    const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    uint32_t last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % TILE_WIDTH;
+    uint32_t last_ktile_h = transpose_a ? a_shape_logical[-1] % TILE_WIDTH : 0;
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w, (uint32_t)last_ktile_h};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 

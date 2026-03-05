@@ -1032,10 +1032,12 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
             in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(
+                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
             for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(
+                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
             in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -1070,7 +1072,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
         uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
         const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-        const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+        const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+        const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
 
         const auto in0_tensor_stride_w = transpose_a ? M : 1;
         const auto in0_tensor_stride_h = transpose_a ? 1 : K;
@@ -1093,6 +1096,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
                 (std::uint32_t)in0_block_num_tiles,
                 (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,
                 (std::uint32_t)in0_last_ktile_w,
+                (std::uint32_t)in0_last_ktile_h,
                 (std::uint32_t)num_blocks,
                 (std::uint32_t)out_num_blocks_x,
                 (std::uint32_t)out_num_blocks_y,
@@ -1119,6 +1123,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
                 (std::uint32_t)in0_block_h,
                 (std::uint32_t)in0_block_num_tiles,
                 (std::uint32_t)in0_last_ktile_w,
+                (std::uint32_t)in0_last_ktile_h,
                 (std::uint32_t)false,
                 (std::uint32_t)0,
                 (std::uint32_t)0,
@@ -1787,10 +1792,9 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
         const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-        const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+        const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+        const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
 
-        // When in0 is sharded, check if we need to extract sub-blocks from the shard.
-        // This is needed when the shard width spans multiple in0_block_w-sized blocks.
         bool extract_shard_sub_blocks = false;
         uint32_t in0_shard_height_in_tiles = 0;
         uint32_t in0_shard_width_in_tiles = 0;
@@ -1890,6 +1894,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             (std::uint32_t)in0_block_h,
             (std::uint32_t)in0_block_w * in0_block_h,
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
             (std::uint32_t)extract_shard_sub_blocks,
             (std::uint32_t)in0_shard_width_in_tiles,
             (std::uint32_t)in0_shard_height_in_tiles,
