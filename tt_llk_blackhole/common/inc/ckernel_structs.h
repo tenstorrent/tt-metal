@@ -20,11 +20,15 @@ struct semaphore
     constexpr static std::uint32_t UNPACK_SYNC         = 5; // trisc <-> unpack sync on hw kernel
     // Wait for beginning and end of each unpack or math iteration. For recording perf events and inserting delay.
     // This semaphore should only be used for either unpack or math. Not both at the same time.
-    constexpr static std::uint32_t UNPACK_MATH_DONE = 6;
-    constexpr static std::uint32_t MATH_DONE        = 7; // wait for math to finish when unpacking to dest
+    constexpr static std::uint32_t UNPACK_MATH_DONE   = 6;
+    constexpr static std::uint32_t MATH_DONE          = 7; // wait for math to finish when unpacking to dest
+    constexpr static std::uint8_t NUM_SEMAPHORES      = 8; // number of semaphores, not a semaphore index
+    constexpr static std::uint8_t SEMAPHORE_BIT_COUNT = 4; // number of bits to represent a semaphore index
+    constexpr static std::uint8_t SEMAPHORE_MAX_VALUE = (1 << SEMAPHORE_BIT_COUNT) - 1;
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
+        LLK_ASSERT(sem_index < NUM_SEMAPHORES, "Semaphore index out of bounds.");
         return (1 << sem_index);
     }
 };
