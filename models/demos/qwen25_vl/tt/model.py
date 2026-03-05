@@ -90,11 +90,14 @@ class VisionTransformer(LightweightModule):
             dtype=dtype,
         )
 
-    def prepare_input(self, patch_input, window_index, seq_len=None):
+    def prepare_input(self, patch_input, window_index, seq_len=None, window_pad_info=None):
         """Convert a patchified torch input to a ttnn tensor
         Args:
             patch_input (torch.Tensor): Patchified input tensor
             window_index (torch.Tensor): Window index tensor
+            seq_len (int, optional): Padded sequence length
+            window_pad_info (dict, optional): If non-uniform windows need padding to uniform size.
+                Keys: orig_cu_seqlens (list), max_window_size (int), num_windows (int)
 
         Returns:
             ttnn.Tensor: Prepared input tensor
@@ -104,6 +107,21 @@ class VisionTransformer(LightweightModule):
         x = patch_input.reshape(patch_seq_len // spatial_merge_unit, spatial_merge_unit, -1)
         x = x[window_index, :, :]
         x = x.reshape(patch_seq_len, -1)
+        if window_pad_info is not None:
+            orig_cu = window_pad_info["orig_cu_seqlens"]
+            max_W = window_pad_info["max_window_size"]
+            num_windows = window_pad_info["num_windows"]
+            hidden_dim = x.shape[-1]
+            new_x = torch.zeros(num_windows * max_W, hidden_dim, dtype=x.dtype)
+            for i in range(num_windows):
+                src_start = orig_cu[i]
+                src_end = orig_cu[i + 1]
+                size = src_end - src_start
+                dst_start = i * max_W
+                new_x[dst_start : dst_start + size] = x[src_start:src_end]
+            x = new_x
+            patch_seq_len = num_windows * max_W
+
         seq_len = ((patch_seq_len // 128) + 1) * 128 if seq_len is None else seq_len
         x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
         x = self.args.prepare_residual_tensor_prefill(
@@ -119,6 +137,8 @@ class VisionTransformer(LightweightModule):
         rot_mats,
         cu_seqlens,
         cu_window_seqlens,
+        windowed_window_info=None,
+        full_window_info=None,
     ):
         """
         Forward pass through the Vision Transformer blocks.
@@ -128,6 +148,8 @@ class VisionTransformer(LightweightModule):
             cu_seqlens (torch.Tensor): Cumulative sequence lengths
             cu_window_seqlens (torch.Tensor): Cumulative window sequence lengths
             rot_mats (list): Rotation matrices for positional embeddings
+            windowed_window_info (dict): Window metadata for windowed attention layers (batched SDPA optimization)
+            full_window_info (dict): Window metadata for full attention layers
 
         Returns:
             ttnn.Tensor: Output tensor
@@ -137,14 +159,17 @@ class VisionTransformer(LightweightModule):
             # Determine which attention type to use (full or windowed)
             if i in self.fullatt_block_indexes:
                 cu_seqlens_now = cu_seqlens
+                window_info = full_window_info
             else:
                 cu_seqlens_now = cu_window_seqlens
+                window_info = windowed_window_info
 
             # Forward through block
             x = block(
                 x,
                 cu_seqlens=cu_seqlens_now,
                 rot_mats=rot_mats,
+                window_info=window_info,
             )
 
         # Merge patches - first remove any sequence length padding
@@ -240,12 +265,103 @@ class DropInVisionTransformer(torch.nn.Module):
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
 
+            # 2b. Compute window metadata for batched SDPA optimization.
+            #     Instead of using windowed_scaled_dot_product_attention (O(S^2)),
+            #     we batch windows into the batch dimension and use regular SDPA (O(S*W)).
+            #     When windows are non-uniform, pad them to uniform max_W and apply a mask
+            #     so real tokens don't attend to zero-padded positions.
+            cu_window_seqlens_list = cu_window_seqlens.flatten().tolist()
+            window_sizes = [
+                cu_window_seqlens_list[i + 1] - cu_window_seqlens_list[i]
+                for i in range(len(cu_window_seqlens_list) - 1)
+            ]
+            num_windows = len(window_sizes)
+            windows_uniform = num_windows > 0 and all(w == window_sizes[0] for w in window_sizes)
+            window_pad_info = None
+
+            if windows_uniform:
+                windowed_window_info = {
+                    "uniform": True,
+                    "window_size": window_sizes[0],
+                    "num_windows": num_windows,
+                }
+            elif num_windows > 0:
+                max_W = max(window_sizes)
+                # Round up to multiple of 32 for tile alignment
+                max_W = ((max_W + 31) // 32) * 32
+                assert 2048 % max_W == 0, f"Aligned max window size {max_W} must divide 2048"
+
+                window_pad_info = {
+                    "orig_cu_seqlens": cu_window_seqlens_list,
+                    "orig_window_sizes": window_sizes,
+                    "max_window_size": max_W,
+                    "num_windows": num_windows,
+                }
+                # Update unpadded_seq_len and seq_len for the padded layout
+                unpadded_seq_len = num_windows * max_W
+                seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+                # Update cu_window_seqlens to uniform
+                cu_window_seqlens = torch.tensor(
+                    [i * max_W for i in range(num_windows + 1)], dtype=cu_window_seqlens.dtype
+                )
+                cu_seqlens = torch.tensor([0, unpadded_seq_len], dtype=cu_seqlens.dtype)
+
+                total_windowed_windows = seq_len // max_W
+                windowed_mask = torch.zeros(1, total_windowed_windows, max_W, max_W, dtype=torch.float32)
+                for i in range(num_windows):
+                    if window_sizes[i] < max_W:
+                        windowed_mask[:, i, :, window_sizes[i] :] = float("-inf")
+                tt_windowed_mask = ttnn.from_torch(
+                    windowed_mask,
+                    device=self.model_args.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat4_b,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                )
+                windowed_window_info = {
+                    "uniform": True,
+                    "window_size": max_W,
+                    "num_windows": num_windows,
+                    "attn_mask": tt_windowed_mask,
+                }
+                logger.info(
+                    f"Padded {num_windows} non-uniform windows to uniform size {max_W} "
+                    f"(original sizes: {sorted(set(window_sizes))})"
+                )
+            else:
+                windowed_window_info = {"uniform": False}
+
+            # Full-attention layers (4 of 32): use windowed SDPA with a single segment
+            # covering the full (padded) sequence. No O(S²) mask needed — windowed SDPA
+            # handles the cu_seqlens boundary natively.
+            full_window_info = {"uniform": False}
+
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(pixel_values)
 
             # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
+
+            # If windows were padded to uniform size, remap position embeddings
+            # so each window's real tokens get their original rotary embeddings
+            # and padding positions get identity rotation (cos=1, sin=0).
+            if window_pad_info is not None:
+                orig_cu = window_pad_info["orig_cu_seqlens"]
+                max_W = window_pad_info["max_window_size"]
+                head_dim = cos_orig.shape[-1]
+                new_cos = torch.ones(unpadded_seq_len, head_dim, dtype=cos_orig.dtype)
+                new_sin = torch.zeros(unpadded_seq_len, head_dim, dtype=sin_orig.dtype)
+                for i in range(num_windows):
+                    src_start = orig_cu[i]
+                    src_end = orig_cu[i + 1]
+                    size = src_end - src_start
+                    dst_start = i * max_W
+                    new_cos[dst_start : dst_start + size] = cos_orig[src_start:src_end]
+                    new_sin[dst_start : dst_start + size] = sin_orig[src_start:src_end]
+                cos_orig = new_cos
+                sin_orig = new_sin
+
             # pad sequence length with cos = 1, sin = 0 (identity rotation)
             cos_padded = (
                 torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1)
@@ -258,28 +374,29 @@ class DropInVisionTransformer(torch.nn.Module):
                 .unsqueeze(0)
             )
             # Convert to TT tensors on the mesh device
+            vision_mesh_mapper = (
+                ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0)
+                if self.model_args.is_galaxy
+                else ttnn.ReplicateTensorToMesh(self.model_args.mesh_device)
+            )
             cos = ttnn.from_torch(
                 cos_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                mesh_mapper=vision_mesh_mapper,
             )
             sin = ttnn.from_torch(
                 sin_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                mesh_mapper=vision_mesh_mapper,
             )
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len, window_pad_info)
 
             # --- TT Model Execution ---
             tt_out = self.tt_model(
@@ -295,6 +412,8 @@ class DropInVisionTransformer(torch.nn.Module):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.model_args.mesh_device,
                 ),
+                windowed_window_info=windowed_window_info,
+                full_window_info=full_window_info,
             )
 
             # deallocate device tensors that are not needed by decode
@@ -303,6 +422,8 @@ class DropInVisionTransformer(torch.nn.Module):
             ttnn.deallocate(sin)
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
+            if "attn_mask" in windowed_window_info:
+                ttnn.deallocate(windowed_window_info["attn_mask"])
 
             # --- Postprocessing ---
             # 1. Convert TT output back to torch tensor
@@ -317,6 +438,22 @@ class DropInVisionTransformer(torch.nn.Module):
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
+
+            # 2b. If windows were padded to uniform size, extract original token positions.
+            #     After patch_merger, each window's tokens were reduced by spatial_merge_unit.
+            #     Remove the inter-window padding tokens (which produced garbage output).
+            if window_pad_info is not None:
+                spatial_merge_unit = self.model_args.hf_config.vision_config.spatial_merge_size**2
+                orig_cu = window_pad_info["orig_cu_seqlens"]
+                max_W = window_pad_info["max_window_size"]
+                merged_max_W = max_W // spatial_merge_unit
+                parts = []
+                for i in range(window_pad_info["num_windows"]):
+                    orig_size = orig_cu[i + 1] - orig_cu[i]
+                    merged_orig = orig_size // spatial_merge_unit
+                    start = i * merged_max_W
+                    parts.append(tt_output_torch[start : start + merged_orig, :])
+                tt_output_torch = torch.cat(parts, dim=0)
 
             # 3. Apply reverse window indexing to match reference model output order
             reverse_indices = torch.argsort(window_index)
@@ -344,6 +481,9 @@ class Transformer(TTTransformer):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
+        rope_setup_class=None,
+        prefetcher=None,
     ):
         # Call parent constructor with vision-specific classes
         super().__init__(
@@ -375,6 +515,60 @@ class Transformer(TTTransformer):
                 ),
             )
         return outputs
+
+    def prepare_prefill_inputs_trace(self, tokens, rot_mats, page_table=None):
+        """
+        Prepare inputs for trace-based prefill. Returns host tensors (device=None)
+        that can be copied to pre-allocated device tensors between trace replays.
+
+        Args:
+            tokens: [1, seq_len, hidden_dim] torch tensor (embeddings)
+            rot_mats: (cos[1, 1, seq_len, head_dim], sin[1, 1, seq_len, head_dim]) torch tensors
+            page_table: [1, num_blocks] torch tensor
+        Returns:
+            Tuple of host tensors: (tokens, cos, sin, page_table)
+        """
+        assert isinstance(rot_mats[0], torch.Tensor)
+        assert isinstance(rot_mats[1], torch.Tensor)
+        assert tokens.dim() == 3, "tokens should be a 3D tensor"
+
+        host_tokens = ttnn.from_torch(
+            tokens.unsqueeze(1),
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+            ),
+        )
+
+        cos_matrix, sin_matrix = rot_mats[0], rot_mats[1]
+        host_cos = ttnn.from_torch(
+            cos_matrix.expand(cos_matrix.shape[0], -1, -1, -1),
+            device=None,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.rope_setup.datatype,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        host_sin = ttnn.from_torch(
+            sin_matrix.expand(sin_matrix.shape[0], -1, -1, -1),
+            device=None,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.rope_setup.datatype,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        host_page_table = None
+        if page_table is not None:
+            host_page_table = ttnn.from_torch(
+                page_table,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return (host_tokens, host_cos, host_sin, host_page_table)
 
     def prepare_inputs_prefill(self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None):
         assert isinstance(rot_mats[0], torch.Tensor)
@@ -425,3 +619,27 @@ class Transformer(TTTransformer):
             tt_chunk_page_table = None
 
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+
+    def ttnn_prefill_forward(
+        self,
+        x,
+        rot_mats_global=None,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        kv_cache=None,
+        batch_size=1,
+    ):
+        return super().ttnn_prefill_forward(
+            x,
+            rot_mats_global=rot_mats_global,
+            user_id=user_id,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            get_last_token=get_last_token,
+            kv_cache=kv_cache,
+            batch_size=batch_size,
+        )

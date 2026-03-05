@@ -2,12 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
+
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -21,6 +24,12 @@ class Generator(WarmupForwardMixin):
         """
         # favor composition over inheritance: __ is convention for private variables
         self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
+
+        # Trace infrastructure for prefill
+        # Keyed by padded sequence length string (e.g., "4096")
+        self.trace_id_prefill = collections.defaultdict(lambda: None)
+        self.trace_inputs_prefill = {}
+        self.trace_output_prefill = {}
 
     @property
     def model(self):
@@ -44,7 +53,104 @@ class Generator(WarmupForwardMixin):
     def processor(self):
         return self._ttt_generator.processor
 
-    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
+    def _capture_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache):
+        """
+        Capture a prefill trace for a given sequence length.
+
+        Steps:
+        1. Create host tensors via prepare_prefill_inputs_trace
+        2. Copy to device and run forward pass (compile)
+        3. Copy to device again and capture trace
+
+        The trace includes a to_memory_config copy of each input tensor at the
+        start. This ensures the input device buffers (which live in normal device
+        memory) are only READ by the trace, not consumed. Without this, the trace
+        system may reclaim the input buffer, making subsequent copy_host_to_device
+        calls fail with "Buffer must be allocated on device".
+        """
+        host_inputs = self.model.prepare_prefill_inputs_trace(
+            tokens_embd, rot_mats=rot_mats_user, page_table=page_table_user
+        )
+
+        # Compile run: copy to device and run forward to compile all programs
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        device_tokens, device_cos, device_sin, device_page_table = device_inputs
+
+        # Create working copies (so inputs survive as read-only buffers)
+        work_tokens = ttnn.to_memory_config(device_tokens, ttnn.DRAM_MEMORY_CONFIG)
+        work_cos = ttnn.to_memory_config(device_cos, ttnn.DRAM_MEMORY_CONFIG)
+        work_sin = ttnn.to_memory_config(device_sin, ttnn.DRAM_MEMORY_CONFIG)
+
+        tt_out = self.model.ttnn_prefill_forward(
+            x=work_tokens,
+            rot_mats_global=[work_cos, work_sin],
+            user_id=0,
+            page_table=device_page_table,
+            get_last_token=-1,
+            kv_cache=kv_cache,
+        )
+        logger.info("Done compiling prefill model for trace")
+
+        # Trace capture: copy to device again (allocates new device tensors for trace)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        device_tokens, device_cos, device_sin, device_page_table = device_inputs
+
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        # Create working copies inside trace — these allocate in trace memory,
+        # keeping the original device_inputs buffers in normal memory intact.
+        work_tokens = ttnn.to_memory_config(device_tokens, ttnn.DRAM_MEMORY_CONFIG)
+        work_cos = ttnn.to_memory_config(device_cos, ttnn.DRAM_MEMORY_CONFIG)
+        work_sin = ttnn.to_memory_config(device_sin, ttnn.DRAM_MEMORY_CONFIG)
+        tt_out = self.model.ttnn_prefill_forward(
+            x=work_tokens,
+            rot_mats_global=[work_cos, work_sin],
+            user_id=0,
+            page_table=device_page_table,
+            get_last_token=-1,
+            kv_cache=kv_cache,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Done capturing prefill trace")
+
+        return trace_id, tt_out, device_inputs
+
+    def _easy_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache, padded_len):
+        """
+        Capture trace on first call per padded_len, replay on subsequent calls.
+
+        Returns the trace output (raw hidden states, [1, 1, padded_len, hidden]).
+        """
+        trace_key = str(padded_len)
+
+        if self.trace_id_prefill[trace_key] is None:
+            trace_id, tt_out, device_inputs = self._capture_trace_prefill(
+                tokens_embd, rot_mats_user, page_table_user, kv_cache
+            )
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out
+
+        return self._prefill_forward_trace(
+            self.trace_id_prefill[trace_key],
+            self.trace_inputs_prefill[trace_key],
+            self.trace_output_prefill[trace_key],
+            tokens_embd,
+            rot_mats_user,
+            page_table_user,
+        )
+
+    def _prefill_forward_trace(self, trace_id, device_inputs, tt_out, tokens_embd, rot_mats_user, page_table_user):
+        """Copy new user data to pre-allocated device tensors and execute the trace."""
+        host_inputs = self.model.prepare_prefill_inputs_trace(
+            tokens_embd, rot_mats=rot_mats_user, page_table=page_table_user
+        )
+        copy_host_to_device(host_inputs, device_tensors=device_inputs, mesh_device=self.mesh_device)
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        return tt_out
+
+    def prefill_forward_text(
+        self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None, enable_trace=True
+    ):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -54,25 +160,74 @@ class Generator(WarmupForwardMixin):
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
+        use_trace = False  # Traced prefill not yet supported for Qwen 2.5 VL
+
+        total_tokens = batch_seq_len * batch
+        if batch > 1:
+            if use_trace:
+                logger.info(
+                    f"Using trace-based sequential prefill: {batch} users × {batch_seq_len} tokens"
+                    f" = {total_tokens} total tokens"
+                )
+            else:
+                logger.info(
+                    f"Using sequential prefill: {batch} users × {batch_seq_len} tokens = {total_tokens} total tokens"
+                )
+
+        block_size = get_block_size(kv_cache) if kv_cache is not None else None
+        num_blocks_padded = num_blocks_in_seq(batch_seq_len, block_size) if block_size is not None else None
+        out_list = []
+
         for user_id in range(batch):
             logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = prompt_lens[user_id]
+            seq_len = int(prompt_lens[user_id])
             last_token_idx = seq_len - 1
 
-            if page_table is not None:
-                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+            if use_trace:
+                # Per-user page table with consistent shape for trace reuse
+                pt_user = page_table[user_id : user_id + 1, :num_blocks_padded]
 
-            logits = self.__prefill_forward_single_user_text(
-                tokens[user_id : user_id + 1],
-                page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
-                last_token_idx=last_token_idx,
-                rot_mats=rot_mats,
-                kv_cache=kv_cache,
-            )
+                # Per-user rotation matrices sliced to padded_len
+                rot_mats_user = (
+                    rot_mats[0][user_id : user_id + 1, :, :batch_seq_len, :],
+                    rot_mats[1][user_id : user_id + 1, :, :batch_seq_len, :],
+                )
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits
+                # Execute via trace (capture on first user, replay on subsequent)
+                tt_hidden = self._easy_trace_prefill(
+                    tokens[user_id : user_id + 1],
+                    rot_mats_user,
+                    pt_user,
+                    kv_cache,
+                    batch_seq_len,
+                )
+
+                # Post-process outside trace: slice last-token tile, norm, lm_head
+                logits = self.model.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
+                out_list.append(logits.cpu(blocking=False))
+            else:
+                if page_table is not None:
+                    page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                else:
+                    page_table_user = None
+
+                logits = self.__prefill_forward_single_user_text(
+                    tokens[user_id : user_id + 1],
+                    page_table=page_table_user,
+                    user_id=user_id,
+                    last_token_idx=last_token_idx,
+                    rot_mats=rot_mats,
+                    kv_cache=kv_cache,
+                )
+                output_logits[user_id] = logits
+
+        if use_trace:
+            # Process asynchronously-copied outputs
+            ttnn.synchronize_device(self.mesh_device)
+            for user_id, out in enumerate(out_list):
+                seq_len = int(prompt_lens[user_id])
+                last_token_idx = seq_len - 1
+                output_logits[user_id] = self.model.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -217,13 +372,63 @@ class Generator(WarmupForwardMixin):
     def process_decode_output_host(self, tt_out, is_tokens=False):
         return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
-        logger.warning("Warmup model prefill not implemented for Qwen2_5_VL Generator")
-        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device=None,
+        non_greedy_decoding_on_device=None,
+        sampling_params=None,
+    ) -> None:
+        """
+        Pre-compile programs for expected power-of-2 prefill sequence lengths.
+        Uses dummy embeddings and rotation matrices to avoid depending on real data.
+        """
+
+        warmup_seq_lens = [128, 1024, 2048, 4096, 8192, 16384]
+        max_warmup = min(self.model_args.max_prefill_chunk_size, self.model_args.max_seq_len)
+        warmup_seq_lens = [s for s in warmup_seq_lens if s <= max_warmup]
+
+        if not warmup_seq_lens:
+            logger.warning("No valid warmup sequence lengths for Qwen2.5-VL prefill")
+            return
+
+        logger.info(f"Warming up Qwen2.5-VL prefill for sequence lengths: {warmup_seq_lens}")
+        hidden_dim = self.model_args.dim
+        head_dim = self.model_args.head_dim
+
+        for seq_len in warmup_seq_lens:
+            dummy_tokens = torch.zeros(1, seq_len, hidden_dim, dtype=torch.bfloat16)
+            dummy_cos = torch.ones(1, 1, seq_len, head_dim, dtype=torch.bfloat16)
+            dummy_sin = torch.zeros(1, 1, seq_len, head_dim, dtype=torch.bfloat16)
+            dummy_rot_mats = (dummy_cos, dummy_sin)
+
+            if kv_cache is not None:
+                block_size = get_block_size(kv_cache)
+                num_blocks = num_blocks_in_seq(seq_len, block_size)
+                dummy_page_table = torch.zeros(1, num_blocks, dtype=torch.int32)
+            else:
+                dummy_page_table = None
+
+            logger.info(f"  Compiling prefill for seq_len={seq_len}")
+            self.__prefill_forward_single_user_text(
+                dummy_tokens,
+                page_table=dummy_page_table,
+                user_id=0,
+                last_token_idx=seq_len - 1,
+                rot_mats=dummy_rot_mats,
+                kv_cache=kv_cache,
+            )
+
+        logger.info("Qwen2.5-VL prefill warmup complete")
 
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):
+        for trace_key, trace_id in self.trace_id_prefill.items():
+            if trace_id is not None:
+                ttnn.release_trace(self.mesh_device, trace_id)
+
         if hasattr(self, "trace_id"):
             ttnn.release_trace(self.mesh_device, self.trace_id)
 

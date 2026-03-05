@@ -99,7 +99,7 @@ class TransformerBlock(LightweightModule):
 
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
-        if args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
+        if args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = DistributedNorm(
             RMSNorm(
@@ -211,6 +211,7 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
@@ -242,6 +243,7 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)

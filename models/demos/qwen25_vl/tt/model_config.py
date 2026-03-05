@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 from loguru import logger
 
@@ -51,16 +52,115 @@ class VisionModelArgs(ModelArgs):
         num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
         k_dim = self.vision_dim // self.cluster_shape[0] if self.is_galaxy else self.vision_dim
         n_dim = self.vision_dim // self.cluster_shape[1] if self.is_galaxy else self.vision_dim
+        # WO weight K dimension is n_heads * padded_head_dim (e.g. 1536), not vision_dim (1280)
+        # Use in0_block_w=2 which safely divides all possible Kt values
+        wo_k_dim = self.vision_n_heads * self.vision_padded_head_dim
+
+        # SDPA program config: f(seq_len) or f(seq_len, chunk_start_idx) for chunked prefill
+        def _sdpa_prog_cfg(seq_len, chunk_start_idx=None):
+            q_chunk = (
+                256
+                if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else 64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seq_len >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx)
+            )
+            k_chunk = q_chunk  # Same as tt_transformers workaround
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
+            )
+
+        self.model_config["SDPA_PROGCFG"] = _sdpa_prog_cfg
+
         self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
             m=num_rows(seq_len),
-            k=k_dim,
+            k=wo_k_dim,
             n=n_dim,
             grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-            in0_block_w=1 if self.is_galaxy else self.vision_dim // 1024,
+            in0_block_w=1 if self.is_galaxy else 2,
             fuse_batch=seq_len <= 1024,
         )
 
         assert self.vision_n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+
+        # Enable fused QK ops (rotary embedding + paged cache update) for decode.
+        # The base class disables this for multimodal models, but for Qwen2.5-VL the
+        # fused path only affects decode (not prefill), and M-RoPE differences are
+        # handled in the prefill code path which uses pre-computed rotation matrices.
+        self.use_qk_fused = True
+
+        # Minimal matmul configs for text decoder MLP on N300 (experimental, gated behind env var)
+        self.use_minimal_matmul = os.getenv("TT_MINIMAL_MATMUL") == "1" and not self.is_galaxy
+
+        if self.use_minimal_matmul:
+            logger.info("Minimal matmul enabled for text decoder MLP (experimental)")
+
+            def prefill_ff1_ff3_minimal_matmul_config(seq_len):
+                if seq_len <= 4096:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    )
+                elif seq_len <= 16384:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    )
+                else:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    )
+
+            self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
+
+            def prefill_ff2_minimal_matmul_config(seq_len):
+                if seq_len <= 4096:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    )
+                elif seq_len <= 16384:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    )
+                else:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    )
+
+            self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
     def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
         """
@@ -73,6 +173,11 @@ class VisionModelArgs(ModelArgs):
 
         x_1BSH = x_bsh.unsqueeze(0)
 
+        if force_replicated:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        else:
+            mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
@@ -80,8 +185,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # todo)) refactor this code to make the intent clear, which is data parallelism
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            mesh_mapper=mesh_mapper,
         )
         return xs_1BSH
 
