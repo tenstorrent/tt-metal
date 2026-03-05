@@ -10,8 +10,10 @@
 
 #include <type_traits>
 
+#ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#endif
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -674,7 +676,9 @@ static void sdpa_inner_loop_step(
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
+#ifdef ARCH_BLACKHOLE
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
+#endif
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
@@ -744,7 +748,9 @@ static void sdpa_inner_loop_step(
         // In ring_mode, is_last_iter is always false — skip entirely.
         if constexpr (padded_k_tiles > 0 && !ring_mode) {
             if (is_last_iter) {
+#ifdef ARCH_BLACKHOLE
                 PACK((llk_pack_mop_config<false, false, false>(cb_mask_in, 1)));
+#endif
                 apply_padded_mask_lightweight<PROFILING_ENABLED, padded_k_tiles, Sk_chunk_t, sbh>(
                     cb_mask_in, cb_qkt_im, q_subblock);
             }
@@ -768,11 +774,15 @@ static void sdpa_inner_loop_step(
         {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
             cb_reserve_back(cur_max, sbh);
+#ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
+#endif
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh>(
                 cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/);
             cb_push_back(cur_max, sbh);
+#ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, qkt_subblock_w)));
+#endif
         }
 
         q_index_offset += sbh * in0_block_w;
@@ -812,7 +822,9 @@ static void sdpa_inner_loop_step(
         cb_reserve_back(cur_out, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
+#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
+#endif
         {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
             static_assert(kt_num_subblocks >= 1, "kt_num_subblocks must be >= 1");
