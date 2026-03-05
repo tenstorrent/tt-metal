@@ -42,9 +42,23 @@ except ImportError:
 # =============================================================================
 
 
-def float_to_bf16_bits(f):
+def float_to_bf16_bits_truncate(f):
+    """Truncation-based BF16 conversion (for enumeration only)."""
     f32_bytes = struct.pack(">f", f)
     return struct.unpack(">H", f32_bytes[:2])[0]
+
+
+def float_to_bf16_bits(f):
+    """Round-to-nearest-even BF16 conversion (matches hardware).
+
+    See tech_reports/data_formats/data_formats.md and bfloat16::from_float().
+    """
+    if math.isnan(f):
+        return 0x7FC0
+    f32_bytes = struct.pack("<f", f)
+    u32 = struct.unpack("<I", f32_bytes)[0]
+    rounding_bias = ((u32 >> 16) & 1) + 0x7FFF
+    return ((u32 + rounding_bias) >> 16) & 0xFFFF
 
 
 def bf16_bits_to_float(bits):
