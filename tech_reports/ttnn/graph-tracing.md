@@ -233,7 +233,7 @@ python -m ttnn.graph_report --svg my_report.json ./visualizer_db/
 The importer creates these database tables:
 - `operations`: Operations with names and durations (IDs start at 1)
 - `operation_arguments`: Python-level arguments (from `python_io`), falling back to C++ arguments
-- `tensors`: Shape, dtype, layout, memory_config, device_id, address, buffer_type
+- `tensors`: Shape, dtype, layout, memory_config, device_id, address, buffer_type, size (bytes = volume * element_size)
 - `device_tensors`: Per-device addresses for multi-device tensors
 - `input_tensors`, `output_tensors`: Tensor-to-operation relationships (from `python_io` tensor IDs)
 - `buffers`: Cumulative memory allocation snapshots per operation (prefers `per_operation_buffers`)
@@ -571,7 +571,7 @@ The golden comparison test performs structural checks across every table:
 | Table | Compared Properties |
 |---|---|
 | `operations` | `operation_id`, `name` |
-| `tensors` | `shape`, `dtype`, `layout`, `memory_config`, `address`, `buffer_type` |
+| `tensors` | `shape`, `dtype`, `layout`, `memory_config`, `address`, `buffer_type`, `size` |
 | `input_tensors` | `operation_id`, `input_index`, resolved tensor `address` |
 | `output_tensors` | `operation_id`, `output_index`, resolved tensor `address` |
 | `device_tensors` | `address` |
@@ -624,6 +624,7 @@ Tensor metadata.
 - `shape`: Tensor shape
 - `dtype`: Data type (`"bfloat16"`, `"float32"`, etc.)
 - `layout`: Memory layout (`"TILE"`, `"ROW_MAJOR"`)
+- `size`: Data size in bytes (logical volume * element size)
 
 **Device tensor params (when on device):**
 - `memory_config`: Memory configuration string
