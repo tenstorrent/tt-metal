@@ -83,7 +83,7 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\"}",
+              "override-tt-config": "{\"sample_on_device_mode\": \"all\"}",
               "additional-server-args": "--max_num_seqs 1",
               "structured-output": true,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
@@ -100,7 +100,7 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"decode_only\"}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
               "structured-output": true,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
@@ -272,6 +272,7 @@ jobs:
               "co-owner-1-id": "U08CEGF78ET"
             },
             {
+              "name": "[WH-N300] NoOp test model (vLLM overhead)",
               "name": "[WH-N300] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
