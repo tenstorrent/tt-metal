@@ -933,6 +933,22 @@ void kernel_main() {
     uint32_t iteration = 0;
 
     auto moe_body = [&]() {
+        DPRINT << "Start MOE Kernel iteration " << iteration << ENDL();
+#if defined(COMPILE_FOR_BRISC) && defined(ENABLE_BCAST)
+        DPRINT << "Persistent mode: " << persistent_mode << ENDL();
+        if constexpr (persistent_mode != 0) {
+            constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
+            DPRINT << "Is bcast sender: " << static_cast<uint32_t>(is_bcast_sender) << ENDL();
+            if constexpr (is_bcast_sender && Core::is_sender_core) {
+                DPRINT << "Waiting for semaphore" << ENDL();
+                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
+                noc_semaphore_wait(next_iter_sem, 1);
+                noc_semaphore_set(next_iter_sem, 0);
+                DPRINT << "Semaphore set" << ENDL();
+            }
+        }
+#endif
+
 #if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
         {
             constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
@@ -943,17 +959,6 @@ void kernel_main() {
         setup_all_sharded_buffers();
 #endif
 #endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
-
-#if defined(COMPILE_FOR_BRISC) && defined(ENABLE_BCAST)
-        if constexpr (persistent_mode != 0) {
-            constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
-            if constexpr (is_bcast_sender && Core::is_sender_core) {
-                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
-                noc_semaphore_wait(next_iter_sem, 1);
-                noc_semaphore_set(next_iter_sem, 0);
-            }
-        }
-#endif
 
 #ifdef ENABLE_BCAST
         // Step -1: CCL Broadcast — receive data from fabric into intermediate tensor
@@ -1356,7 +1361,6 @@ void kernel_main() {
         }
 #endif
 #endif
-
     };
 
     while (true) {
