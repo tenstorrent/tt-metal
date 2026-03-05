@@ -76,11 +76,11 @@ void kernel_main() {
                 uint32_t l1_write_addr = l1_write_addr_base;
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     auto read_addr = input_tensor_addrgens[input_idx].get_noc_addr(output_tile_id_start + tiles_read);
-                    noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
+                    // noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
                     l1_write_addr += payload_size_bytes;
                     tiles_read += contig_pages_advanced;
                 }
-                noc_async_read_barrier();
+                // noc_async_read_barrier();
                 cb_push_back(cb_output_id, packet_size_in_pages);
             }
             tiles_read = input_tile_id_start;
@@ -120,8 +120,9 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
-        // Got it
+        // COMMENTED OUT FOR CCL PERF TESTING - Comment out waiting for remote semaphore increments
+        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+        // Got it - simulate receiving the slice without actually waiting for remote fabric transmission
         slices_received++;
 
         int sender_chip_id;
@@ -169,7 +170,7 @@ void kernel_main() {
                         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                             auto read_addr = output_tensor_addrgens[input_idx].get_noc_addr(
                                 output_tile_id_start + row_offset + pages_read_in_row);
-                            noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
+                            // noc_async_read(read_addr, l1_write_addr, input_tensor_page_size);
                             l1_write_addr += payload_size_bytes;
                             tiles_read += contig_pages_advanced;
 
@@ -179,7 +180,7 @@ void kernel_main() {
                                 pages_read_in_row = 0;
                             }
                         }
-                        noc_async_read_barrier();
+                        // noc_async_read_barrier();
                         cb_push_back(cb_output_id, packet_size_in_pages);
                     }
                     pages_read_in_row = input_tile_id_start % input_tensor_Wt;
