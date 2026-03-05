@@ -199,6 +199,16 @@ void kernel_main() {
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
+    // Signal to combine cores that chunk is available
+    auto combine_semaphore_inc = [&]() {
+        for (uint32_t y = 0; y < height_shard_dim; ++y) {
+            uint32_t idx = combine_core_x + y * width_shard_dim;
+            uint64_t dest_sem_noc_addr =
+                get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
+            noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
+        };
+    };
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
@@ -325,14 +335,10 @@ void kernel_main() {
             // Signal to tilize cores that they can send another chunk of tiles
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+
+            combine_semaphore_inc();
         }
     }
 
-    for (uint32_t y = 0; y < height_shard_dim; ++y) {
-        uint32_t idx = combine_core_x + y * width_shard_dim;
-        uint64_t dest_sem_noc_addr =
-            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
-        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
-    }
     noc_async_atomic_barrier(/*noc_idx=*/1);
 }
