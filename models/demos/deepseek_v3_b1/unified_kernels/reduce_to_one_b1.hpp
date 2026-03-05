@@ -208,7 +208,7 @@ struct ReduceToOneB1 {
             if (args.persistent_enable == 0) {
                 return;
             }
-
+            PacketHeaderPool::reset();
             constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;

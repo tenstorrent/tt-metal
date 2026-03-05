@@ -485,7 +485,7 @@ def test_persistent_moe_15_stages(
     embedding_fifo_size = embedding_size_bytes * 2
 
     torch.manual_seed(42)
-    torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
+    torch_embedding = torch.randn(1, 1, 1, K, dtype=torch.bfloat16)
 
     reduce_root_coord = ttnn.MeshCoordinate(0, 0)
 
@@ -692,6 +692,8 @@ def test_persistent_moe_15_stages(
         pipeline_block.run()
         logger.info(f"[rank={my_mesh_id}] pipeline launched")
 
+        ttnn.distributed_context_barrier()
+
         # ── MoE stages: submit persistent kernel ──
         if my_mesh_id >= 1:
             logger.info(f"[rank={my_mesh_id}] submitting persistent MoE kernel")
@@ -733,27 +735,25 @@ def test_persistent_moe_15_stages(
                 downstream_socket=downstream_socket,
             )
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
+            ttnn.distributed_context_barrier()
 
         # ── Stage 0: drive pipeline with multiple tokens ──
         if is_stage0:
             token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
             num_elements = embedding_size_bytes // 2
-
             for iteration in range(iterations):
                 print(f"[rank={my_mesh_id}] iteration {iteration} start")
                 torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
                 torch_token[0, 0] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
+                pipeline_block.write_token(token_tensor)
+                print(f"[rank={my_mesh_id}] iteration {iteration} token written")
+                print(f"[rank={my_mesh_id}] iteration {iteration} waiting for D2H result")
                 d2h_output_tensor = ttnn.from_torch(
                     torch.zeros(1, num_elements, dtype=torch.bfloat16),
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
-
-                pipeline_block.write_token(token_tensor)
-                print(f"[rank={my_mesh_id}] iteration {iteration} token written")
-                print(f"[rank={my_mesh_id}] iteration {iteration} waiting for D2H result")
                 pipeline_block.read_output(d2h_output_tensor)
                 d2h_result = ttnn.to_torch(d2h_output_tensor)
 
@@ -765,6 +765,7 @@ def test_persistent_moe_15_stages(
                 assert (
                     d2h_nonzero > 0
                 ), f"D2H output is all zeros at iteration {iteration} — persistent MoE 15-stage pipeline failed"
+                ttnn.distributed_context_barrier()
 
             logger.info(f"[rank=0] all {iterations} iterations passed")
 
