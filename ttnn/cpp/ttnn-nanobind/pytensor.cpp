@@ -123,6 +123,7 @@ struct PreprocessedPyTensor {
 };
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
+    ZoneScopedN("ttnn::parse_py_tensor(typecast)");
     auto py_tensor_dtype = py_tensor.dtype();
     // handle bool types by changing them to uint8
     // TODO: add proper handling for bool types as a DataType
