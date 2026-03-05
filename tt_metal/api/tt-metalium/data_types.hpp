@@ -8,6 +8,7 @@
 // All types (DataMovementProcessor, NOC, NOC_MODE) are now in kernel_types.hpp
 // Please update your includes to: #include <tt-metalium/kernel_types.hpp>
 
-#pragma message("data_types.hpp is deprecated. Include kernel_types.hpp instead.")
+// Commenting this out to ensure that no consumers fail on pragma message
+// #pragma message("data_types.hpp is deprecated. Include kernel_types.hpp instead.")
 
 #include <tt-metalium/kernel_types.hpp>
