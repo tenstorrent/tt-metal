@@ -38,7 +38,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-<<<<<<< HEAD
       recreate_weights_cache:
         description: 'Recreate weights cache in a new directory'
         required: false
@@ -52,13 +51,11 @@ on:
         required: false
         type: string
         default: ''
-=======
       enable-tracy:
         required: false
         type: boolean
         default: false
         description: "Enable Tracy-based device perf for final-op-unit tests"
->>>>>>> e4310102ba0 (refactor DeepSeek fused-op CI/perf workflow and local runners)
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
 
