@@ -707,7 +707,7 @@
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
   skus:
-    bh_p150_perf:
+    bh_p150:
       timeout: 84
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
