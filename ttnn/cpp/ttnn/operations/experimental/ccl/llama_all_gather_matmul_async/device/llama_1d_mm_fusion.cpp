@@ -79,7 +79,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
     /* Core setup */
     constexpr bool row_major = true;
-    CoreRangeSet all_worker_cores = b.shard_spec().value().grid;
+    CoreRangeSet all_worker_cores = out_buffers[0]->shard_spec().grid();
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
@@ -102,6 +102,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
     CoreRangeSet ring_cores = CoreRangeSet(ring_list);
     all_cores = ring_cores;
+
     const uint32_t num_cores = all_worker_cores.num_cores();
     const uint32_t ring_size =
         fused_op_signaler->ring_size;  // use ccl ring size instead of num_cores = local core ring size for fused op
@@ -113,9 +114,10 @@ process_agmm_fusion_program_and_create_override_variables(
     /* Inner dim - no padding needed for multicast approach */
     const uint32_t Kt_total = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
     constexpr uint32_t num_multicast_steps = 4;
-    in0_block_w = Kt_total / num_multicast_steps;  // Each step sends 1/4 of K dimension
-
-    uint32_t num_blocks = num_multicast_steps;  // Always 4 blocks now
+    // Keep in0_block_w from program config (smaller sub-blocks within each step)
+    // This allows in1_CB to hold just one sub-block instead of the full chunk
+    TT_FATAL(Kt_total % in0_block_w == 0, "Kt_total ({}) must be divisible by in0_block_w ({})", Kt_total, in0_block_w);
+    uint32_t num_blocks = Kt_total / in0_block_w;  // Total blocks across all steps
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -144,7 +146,9 @@ process_agmm_fusion_program_and_create_override_variables(
     uint32_t in1_CB_tiles = 0;
     uint32_t in1_tensor_width_in_tiles = b.padded_shape()[-1] / in1_tile.get_tile_shape()[1];
 
-    if (in1_is_dram_sharded || in1_is_dram_interleaved) {
+    if (in1_is_dram_sharded) {
+        in1_CB_tiles = in0_block_w * per_core_N;  // Single buffered — one sub-block at a time
+    } else if (in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * multicast_chunk_width_in_tiles * per_core_N;  // Double buffered
     } else {
         in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
@@ -364,7 +368,7 @@ process_agmm_fusion_program_and_create_override_variables(
         out_block_num_subblocks == 1 || !untilize_out,
         "untilize_out is not supported for cases that out_block_num_subblocks > 1");
     std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w (now 1/4 of K)
+        in0_block_w,             // in0_block_w (sub-block width in K dimension)
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
         in0_subblock_num_tiles,  // in0_subblock_num_tiles
@@ -375,7 +379,7 @@ process_agmm_fusion_program_and_create_override_variables(
         in1_tensor_size_bytes,  // in1_tensor_size_bytes
         in1_per_core_w,         // in1_per_core_w
 
-        num_multicast_steps,  // Always 4 steps instead of variable num_blocks
+        num_blocks,  // Total blocks across all multicast steps
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -520,48 +524,18 @@ process_agmm_fusion_program_and_create_override_variables(
     }
 
     /* Runtime args */
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
-    if (in1_is_dram_sharded) {
-        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-            worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
-            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
-            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
-            worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
-
-            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
-            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
-            worker_coord_y_to_dram_bank_second_col_mapping[2] = 9;
-            worker_coord_y_to_dram_bank_second_col_mapping[4] = 10;
-            worker_coord_y_to_dram_bank_second_col_mapping[5] = 11;
-            worker_coord_y_to_dram_bank_second_col_mapping[6] = 8;
-            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
-            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
-
-        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-            TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
-        } else {
-            TT_THROW("ring gather MM currently not supporting this device arch");
-        }
-    }
-
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
     for (uint32_t i = 0; i < num_cores; ++i) {  // runtime args for mm cores
         const auto& core = worker_cores_vec[i];
-        /* in0 - multicast receiver setup (no ring topology needed) */
-        auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
+        auto core_type = CORE_TYPE::WORKER_CORE;
 
+        /* in0 */
         std::vector<uint32_t> mm_in0_args = {
             static_cast<std::uint32_t>(core_type),
-            static_cast<std::uint32_t>(ring_index),           // Core index for multicast addressing
-            static_cast<std::uint32_t>(num_multicast_steps),  // 4 steps
-            // No next_core coordinates needed for multicast reception
-            // Multicast sender coordinates would be determined elsewhere
+            static_cast<std::uint32_t>(ring_index),
+            static_cast<std::uint32_t>(num_multicast_steps),
         };
-
-        // No need for unpadded widths array since no padding and uniform chunks
-        // Add fused op semaphores directly
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         /* in1 */
@@ -571,21 +545,16 @@ process_agmm_fusion_program_and_create_override_variables(
             i,                      // ring_idx
         };
         if (in1_is_dram_sharded) {
-            if (core.x <= 3) {
-                bank_id = worker_coord_y_to_dram_bank_first_col_mapping[core.y];
-            } else {
-                bank_id = worker_coord_y_to_dram_bank_second_col_mapping[core.y];
-            }
-            uint32_t dram_read_offset = 0;
-            if (core.x % 2 == 0) {
-                dram_read_offset = 1;
-            }
+            bank_id = i / 2;                    // Sequential: 2 cores per bank
+            uint32_t dram_read_offset = i % 2;  // First core offset=0, second offset=1
             bank_ids.push_back(bank_id);
-            uint32_t vc = 0;
+            // vc collision avoidance
+            uint32_t vc = bank_id & 0x3;
             for (uint32_t j = 0; j < i; ++j) {
                 auto core_prev = worker_cores_vec[j];
-                if (core_prev.y == core.y) {
+                if (core_prev.y == core.y && ((bank_ids[j] & 0x3) == (bank_id & 0x3))) {
                     vc = (vc + 1) & 0x3;
+                    break;
                 }
             }
             mm_in1_args.push_back(static_cast<std::uint32_t>(bank_id));
@@ -603,10 +572,8 @@ process_agmm_fusion_program_and_create_override_variables(
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
             static_cast<std::uint32_t>(core_type),
-            ring_index,  // core_idx (not ring_idx anymore)
+            ring_index,
         };
-        // No need for unpadded widths since all steps process uniform 1/4 chunks
-
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
     }
 

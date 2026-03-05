@@ -105,13 +105,41 @@ class TtLlamaMLP(LightweightModule):
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 
+    def _init_fused_ag_mm(self, mesh_device):
+        """Create intermediate tensors and semaphores for fused AG+MM (w2 path)."""
+        cluster_shape = self.args.cluster_shape  # (8, 4)
+        self.ag_mm_intermediate_mem_config = self.model_config["FF2_AG_MM_INTERMEDIATE_MEMCFG"]
+        intermediate_shape = [*cluster_shape, 32, 3584]  # [8, 4, M, K]
+
+        num_buffers = 2
+        self.ag_mm_intermediate_tensors = []
+        for _ in range(num_buffers):
+            tt_buf = ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            self.ag_mm_intermediate_tensors.append(tt_buf)
+
+        self.ag_mm_semaphore_handles = [
+            ttnn.create_global_semaphore(mesh_device, self.tt_ccl.sub_device_crs, 0) for _ in range(num_buffers)
+        ]
+        self.ag_mm_buffer_idx = 0
+        self.ag_mm_num_buffers = num_buffers
+
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
+        self.tt_ccl = tt_ccl  # Set early so _init_fused_ag_mm uses correct sub_device_crs
         if tt_ccl.mode == "decode":
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
-            self.prefetcher_setup.insert_tensor(self.w2)
-        self.tt_ccl = tt_ccl
+            # w2 is NOT prefetched — it is read from DRAM via fused AG+MM.
+            # The global CB cores (compute grid) don't match the DRAM shard grid,
+            # so AG+MM cannot use the global CB path.
+            self._init_fused_ag_mm(self.mesh_device)
 
     def forward(self, x: ttnn.Tensor, mode, batch_size=1) -> ttnn.Tensor:
         if mode == "prefill":
@@ -160,29 +188,36 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
-        w2_in = self.tt_ccl.line_all_gather(
+        # Trim padding from w1/w3 N-dimension (3840→3584, per-device 960→896)
+        ff1ff3 = ttnn.to_memory_config(ff1ff3, ttnn.DRAM_MEMORY_CONFIG)
+        ff1ff3 = ttnn.slice(ff1ff3, (0, 0, 0, 0), (1, 1, 32, 896), sub_core_grids=self.args.sub_core_grids)
+        ff1ff3 = ttnn.to_memory_config(ff1ff3, self.model_config["FF1FF3_PRE_AG_MM_MEMCFG"])
+
+        intermediate_l1 = ttnn.to_memory_config(
+            self.ag_mm_intermediate_tensors[self.ag_mm_buffer_idx],
+            self.ag_mm_intermediate_mem_config,
+        )
+        w2_out = ttnn.experimental.llama_all_gather_matmul_async(
             ff1ff3,
+            self.w2,
+            intermediate_l1,
             dim=3,
             cluster_axis=1,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=self.ag_mm_semaphore_handles[self.ag_mm_buffer_idx],
+            ag_memory_config=self.model_config["FF2_AG_MM_INTERMEDIATE_MEMCFG"],
+            mm_memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
+            topology=self.model_config["CCL_TOPOLOGY"],
             num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            buffer_key="BINARY_MUL",
-            use_optimal_ccl_for_llama=False if mode == "prefill" else True,
-        )
-
-        ttnn.deallocate(ff1ff3)
-
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
+            subdevice_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            program_config=pc_2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
-            program_config=pc_2,
-            memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            global_cb=None,  # AG+MM reads w2 from DRAM; global CB cores don't match DRAM shard grid
         )
+        self.ag_mm_buffer_idx = (self.ag_mm_buffer_idx + 1) % self.ag_mm_num_buffers
+        ttnn.deallocate(intermediate_l1)
+        ttnn.deallocate(ff1ff3)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,

@@ -934,6 +934,11 @@ def test_demo_text(
             user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
 
+        # if print_outputs and not pcc_check:
+        #     for user in range(batch_size):
+        #         first_tok = int(prefilled_token[user].item())
+        #         logger.info(f"[User {user}] First token from prefill: {repr(tokenizer.decode([first_tok]))}")
+
         # Keeps track when a user reaches EoD token
         user_done = [False] * batch_size
 

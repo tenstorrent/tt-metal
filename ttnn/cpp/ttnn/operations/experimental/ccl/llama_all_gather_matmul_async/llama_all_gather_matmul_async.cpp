@@ -26,7 +26,8 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype,
-    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<ttnn::Tensor>& aggregated_tensor) {
     auto output_tensors = ttnn::prim::llama_all_gather_matmul_async(
         input0,
         input1,
@@ -43,9 +44,12 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
         program_config,
         compute_kernel_config,
         dtype,
-        global_cb);
+        global_cb,
+        aggregated_tensor);
 
-    output_tensors.aggregated.deallocate(true);
+    if (!aggregated_tensor.has_value()) {
+        output_tensors.aggregated.deallocate(true);
+    }
     return output_tensors.mm;
 }
 

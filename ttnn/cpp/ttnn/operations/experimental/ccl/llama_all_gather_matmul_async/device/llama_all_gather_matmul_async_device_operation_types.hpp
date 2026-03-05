@@ -89,6 +89,7 @@ struct LlamaAllGatherMatmulAsyncInputs {
     Tensor input0;
     Tensor input1;
     Tensor intermediate;
+    std::optional<Tensor> aggregated;  // Pre-allocated aggregated tensor for trace-safe operation
 };
 
 }  // namespace ttnn::experimental::prim

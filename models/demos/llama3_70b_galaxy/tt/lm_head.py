@@ -179,6 +179,13 @@ class LMHead(LightweightModule):
                 x.deallocate(True)
                 outputs.append(output)
 
+        if mode == "decode":
+            # Allocate AllReduce output buffer in L1 after the linear (which needs the L1 space)
+            # but before the all_reduce (which consumes this buffer).
+            self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
+                self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
+            )
+
         outputs_reduced = []
         for output in outputs:
             output_reduced = self.tt_ccl.line_all_reduce(

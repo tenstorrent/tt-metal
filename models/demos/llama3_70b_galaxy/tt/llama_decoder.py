@@ -146,7 +146,6 @@ class TtTransformerBlock(LightweightModule):
             # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
             h = x
-
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             if self.unfuse_res_add:

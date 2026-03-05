@@ -29,7 +29,8 @@ struct ExecuteAllGatherMatmulAsync {
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
+        const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+        const std::optional<ttnn::Tensor>& aggregated_tensor = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

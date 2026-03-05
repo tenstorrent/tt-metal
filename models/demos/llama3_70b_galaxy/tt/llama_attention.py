@@ -27,6 +27,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.layer_num = layer_num
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
@@ -397,6 +398,7 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
+
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         ###
@@ -497,6 +499,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(v_heads_1BKD)
 
         # print("done update cache")
+
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size

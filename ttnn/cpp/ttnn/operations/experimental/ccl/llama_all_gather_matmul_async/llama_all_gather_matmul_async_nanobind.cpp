@@ -44,7 +44,8 @@ void bind_llama_all_gather_matmul_async_op(nb::module_& mod, const ccl_operation
                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const DataType> dtype,
-               const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
+               const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+               const std::optional<ttnn::Tensor>& aggregated_tensor) -> ttnn::Tensor {
                 return self(
                     input_tensor0,        // in0 for matmul, need AG first
                     input_tensor1,        // in1 for matmul
@@ -62,7 +63,8 @@ void bind_llama_all_gather_matmul_async_op(nb::module_& mod, const ccl_operation
                     program_config,         // = std::nullopt
                     compute_kernel_config,  // = std::nullopt
                     dtype,                  // = std::nullopt
-                    global_cb);             // = std::nullopt
+                    global_cb,              // = std::nullopt
+                    aggregated_tensor);     // = std::nullopt
             },
             nb::arg("input_tensor0"),
             nb::arg("input_tensor1"),
@@ -80,7 +82,8 @@ void bind_llama_all_gather_matmul_async_op(nb::module_& mod, const ccl_operation
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
-            nb::arg("global_cb") = nb::none()});
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("aggregated_tensor") = nb::none()});
 }
 
 }  // namespace

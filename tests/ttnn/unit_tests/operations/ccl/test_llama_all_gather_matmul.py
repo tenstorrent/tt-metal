@@ -118,6 +118,7 @@ def run_llama_all_gather_matmul_impl(
     trace_mode=False,
     validate_all=True,
     global_cb=None,
+    padded_input=False,
 ):
     cluster_shape = (8, 4)
 
@@ -140,7 +141,7 @@ def run_llama_all_gather_matmul_impl(
     ##### Set up fabric stuff
     ##################################
 
-    linear = True
+    linear = False
     if linear:
         all_gather_replicate_topology = ttnn.Topology.Linear
         wrap_mesh = False
@@ -168,10 +169,25 @@ def run_llama_all_gather_matmul_impl(
 
     # Input shapes
     M, K_per_device = M_in, K_in // cluster_shape[cluster_axis]
-    K_per_device_per_shard = round_up(math.ceil(K_per_device / input_num_cores), ttnn.TILE_SIZE)
-    in0_shape = [*cluster_shape, M, K_per_device]
-    in1_shape = [*cluster_shape, K_in, N_in]
+    logger.info(f"M, K_per_device: {M}, {K_per_device}")
+    logger.info(f"input_num_cores: {input_num_cores}")
 
+    if padded_input:
+        # Simulate model's w1/w3 N-padding: 3584 → 3840, per-device 896 → 960
+        # DRAM shard alignment: tile_size * dram_cores / cluster_axis = 32 * 12 / 4 = 96
+        dram_shard_alignment = 32 * 12 // cluster_shape[cluster_axis]
+        K_per_device_padded = round_up(K_per_device, dram_shard_alignment)
+    else:
+        K_per_device_padded = K_per_device
+
+    K_per_device_per_shard = round_up(math.ceil(K_per_device_padded / input_num_cores), ttnn.TILE_SIZE)
+    logger.info(f"K_per_device_per_shard: {K_per_device_per_shard}")
+    in0_shape = [*cluster_shape, M, K_per_device_padded]
+    logger.info(f"in0_shape: {in0_shape}")
+    in1_shape = [*cluster_shape, K_in, N_in]
+    logger.info(f"in1_shape: {in1_shape}")
+
+    logger.info(f"output_num_cores: {output_num_cores}")
     K_per_shard = round_up(math.ceil(K_in / output_num_cores), ttnn.TILE_SIZE)
     K_padded = K_per_shard * output_num_cores
     N_per_shard = round_up(math.ceil(N_in / output_num_cores), ttnn.TILE_SIZE)
@@ -250,6 +266,7 @@ def run_llama_all_gather_matmul_impl(
     output_shape[1] *= output_num_cores
     output_N_per_shard = intermediate_shape[-1]
 
+    # print(f"M, K_per_device_per_shard: {M}, {K_per_device_per_shard}")
     input_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -259,6 +276,23 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+
+    # When padded_input, create a sliced memory config for the trimmed tensor
+    sliced_mem_config = None
+    if padded_input:
+        sliced_num_cores = K_per_device // K_per_device_per_shard  # e.g. 896 // 32 = 28
+        sliced_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), sliced_num_cores, SUB_DEVICE_CRS, row_wise=True
+        )
+        sliced_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                sliced_core_range_set,
+                [M, K_per_device_per_shard],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
     in1_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -287,6 +321,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    # print(f"M, N_per_shard: {M}, {N_per_shard}")
     mm_output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -333,11 +368,12 @@ def run_llama_all_gather_matmul_impl(
 
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
+    golden_input = in0_tensor[..., :K_per_device] if padded_input else in0_tensor
     for i in range(num_iters):
         # Golden for all gather part
         golden_Ashape = intermediate_shape
         golden_Ashape[cluster_axis] = 1
-        golden_A = in0_tensor.transpose(-2, cluster_axis).reshape(golden_Ashape).squeeze(cluster_axis)
+        golden_A = golden_input.transpose(-2, cluster_axis).reshape(golden_Ashape).squeeze(cluster_axis)
         golden_A = golden_A.unsqueeze(cluster_axis).repeat(1, intermediate_num_cores, 1, 1)
         # TODO: Add golden for replicate part
 
@@ -349,8 +385,14 @@ def run_llama_all_gather_matmul_impl(
     def run_op(n_iters, store_all_results=True):
         outs = []
         for i in range(n_iters):
+            inp = tt_input_tensor
+            if padded_input:
+                # Interleave, slice to per-device unpadded width, then reshard
+                inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
+                inp = ttnn.slice(inp, (0, 0, 0, 0), (1, 1, M, K_per_device), sub_core_grids=SUB_DEVICE_CRS)
+                inp = ttnn.to_memory_config(inp, sliced_mem_config)
             out = ttnn.experimental.llama_all_gather_matmul_async(
-                tt_input_tensor,
+                inp,
                 tt_in1_tensor,
                 tt_intermediate_tensors[i % num_buffers],
                 dim=3,
@@ -427,13 +469,15 @@ def run_llama_all_gather_matmul_impl(
             output_tensor = output_tensor_goldens_list[tensor_index]
             validate(tt_out_tensor, output_tensor)
     else:
-        print(f"validating last tensor")
+        # print(f"validating last tensor")
         tt_out_tensor = tt_outs[-1]
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
+    expected_entries = 4 if padded_input else 1  # 3 slice/reshard ops + 1 AG+MM
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+        mesh_device.num_program_cache_entries() == expected_entries
+        or mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()

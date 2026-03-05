@@ -1486,6 +1486,40 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+            # RING_CRS = ttnn.CoreRangeSet(
+            #     [
+            #         ttnn.CoreRange(
+            #             ttnn.CoreCoord(x, y),
+            #             ttnn.CoreCoord(x, y),
+            #         )
+            #         for x, y in PREFETCHER_NOC1_GRID
+            #     ]
+            # )
+            # self.model_config["FF2_OUT_RING_MEMCFG_NEW"] = ttnn.MemoryConfig(
+            #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            #     ttnn.BufferType.L1,
+            #     ttnn.ShardSpec(
+            #         RING_CRS,
+            #         [32, 9216 // 4 // RING_SIZE],
+            #         ttnn.ShardOrientation.ROW_MAJOR,
+            #     ),
+            # )
+
+            # Fused AG+MM intermediate tensor config (4 cores for cluster_axis=1)
+            ag_mm_intermediate_crs = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(3, 5)),
+                ]
+            )
+            self.model_config["FF2_AG_MM_INTERMEDIATE_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ag_mm_intermediate_crs,
+                    [32, 896],  # [M, K/4] where K=3584, 4 devices on axis 1
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
 
             core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
             core_range = ttnn.CoreRange(
@@ -1763,6 +1797,19 @@ class TtModelArgs:
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     FF1_CRS_RS_OUT,
+                    [32, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+
+            FF1FF3_PRE_AG_MM_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0), 28, self.sub_core_grids, row_wise=True
+            )
+            self.model_config["FF1FF3_PRE_AG_MM_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    FF1FF3_PRE_AG_MM_CRS,
                     [32, 32],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),

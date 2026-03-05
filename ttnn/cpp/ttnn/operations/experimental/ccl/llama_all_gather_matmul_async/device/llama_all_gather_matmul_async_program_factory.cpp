@@ -169,6 +169,16 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     auto available_cores = sub_device_core_range_set.subtract(intermediate_tensor_cores);
     available_cores = available_cores.subtract(output_tensor_cores);
 
+    // Subtract matmul kernel placement cores (weight grid + hop cores) to prevent sender overlap
+    if (input1.memory_config().shard_spec().has_value()) {
+        available_cores = available_cores.subtract(input1.memory_config().shard_spec()->grid);
+    }
+    const auto* mm_1d_config =
+        std::get_if<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(&program_config);
+    if (mm_1d_config && !mm_1d_config->hop_cores.empty()) {
+        available_cores = available_cores.subtract(mm_1d_config->hop_cores);
+    }
+
     const auto [sender_worker_core_range, sender_worker_cores] =
         ar_choose_worker_cores(args.num_links, num_workers_per_link, available_cores);
 
@@ -210,7 +220,8 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             intermediate_tensor_shard_num_pages * intermediate_tensor_page_size, {{inter_cb_index, df}})
             .set_page_size(inter_cb_index, intermediate_tensor_page_size)
             .set_globally_allocated_address(*intermediate_tensor.buffer());
-    CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
+    auto intermediate_cb_handle = CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
+    log_info(tt::LogOp, "AGMM create: intermediate_buf_addr={}", intermediate_tensor.buffer()->address());
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
@@ -489,6 +500,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
          sender_worker_cores,
          intermediate_cores_vec,
          ring_index,
+         intermediate_cb_handle,
          matmul_shared_variables}};
 }
 
@@ -532,6 +544,10 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
             worker_receiver_runtime_args[0] = args.semaphore.address();
             worker_receiver_runtime_args[3] = aggregated_tensor.buffer()->address();
         }
+
+        // update intermediate CB address (may change when intermediate tensor is re-allocated)
+        log_info(tt::LogOp, "AGMM override: intermediate_buf_addr={}", intermediate_tensor.buffer()->address());
+        UpdateDynamicCircularBufferAddress(program, shared_vars.intermediate_cb_handle, *intermediate_tensor.buffer());
 
         ttnn::operations::llama_matmul::override_agmm_fusion_program_parameters(
             shared_vars.matmul_shared_variables,

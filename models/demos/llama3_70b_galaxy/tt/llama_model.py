@@ -165,7 +165,7 @@ class TtTransformer(LightweightModule):
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
-            n_tensors=5,
+            n_tensors=4,  # wqkv + wo + w1 + w3 (w2 reads from DRAM via fused AG+MM)
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
@@ -722,14 +722,10 @@ class TtTransformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
-        # ttnn.deallocate(h)
+        if h is not None:
+            ttnn.deallocate(h)
         if mode == "decode":
             ttnn.deallocate(garbage_tensor)
-
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
-            self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
-                self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
-            )
 
         if mode == "prefill":
             return x

@@ -674,7 +674,7 @@ class Generator(WarmupForwardMixin):
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(
+        tt_out_compile = self._decode_forward_no_trace_text(
             tokens,
             current_pos,
             page_table=page_table,

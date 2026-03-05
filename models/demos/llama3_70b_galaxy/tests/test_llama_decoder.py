@@ -4,7 +4,6 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
@@ -26,9 +25,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -78,13 +75,13 @@ def test_llama_decoder_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 1
+    model_args.n_layers = 2  # Test with 2 layers to check multi-layer AG+MM / prefetcher interaction
 
     state_dict = model_args.load_state_dict()
 
     prefetcher_setup = TtLlamaPrefetcherSetup(
         mesh_device,
-        n_tensors=5,
+        n_tensors=4,  # wqkv + wo + w1 + w3 (w2 reads from DRAM via fused AG+MM)
         n_layers=model_args.n_layers,
     )
     mesh_device.set_sub_device_stall_group(
@@ -92,13 +89,15 @@ def test_llama_decoder_inference(
     )
 
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
-    reference_model.load_state_dict(partial_state_dict)
+
+    # Create reference models for each layer
+    reference_models = []
+    for layer_id in range(model_args.n_layers):
+        layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", layer_id)
+        partial_state_dict = {k[len(layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(layer_prefix))}
+        ref_model = TransformerBlock(layer_id=layer_id, args=model_args)
+        ref_model.load_state_dict(partial_state_dict)
+        reference_models.append(ref_model)
 
     generation_start_pos = 127
     generation_length = 10
@@ -145,20 +144,23 @@ def test_llama_decoder_inference(
             ),
         )
 
-    # Initialize TT model
-    tt_model = TtTransformerBlock(
-        args=model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        layer_num=0,
-        n_layers=model_args.n_layers,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
-        paged_attention_config=paged_attention_config,
-        prefetcher_setup=prefetcher_setup,
-        tt_ccl=tt_ccl,
-    )
+    # Initialize TT models (one per layer)
+    tt_models = [
+        TtTransformerBlock(
+            args=model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            layer_num=i,
+            n_layers=model_args.n_layers,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            transformation_mats=transformation_mats,
+            paged_attention_config=paged_attention_config,
+            prefetcher_setup=prefetcher_setup,
+            tt_ccl=tt_ccl,
+        )
+        for i in range(model_args.n_layers)
+    ]
 
     seqlen = 1
 
@@ -203,21 +205,24 @@ def test_llama_decoder_inference(
         tt_pf = prefetcher_setup.get_input_tensors()
         ttnn.dram_prefetcher(
             tt_pf,
-            num_layers=1,
+            num_layers=model_args.n_layers,
             global_cb=prefetcher_setup.global_circular_buffer,
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
-        # Run TT model
+        # Run TT model — chain through all layers
         res = None
-        tt_out, res = tt_model(
-            decode_input,
-            res,
-            current_pos_tensor,
-            rot_mats=rot_mats,
-            mode="decode",
-            page_table=page_table_tt,
-        )
+        x = decode_input
+        for tt_model in tt_models:
+            x, res = tt_model(
+                x,
+                res,
+                current_pos_tensor,
+                rot_mats=rot_mats,
+                mode="decode",
+                page_table=page_table_tt,
+            )
+        tt_out = x
         tt_output_torch = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
@@ -226,8 +231,11 @@ def test_llama_decoder_inference(
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
-        # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        # Reference model — chain through all layers
+        ref_x = pt_decode_input
+        for ref_model in reference_models:
+            ref_x = ref_model(ref_x, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = ref_x
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 

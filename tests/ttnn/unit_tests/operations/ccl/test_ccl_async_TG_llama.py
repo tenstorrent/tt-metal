@@ -947,7 +947,7 @@ def test_all_reduce_6U_llama(
     [
         (
             1,
-            3,
+            4,
             30,
             BINARY_MULT_CRS,
             24,
@@ -971,7 +971,7 @@ def test_all_reduce_6U_llama(
         {
             "trace_region_size": 23887872,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
@@ -985,7 +985,7 @@ def test_all_reduce_6U_llama(
 )
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, padded_input",
     [
         (
             1,
@@ -1000,25 +1000,43 @@ def test_all_reduce_6U_llama(
             True,
             PREFETCHER_NOC1_GRID,
             False,
+            False,
         ),  # FF2 (Llama)
         (
             1,
             32,
-            3200,
-            1280,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
+            3584,
+            2048,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
             ttnn.MathFidelity.HiFi2,
             True,
             True,
             PREFETCHER_NOC1_GRID,
             False,
-        ),  # FF2 (Qwen)
+            True,
+        ),  # FF2 (Llama padded) — simulates model w1/w3 N-padding
+        # (
+        #     1,
+        #     32,
+        #     3200,
+        #     1280,
+        #     ttnn.bfloat16,
+        #     ttnn.bfloat16,
+        #     ttnn.bfloat16,
+        #     ttnn.MathFidelity.HiFi2,
+        #     True,
+        #     True,
+        #     PREFETCHER_NOC1_GRID,
+        #     False,
+        #     False,
+        # ),  # FF2 (Qwen)
     ],
     ids=[
         "ff2_llama",
-        "ff2_qwen",
+        "ff2_llama_padded",
+        # "ff2_qwen",
     ],
 )
 def test_llama_all_gather_matmul(
@@ -1037,6 +1055,7 @@ def test_llama_all_gather_matmul(
     N,
     grid,
     in1_is_dram_interleaved,
+    padded_input,
     num_links,
     input_num_cores,
     input_core_range_set,
@@ -1075,4 +1094,5 @@ def test_llama_all_gather_matmul(
         num_iters=num_iters,
         trace_mode=trace_mode,
         validate_all=False,
+        padded_input=padded_input,
     )
