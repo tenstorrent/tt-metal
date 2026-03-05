@@ -139,20 +139,29 @@ void kernel_main() {
 #endif
 #endif
 
-        // Pass 1: Data for calculating variance
+// Pass 1: Data for calculating variance.
+// RM path: push all in_rm first, then all in1 (separate) — the tilize step in
+//   compute provides enough pipeline slack.
+// TILE path: in0 and in1 MUST be interleaved per block to avoid deadlock.
+//   cb_in0 holds only 2*block_size tiles; filling all in0 before any in1 stalls
+//   once the buffer is full while compute waits for in1 — circular wait.
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
             cb_id_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
-#else
-        for (auto block : generic::blocks(Wt, block_size)) {
-            layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
-        }
-#endif
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
                 cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+        }
+#endif
+#else  // TILE path: interleaved per block
+        for (auto block : generic::blocks(Wt, block_size)) {
+            layernorm_dataflow_utils::read_block_to_cb(
+                cb_id_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+#ifdef FUSE_PRE_ADD
+            layernorm_dataflow_utils::read_block_to_cb(
+                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+#endif
         }
 #endif
 
