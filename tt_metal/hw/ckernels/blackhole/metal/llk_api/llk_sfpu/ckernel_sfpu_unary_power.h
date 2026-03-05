@@ -155,6 +155,35 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     return y;
 }
 
+sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
+    sfpi::vFloat low = -127.0f;
+    // Handle underflow
+    sfpi::vec_min_max(low, z);
+
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+
+    // Compute val = z * ln(2), then r = val - k*ln(2) in extended precision.
+    constexpr float LN2 = 0.693147180559945309f;
+    constexpr float LN2_HI = -0.6931152343750000f;
+    constexpr float LN2_LO = -3.19461832987e-05f;
+
+    sfpi::vFloat val = z * LN2;
+    sfpi::vFloat r_hi = k * LN2_HI + val;
+    sfpi::vFloat r = k * LN2_LO + r_hi;
+
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        r, sfpi::vConst1, sfpi::vConst1, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
+
+    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp_nodebias(p) + k_int);
+
+    // Handle overflow
+    v_if(z >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
+    v_endif;
+
+    return result;
+}
+
 template <bool IS_POSITIVE_EXPONENT>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
     // The algorithm works in two steps:
@@ -169,9 +198,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 
     // Range reduction: ensure m in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
     constexpr float SQRT2 = 1.4142135381698608f;
-    // If m >= sqrt(2), divide by 2 and increment exponent
     v_if(m >= SQRT2) {
-        m = m * 0.5f;
+        m = sfpi::addexp(m, -1);
         exp = exp + 1;
     }
     v_endif;
@@ -202,16 +230,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
     sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
 
-    // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
-    // 0**+inf, N**-inf).
-    sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
-    v_endif;
-
-    // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
-    constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_f32_accurate_(z_f32 * LN2);
+    // Step 2: base**pow = 2**(pow*log2(base))
+    sfpi::vFloat y = _sfpu_pow2_f32_accurate_(pow * log2_result);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     if constexpr (!IS_POSITIVE_EXPONENT) {
