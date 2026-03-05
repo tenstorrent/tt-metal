@@ -4,6 +4,8 @@ This document describes the CSV output schemas produced by the three log analysi
 
 All scripts also accept an optional `--csv-prefix PREFIX` flag. When provided, `--csv` is treated as the output **directory** and filenames are generated automatically following the naming convention shown below (e.g. `{domain}_test_{PREFIX}_summary.csv`). When omitted, the original behaviour is preserved — `--csv` is treated as a base filepath and `_summary`, `_details`, etc. are appended to its stem.
 
+All scripts accept an optional `--hosts HOSTS` flag (comma-separated list of hostnames the test ran on). When provided, the value is written to the `hosts` column in the CSV summary output. When omitted, the column is empty (dispatch and fabric) or populated from log content (validation). The `hosts` column always appears in CSV output regardless of whether the flag is used.
+
 ## Common Columns
 
 The following columns appear across all CSV outputs:
@@ -27,6 +29,7 @@ One row per analyzed log file.
 | `timestamp` | string | Analysis timestamp |
 | `log_file` | string | Source log filename |
 | `domain` | string | Always `dispatch` |
+| `hosts` | string | Comma-separated list of hosts the test ran on (from `--hosts`, empty when not provided) |
 | `total_processes` | int | Number of MPI processes (GTest instances) |
 | `tests_run` | int | Total tests executed |
 | `tests_passed` | int | Number of passed tests |
@@ -65,6 +68,7 @@ One row per analyzed log file.
 | `timestamp` | string | Analysis timestamp |
 | `log_file` | string | Source log filename |
 | `domain` | string | Always `fabric` |
+| `hosts` | string | Comma-separated list of hosts the test ran on (from `--hosts`, empty when not provided) |
 | `test_passed` | bool | Whether all hosts passed |
 | `num_hosts` | int | Number of MPI hosts detected |
 | `warnings_count` | int | Runtime warnings detected |
