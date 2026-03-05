@@ -341,7 +341,6 @@ struct ReduceToOneB1 {
 
             // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                DPRINT << "Reduce to One started on Aggregator Core" << ENDL();
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
@@ -358,9 +357,7 @@ struct ReduceToOneB1 {
                         // Aggregator (shard_idx==0): wait for all other workers, then stream to downstream socket.
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                        DPRINT << "Aggregator waiting for " << CTArgs::total_num_workers - 1 << " workers" << ENDL();
                         noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        DPRINT << "Aggregator semaphore wait done" << ENDL();
                         noc_semaphore_set(agg_sem_ptr, 0);
 
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
@@ -370,7 +367,6 @@ struct ReduceToOneB1 {
 
                         uint32_t scratch_l1 = get_read_ptr(CTArgs::scratch_cb);
                         uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
-                        DPRINT << "Aggregator reading pages from workers and writing to D2D" << ENDL();
                         for (uint32_t i = 0; i < CTArgs::total_num_workers; i++) {
                             // Read from padded stride on output core
                             uint64_t shard_src = get_noc_addr(
@@ -388,16 +384,13 @@ struct ReduceToOneB1 {
                             noc_async_write(scratch_l1, fifo_dst, useful_per_shard);
                             noc_async_writes_flushed();
                         }
-                        DPRINT << "Aggregator reading pages from workers and writing to D2D done" << ENDL();
                         socket_push_pages(sender_socket, 1);
                         socket_notify_receiver(sender_socket);
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
                         noc_async_write_barrier();
                         update_socket_config(sender_socket);
-                        DPRINT << "Aggregator update socket config done" << ENDL();
                         send_persistent_next_iter_inc_via_fabric(args);
-                        DPRINT << "Aggregator send persistent next iter inc via fabric done" << ENDL();
                     } else if (args.agg_sem_l1_addr != 0) {
                         // Non-aggregator worker: signal the aggregator that our shard is ready.
                         uint64_t agg_sem_noc =
