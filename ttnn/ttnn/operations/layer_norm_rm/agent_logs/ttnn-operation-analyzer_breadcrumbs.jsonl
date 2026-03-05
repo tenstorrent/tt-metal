@@ -12,3 +12,4 @@
 {"event":"result","type":"git_commit","success":true,"commit_sha":"4938c0d266","ts":"2026-03-05T11:24:12+00:00"}
 {"event":"complete","final_status":"SUCCESS","stages_completed":["analysis"],"final_commit":"4938c0d266","ts":"2026-03-05T11:24:16+00:00"}
 {"event":"analysis_complete","details":"Committed untilize_analysis.md (output_stage focus) at 46071fc2b4. 2 files, 470 insertions.","ts":"2026-03-05T11:24:41+00:00"}
+{"event":"analysis_written","details":"Wrote softmax_analysis.md covering: both w_small and w_large variants, full CB layout with capacity/lifetime, multi-pass data reuse patterns (3x DRAM reread in w_large vs single read in w_small), reduce helper API with all parameter types, binary op broadcast patterns (COL), scalar/constant CB setup, post-reduce lambdas (recip_tile), accumulation pattern for two-phase max, and relevance mapping to layer_norm_rm.","ts":"2026-03-05T11:26:26+00:00"}
