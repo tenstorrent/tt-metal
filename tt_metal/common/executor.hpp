@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <taskflow/taskflow.hpp>
 #include <thread>
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::detail {
 inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
@@ -19,12 +20,22 @@ using ExecTask = tf::Task;
 inline Executor& GetExecutor() {
     // Child process needs to reinitialize the executor after fork()
     // otherwise it will hang because it will try to reference stale thread state
-    // copied from the parent process
+    // copied from the parent process.
+    // Also ensure that no work is in-flight on the main process before forking.
     static Executor* exec = [] {
         auto* e = new Executor(EXECUTOR_NTHREADS);
         pthread_atfork(
-            /*prepare=*/nullptr,
-            /*parent=*/nullptr,
+            /*prepare=*/
+            [] {
+                TT_FATAL(
+                    exec->num_topologies() == 0,
+                    "fork() called while executor has in-flight work "
+                    "(num_topologies={}). All tasks must complete before forking.",
+                    exec->num_topologies());
+                delete exec;
+                exec = nullptr;
+            },
+            /*parent=*/[] { exec = new Executor(EXECUTOR_NTHREADS); },
             /*child=*/[] { exec = new Executor(EXECUTOR_NTHREADS); });
         return e;
     }();

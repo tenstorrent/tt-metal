@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 #include "common/executor.hpp"
@@ -15,6 +16,16 @@ TEST(ExecutorTest, AsyncRunsInline) {
     auto fut = detail::async([&value] { value.store(42); });
     fut.get();
     EXPECT_EQ(value.load(), 42);
+}
+
+TEST(ExecutorDeathTest, ForkWithInflightWorkAborts) {
+    ASSERT_DEATH(
+        {
+            detail::GetExecutor().silent_async([] { std::this_thread::sleep_for(std::chrono::seconds(5)); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            fork();
+        },
+        "fork.*in-flight work");
 }
 
 TEST(ExecutorTest, ForkSafety) {
