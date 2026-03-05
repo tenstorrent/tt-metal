@@ -197,7 +197,7 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
-        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
+        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value, false);
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted

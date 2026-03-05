@@ -92,6 +92,8 @@ OPS_CSV_HEADER = [
     "COMPUTE KERNEL HASH",
     "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
+    "PROGRAM HASH",
+    "PROGRAM CACHE HIT",
     "TENSIX DM 0 MAX KERNEL SIZE [B]",
     "TENSIX DM 1 MAX KERNEL SIZE [B]",
     "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
@@ -1301,6 +1303,12 @@ def generate_reports(
 
                     for kernel, kernelSize in active_op_record["kernel_info"]["kernel_sizes"].items():
                         csv_row[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
+
+                # Extract program hash and cache hit status
+                if "op_hash" in active_op_record:
+                    csv_row["PROGRAM HASH"] = active_op_record["op_hash"]
+                if "program_cache_hit" in active_op_record:
+                    csv_row["PROGRAM CACHE HIT"] = active_op_record["program_cache_hit"]
 
                 if "core_usage" in active_op_record:
                     csv_row["CORE COUNT"] = active_op_record["core_usage"]["count"]
