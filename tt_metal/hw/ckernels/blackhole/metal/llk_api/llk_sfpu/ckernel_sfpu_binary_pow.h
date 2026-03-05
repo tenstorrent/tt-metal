@@ -174,8 +174,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // Transform to z = (m - 1) / (m + 1)
     sfpi::vFloat m_plus_1 = m + sfpi::vConst1;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
     sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
-    // 1/t: initial guess 1.003f - 0.244f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 - t*y).
-    sfpi::vFloat recip = 1.003f - 0.244f * m_plus_1;
+    // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
+    // t*y).
+    sfpi::vFloat recip = sfpi::vConst1 - 0.2426406871192851f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
     recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
     sfpi::vFloat z = m_minus_1 * recip;
