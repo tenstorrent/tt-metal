@@ -273,7 +273,6 @@ jobs:
             },
             {
               "name": "[WH-N300] NoOp test model (vLLM overhead)",
-              "name": "[WH-N300] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
               "benchmark-timeout": 2,
