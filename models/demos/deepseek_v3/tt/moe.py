@@ -4,7 +4,6 @@
 from pathlib import Path
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -21,6 +20,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -156,14 +156,20 @@ class MoE(SharedStateAddOn, AbstractModule):
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
 
-            USERS_PER_ROW = 32
             HIDDEN_SIZE = hf_config.hidden_size
             TP_SIZE = mesh_device.shape[1]
 
+            shard_core_grid = ttnn.CoreGrid(y=7, x=4)
+            per_core_width = (HIDDEN_SIZE // TP_SIZE) // shard_core_grid.num_cores
             input_output_memory_config = ttnn.create_sharded_memory_config(
-                shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE),
-                core_grid=ttnn.CoreGrid(y=7, x=4),
+                shape=(
+                    ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                    ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
+                ),
+                core_grid=shard_core_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
             # Construct the config
@@ -282,6 +288,20 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        # Validate input dimensions
+        hidden_size = cfg["hidden_size"]
+        mesh_device = cfg.get("mesh_device")
+        tp_size = mesh_device.shape[1] if mesh_device else 1
+
+        x_dim = x.shape[-1]
+        expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
+
+        if x_dim not in expected_dims:
+            raise ValueError(
+                f"MoE: Unexpected input dimension {x_dim}. Expected one of {expected_dims}. "
+                f"(hidden_size={hidden_size}, tp_size={tp_size})"
+            )
+
         # breakpoint()
         ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
@@ -290,25 +310,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
         batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
 
-        # All Gather (only if input is TP-sharded)
-        hidden_size = cfg["hidden_size"]
-        tp_size = cfg["mesh_device"].shape[1]
-        x_dim = x.shape[-1]
-
-        if x_dim == hidden_size:
-            # Already full hidden size; skip all_gather
-            pass
-        elif x_dim == hidden_size // tp_size:
-            x = cls._fwd_all_gather(x, cfg)
-        else:
-            logger.warning(
-                f"MoE forward: unexpected input hidden dim {x_dim} (hidden_size={hidden_size}, tp_size={tp_size}); "
-                "running all_gather as fallback."
-            )
-            x = cls._fwd_all_gather(x, cfg)
+        # Note: all_gather is handled by the caller (decoder block or test)
 
         # MoE Gate
-
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # Repeat + Permute Expert weights
@@ -327,9 +331,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Reduce Scatter
-
-        post_combine_output_tensor = cls._fwd_reduce_scatter(post_combine_output_tensor, cfg, ccl)
+        # Note: reduce_scatter is handled by the caller (decoder block or test)
 
         return post_combine_output_tensor
 
@@ -469,18 +471,58 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _fwd_reduce_scatter(
         cls, post_combine_output_tensor: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, ccl: CCL
     ) -> ttnn.Tensor:
-        return ttnn.experimental.reduce_scatter_minimal_async(
-            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
-        )
+        # Use standard reduce_scatter (composite fallback) to avoid shard shape constraints
+        # encountered by the minimal async path in some decode configurations.
+        rs_cfg = cfg["final_output_reduce_scatter"]
+        rs_kwargs = {
+            "dim": rs_cfg["dim"],
+            "cluster_axis": rs_cfg.get("cluster_axis"),
+            "subdevice_id": rs_cfg.get("subdevice_id"),
+            "memory_config": rs_cfg.get("memory_config"),
+            "intermediate_memory_config": rs_cfg.get("intermediate_memory_config"),
+            "num_links": rs_cfg.get("num_links"),
+            "topology": rs_cfg.get("topology"),
+            "chunks_per_sync": rs_cfg.get("chunks_per_sync"),
+            "num_workers_per_link": rs_cfg.get("num_workers_per_link"),
+            "num_buffers_per_channel": rs_cfg.get("num_buffers_per_channel"),
+        }
+        rs_kwargs = {k: v for k, v in rs_kwargs.items() if v is not None}
+        return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_prefill(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
+    ) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls.forward(x, cfg)
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward(x, cfg)
+
+        # Handle reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output

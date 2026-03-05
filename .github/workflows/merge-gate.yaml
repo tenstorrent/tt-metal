@@ -184,6 +184,7 @@ jobs:
         platform: [
           "N300-viommu",
           "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -207,6 +208,7 @@ jobs:
         platform: [
           "N300-viommu",
           "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -253,6 +255,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -275,6 +278,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -292,19 +296,12 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 }
-        ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
     with:
+      enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
       merge-gate-call: true
 
   # TT-CNN Unit tests

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <vector>
 
@@ -12,7 +13,7 @@
 namespace ttnn::experimental::prim {
 
 struct SendAsyncParams {
-    const tt::tt_metal::distributed::MeshSocket mesh_socket;  // No default contructor
+    const tt::tt_metal::distributed::MeshSocket mesh_socket;  // No default constructor
     SendAsyncParams(const tt::tt_metal::distributed::MeshSocket& mesh_socket) : mesh_socket(mesh_socket) {}
     // Add attributes method for reflection
     auto attributes() const {

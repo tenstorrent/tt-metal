@@ -18,6 +18,9 @@ Optional:
                                             (default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto)
     --iterations <number>                   Number of times to run the full validation sequence (default: 50)
                                             Each iteration runs run_cluster_validation with 10 internal iterations
+
+    --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
+                                            (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
     --help                                  Display this help message and exit
 
@@ -34,6 +37,8 @@ DOCKER_IMAGE=""
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
+
+FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
 
 while [[ $# -gt 0 ]]; do
@@ -68,6 +73,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             DEPLOYMENT_DESCRIPTOR_PATH="$2"
+            shift 2
+            ;;
+        --factory-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --factory-descriptor-path requires a non-empty value"
+                exit 1
+            fi
+            FACTORY_DESCRIPTOR_PATH="$2"
             shift 2
             ;;
         --iterations)
@@ -120,8 +133,12 @@ fi
 
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
-echo "Cabling descriptor path: $CABLING_DESCRIPTOR_PATH"
-echo "Deployment descriptor path: $DEPLOYMENT_DESCRIPTOR_PATH"
+if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+    echo "Factory descriptor path: $FACTORY_DESCRIPTOR_PATH"
+else
+    echo "Cabling descriptor path: $CABLING_DESCRIPTOR_PATH"
+    echo "Deployment descriptor path: $DEPLOYMENT_DESCRIPTOR_PATH"
+fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
 echo ""
@@ -149,14 +166,24 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
         echo ""
         echo "Running cluster validation..."
-        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-            --empty-entrypoint \
-            --host "$HOSTS" \
-            ./build/tools/scaleout/run_cluster_validation \
-            --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
-            --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
-            --send-traffic \
-            --num-iterations 10
+        if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
+            ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+                --empty-entrypoint \
+                --host "$HOSTS" \
+                ./build/tools/scaleout/run_cluster_validation \
+                --factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH" \
+                --send-traffic \
+                --num-iterations 10
+        else
+            ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+                --empty-entrypoint \
+                --host "$HOSTS" \
+                ./build/tools/scaleout/run_cluster_validation \
+                --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
+                --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
+                --send-traffic \
+                --num-iterations 10
+        fi
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"

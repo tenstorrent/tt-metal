@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -135,6 +135,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        vae_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -249,6 +250,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
+            dtype=vae_dtype,
         )
 
         if self.dynamic_load:
@@ -259,8 +261,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self.transformer.set_unload_set(self.transformer_2)
             self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
 
-        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
-        # Cache warmup: Load in reverse order of use to ensure the first models stay loaded before call.
+        # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
         self._prepare_transformer1()
         self._prepare_text_encoder()
@@ -979,7 +980,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tt_latents_BTHWC, logical_h = conv_pad_height(
                 tt_latents_BTHWC, self.vae_parallel_config.height_parallel.factor
             )
-            tt_latents_BTHWC = bf16_tensor_2dshard(
+            tt_latents_BTHWC = typed_tensor_2dshard(
                 tt_latents_BTHWC,
                 self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -987,6 +988,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self.vae_parallel_config.height_parallel.mesh_axis: 2,
                     self.vae_parallel_config.width_parallel.mesh_axis: 3,
                 },
+                dtype=self.tt_vae.dtype,
             )
             with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 self._prepare_vae()
@@ -995,12 +997,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-            video_torch = ttnn.to_torch(
-                tt_video_BCTHW,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
-                ),
-            )
+            video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
             video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
