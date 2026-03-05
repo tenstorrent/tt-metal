@@ -51,8 +51,8 @@ def test_clip_encoder(
     tokenizer_location = sdxl_base_tokenizer_2_location if has_projection else sdxl_base_tokenizer_location
 
     # Build kwargs conditionally to avoid transformers subfolder=None bug
-    model_kwargs = {"local_files_only": is_ci_v2_env}
-    tokenizer_kwargs = {"local_files_only": is_ci_v2_env}
+    model_kwargs = {"local_files_only": is_ci_v2_env or is_ci_env}
+    tokenizer_kwargs = {"local_files_only": is_ci_v2_env or is_ci_env}
 
     if not is_ci_v2_env:
         model_kwargs["subfolder"] = clip_path

@@ -41,7 +41,7 @@ def test_euler_discrete_scheduler(
         sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_v2_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     scheduler = pipe.scheduler
@@ -135,7 +135,7 @@ def test_euler_discrete_scheduler_add_noise(
         sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_v2_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     scheduler = pipe.scheduler

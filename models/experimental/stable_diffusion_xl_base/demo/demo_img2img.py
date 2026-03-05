@@ -86,7 +86,7 @@ def run_demo_inference(
         sdxl_refiner_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_v2_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 

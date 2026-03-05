@@ -54,7 +54,7 @@ def test_downsample2d(
         sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_v2_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
         subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()

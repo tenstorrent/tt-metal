@@ -74,7 +74,7 @@ def run_demo_inference(
         sdxl_base_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_v2_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
     )
 
     refiner_pipeline = None
@@ -83,7 +83,7 @@ def run_demo_inference(
             sdxl_refiner_pipeline_location,
             torch_dtype=torch.float32,
             use_safetensors=True,
-            local_files_only=is_ci_v2_env,
+            local_files_only=is_ci_v2_env or is_ci_env,
             text_encoder_2=base_pipeline.text_encoder_2,
             vae=base_pipeline.vae,
         )
