@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include <algorithm>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::prim::detail {
 
@@ -49,6 +51,219 @@ struct CoreChainInfo {
     uint32_t mcast_num_dests = 0;    // num_dests for mcast API (includes self if injector inside rect)
     uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
 };
+
+// ---- Chain builder for KV store-and-forward optimization ----
+//
+// For each head that spans >= 2 cores, builds a forwarding chain:
+// find the best chain start, build wrap-around order, handle uniform/mixed
+// q_chunks, and select the injector core by DRAM channel distance.
+//
+// `num_heads_per_batch` is NQH for classic SDPA or NH for ring-joint SDPA.
+// It is used to decompose head_id -> head via `head_id % num_heads_per_batch`.
+static inline void build_chains_for_heads(
+    const std::vector<std::vector<HeadSegmentRef>>& head_segments,
+    std::vector<CoreChainInfo>& core_chain_info,
+    const std::vector<CoreWork>& core_work,
+    uint32_t num_heads_per_batch) {
+    uint32_t chains_built = 0;
+    uint32_t chains_skipped = 0;
+    // Track injector physical X columns for DRAM channel spreading
+    std::vector<uint32_t> injector_phys_x;
+
+    for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
+        auto& segments = head_segments[head_id];
+        if (segments.size() < 2) {
+            continue;  // No chain needed for single core
+        }
+
+        // Find first non-conflicting single-segment core as chain start.
+        // Exclude the last segment: it must remain as a chain tail since the
+        // wrap-around build below needs at least one segment after start.
+        std::optional<std::size_t> chain_start_idx;
+        for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+            const auto& seg = segments[idx];
+            const auto& work = core_work[seg.core_idx];
+            if (work.global_q_count == 0) {
+                continue;
+            }
+            if (seg.head_work_index >= work.head_work.size()) {
+                continue;
+            }
+            if (core_chain_info[seg.core_idx].participates) {
+                continue;
+            }
+            if (work.head_work.size() == 1) {
+                chain_start_idx = idx;
+                break;
+            }
+        }
+        if (!chain_start_idx.has_value()) {
+            for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
+                const auto& seg = segments[idx];
+                if (core_work[seg.core_idx].global_q_count == 0) {
+                    continue;
+                }
+                if (!core_chain_info[seg.core_idx].participates) {
+                    chain_start_idx = idx;
+                    break;
+                }
+            }
+        }
+
+        if (!chain_start_idx.has_value()) {
+            chains_skipped++;
+            continue;
+        }
+
+        const std::size_t start = chain_start_idx.value();
+
+        // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
+        // Break on conflict (core already in a different chain).
+        std::vector<std::size_t> chain_order;
+        for (std::size_t step = 0; step < segments.size(); ++step) {
+            std::size_t idx = (start + step) % segments.size();
+            const auto& seg = segments[idx];
+            const uint32_t core_idx = seg.core_idx;
+            if (core_work[core_idx].global_q_count == 0) {
+                continue;
+            }
+            if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
+                continue;
+            }
+            if (core_chain_info[core_idx].participates) {
+                break;
+            }
+            chain_order.push_back(idx);
+        }
+
+        if (chain_order.size() < 2) {
+            chains_skipped++;
+            continue;
+        }
+
+        // Check if all chain cores have the same q_chunk_count.
+        // Mixed q_chunk_count chains are safe in unicast mode when sorted in
+        // descending q_chunk_count order: the kernel's should_forward condition
+        // guards on (q_iter < next_core_q_chunks), so a heavier sender only
+        // forwards for the lighter receiver's iteration count, and the receiver
+        // receives for all of its own iterations.  Mcast mode requires uniform
+        // q_chunk_count (checked separately in the mcast eligibility pass).
+        const uint32_t ref_q = core_work[segments[chain_order[0]].core_idx]
+                                   .head_work[segments[chain_order[0]].head_work_index]
+                                   .q_chunk_count;
+        bool uniform_q = true;
+        for (std::size_t i = 1; i < chain_order.size(); ++i) {
+            const auto& seg = segments[chain_order[i]];
+            if (core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count != ref_q) {
+                uniform_q = false;
+                break;
+            }
+        }
+
+        if (uniform_q) {
+            // All cores have equal q_chunk_count — safe to pick any injector.
+            // Choose the core whose physical X is furthest from existing
+            // injectors to spread DRAM reads across channels.
+            std::size_t best_pos = 0;
+            uint32_t best_dist = 0;
+            for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+                const uint32_t phys_x = core_work[segments[chain_order[pos]].core_idx].physical_core.x;
+                uint32_t min_dist = UINT32_MAX;
+                for (uint32_t ix : injector_phys_x) {
+                    uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
+                    min_dist = std::min(min_dist, d);
+                }
+                if (min_dist > best_dist) {
+                    best_dist = min_dist;
+                    best_pos = pos;
+                }
+            }
+            if (best_pos != 0) {
+                std::swap(chain_order[0], chain_order[best_pos]);
+            }
+        } else {
+            // Mixed q_chunk_counts — sort descending so heavier cores come first.
+            // Each sender forwards only for min(own_q_iters, next_core_q_chunks)
+            // iterations, so a heavier sender safely serves a lighter receiver.
+            // Stable sort preserves physical topology where q_counts are equal.
+            std::stable_sort(chain_order.begin(), chain_order.end(), [&](std::size_t a, std::size_t b) {
+                const auto& seg_a = segments[a];
+                const auto& seg_b = segments[b];
+                return core_work[seg_a.core_idx].head_work[seg_a.head_work_index].q_chunk_count >
+                       core_work[seg_b.core_idx].head_work[seg_b.head_work_index].q_chunk_count;
+            });
+        }
+
+        const auto& inj_seg = segments[chain_order[0]];
+        injector_phys_x.push_back(core_work[inj_seg.core_idx].physical_core.x);
+        uint32_t batch = core_work[inj_seg.core_idx].head_work[inj_seg.head_work_index].batch;
+        uint32_t head = head_id % num_heads_per_batch;
+
+        log_debug(
+            tt::LogOp,
+            "Building chain for head {} (batch={}, head={}): {} cores, uniform_q={}, injector phys_x={}",
+            head_id,
+            batch,
+            head,
+            chain_order.size(),
+            uniform_q,
+            core_work[inj_seg.core_idx].physical_core.x);
+
+        for (std::size_t pos = 0; pos < chain_order.size(); ++pos) {
+            const std::size_t idx = chain_order[pos];
+            const auto& seg = segments[idx];
+            const uint32_t core_idx = seg.core_idx;
+            const auto& hw = core_work[core_idx].head_work[seg.head_work_index];
+            auto& chain = core_chain_info[core_idx];
+
+            chain.participates = true;
+            chain.batch = hw.batch;
+            chain.head = hw.head;
+            chain.q_chunk_start = hw.q_chunk_start;
+            chain.q_chunk_count = hw.q_chunk_count;
+
+            if (pos == 0) {
+                chain.is_injector = true;
+            }
+            if (pos == chain_order.size() - 1) {
+                chain.is_sink = true;
+            }
+
+            // Set prev core coordinates (previous in wrap order)
+            if (pos > 0) {
+                const uint32_t prev_core_idx = segments[chain_order[pos - 1]].core_idx;
+                chain.prev_physical = core_work[prev_core_idx].physical_core;
+            }
+
+            // Set next core coordinates and q_chunk count (next in wrap order)
+            if (pos + 1 < chain_order.size()) {
+                const std::size_t next_idx = chain_order[pos + 1];
+                const uint32_t next_core_idx = segments[next_idx].core_idx;
+                chain.next_physical = core_work[next_core_idx].physical_core;
+                const auto& next_hw = core_work[next_core_idx].head_work[segments[next_idx].head_work_index];
+                chain.next_core_q_chunks = next_hw.q_chunk_count;
+            }
+
+            log_debug(
+                tt::LogOp,
+                "  Core {} in chain: injector={}, sink={}, q_chunks={}, prev={}, next={}",
+                core_idx,
+                chain.is_injector,
+                chain.is_sink,
+                chain.q_chunk_count,
+                chain.prev_physical,
+                chain.next_physical);
+        }
+
+        chains_built++;
+    }
+
+    log_debug(
+        tt::LogOp,
+        "Chain construction complete: {} chains built, {} skipped due to conflicts",
+        chains_built,
+        chains_skipped);
+}
 
 // ---- Multicast eligibility checker ----
 //
