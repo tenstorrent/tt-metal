@@ -163,6 +163,6 @@ extern "C" uint32_t _start1() {
         DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
+        DPRINT << "COMPLETION SIGNED OFF " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
     }
 }
