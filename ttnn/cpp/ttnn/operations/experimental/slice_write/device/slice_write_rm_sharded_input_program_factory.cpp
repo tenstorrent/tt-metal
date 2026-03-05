@@ -108,7 +108,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         "slice_write expects output start for the last dimension to be 0. Got {}",
         output_tensor_start[-1]);
 
-    log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
+    log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
         output_row_size_bytes,
