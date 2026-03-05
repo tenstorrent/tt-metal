@@ -557,10 +557,16 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
         }
         this->virtual_pcie_cores_[chip_id] = {};
         this->virtual_dram_cores_[chip_id] = {};
+        this->virtual_dram_hw_cores_[chip_id] = {};
         if (this->arch_ == ARCH::BLACKHOLE) {
             for (const tt::umd::CoreCoord& core :
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
+            }
+
+            for (const tt::umd::CoreCoord& core :
+                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+                this->virtual_dram_hw_cores_[chip_id].insert({core.x, core.y});
             }
 
             for (uint32_t noc = 0; noc < this->num_nocs_; noc++) {
@@ -609,7 +615,7 @@ bool Cluster::is_ethernet_core(const CoreCoord& core, ChipId chip_id) const {
 }
 
 bool Cluster::is_dram_core(const CoreCoord& core, ChipId chip_id) const {
-    return this->virtual_dram_cores_.contains(chip_id) and this->virtual_dram_cores_.at(chip_id).contains(core);
+    return this->virtual_dram_hw_cores_.contains(chip_id) and this->virtual_dram_hw_cores_.at(chip_id).contains(core);
 }
 
 const std::unordered_set<CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {
