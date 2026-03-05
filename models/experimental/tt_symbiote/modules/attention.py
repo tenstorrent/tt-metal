@@ -1105,6 +1105,61 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         )
         self._kv_a_ln_eps = kv_a_ln.variance_epsilon
 
+        self._mesh_mapper = mesh_mapper
+
+        half_dim = self.qk_rope_head_dim // 2
+        perm_idx = torch.arange(half_dim).repeat_interleave(2).reshape(1, 1, 1, -1).to(torch.int32)
+        self._rope_perm_idx = ttnn.from_torch(
+            perm_idx,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if self.device.get_num_devices() > 1:
+            self._cos_sin_mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        else:
+            self._cos_sin_mesh_composer = None
+
+        tile_size = 32
+        shard_h = ((self.num_heads + tile_size - 1) // tile_size) * tile_size
+        self._decode_shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(shard_h, self.qk_head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+        if self.device.get_num_devices() > 1:
+            buf_shape = (1, 1, self.num_heads, self.qk_head_dim)
+            buf_torch = torch.zeros(buf_shape, dtype=torch.bfloat16)
+            self._q_decode_buf = ttnn.from_torch(
+                buf_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            self._k_decode_buf = ttnn.from_torch(
+                buf_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            self._v_decode_buf = ttnn.from_torch(
+                buf_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
     @property
     def _is_distributed(self):
         return (
@@ -1129,42 +1184,45 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
     def _permute_cos_sin_to_meta_format(self, cos, sin):
         """Convert cos/sin from HF doubled-half format to Meta interleaved-pair format.
 
-        HF format:  [c(f0), c(f1), ..., c(f_{d/2-1}), c(f0), c(f1), ..., c(f_{d/2-1})]
-        Meta format: [c(f0), c(f0), c(f1), c(f1), ..., c(f_{d/2-1}), c(f_{d/2-1})]
-
-        rotary_embedding_llama expects Meta format where each adjacent pair shares
-        the same frequency, matching its interleaved rotation convention.
+        For decode (seq_len=1): uses device-side gather with precomputed indices.
+        For prefill (seq_len>1): uses host path (runs only once, not perf critical).
         """
-        half_dim = self.qk_rope_head_dim // 2
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        if cos.layout != ttnn.TILE_LAYOUT:
+            cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if sin.layout != ttnn.TILE_LAYOUT:
+            sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if self._is_distributed:
-            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
-            cos_t = ttnn.to_torch(cos, mesh_composer=mesh_composer)[:1]
-            sin_t = ttnn.to_torch(sin, mesh_composer=mesh_composer)[:1]
+        seq_len = cos.shape[2] if len(cos.shape) == 4 else cos.shape[1]
+        if seq_len == 1:
+            cos = ttnn.gather(cos, dim=3, index=self._rope_perm_idx)
+            sin = ttnn.gather(sin, dim=3, index=self._rope_perm_idx)
         else:
-            cos_t = ttnn.to_torch(cos)
-            sin_t = ttnn.to_torch(sin)
-
-        cos_t = cos_t[..., :half_dim].repeat_interleave(2, dim=-1)
-        sin_t = sin_t[..., :half_dim].repeat_interleave(2, dim=-1)
-
-        cos = ttnn.from_torch(
-            cos_t,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        sin = ttnn.from_torch(
-            sin_t,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            half_dim = self.qk_rope_head_dim // 2
+            mesh_composer = self._cos_sin_mesh_composer
+            if self._is_distributed:
+                cos_t = ttnn.to_torch(cos, mesh_composer=mesh_composer)[:1]
+                sin_t = ttnn.to_torch(sin, mesh_composer=mesh_composer)[:1]
+            else:
+                cos_t = ttnn.to_torch(cos)
+                sin_t = ttnn.to_torch(sin)
+            cos_t = cos_t[..., :half_dim].repeat_interleave(2, dim=-1)
+            sin_t = sin_t[..., :half_dim].repeat_interleave(2, dim=-1)
+            cos = ttnn.from_torch(
+                cos_t,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=self._mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sin = ttnn.from_torch(
+                sin_t,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=self._mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         return cos, sin
 
     def _project_qkv(self, hidden_states, batch_size, seq_length, position_embeddings):
@@ -1315,19 +1373,24 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         return attn_output, None
 
-    def _to_replicated(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
+    def _to_replicated(self, tensor: ttnn.Tensor, buf: ttnn.Tensor = None) -> ttnn.Tensor:
         """Convert a multi-device tensor to an explicitly replicated tensor.
 
         After all-gather the data is identical on every device but the mesh
         topology metadata differs from ReplicateTensorToMesh.  Paged-attention
-        kernels require the replicated topology, so we round-trip through the
-        host for decode tokens (tiny tensors, negligible overhead).
+        kernels require the replicated topology.
+
+        When a pre-allocated replicated buffer is provided, uses device-side
+        ttnn.copy to avoid the host round-trip entirely.
         """
         if self.device.get_num_devices() <= 1:
             return tensor
         t = tensor
         if isinstance(t, TorchTTNNTensor):
             t = t.to_ttnn
+        if buf is not None:
+            ttnn.copy(t, buf)
+            return buf
         orig_shape = list(t.shape)
         mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
         t_torch = ttnn.to_torch(t, mesh_composer=mesh_composer)
@@ -1378,21 +1441,16 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             if isinstance(cp, TorchTTNNTensor):
                 cp = cp.to_torch
             if isinstance(cp, ttnn.Tensor):
-                mesh_composer = None
-                if hasattr(cp, "device") and cp.device() is not None and cp.device().get_num_devices() > 1:
-                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
+                mesh_composer = self._cos_sin_mesh_composer
                 cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
             cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
 
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-
-        # 1-D [batch_size] tensor for paged_update_cache & paged_sdpa_decode
         cur_pos_tt = ttnn.from_torch(
             cache_position_tensor,
             device=self.device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=self._mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -1408,22 +1466,15 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         # --- multi-device: convert all-gathered topology → replicated ---
         if self.device.get_num_devices() > 1:
-            query_states = self._to_replicated(query_states)
-            key_states = self._to_replicated(key_states)
-            value_states = self._to_replicated(value_states)
+            q_buf = getattr(self, "_q_decode_buf", None)
+            k_buf = getattr(self, "_k_decode_buf", None)
+            v_buf = getattr(self, "_v_decode_buf", None)
+            query_states = self._to_replicated(query_states, buf=q_buf)
+            key_states = self._to_replicated(key_states, buf=k_buf)
+            value_states = self._to_replicated(value_states, buf=v_buf)
 
-        tile_size = 32
-        shard_h = ((self.num_heads + tile_size - 1) // tile_size) * tile_size
-
-        core_grid = ttnn.CoreGrid(y=1, x=batch_size)
-        shard_cfg = ttnn.create_sharded_memory_config(
-            shape=(shard_h, self.qk_head_dim),
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        key_states = ttnn.to_memory_config(key_states, shard_cfg)
-        value_states = ttnn.to_memory_config(value_states, shard_cfg)
+        key_states = ttnn.to_memory_config(key_states, self._decode_shard_cfg)
+        value_states = ttnn.to_memory_config(value_states, self._decode_shard_cfg)
 
         # --- update the on-device paged KV cache ---
         past_key_values.paged_update_on_device(
