@@ -461,21 +461,21 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (input_is_row_major) {
         reader_kernel_path = large_tensor_needed
                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor_rm_and_tile.cpp"
+                                   "reader_unary_interleaved_ln_large_tensor.cpp"
                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_rm_and_tile.cpp";
+                                   "reader_unary_interleaved_ln.cpp";
     } else if (large_tensor_needed) {
         reader_kernel_path = use_welford_and_not_rms_norm
                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                    "reader_unary_interleaved_ln_large_tensor_welford.cpp"
                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor_rm_and_tile.cpp";
+                                   "reader_unary_interleaved_ln_large_tensor.cpp";
     } else {
         reader_kernel_path = use_row_major_kernel
                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                    "reader_unary_interleaved_ln_rm_gb.cpp"
                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_rm_and_tile.cpp";
+                                   "reader_unary_interleaved_ln.cpp";
     }
 
     // Build compute args
