@@ -80,13 +80,17 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Get DRAM usage
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
 
-    size_t binary_size = 16384;          // Size of DRAM buffer used for matmul program
-    size_t expected_size = binary_size;  // Allocated left over is program cache
+    size_t binary_size = 16384;  // Size of DRAM buffer used for matmul program
+    size_t expected_size = binary_size;
     size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size = 61440;
+        expected_size = 20480;
+    }
 
-    auto assert_dram_usage = [](const auto& dram_usage, size_t expected_size, size_t expected_peak_size) {
-        EXPECT_EQ(dram_usage.peak, expected_peak_size);
-        EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, expected_size);
+    auto assert_dram_usage = [](const auto& dram_usage, size_t exp_size, size_t exp_peak) {
+        EXPECT_EQ(dram_usage.peak, exp_peak);
+        EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, exp_size);
     };
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 
@@ -100,6 +104,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     expected_size = 0;
     expected_peak_size = tensor1_size + tensor2_size + result_size + binary_size;  // Binary size is still allocated
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size = 61440;
+    }
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 }
 
@@ -179,6 +186,11 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
 
     expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
 
+    if (ttml::core::is_llk_assert_enabled()) {
+        expected_peak_size = 2131968;
+        expected_size = 1148928;
+    }
+
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     EXPECT_EQ(dram_usage.peak, expected_peak_size);
     EXPECT_EQ(dram_usage.total_allocations - dram_usage.total_deallocations, expected_size);
@@ -225,8 +237,9 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage();
 
-        // TODO: verify that 12288 comes from program cache
-        EXPECT_EQ(dram_usage.total_allocations, 12288);
+        // TODO: verify that 12288 comes from program cache (14336 when LLK asserts enabled)
+        size_t expected_dram_alloc = ttml::core::is_llk_assert_enabled() ? 14336 : 12288;
+        EXPECT_EQ(dram_usage.total_allocations, expected_dram_alloc);
 
         // peak_cb = tile_size * sizeof(bfloat16) * n_cb (cb0, cb1, cb_out)
         size_t expected_peak_cb = 2048 * 2 * 3;
@@ -271,8 +284,9 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage();
 
-        // DRAM usage from cache miss
-        EXPECT_EQ(dram_usage.total_allocations, 10240);
+        // DRAM usage from cache miss (12288 when LLK asserts enabled)
+        size_t expected_dram_alloc_2 = ttml::core::is_llk_assert_enabled() ? 12288 : 10240;
+        EXPECT_EQ(dram_usage.total_allocations, expected_dram_alloc_2);
 
         size_t expected_peak_cb = 0;  // CBs are not allocated since add uses sharded inputs as CBs
         EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
@@ -373,27 +387,43 @@ TEST_F(MemoryUtilsTest, SnapshotFeature) {
     ASSERT_EQ(all_l1_usage.size(), 3);
 
     // Verify individual snapshots have captured memory usage with exact values
+    // Two sets of expectations: default and when LLK asserts are enabled (extra allocs for assert bookkeeping)
+    size_t peak_1 = 36864, alloc_1 = 36864, dealloc_1 = 12288;
+    size_t peak_2 = 86016, alloc_2 = 86016, dealloc_2 = 20480;
+    size_t peak_3 = 274432, alloc_3 = 282624, dealloc_3 = 20480;
+    if (ttml::core::is_llk_assert_enabled()) {
+        peak_1 = 38912;
+        alloc_1 = 38912;
+        dealloc_1 = 14336;
+        peak_2 = 90112;
+        alloc_2 = 90112;
+        dealloc_2 = 24576;
+        peak_3 = 278528;
+        alloc_3 = 286720;
+        dealloc_3 = 24576;
+    }
+
     // Snapshot 1: Add operation
     auto dram_usage_1 = ttml::utils::MemoryUsageTracker::get_dram_usage("add_operation");
     // 2 inputs + output have size of 64*64*sizeof(bfloat16) + 12288 bytes of program cache
     // 36864 = 3 * (64 * 64) * sizeof(bfloat16) + 12288
-    EXPECT_EQ(dram_usage_1.peak, 36864);
-    EXPECT_EQ(dram_usage_1.total_allocations, 36864);
-    EXPECT_EQ(dram_usage_1.total_deallocations, 12288);
+    EXPECT_EQ(dram_usage_1.peak, peak_1);
+    EXPECT_EQ(dram_usage_1.total_allocations, alloc_1);
+    EXPECT_EQ(dram_usage_1.total_deallocations, dealloc_1);
 
     // Snapshot 2: Matmul operation
     auto dram_usage_2 = ttml::utils::MemoryUsageTracker::get_dram_usage("matmul_operation");
-    EXPECT_EQ(dram_usage_2.peak, 86016);
-    EXPECT_EQ(dram_usage_2.total_allocations, 86016);
-    EXPECT_EQ(dram_usage_2.total_deallocations, 20480);
+    EXPECT_EQ(dram_usage_2.peak, peak_2);
+    EXPECT_EQ(dram_usage_2.total_allocations, alloc_2);
+    EXPECT_EQ(dram_usage_2.total_deallocations, dealloc_2);
 
     // Snapshot 3: L1 multiply operation
     auto dram_usage_3 = ttml::utils::MemoryUsageTracker::get_dram_usage("multiply_l1_operation");
     auto l1_usage_3 = ttml::utils::MemoryUsageTracker::get_l1_usage("multiply_l1_operation");
-    EXPECT_EQ(dram_usage_3.peak, 274432);
+    EXPECT_EQ(dram_usage_3.peak, peak_3);
     // Total DRAM allocations = (256 * 256 * sizeof(bfloat16) * 2) /*DRAM inputs*/ + 20480 /*program cache*/
-    EXPECT_EQ(dram_usage_3.total_allocations, 282624);
-    EXPECT_EQ(dram_usage_3.total_deallocations, 20480);
+    EXPECT_EQ(dram_usage_3.total_allocations, alloc_3);
+    EXPECT_EQ(dram_usage_3.total_deallocations, dealloc_3);
     // peak_l1 = (256 * 256 * sizeof(bfloat16)) * 2 /*DRAM inputs*/ + (256 * 256 * sizeof(bfloat16)) /*L1 output*/
     EXPECT_EQ(l1_usage_3.peak_l1, 393216);
 

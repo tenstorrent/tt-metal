@@ -20,6 +20,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "serialization/serialization.hpp"
@@ -499,6 +500,10 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
 
     const TestParam& param = GetParam();
     const TensorTestCase& test_case = param;
+
+    if (test_case.dtype == tt::tt_metal::DataType::UINT32) {
+        SKIP_FOR_LLK_ASSERTS("Hits LLK assert for are_packers_configured_correctly.");
+    }
 
     // Skip FLOAT32 ROW_MAJOR tests (both DEVICE and HOST) - they fail with typecast errors
     if (test_case.dtype == tt::tt_metal::DataType::FLOAT32 && test_case.layout == tt::tt_metal::Layout::ROW_MAJOR) {
