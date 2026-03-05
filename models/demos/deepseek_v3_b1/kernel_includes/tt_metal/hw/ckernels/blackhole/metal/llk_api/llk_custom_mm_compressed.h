@@ -36,6 +36,13 @@ FORCE_INLINE void reconfig_custom_mm_srca(
     cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] = reg2_base | src_format;
 }
 
+/** @brief Reconfig SrcA with pre-resolved DataFormat value (no lookup). */
+FORCE_INLINE void reconfig_custom_mm_srca_raw(
+    volatile uint* cfg, uint32_t src_format, uint32_t reg0_base, uint32_t reg2_base) {
+    cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] = reg0_base | src_format;
+    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] = reg2_base | src_format;
+}
+
 // ---------------------------------------------------------------------------
 // Constexpr template-unrolled custom MM (zero runtime format lookup overhead)
 //
@@ -161,22 +168,33 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
         uint32_t address_a = addr_in1;
         constexpr uint32_t num_pairs = KT_DIM * CT_DIM / 2;
 
-        // FMT_FLAT: one format index per CTA element (no packing)
+        // FMT_FLAT is packed: one uint32 per pair
+        // [31:24]=size1 [23:16]=size0 [15:8]=fmt1 [7:0]=fmt0
+        union PairInfo {
+            uint32_t packed;
+            struct {
+                uint8_t fmt0, fmt1, sz0, sz1;
+            };
+        };
+
         for (uint32_t pair = 0; pair < num_pairs; pair++) {
-            uint32_t k0 = pair * 2;
-            uint32_t fmt0 = FMT_FLAT[k0];
-            uint32_t fmt1 = FMT_FLAT[k0 + 1];
+            PairInfo p;
+            p.packed = FMT_FLAT[pair];  // single load
+            uint32_t fmt0 = p.fmt0;
+            uint32_t fmt1 = p.fmt1;
+            uint32_t sz0 = p.sz0;
+            uint32_t sz1 = p.sz1;
 
             wait_for_next_context(2);
-            reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+            reconfig_custom_mm_srca_raw(cfg, fmt0, reg0_base, reg2_base);
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-            address_a += TILE_SIZES_SHIFTED[fmt0];
+            address_a += sz0;
             semaphore_post(semaphore::UNPACK_SYNC);
 
             wait_for_next_context(2);
-            reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+            reconfig_custom_mm_srca_raw(cfg, fmt1, reg0_base, reg2_base);
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-            address_a += TILE_SIZES_SHIFTED[fmt1];
+            address_a += sz1;
             semaphore_post(semaphore::UNPACK_SYNC);
         }
     }));
