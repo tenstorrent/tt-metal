@@ -36,6 +36,7 @@ void bind_topk_router_gpt(nb::module_& mod) {
             nb::arg("k") = 4,
             nb::arg("num_experts") = 128,
             nb::arg("untilize_output") = false,
+            nb::arg("produce_hidden_rm") = false,
         });
 }
 

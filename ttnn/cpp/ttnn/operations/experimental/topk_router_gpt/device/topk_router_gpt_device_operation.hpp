@@ -42,7 +42,8 @@ struct TopkRouterGptDeviceOperation {
         const Tensor& output_tensor,
         uint32_t k,
         uint32_t num_experts,
-        bool untilize_output);
+        bool untilize_output,
+        bool produce_hidden_rm);
 };
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt

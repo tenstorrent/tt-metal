@@ -173,25 +173,31 @@ class TopKRouter:
         self._init_fused_op(device, B)
 
         # Run fused matmul + topk + softmax
-        result = ttnn.experimental.topk_router_gpt(
+        # When throughput experts, also produce hidden_rm + dispatch outputs
+        # (indices as uint16 RM, weights as bf16 RM — avoids Python-side typecast/to_layout).
+        result, hidden_rm, indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
             hidden_states_bf16,
             weight_tensor=self.weight,
             bias_tensor=self._fused_bias,
             output_tensor=self._fused_output,
             k=self.top_k,
             num_experts=self.num_experts,
+            produce_hidden_rm=use_throughput_experts,
         )
 
         if needs_typecast:
             ttnn.deallocate(hidden_states_bf16)
 
-        # Unpack: tile 0 (cols 0..k-1) = softmax weights, tile 1 (cols 32..32+k-1) = indices
-        expert_weights = ttnn.slice(result, [0, 0], [B, self.top_k])
-        expert_indices = ttnn.slice(result, [0, 32], [B, 32 + self.top_k])
-
         if use_throughput_experts:
-            return expert_indices, expert_weights
+            # Kernel produced uint16 RM indices and bf16 RM weights (padded to k_padded).
+            # Just slice off the padding to get [B, top_k].
+            expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
+            expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
+            return expert_indices, expert_weights, hidden_rm
         else:
+            # Unpack: tile 0 (cols 0..k-1) = softmax weights, tile 1 (cols 32..32+k-1) = indices
+            expert_weights = ttnn.slice(result, [0, 0], [B, self.top_k])
+            expert_indices = ttnn.slice(result, [0, 32], [B, 32 + self.top_k])
             # Non-throughput: scatter weights to dense [B, num_experts] format
             zeros = ttnn.zeros(
                 [B, self.num_experts],

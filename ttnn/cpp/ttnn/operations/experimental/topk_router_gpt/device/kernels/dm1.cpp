@@ -31,6 +31,15 @@ inline uint16_t f32_to_bf16(float f) {
     return (uint16_t)(c.u >> 16);
 }
 
+inline float bf16_to_f32(uint16_t bf16) {
+    union {
+        float f;
+        uint32_t u;
+    } c;
+    c.u = (uint32_t)bf16 << 16;
+    return c.f;
+}
+
 // Generate one index tile where every element at (row, col) = bf16((float)(base + col))
 void generate_index_tile(volatile tt_l1_ptr uint32_t* tile32, uint32_t base) {
     uint32_t left_packed[8], right_packed[8];
@@ -287,5 +296,50 @@ void kernel_main() {
         noc_async_write_tile(1, output_addrgen, final_out_l1 + tile_size);
         noc_async_write_barrier();
     }
+
+    // 8. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
+    //    Extracts k values per row from face-layout tiles, converts indices
+    //    from bf16 to uint16, and writes to DRAM as row-major pages.
+    uint32_t produce_dispatch = get_arg_val<uint32_t>(18);
+    if (produce_dispatch) {
+        uint32_t indices_rm_addr = get_arg_val<uint32_t>(19);
+        uint32_t weights_rm_addr = get_arg_val<uint32_t>(20);
+        uint32_t k_padded = get_arg_val<uint32_t>(21);
+
+        constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
+        cb_reserve_back(CB_DISPATCH, 1);
+        uint32_t scratch = get_write_ptr(CB_DISPATCH);
+        uint32_t idx_base = scratch;
+        uint32_t wgt_base = scratch + 32 * k_padded * 2;
+
+        volatile tt_l1_ptr uint16_t* idx_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_base);
+        volatile tt_l1_ptr uint16_t* wgt_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(wgt_base);
+
+        // src0 = weights tile (tile 0), src1 = indices tile (tile 1)
+        volatile tt_l1_ptr uint16_t* src0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1);
+        volatile tt_l1_ptr uint16_t* src1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(final_out_l1 + tile_size);
+
+        for (uint32_t row = 0; row < 32; row++) {
+            for (uint32_t col = 0; col < topk_k; col++) {
+                uint32_t fi = tile_elem_idx(row, col);
+                wgt_buf[row * k_padded + col] = src0[fi];
+                idx_buf[row * k_padded + col] = (uint16_t)bf16_to_f32(src1[fi]);
+            }
+            for (uint32_t col = topk_k; col < k_padded; col++) {
+                wgt_buf[row * k_padded + col] = 0;
+                idx_buf[row * k_padded + col] = 0;
+            }
+        }
+
+        uint32_t page_size = k_padded * 2;  // 16 bytes for k_padded=8
+        const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = page_size};
+        const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = page_size};
+        for (uint32_t p = 0; p < 32; p++) {
+            noc_async_write(idx_base + p * page_size, get_noc_addr(p, idx_ag), page_size);
+            noc_async_write(wgt_base + p * page_size, get_noc_addr(p, wgt_ag), page_size);
+        }
+        noc_async_write_barrier();
+    }
+
     cb_pop_front(CB_FINAL_OUT, 2);
 }

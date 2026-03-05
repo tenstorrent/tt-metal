@@ -5,15 +5,17 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
 struct operation_attributes_t {
-    uint32_t k;            // Number of top experts per token (4)
-    uint32_t num_experts;  // Total number of experts (128)
-    bool untilize_output;  // If true, write output in ROW_MAJOR format
+    uint32_t k;              // Number of top experts per token (4)
+    uint32_t num_experts;    // Total number of experts (128)
+    bool untilize_output;    // If true, write output in ROW_MAJOR format
+    bool produce_hidden_rm;  // If true, allocate and write input in RM as second output
 };
 
 struct tensor_args_t {
@@ -23,8 +25,9 @@ struct tensor_args_t {
     const Tensor& output_tensor;  // [B, num_experts] bf16 pre-allocated
 };
 
-// Output: single pre-allocated tensor
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
+// Four outputs: (main_output, hidden_rm, indices_rm_u16, weights_rm)
+// When produce_hidden_rm=false, slots 1-3 are dummies (copies of output_tensor).
+using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor, Tensor>;
+using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec, TensorSpec>;
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt

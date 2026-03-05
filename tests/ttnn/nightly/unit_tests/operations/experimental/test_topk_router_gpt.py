@@ -34,7 +34,7 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4, un
         layout=out_layout,
     )
 
-    result = ttnn.experimental.topk_router_gpt(
+    result, _, _, _ = ttnn.experimental.topk_router_gpt(
         tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
@@ -190,16 +190,134 @@ def main():
         logger.info(f"  Weight PCC (RM vs TILE): {rm_weight_pcc:.6f}")
 
         # ================================================================
+        # Test 5: TILE output → typecast + to_layout(RM) chain
+        # Verifies the same conversion used in _fused_call throughput path:
+        # slice [B,k] TILE bf16 → typecast uint32 → uint16 → to_layout(RM)
+        # ================================================================
+        logger.info("=" * 60)
+        logger.info("TEST 5: TILE output → typecast + RM conversion for throughput dispatch")
+        torch.manual_seed(42)
+        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
+        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
+        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
+
+        # Run fused op with TILE output (default)
+        weights_tile, indices_tile = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k)
+
+        # Now run with the same TILE output but apply the typecast chain from _fused_call
+        torch_bias_bcast = torch_bias.expand(B, N).contiguous()
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = ttnn.from_torch(torch_bias_bcast, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.from_torch(
+            torch.zeros(B, 64, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        result, _, _, _ = ttnn.experimental.topk_router_gpt(
+            tt_input,
+            weight_tensor=tt_weight,
+            bias_tensor=tt_bias,
+            output_tensor=tt_output,
+            k=k,
+            num_experts=N,
+        )
+        # Slice [B, k] TILE → typecast → to_layout(RM) (same as _fused_call throughput path)
+        expert_indices = ttnn.slice(result, [0, 32], [B, 32 + k])  # [B, k] TILE bf16
+        expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint32)
+        expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint16)
+        expert_indices = ttnn.to_layout(expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+        expert_weights = ttnn.slice(result, [0, 0], [B, k])  # [B, k] TILE bf16
+        expert_weights = ttnn.to_layout(expert_weights, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Convert to torch for comparison
+        indices_torch = ttnn.to_torch(expert_indices)[:B, :k].long()
+        weights_torch = ttnn.to_torch(expert_weights)[:B, :k].float()
+
+        # Compare to the TILE reference (Test 2 same seed) to verify typecast preserves data
+        tc_idx_match = (indices_torch == indices_tile).all().item()
+        tc_weight_pcc = compute_pcc(weights_tile, weights_torch)
+        logger.info(f"  Typecast indices row 0: {indices_torch[0].tolist()}")
+        logger.info(f"  TILE ref  indices row 0: {indices_tile[0].tolist()}")
+        logger.info(f"  Indices exact match (typecast vs TILE): {tc_idx_match}")
+        logger.info(f"  Weight PCC (typecast vs TILE): {tc_weight_pcc:.6f}")
+
+        # ================================================================
+        # Test 6: produce_hidden_rm — verify op allocates and untilizes input to RM
+        # ================================================================
+        logger.info("=" * 60)
+        logger.info("TEST 6: produce_hidden_rm (op-allocated input untilize)")
+        torch.manual_seed(42)
+        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
+        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
+        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
+
+        torch_bias_bcast = torch_bias.expand(B, N).contiguous()
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = ttnn.from_torch(torch_bias_bcast, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.from_torch(
+            torch.zeros(B, 64, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        result, hidden_rm, indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
+            tt_input,
+            weight_tensor=tt_weight,
+            bias_tensor=tt_bias,
+            output_tensor=tt_output,
+            k=k,
+            num_experts=N,
+            produce_hidden_rm=True,
+        )
+
+        # Read back the op-allocated RM tensor and compare to original input
+        hidden_rm_torch = ttnn.to_torch(hidden_rm)[:B, :K].float()
+        input_ref = torch_input.float()
+
+        hidden_rm_pcc = compute_pcc(input_ref, hidden_rm_torch)
+        hidden_rm_match = torch.allclose(input_ref, hidden_rm_torch, atol=1e-3)
+        logger.info(f"  hidden_rm PCC vs input: {hidden_rm_pcc:.6f}")
+        logger.info(f"  hidden_rm exact match: {hidden_rm_match}")
+        logger.info(f"  Input row 0 first 8: {input_ref[0, :8].tolist()}")
+        logger.info(f"  RM    row 0 first 8: {hidden_rm_torch[0, :8].tolist()}")
+
+        # Verify dispatch outputs: indices_rm (uint16) and weights_rm (bf16)
+        indices_rm_torch = ttnn.to_torch(indices_rm)[:B, :k].long()
+        weights_rm_torch = ttnn.to_torch(weights_rm)[:B, :k].float()
+
+        # Compare to the packed result (tile-based reference)
+        tt_result = ttnn.to_torch(result)[:B, :64]
+        ref_weights = tt_result[:, :k].float()
+        ref_indices = tt_result[:, 32 : 32 + k].float().long()
+
+        dispatch_idx_match = (indices_rm_torch == ref_indices).all().item()
+        dispatch_wgt_pcc = compute_pcc(ref_weights, weights_rm_torch)
+        logger.info(f"  indices_rm dtype: {indices_rm.dtype}")
+        logger.info(f"  indices_rm row 0: {indices_rm_torch[0].tolist()}")
+        logger.info(f"  ref       row 0: {ref_indices[0].tolist()}")
+        logger.info(f"  Dispatch indices match: {dispatch_idx_match}")
+        logger.info(f"  Dispatch weights PCC: {dispatch_wgt_pcc:.6f}")
+
+        hrm_pass = hidden_rm_pcc >= 0.999 and hidden_rm_match and dispatch_idx_match and dispatch_wgt_pcc >= 0.999
+
+        # ================================================================
         # Summary
         # ================================================================
         logger.info("=" * 60)
         rm_pass = rm_idx_match and rm_weight_pcc >= 0.999
-        if weight_pcc >= 0.95 and idx_match_pct >= 90 and rm_pass:
+        tc_pass = tc_idx_match and tc_weight_pcc >= 0.95
+        if weight_pcc >= 0.95 and idx_match_pct >= 90 and rm_pass and tc_pass and hrm_pass:
             logger.info("PASSED")
         else:
             logger.error(
                 f"FAILED: weight_pcc={weight_pcc:.4f}, idx_match={idx_match_pct:.1f}%, "
-                f"rm_idx_match={rm_idx_match}, rm_weight_pcc={rm_weight_pcc:.4f}"
+                f"rm_idx_match={rm_idx_match}, rm_weight_pcc={rm_weight_pcc:.4f}, "
+                f"tc_idx_match={tc_idx_match}, tc_weight_pcc={tc_weight_pcc:.4f}, "
+                f"hrm_pcc={hidden_rm_pcc:.4f}, hrm_match={hidden_rm_match}"
             )
 
     finally:

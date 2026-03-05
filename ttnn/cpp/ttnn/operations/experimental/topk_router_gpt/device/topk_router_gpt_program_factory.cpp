@@ -71,7 +71,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     auto input_buffer = tensor_args.input_tensor.buffer();
     auto weight_buffer = tensor_args.weight_tensor.buffer();
     auto bias_buffer = tensor_args.bias_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto output_buffer = std::get<0>(output_tensor).buffer();
 
     // ----- Semaphores -----
     // sem_partial_ready: on worker cores, incremented by senders to signal partial is ready
@@ -122,7 +122,19 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
                                 .set_page_size(tt::CBIndex::c_3, TILE_SIZE_BF16);
         CreateCircularBuffer(program, single_core, local_out_cb);
 
-        // Senders only need CB0-CB3; skip the rest to reduce trace dispatch
+        // CB18: RM scratch for input untilize (group 0 cores only)
+        // Holds 1 re-read tile + space for RM row data
+        {
+            uint32_t group_id_cb = i / CORES_PER_GROUP;
+            if (attributes.produce_hidden_rm && group_id_cb == 0) {
+                auto rm_scratch_cb =
+                    CircularBufferConfig(2 * TILE_SIZE_BF16, {{tt::CBIndex::c_18, tt::DataFormat::Float16_b}})
+                        .set_page_size(tt::CBIndex::c_18, TILE_SIZE_BF16);
+                CreateCircularBuffer(program, single_core, rm_scratch_cb);
+            }
+        }
+
+        // Senders only need CB0-CB3 (+ CB18 if group 0); skip the rest
         if (is_sender_core) {
             continue;
         }
@@ -200,6 +212,17 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
                                  .set_page_size(tt::CBIndex::c_17, TILE_SIZE_BF16);
             CreateCircularBuffer(program, single_core, rm_out_cb);
         }
+
+        // CB19: Scratch for dispatch outputs (indices uint16 + weights bf16 in RM)
+        // Size: 2 × 32 rows × k_padded × 2 bytes = 1024 bytes for k_padded=8
+        if (attributes.produce_hidden_rm) {
+            uint32_t k_padded = ((attributes.k + 7) / 8) * 8;
+            uint32_t dispatch_scratch_size = 2 * TILE_HW * k_padded * 2;  // indices + weights
+            auto dispatch_cb =
+                CircularBufferConfig(dispatch_scratch_size, {{tt::CBIndex::c_19, tt::DataFormat::Float16_b}})
+                    .set_page_size(tt::CBIndex::c_19, dispatch_scratch_size);
+            CreateCircularBuffer(program, single_core, dispatch_cb);
+        }
     }
 
     // ----- Kernel definitions -----
@@ -257,7 +280,13 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
             }
         }
 
-        // DM0 args: weight + input reader
+        // DM0 args: weight + input reader + optional hidden_rm untilize
+        uint32_t hidden_rm_addr = 0;
+        uint32_t hidden_rm_page_size = 0;
+        if (attributes.produce_hidden_rm) {
+            hidden_rm_addr = std::get<1>(output_tensor).buffer()->address();
+            hidden_rm_page_size = hidden_dim * 2;  // bytes per RM row
+        }
         std::vector<uint32_t> dm0_args = {
             weight_buffer->address(),  // 0
             input_buffer->address(),   // 1
@@ -270,6 +299,9 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
             n_tiles,                   // 8: total N-tiles (4, for weight tile indexing)
             is_worker ? 1u : 0u,       // 9
             bias_buffer->address(),    // 10
+            hidden_rm_addr,            // 11: RM output address (0 = disabled)
+            hidden_rm_page_size,       // 12: RM page size (hidden_dim * 2)
+            group_id,                  // 13: group ID (only group 0 does untilize)
         };
         SetRuntimeArgs(program, dm0_kernel_id, core, dm0_args);
 
@@ -278,6 +310,15 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         uint32_t sender_slot = pos_in_group;  // 0 or 1 for senders, unused for workers
         // Worker slot in collector's gathered CB: group_id (0-3)
         uint32_t worker_gather_slot = group_id;
+
+        // Dispatch output addresses (indices_rm + weights_rm)
+        uint32_t indices_rm_addr = 0;
+        uint32_t weights_rm_addr = 0;
+        uint32_t k_padded = ((attributes.k + 7) / 8) * 8;
+        if (attributes.produce_hidden_rm) {
+            indices_rm_addr = std::get<2>(output_tensor).buffer()->address();
+            weights_rm_addr = std::get<3>(output_tensor).buffer()->address();
+        }
 
         std::vector<uint32_t> dm1_args = {
             is_sender ? 1u : 0u,                     // 0
@@ -298,6 +339,10 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
             static_cast<uint32_t>(NUM_GROUPS),       // 15
             attributes.untilize_output ? 1u : 0u,    // 16: untilize output flag
             attributes.untilize_output ? 128u : 0u,  // 17: RM page size (64 bf16 = 128 bytes)
+            attributes.produce_hidden_rm ? 1u : 0u,  // 18: produce dispatch outputs
+            indices_rm_addr,                         // 19: indices RM buffer address
+            weights_rm_addr,                         // 20: weights RM buffer address
+            k_padded,                                // 21: k padded to multiple of 8
         };
         SetRuntimeArgs(program, dm1_kernel_id, core, dm1_args);
 
@@ -322,7 +367,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
 // ---------------------------------------------------------------------------
 void TopkRouterGptProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attributes*/,
+    const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
@@ -334,7 +379,16 @@ void TopkRouterGptProgramFactory::override_runtime_arguments(
     auto input_buffer = tensor_args.input_tensor.buffer();
     auto weight_buffer = tensor_args.weight_tensor.buffer();
     auto bias_buffer = tensor_args.bias_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto output_buffer = std::get<0>(output_tensor).buffer();
+
+    uint32_t hidden_rm_addr = 0;
+    uint32_t indices_rm_addr = 0;
+    uint32_t weights_rm_addr = 0;
+    if (attributes.produce_hidden_rm) {
+        hidden_rm_addr = std::get<1>(output_tensor).buffer()->address();
+        indices_rm_addr = std::get<2>(output_tensor).buffer()->address();
+        weights_rm_addr = std::get<3>(output_tensor).buffer()->address();
+    }
 
     for (uint32_t i = 0; i < shared.num_cores; i++) {
         const auto& core = dram_bank2core_coords[i];
@@ -343,9 +397,12 @@ void TopkRouterGptProgramFactory::override_runtime_arguments(
         dm0_args[0] = weight_buffer->address();
         dm0_args[1] = input_buffer->address();
         dm0_args[10] = bias_buffer->address();
+        dm0_args[11] = hidden_rm_addr;
 
         auto& dm1_args = GetRuntimeArgs(program, shared.dm1_kernel_id, core);
         dm1_args[10] = output_buffer->address();
+        dm1_args[19] = indices_rm_addr;
+        dm1_args[20] = weights_rm_addr;
     }
 }
 
