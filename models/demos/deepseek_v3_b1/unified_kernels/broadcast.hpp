@@ -135,10 +135,8 @@ struct Broadcast {
                     if constexpr (CTArgs::use_socket) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
-                        DPRINT << "Bcast BRISC waiting for pages" << ENDL();
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
-                        DPRINT << "Bcast BRISC waiting for pages done" << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
                         noc_async_read(
@@ -151,7 +149,6 @@ struct Broadcast {
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
-                        DPRINT << "Bcast BRISC update socket config done" << ENDL();
                     } else {
 #endif
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);

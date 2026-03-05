@@ -180,11 +180,6 @@ class SocketInterface:
             ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
         )
 
-        if int(my_fabric_node_id.mesh_id) == 14 and int(my_downstream_fabric_node_id.mesh_id) == 15:
-            print(
-                f"M {my_fabric_node_id.mesh_id} D {my_fabric_node_id.chip_id} -> M {my_downstream_fabric_node_id.mesh_id} D {my_downstream_fabric_node_id.chip_id}"
-            )
-
         use_fabric_on_receiver = my_upstream_fabric_node_id != my_fabric_node_id
         use_fabric_on_sender = my_downstream_fabric_node_id != my_fabric_node_id
 
