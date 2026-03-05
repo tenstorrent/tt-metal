@@ -83,7 +83,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
-    uint32_t iteration = 0;
     while (true) {
         // Wait for space in D2H socket
         socket_reserve_pages(sender_socket, 1);
@@ -132,7 +131,6 @@ void kernel_main() {
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
         invalidate_l1_cache();
-        iteration++;
     }
 
     update_socket_config(sender_socket);
