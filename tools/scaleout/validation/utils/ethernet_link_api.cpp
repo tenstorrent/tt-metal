@@ -55,7 +55,7 @@ void reset_links_wh(const std::vector<ResetLink>& links_to_reset) {
 // ============================================================================
 
 struct BHEthMsg {
-    tt_metal::FWMailboxMsg msg_type;
+    FWMailboxMsg msg_type;
     std::vector<uint32_t> msg_args;
     std::string log_message;
 };
@@ -75,8 +75,8 @@ bool eth_mailbox_ready(ChipId chip_id, uint32_t channel, bool wait_for_ready = t
 
     // Check mailbox is empty/ready
     const auto mailbox_addr = hal.get_eth_fw_mailbox_address(0);
-    const auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
-    const auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
+    const auto status_mask = hal.get_eth_fw_mailbox_val(FWMailboxMsg::ETH_MSG_STATUS_MASK);
+    const auto done_message = hal.get_eth_fw_mailbox_val(FWMailboxMsg::ETH_MSG_DONE);
     uint32_t msg_status = 0;
     std::vector<uint32_t> msg_vec = {0};
     do {
@@ -94,7 +94,7 @@ bool eth_mailbox_ready(ChipId chip_id, uint32_t channel, bool wait_for_ready = t
 void send_eth_msg(
     ChipId chip_id,
     uint32_t channel,
-    tt_metal::FWMailboxMsg msg_type,
+    FWMailboxMsg msg_type,
     std::vector<uint32_t> args,
     bool wait_for_ready,
     bool wait_for_done) {
@@ -119,7 +119,7 @@ void send_eth_msg(
     // service_eth_msg picks up message call before args are fully populated
     const auto mailbox_addr = hal.get_eth_fw_mailbox_address(0);
     const auto first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(0, 0);
-    const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
+    const auto call = hal.get_eth_fw_mailbox_val(FWMailboxMsg::ETH_MSG_CALL);
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
     std::vector<uint32_t> msg_vec = {call | msg_val};
 
@@ -161,12 +161,10 @@ void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     const BHEthMsg ETH_MSG_PORT_DOWN = {
-        tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION,
-        {2, 0, 0},
-        "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
+        FWMailboxMsg::ETH_MSG_PORT_ACTION, {2, 0, 0}, "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
 
     const BHEthMsg ETH_MSG_PORT_REINIT = {
-        tt_metal::FWMailboxMsg::ETH_MSG_PORT_REINIT_MACPCS,
+        FWMailboxMsg::ETH_MSG_PORT_REINIT_MACPCS,
         {1, 2, 0},
         "Sending ETH_MSG_PORT_REINIT_MACPCS to reinitialize MAC/PCS on all links"};
 

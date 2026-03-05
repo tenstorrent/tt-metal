@@ -9,11 +9,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include "tt_metal/llrt/hal.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -22,7 +18,6 @@ using tt::CoordSystem;
 using tt::CoreType;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::FWMailboxMsg;
-using tt::tt_metal::PhysicalSystemDescriptor;
 
 struct ResetLink {
     ChipId chip_id;
