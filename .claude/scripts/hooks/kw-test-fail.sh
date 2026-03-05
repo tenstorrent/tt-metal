@@ -8,7 +8,7 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 ERROR=$(echo "$INPUT" | jq -r '.error // empty')
 
 # Hang: tt-test.sh exits 2, or triage log was generated
-if [[ "$ERROR" == *"status code 2"* || "$ERROR" == *"exit code 2"* ]] || [[ -s /tmp/tt-test-triage-dev0.log ]]; then
+if [[ "$ERROR" == *"status code 2"* || "$ERROR" == *"exit code 2"* ]] || ls /tmp/tt-test-triage-*.log 2>/dev/null | xargs -I{} test -s {} 2>/dev/null; then
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PostToolUseFailure",

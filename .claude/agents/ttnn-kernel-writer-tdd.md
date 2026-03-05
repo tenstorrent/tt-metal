@@ -126,7 +126,7 @@ This catches hangs before they waste a test attempt and a device reset.
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py test --op-path {op_path}
 ```
 
-This runs the current stage's test via `tt-test.sh --dev` (watcher enabled, hang detection at 5s timeout, device reset on failure).
+This runs the current stage's test via `scripts/tt-test.sh --dev` (watcher enabled, hang detection at 5s timeout, device reset on failure).
 
 **Read the FULL output.** Do not skim.
 
@@ -288,7 +288,7 @@ On hang (exit code 2), the triage summary is printed in the test output. It tell
   - **First thing to check:** is `compute_kernel_hw_startup(in_cb0, in_cb1, out_cb)` called at the start of the compute kernel? Most compute kernels that use helpers MUST call this first. Missing it produces hangs with cryptic tt triage messages.
   - Also check: wrong init/uninit sequences if using raw compute calls
 
-**After fixing a hang:** The device was already reset by `tt-test.sh`. Just re-run the test.
+**After fixing a hang:** The device was already reset by `scripts/tt-test.sh`. Just re-run the test.
 
 ---
 
@@ -342,7 +342,7 @@ DPRINT_PACK(DPRINT << "pack: tile value = " << my_val << ENDL());
 
 **Enable on host side** (env vars, set before running the test):
 ```bash
-TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=BR,TR0 ./tt-test.sh --dev <test_file>
+TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=BR,TR0 scripts/tt-test.sh --dev <test_file>
 ```
 
 **Important**: TSLICE must be called between `cb_wait_front` and `cb_pop_front` (or between `cb_reserve_back` and `cb_push_back` for output CBs). Remove DPRINT calls before committing a passing stage.

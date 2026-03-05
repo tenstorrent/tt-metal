@@ -27,14 +27,14 @@ Kernels build at runtime. DO NOT build when changing kernel code.
 
 ### Running tests
 
-Never use standard pytest, prefer using `tt-test.sh` (add --dev flag for debug mode). This gives standard pytest output while also managing device ownership and state.
+Never use standard pytest, prefer using `scripts/tt-test.sh` (add --dev flag for debug mode). This gives standard pytest output while also managing device ownership and state.
 
 Python environment is sourced with
 `source python_env/bin/activate`
 
 Run the tests with
 
-`./tt-test.sh [--dev] <test_file_path.py>`
+`scripts/tt-test.sh [--dev] <test_file_path.py>`
 
 You should be attentive of device hangs when running tests, especially for new / just implemented operations and kernels.
 Watch the bash output at all times, if pytest console output stops, suspect a hang.

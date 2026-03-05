@@ -1,12 +1,12 @@
-"""Failure Parser — Classify tt-test.sh failures into structured JSON.
+"""Failure Parser — Classify scripts/tt-test.sh failures into structured JSON.
 
-Consumes exit codes and output from tt-test.sh, plus triage logs from
+Consumes exit codes and output from scripts/tt-test.sh, plus triage logs from
 hang detection, and produces a structured classification that the
 orchestrator can feed to the kernel-writer agent on retry.
 
 Usage:
     from failure_parser import classify_failure
-    result = classify_failure(exit_code=2, pytest_output="...", triage_log_path="/tmp/tt-test-triage-dev0.log")
+    result = classify_failure(exit_code=2, pytest_output="...", triage_log_path="/tmp/tt-test-triage-PID.log")
     # result = {"classification": "hang_cb_deadlock", "summary": "...", ...}
 
 Depends on: .claude/scripts/summarize-triage.py (reuses parsing patterns)

@@ -208,18 +208,18 @@ done
 GATE
         chmod +x "${clone_dir}/.eval/wait_for_build.sh"
 
-        # Wrap tt-test.sh: prepend a build gate so tests block until ready
-        if [[ -f "${clone_dir}/tt-test.sh" ]]; then
+        # Wrap scripts/tt-test.sh: prepend a build gate so tests block until ready
+        if [[ -f "${clone_dir}/scripts/tt-test.sh" ]]; then
             local original_test_sh
-            original_test_sh="$(cat "${clone_dir}/tt-test.sh")"
-            cat > "${clone_dir}/tt-test.sh" <<WRAPPER
+            original_test_sh="$(cat "${clone_dir}/scripts/tt-test.sh")"
+            cat > "${clone_dir}/scripts/tt-test.sh" <<WRAPPER
 #!/bin/bash
 # Auto-generated wrapper: wait for build before running tests
 source "${clone_dir}/.eval/wait_for_build.sh" || exit \$?
-# --- Original tt-test.sh below ---
+# --- Original scripts/tt-test.sh below ---
 $(echo "$original_test_sh" | tail -n +2)
 WRAPPER
-            chmod +x "${clone_dir}/tt-test.sh"
+            chmod +x "${clone_dir}/scripts/tt-test.sh"
         fi
 
         # 6. Run claude immediately (doesn't need build for early turns)

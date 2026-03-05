@@ -60,7 +60,7 @@ Phase 5: Report        — summary markdown
 
 **Phase 4 — TDD Kernels**: For each stage in order:
 1. Invoke `ttnn-kernel-writer` with stage-scoped prompt
-2. Run `tdd_orchestrator.py test` (uses tt-test.sh --dev with watcher + hang detection)
+2. Run `tdd_orchestrator.py test` (uses scripts/tt-test.sh --dev with watcher + hang detection)
 3. On pass → `advance` + commit; on fail → parse failure, retry or rollback
 
 **Phase 5 — Report**: Generates `REPORT.md` with pipeline execution summary.
@@ -96,7 +96,7 @@ Phase 5: Report        — summary markdown
 pytest tests/ttnn/unit_tests/operations/row_centralize/test_row_centralize.py -v
 
 # Run a specific stage test (with hang detection)
-./tt-test.sh --dev tests/ttnn/unit_tests/operations/row_centralize/test_stage_data_pipeline.py
+scripts/tt-test.sh --dev tests/ttnn/unit_tests/operations/row_centralize/test_stage_data_pipeline.py
 
 # Check TDD pipeline status
 python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path ttnn/ttnn/operations/row_centralize

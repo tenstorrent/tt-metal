@@ -195,9 +195,9 @@ def test_functional_correctness(device):
     torch.testing.assert_close(output_torch, expected, rtol=..., atol=...)
 ```
 
-**Always run tests with `tt-test.sh --dev`:**
+**Always run tests with `scripts/tt-test.sh --dev`:**
 ```bash
-./tt-test.sh --dev {test_file_path}
+scripts/tt-test.sh --dev {test_file_path}
 ```
 
 The script enables watcher, LLK asserts, lightweight kernel asserts, and automatic hang detection (5s dispatch timeout). It serializes device access via flock and resets the device after hangs.
