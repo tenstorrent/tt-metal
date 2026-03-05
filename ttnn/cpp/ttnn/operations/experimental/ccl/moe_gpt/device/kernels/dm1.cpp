@@ -181,125 +181,109 @@ void kernel_main() {
     uint32_t semaphore_value = 0;
 
     //-------------------------------------------------------------------------
-    // Per-expert processing: SwiGLU → A2A ring → combine write
+    // Per-chunk processing: SwiGLU → A2A ring → combine write
+    // Unified chunk loop following the deepseek moe_compute pattern.
+    // The full pipeline completes per chunk, so:
+    // - No cross-expert barrier needed (A2A step 0's semaphore wait implicitly
+    //   ensures predecessor's writes have landed)
+    // - No cb_w2c_rdy sync before SwiGLU (pipeline completion guarantees
+    //   cb_s2c_in2 is free)
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
 
-        // Set NOC 1 write state at top of loop, before waiting for compute.
-        // This overlaps setup with compute's SwiGLU work.
-        noc_async_write_one_packet_set_state<true>(neighbor_base_addr, a2a_packet_size, 1, vchannel);
-        noc_inline_dw_write_set_state<true, false>(neighbor_semaphore_noc_addr, 0, 0xF, write_at_cmd_buf, 1, vchannel);
-
-        // Per-chunk SwiGLU handling
-        // SwiGLU output stays in cb_s2c_in2 buf 0 for A2A ring.
-        // For all chunks EXCEPT the last: signal cb_w2c_rdy so compute can overwrite.
-        // For the last chunk: do NOT signal cb_w2c_rdy; A2A step 0 will signal instead.
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            // Set NOC 1 write state at top of chunk, before waiting for compute.
+            // This overlaps setup with compute's SwiGLU work.
+            noc_async_write_one_packet_set_state<true>(neighbor_base_addr, a2a_packet_size, 1, vchannel);
+            noc_inline_dw_write_set_state<true, false>(
+                neighbor_semaphore_noc_addr, 0, 0xF, write_at_cmd_buf, 1, vchannel);
+
+            // Wait for compute's SwiGLU output
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);
 
-            if (chunk < num_expert_chunks - 1) {
-                // Not the last chunk: signal compute it's safe to overwrite cb_s2c_in2
-                cb_reserve_back(cb_w2c_rdy, 1);
-                cb_push_back(cb_w2c_rdy, 1);
-            }
-        }
+            // A2A ring rotation for this chunk's SwiGLU output
+            for (uint32_t i = 0; i < num_a2a_iters; ++i) {
+                for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+                    // Wait for data from predecessor
+                    while ((*my_semaphore_ptr) < semaphore_value) {
+                    };
 
-        // A2A ring rotation for this expert's SwiGLU output
-        for (uint32_t i = 0; i < num_a2a_iters; ++i) {
-            for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
-                // Wait for data from predecessor
-                while ((*my_semaphore_ptr) < semaphore_value) {
-                };
+                    // Signal compute that A2A data is ready for W2 matmul
+                    cb_reserve_back(cb_w2c_rdy, 1);
+                    cb_push_back(cb_w2c_rdy, 1);
 
-                // Signal compute that A2A data is ready for W2 matmul
-                cb_reserve_back(cb_w2c_rdy, 1);
-                cb_push_back(cb_w2c_rdy, 1);
+                    // Send to ring neighbor
+                    const uint32_t src_buf = step % NUM_A2A_BUFFERS;
+                    const uint32_t dst_buf = (step + 1) % NUM_A2A_BUFFERS;
+                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[src_buf];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[dst_buf];
 
-                // Send to ring neighbor
-                const uint32_t src_buf = step % NUM_A2A_BUFFERS;
-                const uint32_t dst_buf = (step + 1) % NUM_A2A_BUFFERS;
-                const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[src_buf];
-                const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[dst_buf];
+                    for (uint32_t pkt = 0; pkt < a2a_num_packets; ++pkt) {
+                        uint32_t pkt_offset = pkt * a2a_packet_size;
+                        noc_async_write_one_packet_with_state<true>(
+                            local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
+                    }
 
-                for (uint32_t pkt = 0; pkt < a2a_num_packets; ++pkt) {
-                    uint32_t pkt_offset = pkt * a2a_packet_size;
-                    noc_async_write_one_packet_with_state<true>(
-                        local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
+                    // Signal neighbor that data is ready. No flush needed between data and
+                    // semaphore: same destination, same NOC, NOC ordering guarantees order.
+                    noc_inline_dw_write_with_state<false, true, true, false, true>(++semaphore_value);
+
+                    noc_async_posted_writes_flushed(1);
                 }
-
-                // Signal neighbor that data is ready (increment their semaphore value).
-                // No flush needed between data and semaphore: both are posted writes to the
-                // same destination on the same NOC, so NOC ordering guarantees data arrives first.
-                noc_inline_dw_write_with_state<false, true, true, false, true>(++semaphore_value);
-
-                noc_async_posted_writes_flushed(1);
             }
-        }
 
-        //---------------------------------------------------------------------
-        // Combine core output write for this expert
-        // Untilized ROW_MAJOR data from c_14 → combine core L1
-        //---------------------------------------------------------------------
-        const uint32_t dest_height_shard = expert_id;
+            //-----------------------------------------------------------------
+            // Combine core output write for this chunk
+            // Untilized ROW_MAJOR data from c_14 → combine core L1
+            //-----------------------------------------------------------------
+            const uint32_t dest_height_shard = expert_id;
 
-        cb_wait_front(cb_c2s_out, tokens_per_chunk_combine);  // 32 pages of untilized data
-        const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
+            cb_wait_front(cb_c2s_out, tokens_per_chunk_combine);
+            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
 
-        uint32_t width_tiles_to_send = output_width_tiles_core;
-        uint32_t width_tiles_sent = 0;
+            uint32_t width_tiles_to_send = output_width_tiles_core;
+            uint32_t width_tiles_sent = 0;
 
-        while (width_tiles_to_send > 0) {
-            const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
-            const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
-            const uint32_t dest_width_offset_tiles = width_tile_start % combine_shard_width_tiles;
-            const uint32_t dest_width_offset_bytes = dest_width_offset_tiles * tile_width_size_bytes;
+            while (width_tiles_to_send > 0) {
+                const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
+                const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
+                const uint32_t dest_width_offset_tiles = width_tile_start % combine_shard_width_tiles;
+                const uint32_t dest_width_offset_bytes = dest_width_offset_tiles * tile_width_size_bytes;
 
-            const uint32_t width_transfer_tiles = std::min(
-                combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
-            const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
+                const uint32_t width_transfer_tiles = std::min(
+                    combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
+                const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
-            const auto dest_noc_x = output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
-            const auto dest_noc_y =
-                output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
+                const auto dest_noc_x =
+                    output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
+                const auto dest_noc_y =
+                    output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
 
-            const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
-            noc_async_write_one_packet_set_state<true>(dest_noc_addr_base, width_transfer_bytes, 1, vchannel);
+                const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
+                noc_async_write_one_packet_set_state<true>(dest_noc_addr_base, width_transfer_bytes, 1, vchannel);
 
-            for (uint32_t bt = 0; bt < tokens_per_chunk_combine; ++bt) {
-                const uint32_t shard_row_offset_bytes = bt * combine_shard_width_tiles * tile_width_size_bytes;
+                for (uint32_t bt = 0; bt < tokens_per_chunk_combine; ++bt) {
+                    const uint32_t shard_row_offset_bytes = bt * combine_shard_width_tiles * tile_width_size_bytes;
 
-                const uint32_t dest_l1_addr = output_base_l1_addr + dest_width_offset_bytes + shard_row_offset_bytes;
+                    const uint32_t dest_l1_addr =
+                        output_base_l1_addr + dest_width_offset_bytes + shard_row_offset_bytes;
 
-                const uint32_t source_l1_addr =
-                    source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
+                    const uint32_t source_l1_addr =
+                        source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
-                noc_async_write_one_packet_with_state<true>(source_l1_addr, dest_l1_addr);
+                    noc_async_write_one_packet_with_state<true>(source_l1_addr, dest_l1_addr);
+                }
+                width_tiles_sent += width_transfer_tiles;
+                width_tiles_to_send -= width_transfer_tiles;
             }
-            width_tiles_sent += width_transfer_tiles;
-            width_tiles_to_send -= width_transfer_tiles;
-        }
 
-        noc_async_posted_writes_flushed(1);
-        cb_pop_front(cb_c2s_out, tokens_per_chunk_combine);
+            noc_async_posted_writes_flushed(1);
+            cb_pop_front(cb_c2s_out, tokens_per_chunk_combine);
 
-        // Signal tilize drain that this expert's chunk(s) have been consumed.
-        // Done after combine write (not before A2A) so everything stays on NOC 1,
-        // avoiding the need for noc_async_atomic_barrier between NOC 0 atomics and NOC 1 set_state.
-        for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            // Signal tilize drain that this chunk has been consumed
             noc_semaphore_inc<true>(matmul_chunk_available_noc_addr, 1, 1, vchannel);
-        }
-
-        // Cross-expert boundary barrier: wait for predecessor's last A2A write to our
-        // buf 0, then signal compute that buf 0 is safe for the next expert's SwiGLU.
-        // Placed after combine write so the (nearly instant) spin wait doesn't block
-        // useful combine work.
-        if (expert_id < num_experts - 1) {
-            while ((*my_semaphore_ptr) < semaphore_value) {
-            };
-            cb_reserve_back(cb_w2c_rdy, 1);
-            cb_push_back(cb_w2c_rdy, 1);
         }
     }
 

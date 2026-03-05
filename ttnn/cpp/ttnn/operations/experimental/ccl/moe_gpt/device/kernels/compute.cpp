@@ -162,7 +162,10 @@ void kernel_main() {
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
-    // Process chunks
+    // Unified chunk loop: SwiGLU → A2A (via dm1) → W2 matmul → untilize
+    // Full pipeline completes per chunk, matching the deepseek moe_compute pattern.
+    // No cross-chunk cb_w2c_rdy sync needed: pipeline completion guarantees
+    // cb_s2c_in2 is free before the next chunk's SwiGLU.
     volatile tt_l1_ptr uint32_t* chunk_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_ready_sem_addr);
     uint32_t chunk_ready_wait_value = 1;
@@ -170,19 +173,10 @@ void kernel_main() {
 
     constexpr uint32_t source_width_tiles = moe_gpt_ring::SOURCE_WIDTH_TILES;  // 8
 
-    uint32_t total_chunks_processed = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
 
-        // Phase 1: SwiGLU chunks for this expert
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Wait for dm1 to finish reading previous chunk's output from cb_s2c_in2
-            // before we overwrite it with this chunk's output
-            if (total_chunks_processed > 0) {
-                cb_wait_front(cb_w2c_rdy, 1);
-                cb_pop_front(cb_w2c_rdy, 1);
-            }
-
             // Wait for tilize drain to deliver this chunk via multicast
             UNPACK(({
                 noc_semaphore_wait_min(chunk_ready_sem_ptr, chunk_ready_wait_value);
@@ -192,7 +186,7 @@ void kernel_main() {
             // Double-buffer: determine input tile base
             uint32_t in0_base = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
-            // Compute chunk @ W0/W1 → SwiGLU
+            // W0/W1 matmul → SwiGLU
             for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = in0_base;
 
@@ -238,69 +232,67 @@ void kernel_main() {
             cb_reserve_back(cb_c2w_rdy, 1);
             cb_push_back(cb_c2w_rdy, 1);
 
-            use_second_half_buffer = !use_second_half_buffer;
-            total_chunks_processed++;
-        }
+            // W2 matmul + untilize (dm1 does A2A ring, compute does W2)
+            cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
 
-        // Phase 2: A2A + W2 matmul + untilize for this expert
-        // dm1 does A2A ring rotation, compute does W2 matmul + untilize.
-        cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
+            for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+                uint32_t dm1_step = 0;
+                uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+                cb_wait_front(cb_w2c_rdy, 1);
 
-        for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-            uint32_t dm1_step = 0;
-            uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
-            cb_wait_front(cb_w2c_rdy, 1);
+                // 6-buffer cycling: each A2A step uses buf (step % 6)
+                uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
 
-            // 6-buffer cycling: each A2A step uses buf (step % 6)
-            uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
+                tile_regs_acquire();
 
-            tile_regs_acquire();
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
-                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                        if (dm1_tiles_remaining == 0) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                            cb_wait_front(cb_w2c_rdy, 1);
+                            dm1_tiles_remaining =
+                                moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                            in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
+                            in2_offset = in2_buf * tiles_per_step;
+                            in2_index = in2_offset;
+                        }
+                        dm1_tiles_remaining--;
 
-                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    if (dm1_tiles_remaining == 0) {
-                        cb_pop_front(cb_w2c_rdy, 1);
-                        cb_wait_front(cb_w2c_rdy, 1);
-                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
-                        in2_offset = in2_buf * tiles_per_step;
-                        in2_index = in2_offset;
+                        matmul_block(
+                            cb_s2c_in2,
+                            cb_r2c_w2,
+                            in2_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
                     }
-                    dm1_tiles_remaining--;
-
-                    matmul_block(
-                        cb_s2c_in2,
-                        cb_r2c_w2,
-                        in2_index++,
-                        /*in1_index=*/k,
-                        /*idst=*/0,
-                        /*transpose=*/false,
-                        /*ct_dim=*/4,
-                        /*rt_dim=*/1,
-                        /*kt_dim=*/1);
+                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
-                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+
+                cb_pop_front(cb_w2c_rdy, 1);
+
+                tile_regs_commit();
+
+                // Untilize W2 output to cb_c2s_out (ROW_MAJOR)
+                tile_regs_wait();
+                pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
+                pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(
+                    cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+                pack_untilize_uninit(cb_c2s_out);
+                tile_regs_release();
             }
 
-            cb_pop_front(cb_w2c_rdy, 1);
+            cb_push_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
 
-            tile_regs_commit();
-
-            // Untilize W2 output to cb_c2s_out (ROW_MAJOR)
-            tile_regs_wait();
-            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
-            pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(
-                cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-            pack_untilize_uninit(cb_c2s_out);
-            tile_regs_release();
+            // Toggle input buffer and reinit packer for next chunk's SwiGLU
+            use_second_half_buffer = !use_second_half_buffer;
+            pack_reconfig_data_format(cb_s2c_in2);
         }
-
-        cb_push_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
-
-        // Reinit packer for next expert's SwiGLU pack_tile calls
-        pack_reconfig_data_format(cb_s2c_in2);
     }
 
     // Drain W2 pipeline: dm0 pushes extra blocks at end
