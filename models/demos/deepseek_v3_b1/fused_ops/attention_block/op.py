@@ -720,11 +720,10 @@ class AttentionBlock:
         # ========================================================================
         gather2_noc0_receiver_semaphore_id = 0
         gather2_noc1_receiver_semaphore_id = 1
-        mcast3_data_sender_semaphore_id = 2
-        mcast3_data_receiver_semaphore_id = 3
-        gather3_noc0_receiver_semaphore_id = 4
-        gather3_noc1_receiver_semaphore_id = 5
-        gather3_completion_semaphore_id = 6  # Gather3 signals, CCL sender waits
+        mcast3_data_receiver_semaphore_id = 2
+        gather3_noc0_receiver_semaphore_id = 3
+        gather3_noc1_receiver_semaphore_id = 4
+        gather3_completion_semaphore_id = 5  # Gather3 signals, CCL sender waits
 
         # Semaphore IDs for mcast synchronization
         mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(
@@ -735,6 +734,8 @@ class AttentionBlock:
             attention_block_semaphores[semaphore_index]
         )
         semaphore_index += 1
+
+        mcast3_data_sender_semaphore_addr = mcast_data_sender_semaphore_addr
 
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
@@ -881,8 +882,8 @@ class AttentionBlock:
         gather3_dst_cb = 59  # Gather3 output = CCL local data (gather core)
         ccl_sender_in_cb = 60  # CCL sender reads gather3 output (sender core)
         ccl_remote_data_cb = 61  # CCL received remote data (receiver core)
-        ccl_residual_cb = 62  # CCL residual (receiver core)
-        ccl_temp_cb = 63  # CCL temp for compute (receiver core)
+        ccl_residual_cb = input_cb
+        ccl_temp_cb = 62  # CCL temp for compute (receiver core)
         ccl_output_cb = 11  # CCL output (receiver core)
         ccl_packet_header_cb = 23  # CCL packet headers (sender + receiver cores)
 
@@ -1696,7 +1697,7 @@ class AttentionBlock:
             ("mcast3_dest_noc_end_x", mcast3_dest_noc_end_core.x),
             ("mcast3_dest_noc_end_y", mcast3_dest_noc_end_core.y),
             ("mcast3_num_cores", num_mcast3_cores),
-            ("mcast3_data_sender_semaphore", mcast3_data_sender_semaphore_id),
+            ("mcast3_data_sender_semaphore_addr", mcast3_data_sender_semaphore_addr),
             ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
             ("mcast3_data_size_bytes", mcast3_data_size_bytes),
             ("mcast3_src_cb", gather2_dst_cb),
@@ -2584,7 +2585,21 @@ class AttentionBlock:
                 running_address_offset = 0
 
                 # CB 0: Matmul4 input (from sharded tensor, kv_b2 grid)
-                matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul4_in0_cb, input_tensor_device)
+                matmul4_in0_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+                matmul4_in0_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=matmul4_in0_cb,
+                    data_format=data_format,
+                    page_size=tile_1x32_size,
+                    tile=matmul4_in0_tile_descriptor,
+                )
+                matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    matmul4_in0_cb,
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=running_address_offset,
+                    total_size=matmul4_k_num_tiles * tile_1x32_size,
+                )
+                matmul4_in0_cb_descriptor.format_descriptors = [matmul4_in0_cb_format]
+                running_address_offset += matmul4_in0_cb_descriptor.total_size
 
                 # CB 1: Matmul4 weights (from kv_b2 overlapped tensor)
                 matmul4_in1_cb_descriptor = cb_descriptor_from_overlapped_tensor(
@@ -2695,22 +2710,6 @@ class AttentionBlock:
                 )
                 ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
                 post_sdpa_cb_list.append(ccl_remote_data_cb_descriptor)
-
-                # CB 10: CCL residual (optional, from sharded tensor)
-                ccl_residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    ccl_residual_cb, input_tensor_device
-                )
-                ccl_residual_cb_descriptor.core_ranges = gather_core_grid
-                ccl_residual_cb_descriptor.total_size = ccl_num_tiles * tile_1x32_size
-                ccl_residual_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=ccl_residual_cb,
-                        data_format=data_format,
-                        page_size=tile_1x32_size,
-                        tile=matmul4_out_tile_descriptor,  # 1x32 tiles to match gather3
-                    )
-                ]
-                post_sdpa_cb_list.append(ccl_residual_cb_descriptor)
 
                 # CB 11: CCL temp scratch buffer (not backed by tensor)
                 ccl_temp_cb_format = ttnn.CBFormatDescriptor(
@@ -2847,11 +2846,6 @@ class AttentionBlock:
                     core_ranges=full_grid,
                     initial_value=0,
                 )
-                mcast3_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast3_data_sender_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
                 mcast3_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
                     id=mcast3_data_receiver_semaphore_id,
                     core_ranges=full_grid,
@@ -2870,7 +2864,6 @@ class AttentionBlock:
                 semaphore_list = [
                     gather2_noc0_semaphore_descriptor,
                     gather2_noc1_semaphore_descriptor,
-                    mcast3_sender_semaphore_descriptor,
                     mcast3_receiver_semaphore_descriptor,
                     gather3_noc0_semaphore_descriptor,
                     gather3_noc1_semaphore_descriptor,
