@@ -301,10 +301,11 @@ def extract_rope_parameters(traced_source: str = None) -> dict:
 
 
 def run(
-    input_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    input_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
@@ -347,6 +348,18 @@ def run(
     """
     torch.manual_seed(0)
 
+    # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
+    if input_shape is None and input_a_shape is not None:
+        input_shape = input_a_shape
+    elif input_shape is not None and input_a_shape is None:
+        input_a_shape = input_shape
+    if input_a_dtype is None:
+        input_a_dtype = ttnn.bfloat16
+    if input_a_layout is None:
+        input_a_layout = ttnn.TILE_LAYOUT
+    if input_a_memory_config is None:
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     # Extract RoPE parameters from traced source or explicit parameters
     rope_params = extract_rope_parameters(traced_source)
 
@@ -369,14 +382,11 @@ def run(
         shape_b = input_shape["input_b"]  # cos_cache: [1, n_heads_or_1, cache_size, head_dim]
         shape_c = input_shape["input_c"]  # sin_cache: [1, n_heads_or_1, cache_size, head_dim]
     else:
-        # Sample configuration - derive shapes from input_shape
-        # input_shape format: [batch, n_heads, seq_len, head_dim]
         shape_a = list(input_shape)
         batch, n_heads, seq_len, head_dim = shape_a
-        # Generate cos/sin cache shapes (cache can be larger than seq_len)
-        cache_size = max(seq_len, 1024)  # Use at least 1024 for cache
-        shape_b = [1, 1, cache_size, head_dim]  # cos cache
-        shape_c = [1, 1, cache_size, head_dim]  # sin cache
+        # Use explicit shapes from V2 vectors if available, otherwise derive
+        shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(seq_len, 1024), head_dim]))
+        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(seq_len, 1024), head_dim]))
 
     # Detect decode mode from memory config
     # Decode mode uses HEIGHT_SHARDED memory layout

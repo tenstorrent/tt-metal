@@ -98,9 +98,31 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Handle dict input_a_shape from traced configurations (multi-input)
+    # V2 vectors provide named tensors: update_idxs_tensor_* → input_c, page_table_* → input_d
+    if input_c_dtype is None and "update_idxs_tensor_dtype" in kwargs:
+        input_c_dtype = kwargs["update_idxs_tensor_dtype"]
+        input_c_layout = kwargs.get("update_idxs_tensor_layout", ttnn.ROW_MAJOR_LAYOUT)
+        input_c_memory_config = kwargs.get("update_idxs_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+    if input_d_dtype is None and "page_table_dtype" in kwargs:
+        input_d_dtype = kwargs["page_table_dtype"]
+        input_d_layout = kwargs.get("page_table_layout", ttnn.ROW_MAJOR_LAYOUT)
+        input_d_memory_config = kwargs.get("page_table_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
+    # Fallback defaults
+    if input_b_dtype is None:
+        input_b_dtype = input_a_dtype
+    if input_b_layout is None:
+        input_b_layout = input_a_layout
+    if input_b_memory_config is None:
+        input_b_memory_config = input_a_memory_config
+    if input_c_dtype is None:
+        input_c_dtype = ttnn.int32
+    if input_c_layout is None:
+        input_c_layout = ttnn.ROW_MAJOR_LAYOUT
+    if input_c_memory_config is None:
+        input_c_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     if isinstance(input_a_shape, dict):
-        # Traced configuration with multiple inputs
         shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
         shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
         shape_c = input_a_shape.get("input_c")
@@ -110,47 +132,28 @@ def run(
         if shape_d is None:
             shape_d = shape_c
     else:
-        # Fallback for sample configurations
         if isinstance(input_a_shape, (tuple, list)):
             shape = tuple(input_a_shape)
         else:
             shape = input_a_shape
-        shape_a = shape_b = shape_c = shape_d = shape
+        shape_a = shape_b = shape
+        shape_c = kwargs.get("update_idxs_tensor_shape", shape)
+        shape_d = kwargs.get("page_table_shape", shape)
 
-    # Check if we have 3 or 4 tensors (4th tensor is optional)
     has_input_d = input_d_dtype is not None and input_d_layout is not None and input_d_memory_config is not None
 
-    # Use provided dtypes - fail if not provided (no fallbacks for required tensors)
     dtype_a = input_a_dtype
-    if input_b_dtype is None:
-        raise ValueError("input_b_dtype is None - required parameter missing")
-    if input_c_dtype is None:
-        raise ValueError("input_c_dtype is None - required parameter missing")
     dtype_b = input_b_dtype
     dtype_c = input_c_dtype
     dtype_d = input_d_dtype if has_input_d else None
-
-    # Use provided layouts - fail if not provided (no fallbacks for required tensors)
     layout_a = input_a_layout
-    if input_b_layout is None:
-        raise ValueError("input_b_layout is None - required parameter missing")
-    if input_c_layout is None:
-        raise ValueError("input_c_layout is None - required parameter missing")
     layout_b = input_b_layout
-    # layout_c validated but overridden later (must be ROW_MAJOR for page_table)
-
-    # Use provided memory configs - fail if not provided (no fallbacks for required tensors)
     mem_config_a = input_a_memory_config
-    if input_b_memory_config is None:
-        raise ValueError("input_b_memory_config is None - required parameter missing")
-    if input_c_memory_config is None:
-        raise ValueError("input_c_memory_config is None - required parameter missing")
-    # Fall back to input_a_memory_config if output_memory_config is not provided
-    if output_memory_config is None:
-        output_memory_config = input_a_memory_config
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
     mem_config_d = input_d_memory_config if has_input_d else None
+    if output_memory_config is None:
+        output_memory_config = input_a_memory_config
     output_mem_config = output_memory_config
 
     # Create input tensors
