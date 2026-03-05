@@ -9,6 +9,25 @@ When `TT_METAL_WATCHER=1` is enabled, `test_layer_norm_sharded_two_stage` fails 
 **Without watcher:** test passes in ~1.08s.
 **With watcher:** test aborts due to tripped assert.
 
+## CONFIRMED Root Cause (2026-03-05)
+
+**Non-posted multicast writes on Wormhole spuriously increment `NIU_MST_RD_RESP_RECEIVED`.**
+
+DPRINT diagnostics confirmed:
+```
+post-read-barrier: HW_RD_RESP=40 SW_ISSUED=40    ← in sync after last read barrier
+post-mcast-writes: HW_RD_RESP=42 SW_ISSUED=40    ← HW jumped +2, SW unchanged
+MISMATCH! delta=2
+```
+
+Between these two measurements, the kernel issued **zero NOC reads** — only non-posted
+multicast writes (`noc_async_write_multicast` with `linked=true`) and `noc_semaphore_set_multicast`.
+Yet the hardware read-response counter incremented by 2, causing the firmware assert to trip.
+
+The delta of 2 matches the number of multicast write loop iterations
+(`num_all_to_all_workers_first_stage`), suggesting each iteration's write+semaphore pair
+causes one spurious increment of the read response counter.
+
 ---
 
 ## Test Command
@@ -189,108 +208,46 @@ successful barrier (line 236) and kernel exit.**
 
 ---
 
-## Root Cause Hypotheses
+## Root Cause: CONFIRMED
 
-### Hypothesis 1: Watcher NOC Sanitization Overhead Creates a Timing Window
+### Non-posted multicast write acks increment `NIU_MST_RD_RESP_RECEIVED` on Wormhole
 
-When `WATCHER_ENABLED` is defined, every NOC transaction goes through sanitization macros
-(`DEBUG_SANITIZE_NOC_READ_TRANSACTION`, `DEBUG_SANITIZE_NOC_WRITE_TRANSACTION` in `sanitize.h`).
-These add significant overhead:
-- Address validation logic
-- `debug_insert_delay()` calls for each transaction (configurable delays)
-- Additional register reads for validation
+DPRINT instrumentation was added to `reader_mcast_sender_unary_sharded_ln.cpp` to read
+the hardware register `NIU_MST_RD_RESP_RECEIVED` and software counter `noc_reads_num_issued`
+at two points:
+1. Immediately after the last `noc_async_read_barrier()` (line 237)
+2. Immediately after the multicast write loop completes (after all `noc_async_write_barrier()` calls)
 
-This overhead **slows down the kernel execution significantly**. With `DM_DEDICATED_NOC` mode:
-
-1. `noc_local_state_init` snapshots `NIU_MST_RD_RESP_RECEIVED` into `noc_reads_num_issued[NOC_0]`
-2. The kernel runs and issues reads, incrementing `noc_reads_num_issued[NOC_0]` each time
-3. Hardware `NIU_MST_RD_RESP_RECEIVED` increments as read responses arrive
-
-**The sanitization overhead slows down software counter increments relative to hardware events.**
-This shouldn't cause a mismatch at the *end* though, since the barrier at line 236 synchronizes them.
-
-### Hypothesis 2: `ALIGN_LOCAL_CBS_TO_REMOTE_CBS` Pre-Kernel NOC Operations (Less Likely)
-
-In `brisck.cc:72-74`, before `kernel_main()`:
-
-```cpp
-#ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-    ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#endif
+**Results:**
+```
+post-read-barrier: HW_RD_RESP=40 SW_ISSUED=40    ← perfectly in sync
+post-mcast-writes: HW_RD_RESP=42 SW_ISSUED=40    ← HW +2, SW unchanged
+MISMATCH! delta=2
 ```
 
-This macro, when defined, expands to code generated at `program.cpp:1022-1056` that calls
-`align_local_cbs_to_remote_cb()`. However, examining the implementation in
-`remote_circular_buffer.h:387-405`, this function only manipulates CB interface structs
-(fifo pointers, sizes) — **it does NOT issue NOC reads**. So this is likely not the cause.
+Between these two points, the kernel issues **zero NOC reads**. The only operations are:
+- `noc_async_write_multicast(..., linked=true)` — non-posted multicast write
+- `noc_semaphore_set_multicast(...)` — non-posted multicast semaphore set
+- `noc_async_write_barrier()` — wait for write acks
 
-### Hypothesis 3: Watcher Sanitize NOC Address Check Interfering with NOC Read Counter (Most Likely)
+Each loop iteration (there are 2, matching `num_all_to_all_workers_first_stage`) causes
+`NIU_MST_RD_RESP_RECEIVED` to increment by 1, for a total delta of 2.
 
-Looking more carefully at the sanitize macros in `sanitize.h`:
+**This is a Wormhole NOC hardware behavior** where non-posted multicast write acknowledgements
+also increment the read response counter. The software counter `noc_reads_num_issued` is
+never incremented for writes, so they diverge.
 
-```cpp
-#define DEBUG_SANITIZE_NOC_READ_TRANSACTION_(noc_id, noc_a, worker_a, l, check_linked)
-    debug_sanitize_noc_and_worker_addr(noc_id, noc_a, worker_a, l, ...);
-    LOG_LEN(l);
-    debug_insert_delay((uint8_t)TransactionRead);
-```
+### Why it only fails with watcher
 
-The sanitize macro for reads is called **BEFORE** the actual NOC read command is issued
-to hardware. However, the software counter `noc_reads_num_issued[noc]` is incremented
-**AFTER** the hardware command is issued (`NOC_CMD_CTRL, NOC_CTRL_SEND_REQ`). The typical
-flow in `ncrisc_noc_fast_read` is:
+Without watcher, the kernel completes and the firmware never checks the counters —
+`noc_local_state_init` at the start of the next kernel re-snapshots both to their
+current (matched) values. With watcher, the firmware checks `==` at `NKFW` and catches
+the mismatch.
 
-```
-1. [WATCHER] sanitize addresses, insert delay    ← slow
-2. Write NOC command registers
-3. NOC_CMD_CTRL = SEND_REQ                        ← hardware starts read
-4. noc_reads_num_issued[noc] += 1                  ← software counter update
-```
+### Why adding `noc_async_read_barrier()` at the end caused a hang
 
-If the sanitize delay (step 1) is significant and there's a race between the hardware
-completing a prior read vs the software processing the next read, this could create a
-**temporary** mismatch. But it would self-resolve after the barrier.
-
-### Hypothesis 4: Non-Posted Multicast Write Response Aliasing (Primary Suspect)
-
-After the last read barrier at line 236, the kernel issues:
-
-```cpp
-noc_async_write_multicast(
-    l1_read_addr_ex_global,
-    multicast_data_noc | l1_read_addr_ex_global,
-    num_tiles_scaler * num_tiles_bytes,
-    num_blocks - 1,
-    true);  // linked = true
-noc_semaphore_set_multicast(
-    reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
-```
-
-These are **non-posted** writes on NOC0. In the Wormhole NOC architecture, non-posted
-writes expect acknowledgement responses. The `ncrisc_noc_fast_write` function increments
-`noc_nonposted_writes_num_issued` and `noc_nonposted_writes_acked` — NOT `noc_reads_num_issued`.
-
-**However**, there's a subtle possibility: on Wormhole, the NOC hardware may share some
-response paths between read responses and write acknowledgements, especially for linked
-multicast transactions. If the hardware's `NIU_MST_RD_RESP_RECEIVED` register gets
-spuriously incremented by a write-ack response (a hardware quirk), this would cause
-`NIU_MST_RD_RESP_RECEIVED > noc_reads_num_issued[NOC_0]`, and:
-
-- The barrier at line 236 would pass (both equal at that point)
-- After the multicast writes, `NIU_MST_RD_RESP_RECEIVED` would be spuriously incremented
-- At kernel exit, `NIU_MST_RD_RESP_RECEIVED != noc_reads_num_issued[NOC_0]` → assert trips
-- An added `noc_async_read_barrier()` at the end would hang forever because
-  `NIU_MST_RD_RESP_RECEIVED > noc_reads_num_issued[NOC_0]` and nothing will increment
-  `noc_reads_num_issued[NOC_0]` to catch up
-
-**This hypothesis perfectly explains both the original assert AND the hang with the added barrier.**
-
-### Hypothesis 5: Watcher Sanitize Overhead Changes Timing of Multicast Write Acks
-
-A variant of Hypothesis 4: the multicast write acks are always arriving, but without watcher
-the timing works out such that they arrive before `noc_local_state_init` of the *next*
-kernel invocation (which re-snapshots the counters). With watcher's overhead, the kernel
-runs slower, and the ack timing relative to the assert check changes.
+The barrier spins on `NIU_MST_RD_RESP_RECEIVED == noc_reads_num_issued[noc]`.
+Since `HW (42) > SW (40)`, and nothing will ever increment `SW`, the barrier hangs forever.
 
 ---
 
@@ -310,62 +267,75 @@ runs slower, and the ack timing relative to the assert check changes.
 
 ---
 
-## Recommended Next Steps
+## Recommended Next Steps (updated after confirmation)
 
-### 1. Verify counter mismatch direction (diagnostic)
+### 1. Determine the correct fix layer
 
-Add temporary debug prints (or use `DPRINT`) right before the assert in `brisck.cc` to
-print the actual values of `NIU_MST_RD_RESP_RECEIVED` and `noc_reads_num_issued[NOC_0]`
-at the `NKFW` waypoint. This will tell us:
-- Which direction the mismatch is in (HW > SW or SW > HW)
-- By how much they differ
+There are several possible fix approaches. The right one depends on whether this is
+considered a hardware quirk to work around, a firmware assert that's too strict, or
+a kernel-level issue:
 
-```cpp
-// Temporary debug in brisck.cc at NKFW
-WAYPOINT("NKFW");
-DPRINT << "RD_RESP=" << NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_RD_RESP_RECEIVED)
-       << " SW=" << noc_reads_num_issued[NOC_INDEX] << ENDL();
-```
+**Option A: Fix in the kernel (localized, lowest risk)**
 
-### 2. Verify multicast write ack hypothesis (diagnostic)
-
-Add counter reads right after the last `noc_async_read_barrier()` at line 236 and again
-after the multicast write loop to see if `NIU_MST_RD_RESP_RECEIVED` changes during the
-write phase:
+Re-snapshot `noc_reads_num_issued` after the multicast writes to absorb the spurious
+HW increments, then let the firmware assert pass naturally:
 
 ```cpp
-// After line 236 in reader_mcast_sender_unary_sharded_ln.cpp:
-noc_async_read_barrier();
-uint32_t rd_resp_before = NOC_STATUS_READ_REG(0, NIU_MST_RD_RESP_RECEIVED);
-uint32_t sw_before = noc_reads_num_issued[0];
-
-// ... multicast write loop ...
-
-noc_async_write_barrier();
-uint32_t rd_resp_after = NOC_STATUS_READ_REG(0, NIU_MST_RD_RESP_RECEIVED);
-// DPRINT both before/after values
+// After the multicast write loop in reader_mcast_sender_unary_sharded_ln.cpp:
+noc_reads_num_issued[noc_index] = NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED);
 ```
 
-If `rd_resp_after != rd_resp_before`, the multicast writes are affecting the read counter.
+This is simple but only fixes THIS kernel. Any other kernel that does non-posted
+multicast writes on Wormhole will have the same issue.
 
-### 3. If multicast writes are the cause
+**Option B: Fix in the firmware assert (broader, medium risk)**
 
-The fix would be to call `noc_async_read_barrier()` at the end, but **first update the
-software counter** to account for the spurious increments. Or, investigate whether the
-`linked=true` flag on the multicast write is the root cause and whether removing it
-(or using posted writes) avoids the issue.
+Change the `NKFW` assert in `brisck.cc` to re-snapshot before checking, or use `>=`:
 
-### 4. Check if this is a known Wormhole NOC quirk
+```cpp
+// Instead of:
+ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+// Use:
+ASSERT(NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_RD_RESP_RECEIVED) >= noc_reads_num_issued[NOC_INDEX],
+       DebugAssertNCriscNOCReadsFlushedTripped);
+```
 
-Search for similar issues or comments about `NIU_MST_RD_RESP_RECEIVED` being affected
-by write transactions, especially linked multicasts. Check with hardware team if this
-is expected behavior.
+This handles all kernels but weakens the assert (can't detect HW > SW mismatches
+from other bugs). Needs discussion with firmware team.
 
-### 5. Alternative: Adjust the firmware assert
+**Option C: Fix in the NOC write API (broadest, highest risk)**
 
-If the hardware register aliasing is confirmed, the firmware assert in `brisck.cc` may
-need to account for this. For example, checking `>=` instead of `==`, or re-snapshotting
-the counters after writes complete.
+Make `ncrisc_noc_fast_write` (for non-posted multicast) also increment
+`noc_reads_num_issued` to account for the HW behavior. This is the most
+architecturally correct fix but needs confirmation from the hardware team about
+exactly which write operations cause the increment and under what conditions.
+
+### 2. Investigate scope: which write operations cause the increment?
+
+The delta is 2 with 2 loop iterations. Each iteration does:
+- `noc_async_write_multicast` (linked=true, non-posted)
+- `noc_semaphore_set_multicast` (non-posted)
+
+Need to determine:
+- Is it the multicast write, the semaphore set, or both?
+- Does `linked=true` matter?
+- Does this happen for unicast non-posted writes too?
+- Is this Wormhole-specific or also affects Blackhole?
+
+### 3. Search for other affected kernels
+
+Any kernel that:
+1. Uses `DM_DEDICATED_NOC` mode
+2. Issues non-posted multicast writes on its NOC
+3. Has those writes as the last operations before kernel exit
+
+...will have the same watcher assert failure. Search the codebase for other
+`noc_async_write_multicast` calls in kernels to assess the scope.
+
+### 4. Discuss with hardware team
+
+Confirm whether `NIU_MST_RD_RESP_RECEIVED` incrementing on non-posted multicast
+write acks is expected Wormhole behavior, a known errata, or a newly discovered quirk.
 
 ---
 
@@ -373,8 +343,11 @@ the counters after writes complete.
 
 1. The test **only fails with watcher enabled** — without watcher, it passes consistently.
 2. The failing kernel's **internal read barriers all pass** (the kernel completes normally).
-3. The mismatch appears **after the kernel's last read barrier** but before firmware checks.
-4. Adding a read barrier at the end **hangs** rather than fixing the issue, proving the
-   software and hardware counters are out of sync in a way that can never self-resolve.
-5. The only NOC0 operations between the last successful barrier and kernel exit are
-   **non-posted multicast writes with `linked=true`**.
+3. **CONFIRMED:** `NIU_MST_RD_RESP_RECEIVED` increments by exactly 2 during the multicast
+   write phase, with zero NOC reads issued. `HW=40→42, SW=40→40`.
+4. The delta of 2 matches `num_all_to_all_workers_first_stage` (the multicast loop iteration count).
+5. Adding a `noc_async_read_barrier()` at the end **hangs forever** because `HW > SW` and
+   `SW` will never catch up — this is NOT a "pending reads" problem, it's a spurious HW
+   counter increment problem.
+6. The only NOC0 operations between the last successful barrier and kernel exit are
+   **non-posted multicast writes with `linked=true`** and **`noc_semaphore_set_multicast`**.
