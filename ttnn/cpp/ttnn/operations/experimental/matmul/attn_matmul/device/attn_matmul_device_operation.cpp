@@ -6,22 +6,12 @@
 #include "attn_matmul_program_factory.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-AttnMatmulDeviceOperation::program_factory_t AttnMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return AttnMatmulProgramFactory{};
-}
-
-void AttnMatmulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -55,7 +45,7 @@ void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             (args.num_tokens.has_value() and args.transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(args.num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL(args.num_tokens.value() % 32 == 0, "Number of tokens must be divisible by 32!");
         read_from_kv_cache = true;
     }
 
@@ -115,20 +105,16 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
 
 tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_a),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_a.storage_type());
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_b),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_b.storage_type());
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         args,
-        program_factory.index(),
         args.transpose_hw,
         args.output_mem_config,
         args.output_dtype,

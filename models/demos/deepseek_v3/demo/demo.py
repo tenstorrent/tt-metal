@@ -116,6 +116,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Enable trace for decode forward pass",
     )
     p.add_argument(
+        "--enable-mem-profile",
+        action="store_true",
+        default=False,
+        help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
         "--repeat-batches",
         type=int,
         default=1,
@@ -130,6 +136,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--prefill-max-tokens",
         type=int,
         help="Maximum number of tokens to prefill.",
+    )
+    p.add_argument(
+        "--profile-decode",
+        action="store_true",
+        default=False,
+        help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
     return p
 
@@ -243,9 +255,11 @@ def run_demo(
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
+    enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
+    profile_decode: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -341,8 +355,10 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
+                enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                profile_decode=profile_decode,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -399,6 +415,8 @@ def run_demo(
             gen.cleanup_all()
         except Exception as e:
             logger.warning(f"Failed to cleanup generator: {e}")
+        # Synchronize device before closing to flush pending ops (e.g. profiler data)
+        ttnn.synchronize_device(mesh_device)
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
@@ -439,8 +457,10 @@ def main() -> None:
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        enable_mem_profile=args.enable_mem_profile,
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
+        profile_decode=args.profile_decode,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

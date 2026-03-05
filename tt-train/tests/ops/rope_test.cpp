@@ -467,8 +467,6 @@ TEST_F(RoPETest, ForwardTest) {
 }
 
 TEST_F(RoPETest, BackwardTest) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     // Head dim must be a multiple of TILE_WIDTH
     // Head dim must be <= 256
     // Input query tensor

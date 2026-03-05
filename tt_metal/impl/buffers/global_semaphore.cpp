@@ -35,7 +35,18 @@ GlobalSemaphore::GlobalSemaphore(
     this->setup_buffer(initial_value, buffer_type);
 }
 
-void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_type) {
+GlobalSemaphore::GlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) :
+    device_(device), cores_(cores) {
+    this->setup_buffer(initial_value, buffer_type, address);
+}
+
+void GlobalSemaphore::setup_buffer(
+    std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -51,9 +62,11 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    buffer_ = distributed::AnyBuffer::create(sem_shard_config);
+    buffer_ = distributed::AnyBuffer::create(sem_shard_config, address);
 
-    this->reset_semaphore_value(initial_value);
+    if (initial_value.has_value()) {
+        this->reset_semaphore_value(initial_value.value());
+    }
 }
 
 IDevice* GlobalSemaphore::device() const { return device_; }
@@ -72,7 +85,15 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // lost due to device skew.
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto mesh_buffer = buffer_.get_mesh_buffer();
-    distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
+    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
+    if (using_fast_dispatch) {
+        distributed::EnqueueWriteMeshBuffer(
+            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
+    } else {
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
+            tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

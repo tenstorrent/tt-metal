@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,11 @@ void py_module(nb::module_& m) {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
         py_binary.def(
             "add",
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const ttnn::Tensor&)>(&ops::operator+),
+            nb::arg("a"),
+            nb::arg("b"));
+        py_binary.def(
+            "add",
             static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
                 &ops::operator+),
             nb::arg("a"),
@@ -119,12 +124,16 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+        nb::enum_<ttml::ops::distributed::GradOutputType>(py_distributed, "GradOutputType")
+            .value("REPLICATED", ttml::ops::distributed::GradOutputType::REPLICATED)
+            .value("SHARDED", ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "all_gather",
             &ttml::ops::distributed::all_gather,
             nb::arg("tensor"),
             nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none());
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
     }
@@ -146,13 +155,14 @@ void py_module(nb::module_& m) {
 
     {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def("layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta"));
+        py_layernorm.def(
+            "layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta") = nb::none());
         py_layernorm.def(
             "composite_layernorm",
             &ttml::ops::composite_layernorm,
             nb::arg("tensor"),
             nb::arg("gamma"),
-            nb::arg("beta"));
+            nb::arg("beta") = nb::none());
     }
 
     {
@@ -263,6 +273,19 @@ void py_module(nb::module_& m) {
             nb::arg("key"),
             nb::arg("value"),
             nb::arg("mask") = std::nullopt);
+
+        py_attention.def(
+            "scaled_dot_product_attention_composite",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention_composite(query, key, value, mask);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
     }
 
     {
@@ -274,7 +297,8 @@ void py_module(nb::module_& m) {
             nb::arg("head_dim"),
             nb::arg("sequence_length"),
             nb::arg("theta"),
-            nb::arg("rope_scaling_params"));
+            nb::arg("rope_scaling_params"),
+            nb::arg("mesh_mapper") = nullptr);
         py_rope.def(
             "build_rope_params",
             &ttml::ops::build_rope_params,

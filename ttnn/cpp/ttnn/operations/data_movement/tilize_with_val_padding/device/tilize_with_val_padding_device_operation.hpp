@@ -12,7 +12,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp"
 
@@ -27,12 +27,10 @@ struct TilizeWithValPaddingDeviceOperation {
     using program_factory_t = std::variant<
         ttnn::prim::TilizeWithValPaddingSingleCoreFactory,
         ttnn::prim::TilizeWithValPaddingMultiCoreBlockInterleavedFactory,
-        ttnn::prim::TilizeWithValPaddingMultiCoreInterleavedFactory,
+        ttnn::prim::TilizeWithValPaddingMultiCoreDefaultFactory,
         ttnn::prim::TilizeWithValPaddingMultiCoreShardedFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

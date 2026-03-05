@@ -12,22 +12,16 @@
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_mop_config(const bool transpose_of_faces = false, const std::uint32_t operand_id = 0) {
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);  // if narrow tile read face 0 twice for row broadcast
-                                                                   // or read face 0 and 1 for col broadcast
-    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, num_faces, narrow_tile);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose = 0) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile =
-        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
-
-    _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
@@ -45,6 +39,18 @@ inline void llk_unpack_AB(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
+
+    LLK_ASSERT(
+        (are_unpacker_AB_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            get_operand_face_r_dim(operandA_id),
+            get_operand_face_r_dim(operandB_id),
+            get_operand_num_faces(operandA_id),
+            get_operand_num_faces(operandB_id))),
+        "");
 
     // For row broadcast with non-zero row index, adjust address to point to the desired row
     if constexpr (BType == BroadcastType::ROW) {
@@ -82,26 +88,4 @@ inline void llk_unpack_AB(
     WAYPOINT("UABW");
     _llk_unpack_AB_<BType>(address_a, address_b);
     WAYPOINT("UABD");
-}
-
-template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
-inline void llk_unpack_AB_reduce_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t acc_to_dest = 0) {
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const bool narrow_tile =
-        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
-    // TODO NC: Move to TRISC1 tt-metal#36411
-    if constexpr (enforce_fp32_accumulation) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-    }
-
-    _llk_unpack_AB_reduce_init_<dim, BType, enforce_fp32_accumulation>(
-        face_r_dim, num_faces, narrow_tile, transpose, within_face_16x16_transpose);
 }

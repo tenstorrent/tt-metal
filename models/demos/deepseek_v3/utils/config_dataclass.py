@@ -78,6 +78,7 @@ class LinearConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
+    output_tile: "tt.tt_metal.Tile | None" = None
 
 
 @dataclass
@@ -126,6 +127,18 @@ class AllGatherAsyncConfig(OpConfigBase):
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_workers_per_link: int | None = None
+
+
+@dataclass
+class AllBroadcastAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_broadcast_async op"""
+
+    num_links: int | None = 4
+    cluster_axis: int | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
 
 
 @dataclass

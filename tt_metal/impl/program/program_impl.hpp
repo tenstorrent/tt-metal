@@ -52,19 +52,6 @@ class MeshWorkload;
 class MeshWorkloadImpl;
 }  // namespace distributed
 
-enum dispatch_core_processor_classes {
-    // Tensix processor classes
-    DISPATCH_CLASS_TENSIX_DM0 = 0,
-    DISPATCH_CLASS_TENSIX_DM1 = 1,
-    DISPATCH_CLASS_TENSIX_COMPUTE = 2,
-
-    // Ethernet processor classes
-    DISPATCH_CLASS_ETH_DM0 = 0,
-    DISPATCH_CLASS_ETH_DM1 = 1,
-
-    DISPATCH_CLASS_MAX = 3,
-};
-
 namespace experimental {
 class GlobalCircularBuffer;
 }
@@ -82,9 +69,12 @@ void assemble_device_commands(
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
-    // kernel_ids are ordered by dispatch class
+    // kernel_ids are ordered by processor index
     std::vector<KernelHandle> kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
+    // RTA/CRTA layout for each kernel
+    std::vector<uint32_t> rta_sizes;
+    std::vector<uint32_t> crta_offsets;
+    std::vector<uint32_t> crta_sizes;
     uint32_t total_rta_size{};
     // kernel_text_offsets is indexed by processor index within core.
     std::vector<uint32_t> kernel_text_offsets;
@@ -106,8 +96,6 @@ struct KernelGroup {
 // Contains the program's worker memory map
 struct ProgramConfig {
     uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
     uint32_t sem_offset;
     uint32_t sem_size;
     uint32_t cb_offset;
@@ -136,9 +124,6 @@ struct ProgramOffsetsState {
     uint32_t offset = 0;
     // Unique RTA offset.
     uint32_t rta_offset = 0;
-    // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets{};
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes{};
     // Semaphore offsets and sizes.
     uint32_t sem_offset = 0;
     uint32_t sem_size = 0;
@@ -157,8 +142,6 @@ struct ProgramOffsetsState {
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
-using DataflowBuffersGetter =
-    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
 
 // Internal class for holding a group of programs for parallel compilation.
 class ProgramCompileGroup {
@@ -212,6 +195,8 @@ public:
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
+        const;
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
@@ -222,6 +207,7 @@ public:
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     void init_semaphores(
@@ -230,7 +216,7 @@ public:
     void compile(IDevice* device, bool force_slow_dispatch = false);
     void invalidate_circular_buffer_allocation();
     void invalidate_dataflow_buffer_allocation();
-    // Always used in conjuction with validate_circular_buffer_region and compile
+    // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     void allocate_dataflow_buffers(const IDevice* device);
     bool is_finalized() const;
@@ -276,7 +262,6 @@ public:
         const KernelsGetter& kernels_getter,
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
-        const DataflowBuffersGetter& dataflow_buffers_getter,
         tt::stl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
@@ -290,11 +275,19 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
+    // core require remapper being enabled
+    void finalize_dataflow_buffer_configs();
+
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
+
+    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
+    // Ensures that circular buffer core ranges are within the device compute grid
+    void validate_circular_buffer_core_ranges(const IDevice* device);
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
@@ -405,13 +398,22 @@ private:
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
 
+    void finalize_single_dfb_config(
+        std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
+        const CoreCoord& core,
+        bool use_remapper);
+
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
     void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
+    void set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
     void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
+    void set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

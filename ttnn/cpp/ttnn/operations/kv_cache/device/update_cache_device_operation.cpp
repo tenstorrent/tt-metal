@@ -64,23 +64,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
 
-        // TODO: For interleaved, assume each core handles 1 tile of seq_len if kv_heads > 1
-        // For 56 cores and 2 heads, this effectively caps max seq len at 56 / 2 * 32 = 896
-        // Can generalize interleaved to infer and check arbitrary number of tiles along seq_len per core; or, add more
-        // robust logic in reader/writer loops to handle generic blocking of work For sharded, we infer number of tiles
-        // each core handles from shard so no issues there
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
-            input_tensor.padded_shape()[1] > 1) {
-            const uint32_t num_blocks_of_work =
-                input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
-            const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-            TT_FATAL(
-                (num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y),
-                "Number of work blocks ({}) must be <= total grid size ({})",
-                num_blocks_of_work,
-                compute_with_storage_grid_size.x * compute_with_storage_grid_size.y);
-        }
-
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
@@ -146,11 +129,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             TT_FATAL(args.batch_offset == 0, "Batch offset must be 0 when cache tensor batch size >= 32");
         }
     }
-}
-
-void UpdateKVCacheOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 TensorSpec UpdateKVCacheOperation::compute_output_specs(

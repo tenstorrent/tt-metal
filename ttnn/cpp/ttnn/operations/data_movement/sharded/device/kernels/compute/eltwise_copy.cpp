@@ -12,6 +12,7 @@ void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_tile_init(tt::CBIndex::c_0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         acquire_dst();
 

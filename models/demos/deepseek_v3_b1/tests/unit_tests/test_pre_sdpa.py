@@ -13,20 +13,109 @@ Tests pre-SDPA fused operation with full pipeline:
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
-from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
 def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def test_get_device_mla_work_assignment():
+    """Unit tests for get_device_mla_work_assignment, covering the key SP scenarios.
+
+    Python mirror of get_device_mla_work_assignment in rt_args_common.hpp.
+    Returns (skip_attention, skip_kv_cache_update, local_cur_pos).
+    """
+
+    def get_device_mla_work_assignment(cur_pos, sp_device_idx, device_chunk_size, num_sp_devices):
+        if cur_pos < sp_device_idx * device_chunk_size:
+            return True, True, 0
+
+        sp_block = device_chunk_size * num_sp_devices
+        num_full_blocks = cur_pos // sp_block
+        remainder = cur_pos % sp_block
+
+        dev_start = sp_device_idx * device_chunk_size
+        dev_contrib = max(0, remainder - dev_start)
+        if dev_contrib > device_chunk_size:
+            dev_contrib = device_chunk_size
+        local_seq_len = num_full_blocks * device_chunk_size + dev_contrib
+
+        owning_device = (cur_pos // device_chunk_size) % num_sp_devices
+        skip_kv_cache_update = sp_device_idx != owning_device
+        local_cur_pos = local_seq_len - 1 if skip_kv_cache_update else local_seq_len
+
+        return False, skip_kv_cache_update, local_cur_pos
+
+    dcs = 1024  # device_chunk_size
+    nsp = 4  # num_sp_devices
+
+    # ---- pos=0: only dev0 has work (owns it) ----
+    assert get_device_mla_work_assignment(0, 0, dcs, nsp) == (False, False, 0)  # dev0 owns, write slot 0
+    assert get_device_mla_work_assignment(0, 1, dcs, nsp) == (True, True, 0)  # dev1 no data yet
+    assert get_device_mla_work_assignment(0, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(0, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=1023: last slot in dev0's first chunk, dev0 owns it ----
+    assert get_device_mla_work_assignment(1023, 0, dcs, nsp) == (False, False, 1023)  # dev0 owns, write slot 1023
+    assert get_device_mla_work_assignment(1023, 1, dcs, nsp) == (True, True, 0)  # dev1 no data yet
+    assert get_device_mla_work_assignment(1023, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(1023, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=1024: first slot in dev1's first chunk, dev1 owns it ----
+    assert get_device_mla_work_assignment(1024, 0, dcs, nsp) == (False, True, 1023)  # dev0 full first block, non-owner
+    assert get_device_mla_work_assignment(1024, 1, dcs, nsp) == (False, False, 0)  # dev1 owns, write slot 0
+    assert get_device_mla_work_assignment(1024, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(1024, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=2047: last slot in dev1's first chunk ----
+    assert get_device_mla_work_assignment(2047, 0, dcs, nsp) == (False, True, 1023)  # dev0 full first block, non-owner
+    assert get_device_mla_work_assignment(2047, 1, dcs, nsp) == (False, False, 1023)  # dev1 owns, write slot 1023
+    assert get_device_mla_work_assignment(2047, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(2047, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=4095: last slot in dev3's first chunk ----
+    assert get_device_mla_work_assignment(4095, 0, dcs, nsp) == (False, True, 1023)  # dev0 full first block, non-owner
+    assert get_device_mla_work_assignment(4095, 1, dcs, nsp) == (False, True, 1023)  # dev1 full first block, non-owner
+    assert get_device_mla_work_assignment(4095, 2, dcs, nsp) == (False, True, 1023)  # dev2 full first block, non-owner
+    assert get_device_mla_work_assignment(4095, 3, dcs, nsp) == (False, False, 1023)  # dev3 owns, write slot 1023
+
+    # ---- pos=4096: first slot of second round-robin block, dev0 owns again ----
+    assert get_device_mla_work_assignment(4096, 0, dcs, nsp) == (False, False, 1024)  # dev0 owns, write slot 1024
+    assert get_device_mla_work_assignment(4096, 1, dcs, nsp) == (False, True, 1023)  # dev1 full first block, non-owner
+    assert get_device_mla_work_assignment(4096, 2, dcs, nsp) == (False, True, 1023)  # dev2 full first block, non-owner
+    assert get_device_mla_work_assignment(4096, 3, dcs, nsp) == (False, True, 1023)  # dev3 full first block, non-owner
+
+    # ---- local counts (2,2,1 + partial,1): 1 full block + partial reaching into dev2
+    # pos = sp_block + 2*dcs + 500 = 6644, owner=dev2, dev2 local=1524 (write slot)
+    assert get_device_mla_work_assignment(6644, 0, dcs, nsp) == (False, True, 2047)  # dev0 2 full chunks, non-owner
+    assert get_device_mla_work_assignment(6644, 1, dcs, nsp) == (False, True, 2047)  # dev1 2 full chunks, non-owner
+    assert get_device_mla_work_assignment(6644, 2, dcs, nsp) == (False, False, 1524)  # dev2 owns, write slot 1524
+    assert get_device_mla_work_assignment(6644, 3, dcs, nsp) == (False, True, 1023)  # dev3 1 full chunk, non-owner
+
+    # ---- local counts (3,2 + partial,2,2): 2 full blocks + partial into dev1
+    # pos = 2*sp_block + dcs + 700 = 9916, owner=dev1, dev1 local=2748 (write slot)
+    assert get_device_mla_work_assignment(9916, 0, dcs, nsp) == (False, True, 3071)  # dev0 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(9916, 1, dcs, nsp) == (False, False, 2748)  # dev1 owns, write slot 2748
+    assert get_device_mla_work_assignment(9916, 2, dcs, nsp) == (False, True, 2047)  # dev2 2 full chunks, non-owner
+    assert get_device_mla_work_assignment(9916, 3, dcs, nsp) == (False, True, 2047)  # dev3 2 full chunks, non-owner
+
+    # ---- local counts (3,3,3,2 + partial): 2 full blocks + partial into dev3
+    # pos = 2*sp_block + 3*dcs + 400 = 11664, owner=dev3, dev3 local=2448 (write slot)
+    assert get_device_mla_work_assignment(11664, 0, dcs, nsp) == (False, True, 3071)  # dev0 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(11664, 1, dcs, nsp) == (False, True, 3071)  # dev1 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(11664, 2, dcs, nsp) == (False, True, 3071)  # dev2 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(11664, 3, dcs, nsp) == (False, False, 2448)  # dev3 owns, write slot 2448
+
+    logger.info("test_get_device_mla_work_assignment passed")
 
 
 @pytest.mark.parametrize(
@@ -39,9 +128,26 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("using_persistent_buffers", [True])
-@pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
-@pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
+@pytest.mark.parametrize("num_iters", [(1)])
+@pytest.mark.parametrize("max_seq_len", [32 * 1024])
+@pytest.mark.parametrize(
+    "position_id",
+    [
+        0,
+        1,
+        127,
+        242,
+        255,
+        564,
+        1023,
+        2047,
+        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
+        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
+        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
+        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+    ],
+)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -53,6 +159,8 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.requires_grid_size((13, 10))
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
@@ -63,14 +171,16 @@ def test_pre_sdpa(
     use_fp32,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
-    skip_ccl,
     num_iters,
-    num_warmup_iter,
+    max_seq_len,
+    position_id,
+    noc_mode,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
-
     num_devices = mesh_rows * mesh_cols
+    skip_ccl = False
+    if num_devices == 1:
+        skip_ccl = True
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -81,12 +191,8 @@ def test_pre_sdpa(
 
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    submesh.load_sub_device_manager(submesh.create_sub_device_manager([worker_sub_device], 0))
-    submesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+
+    semaphores = PreSDPA.create_semaphores(submesh, skip_ccl)
 
     # ========================================================================
     # Configuration
@@ -94,6 +200,9 @@ def test_pre_sdpa(
     # Input tensor shapes
     shape = (1, 7168)
     matmul_weights_shape = (7168, 1536)
+
+    per_device_max_seq_len = max_seq_len // mesh_rows
+    assert position_id < max_seq_len, f"Position ID {position_id} must be less than max sequence length {max_seq_len}"
 
     # Head configuration
     NUM_QNOPE_HEADS = 64
@@ -106,6 +215,10 @@ def test_pre_sdpa(
     KNOPE_DIM = 512
     KROPE_DIM = 64
 
+    assert QROPE_HEAD_DIM == KROPE_DIM, "Qrope and Krope head dimensions must match"
+
+    scale = (QNOPE_HEAD_DIM + QROPE_HEAD_DIM) ** -0.5
+
     # Qnope/Qrope grid configuration (must match head configuration)
     QNOPE_GRID_COLS = 8  # 8 Qnope cores per row (1 head each)
     QROPE_GRID_COLS = 4  # 4 Qrope cores per row (2 heads each)
@@ -117,12 +230,85 @@ def test_pre_sdpa(
             f"Device grid {device_grid_size.x}x{device_grid_size.y} too small for {TOTAL_COLS} columns required (P100 has 11 columns)"
         )
 
-    matmul2_grid_x = min(TOTAL_COLS, device_grid_size.x)  # Must be exactly 12 for correct sharding
+    matmul2_grid_x = 12
     matmul2_grid_y = 8
+
+    # SDPA KV Cache tensor declared here to overlap with pre-SDPA, pre-KV cache branch CBs.
+    # Matches flash_mla's double-buffered KV CB sizing: shard = (2 * k_chunk_size, kvpe_dim)
+    # = (256, 576) per core, giving 156,672 bytes/core — same as flash_mla's cb_k_in.
+    # Total height = shard_height * num_cores must be divisible by tile height (32).
+    kvpe_dim = KNOPE_DIM + KROPE_DIM  # 576
+    kv_cache_num_cores_x = device_grid_size.x
+    kv_cache_num_cores_y = device_grid_size.y
+    kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
+    kv_cache_shard_height = 256  # 2 * k_chunk_size (128), matching flash_mla double-buffer
+    kv_cache_total_height = kv_cache_shard_height * kv_cache_num_cores
+
+    kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(kv_cache_num_cores_x - 1, kv_cache_num_cores_y - 1),
+                )
+            }
+        ),
+        (kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.randn((kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            kv_cache_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    # TODO: Reduce to 3 slots
+    # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
+    # Matches flash_mla's cb_out_im sizing: 68 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 68 tiles per core.
+    sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_num_slots = 4
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
+    sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
+    sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
+
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1),
+                )
+            }
+        ),
+        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_out_interm_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        tile=ttnn.Tile([8, 32]),
+    )
 
     # Matmul2 output width (interleaved Qnope/Qrope)
     matmul2_width = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM + NUM_QROPE_HEADS * QROPE_HEAD_DIM  # 8192 + 4096 = 12288
     matmul2_weights_shape = (1536, matmul2_width)
+    num_tp = mesh_cols  # TP parallelism across mesh columns (2 for 4x2, 1 for 1x1)
     qnope_num_cores = QNOPE_GRID_COLS * matmul2_grid_y  # 64 cores
     qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y  # 32 cores
 
@@ -181,26 +367,36 @@ def test_pre_sdpa(
     torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
-    # Matmul2 weights - create unshuffled first, then shuffle for device
-    torch_matmul2_weights_unshuffled = torch.randn(matmul2_weights_shape, dtype=torch.bfloat16)
-    torch_matmul2_weights_shuffled = shuffle_weights_for_interleaved_qnope_qrope(
-        torch_matmul2_weights_unshuffled,
-        num_qnope_heads=NUM_QNOPE_HEADS,
-        num_qrope_heads=NUM_QROPE_HEADS,
-        qnope_head_dim=QNOPE_HEAD_DIM,
-        qrope_head_dim=QROPE_HEAD_DIM,
-        heads_per_row=HEADS_PER_ROW,
+    # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
+    # Golden receives this directly; per-TP slices are extracted for shuffling + mesh distribution.
+    total_qnope_heads = num_tp * NUM_QNOPE_HEADS
+    total_qrope_heads = num_tp * NUM_QROPE_HEADS
+    total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
+    total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
+    torch_matmul2_weights_full_unshuffled = torch.randn(
+        (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
-    # Matmul3 weights - [num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
-    # but [qnope_head_dim, qnope_out_dim] per core for device (height sharded)
-    torch_matmul3_weights = torch.randn((NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
+    # Each TP slice of 64 heads is height-sharded on 64 cores per device.
+    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+
+    # kv_b2_proj weights (placeholder — not consumed by pre-SDPA but required by the fused buffer)
+    torch_kv_b2_proj_weights = torch.zeros(
+        (QNOPE_OUT_DIM, num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM), dtype=torch.bfloat16
+    )
+
+    # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
+    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+
+    # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
+    torch_o_proj_weights = torch.zeros((num_tp * 8192, 7168), dtype=torch.bfloat16)
+    torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
+    torch_ffn_norm = torch.zeros((1, 7168), dtype=torch.bfloat16)
 
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
     # ========================================================================
-    max_seq_len = 8192
-    position_id = 0  # Decode mode: first token
     position_ids = torch.tensor([position_id])  # [batch]
 
     # Create cos/sin matrices in Meta-style format
@@ -269,180 +465,91 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
-    ttnn_gamma = ttnn.from_torch(
-        torch_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # Matmul weights tensor - width sharded on 6x8 grid (48 cores)
-    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))
-    num_matmul_cores = 6 * 8
-    matmul_shard_shape = (matmul_weights_shape[0], matmul_weights_shape[1] // num_matmul_cores)
-    matmul_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul_grid}),
-        matmul_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul_shard_spec)
-
-    ttnn_matmul_weights = ttnn.from_torch(
+    # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
+    # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
+    bdw = BlitzDecodeWeights(submesh)
+    (
+        matmul_weights_overlapped,
+        matmul2_weights_overlapped,
+        dkv_matmul_weights_overlapped,
+    ) = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
         torch_matmul_weights,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        torch_matmul2_weights_full_unshuffled,
+        torch_dkv_matmul_weights,
     )
 
-    # Matmul2 weights tensor (shuffled) - width sharded on 8x12 grid
-    matmul2_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1))
-    matmul2_num_cores = matmul2_grid_x * matmul2_grid_y
-    matmul2_shard_shape = (matmul2_weights_shape[0], matmul2_weights_shape[1] // matmul2_num_cores)
-    matmul2_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({matmul2_grid}),
-        matmul2_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul2_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, matmul2_shard_spec
-    )
-
-    ttnn_matmul2_weights = ttnn.from_torch(
-        torch_matmul2_weights_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # RMSNorm2 gamma tensor
-    rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
-        (1, rmsnorm2_width),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    rmsnorm2_gamma_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, rmsnorm2_gamma_shard_spec
-    )
-    ttnn_rmsnorm2_gamma = ttnn.from_torch(
-        torch_rmsnorm2_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=rmsnorm2_gamma_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # Matmul3 weights tensor - height sharded on Qnope grid (64 cores)
-    # Each core gets [128, 512] = shape per core
-    qnope_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(QNOPE_GRID_COLS - 1, matmul2_grid_y - 1))
-    # Flatten matmul3 weights for height sharding: [num_heads * K, N] = [64 * 128, 512] = [8192, 512]
-    torch_matmul3_weights_flat = torch_matmul3_weights.reshape(NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    matmul3_shard_shape = (QNOPE_HEAD_DIM, QNOPE_OUT_DIM)  # [128, 512] per core
-    matmul3_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qnope_grid}),
-        matmul3_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    matmul3_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, matmul3_shard_spec
-    )
-
-    ttnn_matmul3_weights = ttnn.from_torch(
+    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj via BlitzDecodeWeights
+    torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
+    matmul3_weights_overlapped, _ = bdw.get_tt_kv_b12_proj_weights(
         torch_matmul3_weights_flat,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=matmul3_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        torch_kv_b2_proj_weights,
     )
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
-    # Each SDPA Input core receives 8 interleaved heads: 8 × (512 + 64) = 8 × 576 = 4608 elements
+    # After 3-phase CreateQHeads tilization:
+    #   Each SDPA Input core receives 8 heads, tilized as [8, 576] with [8, 32] tiles
+    #   Total: 8 cores × 8 heads = 64 rows, 576 elements per head
     # SDPA Input grid: 4×2 rectangle at logical (0,1)-(3,2)
     SDPA_INPUT_GRID_COLS = 4
     SDPA_INPUT_GRID_ROWS = 2
     SDPA_INPUT_NUM_CORES = SDPA_INPUT_GRID_COLS * SDPA_INPUT_GRID_ROWS  # 8 cores
     COMBINED_HEAD_SIZE = QNOPE_OUT_DIM + QROPE_HEAD_DIM  # 512 + 64 = 576
-    SDPA_INPUT_ELEMENTS_PER_CORE = HEADS_PER_ROW * COMBINED_HEAD_SIZE  # 8 * 576 = 4608
 
-    sdpa_input_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(0, 1), ttnn.CoreCoord(SDPA_INPUT_GRID_COLS - 1, 1 + SDPA_INPUT_GRID_ROWS - 1)
+    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
+    sdpa_input_output_grid_crs = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
     )
-    sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)  # [8, 4608] total
-    sdpa_input_output_shard_shape = (1, SDPA_INPUT_ELEMENTS_PER_CORE)  # [1, 4608] per core
+
+    sdpa_tile = ttnn.Tile([8, 32])  # Tilize tile shape for CreateQHeads output
+    sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM)  # [64, 512] total
+    sdpa_input_output_shard_shape = (HEADS_PER_ROW, QNOPE_OUT_DIM)  # [8, 512] per core
     sdpa_input_output_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({sdpa_input_grid}),
+        sdpa_input_output_grid_crs,
         sdpa_input_output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    sdpa_input_output_mem_config = ttnn.MemoryConfig(
+    sdpa_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
     )
-    torch_sdpa_input_output = torch.zeros(sdpa_input_output_shape, dtype=torch.bfloat16)
-    ttnn_sdpa_input_output = ttnn.from_torch(
-        torch_sdpa_input_output,
+    torch_sdpa_output = torch.zeros(sdpa_input_output_shape, dtype=torch.bfloat16)
+    ttnn_output = ttnn.from_torch(
+        torch_sdpa_output,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=sdpa_input_output_mem_config,
-        tile=tile,
+        memory_config=sdpa_mem_config,
+        tile=sdpa_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # RoPE tensors - sharded on Qrope grid (4x8 = 32 cores)
+    # RoPE tensors
     qrope_grid = ttnn.CoreRange(
         ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
     )
 
-    # For decode mode, cos/sin are indexed by position: [1, batch, 1, head_dim]
-    # Shape: [1, 1, 1, qrope_head_dim] - broadcast multiply will use row 0
+    # QRoPE cos/sin: DRAM INTERLEAVED (all qrope cores read full head_dim)
+    # Shape: [1, 1, max_seq_len, qrope_head_dim]
+    qrope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
+    qrope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
 
-    # Cos/Sin sharding: HEIGHT_SHARDED on qrope grid
-    # Each core gets full head_dim (since cos/sin are reused for all heads on that core)
-    # Shape per core: (1, qrope_head_dim) = (1, 64)
-    # Shared with KV Cache branch, double check if modifying these tensors
-    cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
-    sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
+    qrope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    qrope_cos_sin_shard_shape = (1, QROPE_HEAD_DIM)  # [1, 64] per core
-    qrope_cos_sin_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qrope_grid}),
-        qrope_cos_sin_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    qrope_cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, qrope_cos_sin_shard_spec
-    )
-
-    # Repeat cos/sin for all qrope cores: [1, 1, num_cores, qrope_head_dim]
-    # Each core gets the same cos/sin (reused for its 2 heads)
-    cos_replicated = cos_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
-    sin_replicated = sin_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
-
-    ttnn_cos = ttnn.from_torch(
-        cos_replicated,
+    ttnn_qrope_cos = ttnn.from_torch(
+        qrope_cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=qrope_cos_sin_mem_config,
+        memory_config=qrope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    ttnn_sin = ttnn.from_torch(
-        sin_replicated,
+    ttnn_qrope_sin = ttnn.from_torch(
+        qrope_sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=qrope_cos_sin_mem_config,
+        memory_config=qrope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
@@ -472,277 +579,330 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # KV Cache Branch
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
-    num_shards = kv_cache_branch_crs.num_cores()
-    shard_width = dkv_matmul_weights_shape[1] // num_shards
-    new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
-    torch_dkv_matmul_weights_shards = torch_dkv_matmul_weights.reshape(
-        dkv_matmul_weights_shape[0], num_shards, shard_width
-    )
-    torch_dkv_matmul_weights_shuffled = torch_dkv_matmul_weights_shards[:, new_shard_order, :].reshape(
-        dkv_matmul_weights_shape[0], dkv_matmul_weights_shape[1]
-    )
-    dkv_matmul_weights_shard_spec = ttnn.ShardSpec(
-        kv_cache_branch_crs,
-        (dkv_matmul_weights_shape[0], shard_width),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-    dkv_matmul_weights_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, dkv_matmul_weights_shard_spec
-    )
-    ttnn_dkv_matmul_weights = ttnn.from_torch(
-        torch_dkv_matmul_weights_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=dkv_matmul_weights_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
+    # KV Cache Branch RMSNorm gamma
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
-    dkv_rmsnorm_gamma_shard_spec = ttnn.ShardSpec(
-        kv_cache_branch_rms_crs,
-        (1, KNOPE_DIM),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    dkv_rmsnorm_gamma_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, dkv_rmsnorm_gamma_shard_spec
-    )
 
-    ttnn_dkv_rmsnorm_gamma = ttnn.from_torch(
+    # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
+    (
+        _,  # o_proj
+        _,  # gate_mm
+        gamma_overlapped,
+        rmsnorm2_gamma_overlapped,
+        dkv_rmsnorm_gamma_overlapped,
+        _,  # ffn_norm
+    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+        torch_o_proj_weights,
+        torch_gate_mm_weights,
+        torch_gamma,
+        torch_rmsnorm2_gamma,
         torch_dkv_rmsnorm_gamma,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=dkv_rmsnorm_gamma_mem_config,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        torch_ffn_norm,
     )
 
-    krope_num_heads = 1
-    krope_cos_sin_shard_spec = ttnn.ShardSpec(
-        kv_cache_branch_rope_crs,
-        (krope_num_heads, KROPE_DIM // 2),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    krope_cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, krope_cos_sin_shard_spec
-    )
+    # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
+    krope_num_cores = kv_cache_branch_rope_crs.num_cores()
+    krope_cos_full = torch_cos.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
+    krope_sin_full = torch_sin.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq_len, 64]
+
+    krope_dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     ttnn_krope_cos = ttnn.from_torch(
-        cos_selected,
+        krope_cos_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=krope_cos_sin_mem_config,
+        memory_config=krope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
     ttnn_krope_sin = ttnn.from_torch(
-        sin_selected,
+        krope_sin_full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=krope_cos_sin_mem_config,
+        memory_config=krope_dram_mem_config,
         tile=tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    num_cores = device_grid_size.x * device_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
+    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=pos_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    # KV Cache tensor in DRAM sharded
+    # Create KV cache (non-paged) based on max seq len
+    program_config = FlashMLADecode.ProgramConfig(
+        k_chunk_size=128,
+        exp_approx_mode=False,  # Use exact exp for higher precision
+    )
+    logger.info(f"Creating KV cache with per-device seq_len={per_device_max_seq_len}, total_seq_len={max_seq_len}...")
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
+    cache_shape = (1, 1, max_seq_len, kvpe_dim)
+
+    def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
+        """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+        The global KV cache is written in round-robin device_chunk_size blocks:
+          [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+        ShardTensor2dMesh splits dim-2 contiguously, so each device would
+        receive the wrong data.  This function reorders to:
+          [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+        so that after the contiguous split each device gets its own chunks.
+        """
+        b, h, seq, d = kv.shape
+        num_chunks = seq // device_chunk_size
+        chunks_per_device = num_chunks // num_devices
+        return (
+            kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
+        )
+
+    dcs = program_config.device_chunk_size
+    num_sp = mesh_rows
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
+
+    # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
+    # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
+    # Use optimal DRAM bank order matching S block work assignment for locality
+    grid = program_config.grid
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
+        grid=grid.optimal_dram_grid(),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
+    num_chunks = max_seq_len // program_config.k_chunk_size
+    num_banks = len(grid.OPTIMAL_DRAM_BANK_ORDER)
+    logger.info(
+        f"KV cache: ND sharded, DRAM banks: {num_banks} (optimal order: {grid.OPTIMAL_DRAM_BANK_ORDER}), chunks: {num_chunks}, shard_shape: [1, 1, {program_config.k_chunk_size}, {kvpe_dim}]"
+    )
+
+    ttnn_kv_cache = ttnn.from_torch(
+        torch_kv_cache_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None)),
+    )
+    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
-    logger.info("Running pre-SDPA operation...")
+    logger.info(f"Running pre-SDPA operation with position_id={position_id}...")
 
-    profiler = BenchmarkProfiler()
-
-    # Compile Run
-    logger.info("Compiling model")
-    ttnn_sdpa_input_result = PreSDPA.op(
-        input_tensor_mesh,
-        intermediate_tensor_mesh,
-        ttnn_gamma,
-        ttnn_matmul_weights,
-        ttnn_rmsnorm2_gamma,
-        ttnn_matmul2_weights,
-        ttnn_matmul3_weights,
-        ttnn_sin,
-        ttnn_cos,
-        ttnn_trans_mat,
-        ttnn_krope_cos,
-        ttnn_krope_sin,
-        ttnn_dkv_matmul_weights,
-        ttnn_dkv_rmsnorm_gamma,
-        ttnn_sdpa_input_output,
-        sender_coord,
-        semaphores=semaphores,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
-        epsilon=epsilon,
-        fp32_dest_acc_en=use_fp32,
-        skip_ccl=skip_ccl,
-    )
-    ttnn.synchronize_device(submesh)
-
-    # Capture warmup trace
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_warmup_iter):
-        ttnn_sdpa_input_result = PreSDPA.op(
-            input_tensor_mesh,
-            intermediate_tensor_mesh,
-            ttnn_gamma,
-            ttnn_matmul_weights,
-            ttnn_rmsnorm2_gamma,
-            ttnn_matmul2_weights,
-            ttnn_matmul3_weights,
-            ttnn_sin,
-            ttnn_cos,
-            ttnn_trans_mat,
-            ttnn_krope_cos,
-            ttnn_krope_sin,
-            ttnn_dkv_matmul_weights,
-            ttnn_dkv_rmsnorm_gamma,
-            ttnn_sdpa_input_output,
-            sender_coord,
-            semaphores=semaphores,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
-            epsilon=epsilon,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=skip_ccl,
-        )
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    # Capture main trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
     for i in range(num_iters):
-        ttnn_sdpa_input_result = PreSDPA.op(
+        ttnn_output_result = PreSDPA.op(
             input_tensor_mesh,
             intermediate_tensor_mesh,
-            ttnn_gamma,
-            ttnn_matmul_weights,
-            ttnn_rmsnorm2_gamma,
-            ttnn_matmul2_weights,
-            ttnn_matmul3_weights,
-            ttnn_sin,
-            ttnn_cos,
+            gamma_overlapped,
+            matmul_weights_overlapped,
+            rmsnorm2_gamma_overlapped,
+            matmul2_weights_overlapped,
+            matmul3_weights_overlapped,
+            ttnn_qrope_sin,
+            ttnn_qrope_cos,
             ttnn_trans_mat,
             ttnn_krope_cos,
             ttnn_krope_sin,
-            ttnn_dkv_matmul_weights,
-            ttnn_dkv_rmsnorm_gamma,
-            ttnn_sdpa_input_output,
+            dkv_matmul_weights_overlapped,
+            dkv_rmsnorm_gamma_overlapped,
+            ttnn_kv_cache,
+            position_id,
+            ttnn_position_ids,
+            scale,
+            ttnn_output,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
             sender_coord,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
         )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
 
-    # Execute warmup trace
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-pre-sdpa-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-pre-sdpa-warmup")
-
-    # Execute main trace with signposts for profiling
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-pre-sdpa-trace")
-
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-
-    profiler.end("deepseek-pre-sdpa-trace")
-    signpost("stop")
+    kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Convert back to torch for verification
-    sdpa_input_output_torch = ttnn.to_torch(
-        ttnn_sdpa_input_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
-    )
+    output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    assert output_torch.shape[-1] == KNOPE_DIM, f"Output width {output_torch.shape[-1]} != {KNOPE_DIM}"
 
     # ========================================================================
-    # Compute golden reference
+    # Compute golden reference per SP device
+    #
+    # KV cache positions are distributed across SP devices in interleaved
+    # device_chunk_size blocks:
+    #   global [0, dcs) → SP0, [dcs, 2*dcs) → SP1, ..., wrapping round-robin.
+    # For each SP device that has data we run PreSDPA.golden with the
+    # device's local KV cache slice and the normalized local position_id.
+    # Only the owning device (the one whose chunk contains position_id)
+    # performs the KV cache update; all others run MLA over existing data.
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses shuffled weights to produce same interleaved output
-    _, _, torch_sdpa_expected, torch_kv_cache_expected = PreSDPA.golden(
-        torch_input,
-        torch_gamma,
-        torch_matmul_weights,
-        torch_rmsnorm2_gamma,
-        torch_matmul2_weights_shuffled,  # Use shuffled weights
-        torch_matmul3_weights,
-        torch_sin,
-        torch_cos,
-        position_ids,
-        torch_dkv_matmul_weights,
-        torch_dkv_rmsnorm_gamma,
+    device_chunk_size = program_config.device_chunk_size
+    num_sp = mesh_rows
+    owning_sp_device = (position_id // device_chunk_size) % num_sp
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
+
+    def build_local_kv_cache(sp_idx):
+        """Extract sp_idx's local KV cache from torch_kv_cache_shuffled.
+
+        After the deinterleave shuffle, device sp_idx's data sits at
+        torch_kv_cache_shuffled[:, :, sp_idx*per_dev_seq : ..., :].
+        We compute local_len the same way get_normalized_position does.
+        """
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+
+        # How many positions in the partial block belong to this device:
+        # clamp the remainder to this device's [dev_start, dev_start + dcs) window.
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        local_len = num_full_blocks * device_chunk_size + dev_contrib
+
+        if local_len == 0:
+            return None, 0
+        shard_offset = sp_idx * per_device_max_seq_len
+        local_kv = torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
+        return local_kv, local_len
+
+    golden_args = dict(
+        input_tensor=torch_input,
+        gamma_tensor=torch_gamma,
+        matmul_weights_tensor=torch_matmul_weights,
+        rmsnorm2_gamma_tensor=torch_rmsnorm2_gamma,
+        matmul2_weights_tensor=torch_matmul2_weights_full_unshuffled,
+        matmul3_weights_tensor=torch_matmul3_weights,
+        sin_tensor=torch_sin,
+        cos_tensor=torch_cos,
+        dkv_matmul_weights_tensor=torch_dkv_matmul_weights,
+        dkv_rmsnorm_gamma_tensor=torch_dkv_rmsnorm_gamma,
+        scale=scale,
         epsilon=epsilon,
-        num_qnope_heads=NUM_QNOPE_HEADS,
-        num_qrope_heads=NUM_QROPE_HEADS,
+        num_qnope_heads=total_qnope_heads,
+        num_qrope_heads=total_qrope_heads,
         qnope_head_dim=QNOPE_HEAD_DIM,
         qrope_head_dim=QROPE_HEAD_DIM,
         heads_per_row=HEADS_PER_ROW,
-        knope_dim=KNOPE_DIM,
-        krope_dim=KROPE_DIM,
+        nope_dim=KNOPE_DIM,
+        rope_dim=KROPE_DIM,
     )
 
+    golden_per_sp = {}
+    for sp_idx in range(num_sp):
+        local_kv, local_seq_len = build_local_kv_cache(sp_idx)
+        is_owner = sp_idx == owning_sp_device
+        if local_kv is None:
+            if is_owner:
+                # Owning device at pos 0: no prior cache exists yet, but it
+                # still writes the first entry and runs MLA on it.
+                local_kv = torch.zeros(1, 1, 0, kvpe_dim, dtype=torch.bfloat16)
+            else:
+                continue
+        local_pos = torch.tensor([local_seq_len if is_owner else local_seq_len - 1])
+        _, golden_new_kv, mla_output = PreSDPA.golden(
+            **golden_args,
+            local_position_ids=local_pos,
+            global_position_ids=torch.tensor([position_id]),
+            kv_cache_tensor=local_kv,
+            kv_cache_update=is_owner,
+        )
+        golden_per_sp[sp_idx] = (golden_new_kv, mla_output, local_seq_len)
+
+    logger.info(
+        f"Golden computed for {len(golden_per_sp)} SP devices "
+        f"(owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})"
+    )
+
+    # ========================================================================
+    # Validate outputs
+    # ========================================================================
     slice_size = sdpa_input_output_shape[0]
-    expected_width = 4608
 
     for device_idx in range(mesh_rows * mesh_cols):
+        tp_group = device_idx % mesh_cols
+        sp_group = device_idx // mesh_cols
+
+        if sp_group not in golden_per_sp:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no work, skipped")
+            continue
+
+        golden_new_kv, golden_mla_output, local_seq_len = golden_per_sp[sp_group]
+
+        # ---- KV Cache: old positions must be unchanged ----
+        assert torch.equal(
+            kv_cache_bfp8_before_op[device_idx, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
+
+        # ---- KV Cache new-position check (owning device only) ----
+        if golden_new_kv is not None:
+            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        # ---- PreSDPA / MLA Output ----
         start = device_idx * slice_size
         end = start + slice_size
-        # Trim to expected width for comparison
-        received = sdpa_input_output_torch[start:end, :expected_width]
+        received = output_torch[start:end, :]
 
-        # Golden SDPA Input shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
-        # The 4×2 grid with ROW_MAJOR orientation gives indices 0-7 matching source rows 0-7
-        # Each combined head is (qnope[512], qrope[64]) where qrope has been processed by RoPE
-        torch_sdpa_input_expected_flat = torch_sdpa_expected.reshape(SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)
-        if received.shape != torch_sdpa_input_expected_flat.shape:
+        tp_start = tp_group * slice_size
+        tp_end = tp_start + slice_size
+        torch_output_expected_flat = golden_mla_output[tp_start:tp_end, :]
+
+        if received.shape != torch_output_expected_flat.shape:
             logger.error(
-                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_expected.shape}"
+                f"Device {device_idx} (TP={tp_group}, SP={sp_group}) output shape mismatch: "
+                f"got {received.shape}, expected {torch_output_expected_flat.shape}"
             )
             continue
 
-        max_diff = torch.max(torch.abs(received - torch_sdpa_input_expected_flat)).item()
-        mean_diff = torch.mean(torch.abs(received - torch_sdpa_input_expected_flat)).item()
-
-        logger.info(f"Device {device_idx}: Max diff={max_diff}, Mean diff={mean_diff}")
-
-        passing, pcc_message = comp_pcc(torch_sdpa_input_expected_flat, received, 0.99)
-        logger.info(f"Device {device_idx}: {pcc_message}")
-
-        assert passing, f"Device {device_idx} failed: {pcc_message}"
+        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.84)
+        logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {sdpa_pcc}")
+        assert (
+            passing
+        ), f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {sdpa_pcc}"
 
     logger.info("✓ PreSDPA mesh test passed!")
 
     # Clean up trace and sub-device state before fixture teardown
     # This ensures profiler data is properly flushed before close_mesh_device
     ttnn.synchronize_device(submesh)
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()

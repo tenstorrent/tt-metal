@@ -13,6 +13,9 @@ namespace ttnn::operations::ternary {
 // Supports float, int, and Tensor types
 using TensorScalarVariant = std::variant<float, int, Tensor>;
 
+// Scalar variant for addcmul(float, int32, uint32)
+using ScalarVariant = std::variant<float, int32_t, uint32_t>;
+
 // Ternary operation types
 enum class TernaryOpType {
     WHERE,    // conditional selection: out = predicate ? value_true : value_false

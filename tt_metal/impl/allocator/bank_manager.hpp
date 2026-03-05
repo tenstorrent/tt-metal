@@ -42,7 +42,7 @@ public:
      * AllocatorDependencies is created from an unordered map of allocator IDs with their dependencies.
      * Some nuances:
         - Default value (AllocatorDependencies() or AllocatorDependencies{}) represents a single independent allocator.
-        - The presence of alloctor IDs in keys or values implies the existence of previous allocator IDs.
+        - The presence of allocator IDs in keys or values implies the existence of previous allocator IDs.
           Eg. 3: {0, 1} (read as: 3 depends on 0 and 1) implies that 0: {3}, 1: {3}, 2: {}, 3: {0, 1}.
         - Undirected adjacency lists means that 0: 1 implies 1: 0 (as seen in the example above).
           Eg. 0: {1}, 1: {2}, 2: {3} implies 0: {1}, 1: {0, 2}, 2: {1, 3}, 3: {2}.
@@ -124,6 +124,14 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
+    // High water mark tracking for all allocations (both bottom-up and top-down)
+    // Tracks the maximum address extent reached during the tracking period, including deallocated buffers
+    void begin_high_water_mark_tracking();
+    DeviceAddr end_high_water_mark_tracking();
+    DeviceAddr get_high_water_mark() const;
+    DeviceAddr get_allocation_high_water_mark() const;
+    DeviceAddr get_deletion_high_water_mark() const;
+
     // AllocatorState Methods
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
@@ -166,6 +174,11 @@ private:
 
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
+
+    // High water mark tracking for allocations and deallocations
+    bool tracking_high_water_mark_ = false;
+    DeviceAddr allocation_high_water_mark_ = 0;
+    DeviceAddr deletion_high_water_mark_ = 0;
 
     /*********************************
      * Allocator-independent methods *

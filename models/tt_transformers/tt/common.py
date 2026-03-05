@@ -7,14 +7,45 @@ import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional
+from typing import List, Optional, Union
 
 import torch
-from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
+from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
+from models.common.tensor_utils import get_rot_transformation_mat as get_rot_transformation_mat_v2
+
+
+class URL(BaseModel):
+    uri: str
+
+    def __str__(self) -> str:
+        return self.uri
+
+
+class ImageMedia(BaseModel):
+    image: Union[PIL_Image.Image, URL]
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class Role(Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    ipython = "ipython"
+
+
+InterleavedTextMedia = Union[
+    str,
+    # Specific modalities can be placed here, but not generic attachments
+    # since models don't consume them in a generic way
+    ImageMedia,
+    List[Union[str, ImageMedia]],
+]
 
 
 class Mode(Enum):
@@ -439,13 +470,11 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
 
 #  Add-Multiply method of rotary embeddings for prefill
-def get_rot_transformation_mat(dhead):
+def get_rot_transformation_mat(dhead=32):
     # ROPE op uses a single tile
     dhead = 32
-    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
-    return rot_emb_matrix
+    # Delegate to TTTv2 implementation for consistency
+    return get_rot_transformation_mat_v2(dhead)
 
 
 def get_single_rot_mat(
@@ -779,6 +808,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
+    use_hf_rope=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -794,6 +824,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         prefetcher=prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     if num_layers is not None:

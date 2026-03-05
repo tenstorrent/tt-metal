@@ -5,6 +5,7 @@
 #pragma once
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -14,7 +15,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
         v->tripped = assert_type;
-        v->which = PROCESSOR_INDEX;
+        v->which = internal_::get_hw_thread_idx();
     }
 
     // Hang, or in the case of erisc, early exit.

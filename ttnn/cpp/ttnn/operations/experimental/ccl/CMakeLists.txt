@@ -30,10 +30,10 @@ file(
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
-    deepseek_minimal_broadcast/device/kernels/*
-    deepseek_minimal_all_reduce/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
     deepseek_b1_reduce_to_one/device/kernels/*
+    moe_compute/device/kernels/*
+    moe/selective_reduce_combine/device/kernels/*
 )
 
 target_sources(
@@ -48,6 +48,7 @@ target_sources(
             all_gather_async/device/all_gather_async_device_operation.hpp
             all_gather_async/device/all_gather_async_default_program_factory.hpp
             all_gather_async/device/all_gather_async_llama_sharded_program_factory.hpp
+            all_gather_async/device/all_gather_via_broadcast_factory.hpp
             all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
@@ -80,6 +81,7 @@ target_sources(
         all_gather_async/device/all_gather_async_device_operation.cpp
         all_gather_async/device/all_gather_async_default_program_factory.cpp
         all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
+        all_gather_async/device/all_gather_via_broadcast_factory.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp
@@ -121,21 +123,17 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
-        deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
-        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
-        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
-        deepseek_minimal_all_reduce/deepseek_minimal_all_reduce.cpp
-        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_device_operation.cpp
-        deepseek_minimal_all_reduce/device/deepseek_minimal_all_reduce_program_factory.cpp
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
-        deepseek_b1_reduce_to_one/deepseek_b1_reduce_to_one.cpp
-        deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_op.cpp
-        deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_program.cpp
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
+        moe_compute/moe_compute.cpp
+        moe_compute/device/moe_compute_device_operation.cpp
+        moe_compute/device/moe_compute_program_factory.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

@@ -8,6 +8,7 @@ to dynamically batch tokens across devices based on expert routing.
 """
 
 import ttnn
+from models.demos.gpt_oss.config import MeshConfig
 
 from .config import AllToAllCombineConfig, AllToAllDispatchConfig, ThroughputExpertConfig, ThroughputProgramConfig
 from .decode import decode_forward as forward
@@ -26,7 +27,9 @@ def prefill_forward_chunked(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
-    chunk_size: int = 512,  # TODO: increasing this causes diverging outputs for last mesh row (https://github.com/tenstorrent/tt-metal/issues/36335)
+    mesh_config: MeshConfig,
+    ccl_manager,
+    chunk_size: int,
 ) -> ttnn.Tensor:
     """Chunked prefill forward pass for very long sequences.
 
@@ -66,6 +69,8 @@ def prefill_forward_chunked(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
 
     # Split into chunks
@@ -77,8 +82,8 @@ def prefill_forward_chunked(
     ttnn.deallocate(topk_expert_indices)
     ttnn.deallocate(topk_expert_weights)
 
-    # Process each chunk
-    output_chunks = []
+    # Process each chunk and stream-concatenate to reduce peak DRAM usage.
+    output_acc = None
     for h_chunk, i_chunk, w_chunk in zip(hidden_chunks, indices_chunks, weights_chunks):
         chunk_output = forward(
             h_chunk,
@@ -92,16 +97,18 @@ def prefill_forward_chunked(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
-        output_chunks.append(chunk_output)
+        if output_acc is None:
+            output_acc = chunk_output
+        else:
+            output_concat = ttnn.concat([output_acc, chunk_output], dim=2)
+            ttnn.deallocate(output_acc)
+            ttnn.deallocate(chunk_output)
+            output_acc = output_concat
 
         ttnn.deallocate(h_chunk)
         ttnn.deallocate(i_chunk)
         ttnn.deallocate(w_chunk)
-
-    # Concatenate outputs
-    output = ttnn.concat(output_chunks, dim=2)
-    for chunk in output_chunks:
-        ttnn.deallocate(chunk)
-
-    return output
+    return output_acc

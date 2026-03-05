@@ -3,6 +3,7 @@
 
 #include "gtest/gtest.h"
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -135,7 +136,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     std::vector<uint16_t> empty_data(volume);
     auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
 
-    auto& storage = std::get<DeviceStorage>(tensor.storage());
+    const auto& storage = tensor.device_storage();
     auto buffer = storage.get_mesh_buffer();
 
     size_t region_size = buffer->page_size();

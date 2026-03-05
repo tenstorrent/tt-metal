@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "core_coord.hpp"
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
@@ -49,6 +50,7 @@
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"
 #include "debug/noc_debugging.hpp"
+#include "tools/profiler/noc_debugging_metadata.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -1770,6 +1772,29 @@ void DeviceProfiler::readDeviceMarkerData(
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
+
+#if defined(TRACY_ENABLE)
+    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
+        NOCDebugState* noc_debug_state = MetalContext::instance().noc_debug_state().get();
+        if (noc_debug_state) {
+            const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+            // disable linting here; slicing is __intended__
+            // NOLINTBEGIN
+            const CoreCoord virtual_core =
+                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+            // NOLINTEND
+
+            NocDebuggingEventMetadata ev_md(data);
+            ScopedLockEvent scoped_ev{
+                static_cast<int8_t>(virtual_core.x),
+                static_cast<int8_t>(virtual_core.y),
+                static_cast<NocDebuggingEventMetadata::NocDebugEventType>(ev_md.event_type),
+                ev_md.getLockedAddressBase(),
+                ev_md.getNumBytes()};
+            noc_debug_state->push_event(device_id, timestamp, get_processor_id(risc_type), NOCDebugEvent{scoped_ev});
+        }
+    }
+#endif
 }
 
 void DeviceProfiler::readTsData16BMarkerData(
@@ -2311,7 +2336,8 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    if (!getDeviceProfilerState() || MetalContext::instance().rtoptions().get_profiler_disable_dump_to_files()) {
+    if (!getDeviceProfilerState() || MetalContext::instance().rtoptions().get_profiler_disable_dump_to_files() ||
+        MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
         return;
     }
 

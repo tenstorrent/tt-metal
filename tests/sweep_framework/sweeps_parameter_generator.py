@@ -19,7 +19,6 @@ from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -31,16 +30,25 @@ DO_RANDOMIZE = False
 
 
 def get_mesh_shape_from_vector(vector):
-    """Extract mesh_device_shape from traced_machine_info, default to [1, 1] for single-chip.
+    """Extract mesh_device_shape from traced_machine_info.
 
     Args:
         vector: Dictionary containing vector parameters including traced_machine_info
 
     Returns:
-        tuple: (rows, cols) representing mesh shape, e.g., (2, 4) or (1, 1) for single-chip
+        tuple: (rows, cols) representing mesh shape (e.g., (4, 8) for Galaxy), or
+               None if mesh shape cannot be determined (vector has no routing restriction).
     """
     machine_info = vector.get("traced_machine_info")
-    if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
+
+    # Handle dict format (current V2 format)
+    if machine_info and isinstance(machine_info, dict):
+        mesh_shape = machine_info.get("mesh_device_shape")
+        if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+            return tuple(mesh_shape)
+
+    # Handle list format (legacy format)
+    elif machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
         # Check if mesh_device_shape is directly in machine_info (old format)
         mesh_shape = machine_info[0].get("mesh_device_shape")
         if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
@@ -58,12 +66,26 @@ def get_mesh_shape_from_vector(vector):
                     if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
                         return tuple(mesh_shape)
                 except (ValueError, SyntaxError) as e:
-                    # Invalid or malformed mesh_device_shape string; fall back to default (1, 1)
                     logger.debug(f"Failed to parse mesh_device_shape '{mesh_shape_str}': {e}")
             elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
                 return tuple(mesh_shape_str)
 
-    return (1, 1)  # Default: single-chip
+        # Infer mesh_device_shape from device_series + card_count when not explicitly present.
+        # This handles V1 machine_info which lacks mesh_device_shape but records device_series.
+        # Iterate all entries so we find the galaxy entry even if it isn't first.
+        _DEVICE_SERIES_MESH_MAP = {
+            ("tt-galaxy-wh", 32): (4, 8),
+        }
+        for entry in machine_info:
+            if not isinstance(entry, dict):
+                continue
+            device_series = entry.get("device_series", "")
+            card_count = entry.get("card_count", 0)
+            inferred = _DEVICE_SERIES_MESH_MAP.get((device_series, card_count))
+            if inferred:
+                return inferred
+
+    return None  # Unknown mesh shape: no routing restriction
 
 
 def group_vectors_by_mesh_shape(vectors):
@@ -86,10 +108,6 @@ def group_vectors_by_mesh_shape(vectors):
 
 # Generate vectors from module parameters
 def generate_vectors(module_name, model_traced, suite_name=None):
-    # Configure MasterConfigLoader filter BEFORE importing sweep modules
-    # This replaces the previous environment variable approach for cleaner control
-    MasterConfigLoader.set_lead_models_filter(model_traced == "lead")
-
     # Import or reload the module to pick up the filter setting
     # Note: Reload is still needed because sweep modules define parameters at import time
     module_path = "sweeps." + module_name
@@ -258,7 +276,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
     Vectors are grouped by mesh_device_shape and written to separate files:
     - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
-    - model_traced.op__mesh_1x1.json (for single-chip)
+    - model_traced.op.json (for unknown mesh — no suffix, runs on any machine)
 
     IMPORTANT: The mesh suffix is used ONLY for filename routing, NOT for modifying
     the sweep_name field. This ensures stable full_test_name and input_hash values
@@ -279,10 +297,14 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         if not mesh_vectors:
             continue
 
-        # Generate mesh-specific filename (NOT sweep_name)
-        # The mesh suffix is for file routing only, not for modifying vector metadata
-        mesh_suffix = format_mesh_suffix(mesh_shape)
-        mesh_module_name = f"{module_name}{mesh_suffix}"
+        # Generate mesh-specific filename (NOT sweep_name).
+        # None mesh_shape means no routing restriction - export without mesh suffix
+        # so any runner can pick up the file.
+        if mesh_shape is not None:
+            mesh_suffix = format_mesh_suffix(mesh_shape)
+            mesh_module_name = f"{module_name}{mesh_suffix}"
+        else:
+            mesh_module_name = module_name
 
         # Export vectors WITHOUT modifying sweep_name
         # The mesh info is already in traced_machine_info; sweep_name stays stable
@@ -454,6 +476,29 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
 
 
 if __name__ == "__main__":
+    # Parse --model-traced argument FIRST to set environment variable
+    # This must happen BEFORE any other imports so sweep modules see the filter setting
+    import sys
+
+    model_traced_arg = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--model-traced" and i + 1 < len(sys.argv):
+            model_traced_arg = sys.argv[i + 1]
+            break
+        elif arg.startswith("--model-traced="):
+            model_traced_arg = arg.split("=", 1)[1]
+            break
+
+    # Set environment variable BEFORE any sweep modules are imported
+    if model_traced_arg == "lead":
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1"
+        logger.info("=" * 80)
+        logger.info("LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations")
+        logger.info(f"Environment variable set: TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY')}")
+        logger.info("=" * 80)
+    else:
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "0"
+
     parser = argparse.ArgumentParser(
         prog="Sweep Test Vector Generator",
         description="Generate test vector suites for the specified module.",
@@ -507,6 +552,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
+    # Log filter status (env var was already set at the start of __main__)
+    if args.model_traced == "lead":
+        logger.info("Lead models filter enabled: Only loading DeepSeek V3 configurations")
+
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
@@ -521,6 +570,9 @@ if __name__ == "__main__":
     else:
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
+
+    # Import MasterConfigLoader NOW (after env var is set)
+    from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
     # Configure database mode if --use-db flag is provided
     if args.use_db:

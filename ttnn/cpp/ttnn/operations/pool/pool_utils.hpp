@@ -99,6 +99,8 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     const DataType& output_dtype,
     bool config_tensor_in_dram);
 
+DataType get_index_data_type(uint32_t in_h, uint32_t in_w);
+
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
     const DataType& input_dtype,
@@ -108,10 +110,14 @@ FactoryParameters get_factory_parameters(
     uint32_t in_channels,
     Pool2DType pool_type,
     bool return_indices,
+    uint32_t in_h,
+    uint32_t in_w,
     const Layout& output_layout);
 
 uint32_t calculate_L1_usage(
     DataType input_dtype,
+    uint32_t in_h,
+    uint32_t in_w,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -121,8 +127,6 @@ uint32_t calculate_L1_usage(
     bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
-    uint32_t out_h,
-    uint32_t out_w,
     const tt::tt_metal::MemoryConfig& input_memory,
     const tt::tt_metal::MemoryConfig& output_memory,
     Pool2DType pool_type,

@@ -71,9 +71,6 @@ def test_rms_norm_sharded_two_stage(
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
-    if tensor_type == "random" or tensor_type == "random_normal":
-        pytest.skip("Low PCC, see #30455")
-
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -91,6 +88,35 @@ def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
         dtype,
         residual=residual,
         weight=None,
+    )
+
+
+@pytest.mark.parametrize("two_stage", [True, False])
+@pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_rms_norm_sharded_with_bias_only(device, two_stage, tensor_type, dtype):
+    """
+    Sharded rms_norm with bias only (no weight). Exercises do_beta=1, do_gamma=0 in layernorm_sharded.
+    Fails with the old cb_im formula; passes with the fixed formula.
+    """
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
+
+    bias = generate_input_tensor(1, w, "random", dtype)
+    rms_norm_test_main(
+        device,
+        h,
+        w,
+        num_cores_h,
+        num_cores_w,
+        block_ht,
+        block_wt,
+        subblock_wt,
+        two_stage,
+        tensor_type,
+        dtype,
+        residual=None,
+        weight=None,
+        bias=bias[0],
     )
 
 
@@ -150,9 +176,6 @@ def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tens
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_and_residual(device, two_stage, tensor_type, dtype):
-    if tensor_type == "random" or tensor_type == "random_normal":
-        pytest.skip("Low PCC, see #30455")
-
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)

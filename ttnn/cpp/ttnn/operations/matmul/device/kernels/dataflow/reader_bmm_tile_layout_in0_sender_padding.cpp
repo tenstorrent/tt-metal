@@ -38,36 +38,37 @@ void kernel_main() {
     constexpr uint32_t in0_block_h = get_compile_time_arg_val(5);
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(7);
+    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(8);
 
-    constexpr bool extract_shard_sub_blocks = (bool)get_compile_time_arg_val(8);
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(10);
+    constexpr bool extract_shard_sub_blocks = (bool)get_compile_time_arg_val(9);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(11);
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(11);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(16);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(17);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
     // batch args
-    constexpr uint32_t MtKt = get_compile_time_arg_val(18);  // if 0
-    constexpr uint32_t batch = get_compile_time_arg_val(19);
+    constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
+    constexpr uint32_t batch = get_compile_time_arg_val(20);
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(20);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(21);
+    constexpr uint32_t batchB = get_compile_time_arg_val(21);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(22);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(22);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(23);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(23);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(24);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(24);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
 
-    constexpr auto in0_args = TensorAccessorArgs<25>();
+    constexpr auto in0_args = TensorAccessorArgs<26>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
@@ -88,7 +89,7 @@ void kernel_main() {
         );
     }
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t one_tile = 1;
@@ -103,7 +104,8 @@ void kernel_main() {
 
     uint32_t noc_shard_read_start_addr = 0;
     if constexpr (extract_shard_sub_blocks) {
-        constexpr uint32_t cb_id_in2 = 2;  // in0 sharded cb if extract_shard_sub_blocks
+        constexpr uint32_t cb_id_in2 =
+            get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
         noc_shard_read_start_addr = get_read_ptr(cb_id_in2);
     }
 
@@ -112,7 +114,7 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 
     // sparsity accessor
-    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 #ifndef SKIP_MCAST
@@ -206,7 +208,8 @@ void kernel_main() {
 #ifndef IN0_SHARDED
 
 #ifdef INTERMEDIATE_CB_READ
-                        constexpr uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+                        constexpr uint32_t in0_intermediate_cb_index =
+                            get_named_compile_time_arg_val("cb_in0_intermediate");
                         cb_reserve_back(in0_intermediate_cb_index, one_tile);
                         uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ
@@ -242,6 +245,13 @@ void kernel_main() {
                                         noc_async_read_barrier();
                                         const DataFormat in0_data_format = get_dataformat(cb_id_in0);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                                    }
+                                }
+                                if constexpr (in0_last_ktile_h > 0) {
+                                    if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
+                                        noc_async_read_barrier();
+                                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(l1_write_addr_in0);
                                     }
                                 }
 
