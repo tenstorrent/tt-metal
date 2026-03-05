@@ -2,8 +2,6 @@
 #SBATCH --job-name=models-t1-e2e-tests
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # GHA source: .github/workflows/models-t1-e2e-tests.yaml
 # Orchestrator: loads the tier-1 E2E matrix from config and submits

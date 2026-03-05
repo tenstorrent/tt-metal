@@ -4,8 +4,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # TT simulator tests (no hardware required).
 
@@ -35,8 +33,8 @@ TT_METAL_SIMULATOR_EN=1"
 export DOCKER_EXTRA_ENV
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 cmake -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \

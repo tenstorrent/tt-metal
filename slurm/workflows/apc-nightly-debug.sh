@@ -2,8 +2,6 @@
 #SBATCH --job-name=apc-nightly-debug
 #SBATCH --partition=wh-n150
 #SBATCH --time=04:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Nightly APC (All Post-Commit) debug tests on Wormhole N150.
 
@@ -38,8 +36,8 @@ TT_METAL_SLOW_DISPATCH_MODE=1"
 export DOCKER_EXTRA_ENV
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 pytest tests/ -x --timeout=600 \
     -m 'not models_performance_bare_metal and not models_device_performance_bare_metal' \

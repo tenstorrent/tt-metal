@@ -2,8 +2,6 @@
 #SBATCH --job-name=t3000-demo-tests
 #SBATCH --partition=wh-t3k
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # T3000 demo tests — array job, dynamic matrix from tests/pipeline_reorg/t3k_demo_tests.yaml.
 # Equivalent to .github/workflows/t3000-demo-tests-impl.yaml
@@ -49,11 +47,11 @@ fi
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
-HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-LD_LIBRARY_PATH=/work/build/lib
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
+HF_HUB_CACHE=${MLPERF_BASE}/huggingface/hub
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib
 GITHUB_ACTIONS=true"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:${MLPERF_RW:-ro}"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:${MLPERF_RW:-ro}"
 export DOCKER_EXTRA_OPTS="--privileged -v /sys:/sys"
 
 docker_run "$DOCKER_IMAGE" "

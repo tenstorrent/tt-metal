@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-t3k
 #SBATCH --constraint=pipeline-perf
 #SBATCH --time=03:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # T3000 performance tests — array job, dynamic matrix from
 # tests/pipeline_reorg/t3k_perf_tests.yaml.
@@ -51,15 +49,15 @@ fi
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
-HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
+HF_HUB_CACHE=${MLPERF_BASE}/huggingface/hub
 GITHUB_ACTIONS=true
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 export DOCKER_EXTRA_OPTS="--privileged -v /sys:/sys"
 
 docker_run "$DOCKER_IMAGE" "
-    mkdir -p /work/generated/test_reports
+    mkdir -p \${TT_METAL_HOME}/generated/test_reports
     source tests/scripts/t3000/run_t3000_perf_tests.sh
     echo '${TEST_CMD}'
     ${TEST_CMD}

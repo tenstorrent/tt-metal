@@ -2,8 +2,6 @@
 #SBATCH --job-name=blackhole-demo-tests
 #SBATCH --partition=bh-p150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

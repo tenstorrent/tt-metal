@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n300
 #SBATCH --time=02:00:00
 #SBATCH --array=0-13
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/conda-post-commit.yaml
 # Runs ttnn unit tests in a conda environment.
@@ -71,7 +69,7 @@ fi
 
 log_info "Running conda test: ${TEST_NAME} (task ${TASK_ID})"
 
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 docker_run "$DOCKER_IMAGE" "\
     ${CONDA_SETUP} && \
     ${TEST_CMD}

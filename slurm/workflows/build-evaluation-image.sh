@@ -4,7 +4,6 @@
 #SBATCH --time=01:30:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --output=logs/eval-image-%j.out
 #
 # Build the evaluation Docker image for model benchmarking and scoring.
 #

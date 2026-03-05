@@ -30,8 +30,7 @@ TEST_JOB=$(sbatch \
     --partition=wh-n150 \
     --time=02:00:00 \
     --job-name=fast-dispatch-frequent-tests \
-    --output=/weka/ci/logs/%x/%j/%a.log \
-    --error=/weka/ci/logs/%x/%j/%a.err \
+    --output="${LOG_DIR}/%x-%j-%a.out" \
     --export="ALL,PIPELINE_ID=${PIPELINE_ID}" \
     "${SCRIPT_DIR}/workflows/fast-dispatch-frequent-tests-impl.sh" 2>&1 | awk '/Submitted batch job/{print $NF}')
 

@@ -2,8 +2,6 @@
 #SBATCH --job-name=umd-unit-tests
 #SBATCH --partition=wh-n150
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # UMD (User Mode Driver) unit tests.
 
@@ -31,8 +29,8 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 ./build/bin/umd_unit_tests \
     --gtest_output=xml:generated/test_reports/umd_unit_tests.xml \

@@ -2,8 +2,6 @@
 #SBATCH --job-name=tm-data-movement-perf
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # TM data-movement performance tests on Galaxy-class hardware.
 # Equivalent to .github/workflows/tm-data-movement-perf-impl.yaml.

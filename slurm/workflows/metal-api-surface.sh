@@ -2,8 +2,6 @@
 #SBATCH --job-name=metal-api-surface
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # API surface compatibility check (CPU-only, no device needed).
 

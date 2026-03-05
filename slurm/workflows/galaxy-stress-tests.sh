@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-stress-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=06:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy stress tests — array job with inline matrix covering the repeated
 # decode stress test, fabric stability, and Llama long stress test.
@@ -41,7 +39,7 @@ if [[ -z "${MATRIX_FILE:-}" ]]; then
          "cmd": "TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml"},
         {"name": "Llama Galaxy Long Stress Test",
          "timeout": 140,
-         "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k \"stress-test and not mini-stress-test\""}
+         "cmd": "LLAMA_DIR=${MLPERF_BASE}/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k \"stress-test and not mini-stress-test\""}
     ]'
     MATRIX_FILE="$(create_matrix_file "$MATRIX_JSON")"
 fi
@@ -55,10 +53,10 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+export DOCKER_EXTRA_ENV="LLAMA_DIR=${MLPERF_BASE}/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 TT_METAL_ENABLE_ERISC_IRAM=1
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
     ${TEST_CMD}

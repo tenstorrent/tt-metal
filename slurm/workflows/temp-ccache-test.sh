@@ -4,8 +4,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Ccache testing: validate kernel ccache hit rates and remote storage.
 
@@ -41,7 +39,7 @@ CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE:-}"
 export DOCKER_EXTRA_ENV
 
 docker_run "${IMAGE}" "
-cd /work
+cd \${TT_METAL_HOME}
 
 ccache -z
 ccache -p

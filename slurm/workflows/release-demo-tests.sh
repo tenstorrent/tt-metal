@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
 #SBATCH --array=0-3
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Release validation tests run as a job array.
 # Each task exercises a different demo/validation suite.
@@ -49,8 +47,8 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 ${TEST_CMD}
 "
 

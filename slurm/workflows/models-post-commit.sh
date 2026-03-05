@@ -2,8 +2,6 @@
 #SBATCH --job-name=models-post-commit
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # GHA source: .github/workflows/models-post-commit.yaml (orchestrator portion)
 # Orchestrator: submits all model test suites (unit, e2e, sweep) across tiers.

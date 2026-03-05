@@ -2,8 +2,6 @@
 #SBATCH --job-name=t3000-unit-tests
 #SBATCH --partition=wh-t3k
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # T3000 unit tests — array job, dynamic matrix from tests/pipeline_reorg/t3k_unit_tests.yaml.
 # Equivalent to .github/workflows/t3000-unit-tests-impl.yaml
@@ -40,14 +38,14 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
 HF_HUB_OFFLINE=1
-HF_HOME=/mnt/MLPerf/huggingface
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+HF_HOME=${MLPERF_BASE}/huggingface
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
-    mkdir -p /work/generated/test_reports
+    mkdir -p \${TT_METAL_HOME}/generated/test_reports
     source tests/scripts/t3000/run_t3000_unit_tests.sh
     echo '${TEST_CMD}'
     ${TEST_CMD}

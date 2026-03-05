@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-unit-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy unit tests — array job with inline matrix covering UMD, fabric,
 # multiprocess, distributed-ops, GPT-OSS, and tttv2 test groups.
@@ -47,7 +45,7 @@ if [[ -z "${MATRIX_FILE:-}" ]]; then
         {"name": "Galaxy distributed ops tests","model": "distributed-ops", "timeout": 5,  "mlperf": false,
          "cmd": "mkdir -p generated/test_reports && pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py"},
         {"name": "Galaxy GPT-OSS unit tests",   "model": "gpt-oss",        "timeout": 25, "mlperf": true,
-         "cmd": "uv pip install -r models/demos/gpt_oss/requirements.txt && TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/tests/unit -k \"4x8\" --timeout 600"},
+         "cmd": "uv pip install -r models/demos/gpt_oss/requirements.txt && TT_CACHE_PATH=${MLPERF_BASE}/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=${MLPERF_BASE}/tt_dnn-models/openai/gpt-oss-120b/ pytest models/demos/gpt_oss/tests/unit -k \"4x8\" --timeout 600"},
         {"name": "Galaxy tttv2 tests",          "model": "tttv2",          "timeout": 10, "mlperf": true,
          "cmd": "failed=0; pytest --durations-min=3.0 models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py -m \"not slow\" --tb=short --cov=models.common.modules.rmsnorm.rmsnorm_2d --cov-report=term-missing --cov-config=models/common/tests/setup.cfg || failed=1; pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py -m \"not slow\" --tb=short --cov=models.common.modules.mlp.mlp_2d --cov-report=term-missing --cov-config=models/common/tests/setup.cfg || failed=1; pytest --durations-min=3.0 models/common/tests/test_auto_compose.py --tb=short --cov=models.common.auto_compose --cov-report=term-missing --cov-config=models/common/tests/setup.cfg || failed=1; exit \\$failed"}
     ]'
@@ -64,18 +62,18 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
-LD_LIBRARY_PATH=/work/build/lib"
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
 
 if [[ "${NEEDS_MLPERF}" == "true" ]]; then
     export DOCKER_EXTRA_ENV="${DOCKER_EXTRA_ENV}
 HF_HUB_OFFLINE=1
-HF_HOME=/mnt/MLPerf/huggingface"
-    export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+HF_HOME=${MLPERF_BASE}/huggingface"
+    export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 fi
 
 docker_run "$DOCKER_IMAGE" "
-    mkdir -p /work/generated/test_reports
+    mkdir -p \${TT_METAL_HOME}/generated/test_reports
     ${TEST_CMD}
 "
 

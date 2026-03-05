@@ -4,8 +4,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Build and publish public documentation.
 
@@ -34,7 +32,7 @@ DOCS_VERSION=${DOCS_VERSION:-latest}"
 export DOCKER_EXTRA_ENV
 
 BUILD_COMMANDS="
-cd /work
+cd \${TT_METAL_HOME}
 
 pip install -r docs/requirements-docs.txt 2>/dev/null || true
 
@@ -51,7 +49,7 @@ log_info "Documentation built: ${DOCS_OUTPUT}/docs/"
 
 if [[ "${PUBLISH_DOCS:-0}" == "1" ]]; then
     log_info "Publishing docs (PUBLISH_DOCS=1)"
-    DOCS_DEST="${DOCS_PUBLISH_PATH:-/weka/ci/docs/latest}"
+    DOCS_DEST="${DOCS_PUBLISH_PATH:-${CI_STORAGE_BASE}/docs/latest}"
     mkdir -p "${DOCS_DEST}"
     rsync -a --delete "${DOCS_OUTPUT}/docs/" "${DOCS_DEST}/"
     log_info "Docs published to ${DOCS_DEST}"

@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-demo-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy demo tests — array job, dynamic matrix from
 # tests/pipeline_reorg/galaxy_demo_tests.yaml.
@@ -41,9 +39,9 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:${MLPERF_RW:-ro}"
+export DOCKER_EXTRA_ENV="HF_HUB_CACHE=${MLPERF_BASE}/huggingface/hub
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:${MLPERF_RW:-ro}"
 
 docker_run "$DOCKER_IMAGE" "
     echo '${TEST_CMD}'

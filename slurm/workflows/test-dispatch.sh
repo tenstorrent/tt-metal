@@ -4,8 +4,6 @@
 #SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Test job dispatch validation: verify the Slurm CI infrastructure
 # can correctly submit, track, and clean up jobs.
@@ -45,7 +43,7 @@ else
 fi
 
 log_info "Validating log directory"
-LOG_DIR="/weka/ci/logs/${SLURM_JOB_NAME:-test-dispatch}"
+LOG_DIR="${LOG_BASE}/${SLURM_JOB_NAME:-test-dispatch}"
 mkdir -p "${LOG_DIR}" 2>/dev/null || log_warn "Could not create log dir: ${LOG_DIR}"
 
 rm -f "${ARTIFACT_DIR}/test-dispatch/marker"

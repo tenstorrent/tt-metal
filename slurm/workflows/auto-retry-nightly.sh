@@ -4,8 +4,6 @@
 #SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Check sacct for failed nightly jobs and resubmit with --requeue.
 # Designed to run ~2 hours after the nightly pipeline.

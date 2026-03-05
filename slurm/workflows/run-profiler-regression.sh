@@ -2,8 +2,6 @@
 #SBATCH --job-name=run-profiler-regression
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Tracy profiler regression tests.
 
@@ -34,8 +32,8 @@ TRACY_REPORT_DIR="${ARTIFACT_DIR}/reports/profiler-regression"
 mkdir -p "${TRACY_REPORT_DIR}"
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 python tests/tt_metal/tools/profiler/test_device_profiler.py \
     --regression \

@@ -2,8 +2,6 @@
 #SBATCH --job-name=all-static-checks
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/all-static-checks.yaml
 # Runs all static analysis checks: pre-commit hooks, SPDX license validation,

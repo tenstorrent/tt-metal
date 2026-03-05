@@ -89,25 +89,26 @@ docker_run() {
         --log-driver local
         --log-opt max-size=500m
         --log-opt max-file=5
-        -w /work
+        -w "${CONTAINER_WORKDIR:-/work}"
     )
 
     # UID/GID mapping
     docker_args+=( -u "$(id -u):$(id -g)" )
 
     # Device access
-    if [[ -e /dev/tenstorrent ]]; then
-        docker_args+=( --device /dev/tenstorrent )
+    if [[ -e "${TT_DEVICE_PATH:-/dev/tenstorrent}" ]]; then
+        docker_args+=( --device "${TT_DEVICE_PATH:-/dev/tenstorrent}" )
     fi
 
     # Hugepages
-    if [[ -d /dev/hugepages-1G ]]; then
-        docker_args+=( -v /dev/hugepages-1G:/dev/hugepages-1G )
+    local _hp="${HUGEPAGES_PATH:-/dev/hugepages-1G}"
+    if [[ -d "$_hp" ]]; then
+        docker_args+=( -v "${_hp}:${_hp}" )
     fi
 
     # Core volume mounts
     docker_args+=(
-        -v "${WORKSPACE:-.}:/work"
+        -v "${WORKSPACE:-.}:${CONTAINER_WORKDIR:-/work}"
         -v /etc/passwd:/etc/passwd:ro
         -v /etc/shadow:/etc/shadow:ro
         -v /etc/bashrc:/etc/bashrc:ro
@@ -121,9 +122,9 @@ docker_run() {
 
     # Core environment variables
     docker_args+=(
-        -e TT_METAL_HOME=/work
-        -e PYTHONPATH=/work
-        -e HOME=/work
+        -e "TT_METAL_HOME=${CONTAINER_WORKDIR:-/work}"
+        -e "PYTHONPATH=${CONTAINER_WORKDIR:-/work}"
+        -e "HOME=${CONTAINER_WORKDIR:-/work}"
         -e "ARCH_NAME=${ARCH_NAME:-wormhole_b0}"
         -e "LOGURU_LEVEL=${LOGURU_LEVEL:-INFO}"
     )

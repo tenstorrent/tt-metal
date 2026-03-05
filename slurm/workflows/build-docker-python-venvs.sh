@@ -4,7 +4,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --output=logs/python-venvs-%j.out
 #
 # Build Python venv Docker images (ci-build-venv, ci-test-venv) using
 # content-addressed tags. Checks if images already exist before building.

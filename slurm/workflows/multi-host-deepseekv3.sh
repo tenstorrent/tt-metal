@@ -2,8 +2,6 @@
 #SBATCH --job-name=multi-host-deepseekv3
 #SBATCH --partition=exabox
 #SBATCH --time=04:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -4,8 +4,6 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Package release artifacts: tarball, wheels, and release metadata.
 
@@ -39,7 +37,7 @@ CMAKE_BUILD_PARALLEL_LEVEL=${SLURM_CPUS_PER_TASK:-8}"
 export DOCKER_EXTRA_ENV
 
 PACKAGE_COMMANDS="
-cd /work
+cd \${TT_METAL_HOME}
 
 cmake -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -50,7 +48,7 @@ mkdir -p build/dist
 
 tar --zstd -cf build/dist/tt-metal-\${RELEASE_VERSION}.tar.zst \
     --exclude='build/dist' \
-    -C /work \
+    -C \${TT_METAL_HOME} \
     build/lib build/bin build/generated
 
 pip wheel . --no-deps --wheel-dir build/dist/

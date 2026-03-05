@@ -2,8 +2,6 @@
 #SBATCH --job-name=ttnn-ops-docs-check
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # Validates that all TTNN ops have corresponding documentation (CPU-only).
 

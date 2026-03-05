@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
 #SBATCH --array=0-5
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: single-card demo test workflows
 # Runs demo tests across N150/N300 cards. Uses a matrix file to map
@@ -47,7 +45,7 @@ fi
 log_info "Running single-card demo test: ${DEMO_NAME} on ${CARD_TYPE} (task ${TASK_ID})"
 
 export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:generated/test_reports/"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "\
     pytest demos/${DEMO_NAME}/ \

@@ -2,8 +2,6 @@
 #SBATCH --job-name=fast-dispatch-frequent-tests
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/fast-dispatch-frequent-tests-impl.yaml
 # Each TASK_ID maps to a specific dispatch benchmark test group.

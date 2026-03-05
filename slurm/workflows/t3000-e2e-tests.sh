@@ -2,8 +2,6 @@
 #SBATCH --job-name=t3000-e2e-tests
 #SBATCH --partition=wh-t3k
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # T3000 end-to-end tests — array job, dynamic matrix from
 # tests/pipeline_reorg/t3k_e2e_tests.yaml.
@@ -41,8 +39,8 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
     echo '${TEST_CMD}'

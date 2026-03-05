@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=wheels-test
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # Test a built wheel on real hardware. Fetches the wheel artifact from
 # shared storage, installs it, and runs end-to-end tests.
@@ -41,7 +39,7 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
+cd \${TT_METAL_HOME}
 
 WHEEL_DIR='${ARTIFACT_DIR}/build/tt_metal_wheels'
 if [ -d \"\${WHEEL_DIR}\" ]; then
@@ -61,10 +59,10 @@ if [ -f tests/scripts/set_up_end_to_end_tests_env.sh ]; then
     cd tests/end_to_end_tests
     pytest -c conftest.py . -m eager_host_side \
         --timeout=120 \
-        --junitxml=/work/generated/test_reports/wheel_e2e_tests.xml \
+        --junitxml=\${TT_METAL_HOME}/generated/test_reports/wheel_e2e_tests.xml \
         -v \
-        2>&1 | tee /work/generated/test_reports/wheel_e2e_tests.log
-    cd /work
+        2>&1 | tee \${TT_METAL_HOME}/generated/test_reports/wheel_e2e_tests.log
+    cd \${TT_METAL_HOME}
 fi
 
 # Basic import and unit tests

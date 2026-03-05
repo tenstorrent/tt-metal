@@ -2,8 +2,6 @@
 #SBATCH --job-name=tt-cnn-post-commit
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: tt-cnn post-commit workflow
 # Runs CNN model tests on a single N150 node.

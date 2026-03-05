@@ -2,8 +2,6 @@
 #SBATCH --job-name=fast-dispatch-full-regressions
 #SBATCH --partition=wh-n300
 #SBATCH --time=04:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
 # Runs nightly model regression tests. TASK_ID selects model + card combination.
@@ -95,6 +93,6 @@ if [[ "${MODEL}" == "stable_diffusion_xl_base" || "${MODEL}" == "stable_diffusio
 TT_MM_THROTTLE_PERF=5"
 fi
 export DOCKER_EXTRA_ENV="${EXTRA_ENV}"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "${TEST_CMD}"

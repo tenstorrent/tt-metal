@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --time=12:00:00
 #SBATCH --array=0-49%20
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/ttnn-run-sweeps.yaml
 # Runs TTNN sweep framework tests in batched parallel execution.
@@ -67,6 +65,6 @@ CMD=(
 
 export DOCKER_EXTRA_ENV="TRACY_NO_INVARIANT_CHECK=1
 LOGURU_LEVEL=${LOGURU_LEVEL:-INFO}"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "${CMD[*]}"

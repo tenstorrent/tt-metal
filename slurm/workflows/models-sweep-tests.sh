@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=models-sweep-tests
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/models-sweep-tests-impl.yaml
 # Worker: runs model sweep tests from a matrix-defined command.
@@ -60,10 +58,10 @@ export ARCH_NAME="${ARCH}"
 # ---------------------------------------------------------------------------
 # Docker environment — mirrors GHA container env block
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf${MLPERF_OPTS}"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}${MLPERF_OPTS}"
 export DOCKER_EXTRA_ENV="HF_HUB_OFFLINE=1
-HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-GTEST_OUTPUT=xml:/work/generated/test_reports/
+HF_HUB_CACHE=${MLPERF_BASE}/huggingface/hub
+GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
 ARCH_NAME=${ARCH}"
 export DOCKER_EXTRA_OPTS="--privileged -v /sys:/sys"
 

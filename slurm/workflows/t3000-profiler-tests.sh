@@ -2,8 +2,6 @@
 #SBATCH --job-name=t3000-profiler-tests
 #SBATCH --partition=wh-t3k
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # T3000 profiler tests — single job (no array).
 # Equivalent to .github/workflows/t3000-profiler-tests.yaml calling
@@ -31,10 +29,10 @@ trap 'cleanup_job $?' EXIT
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=/work/build/lib"
+export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
 
 docker_run "$DOCKER_IMAGE" "
-    mkdir -p /work/generated/test_reports
+    mkdir -p \${TT_METAL_HOME}/generated/test_reports
     source tests/scripts/t3000/run_t3000_profiler_tests.sh
     run_t3000_profiler_tests
 "

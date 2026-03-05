@@ -2,8 +2,6 @@
 #SBATCH --job-name=fabric-build-and-unit-tests
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # Two-stage workflow: build on the build partition, then test on wh-n150.
 # This script acts as an orchestrator that submits both stages.
@@ -31,8 +29,7 @@ BUILD_JOB=$(sbatch --parsable \
     --job-name=fabric-build \
     --partition=build \
     --time=01:00:00 \
-    --output=/weka/ci/logs/%x/%j.log \
-    --error=/weka/ci/logs/%x/%j.err \
+    --output="${LOG_DIR}/%x-%j.out" \
     --export=ALL,PIPELINE_ID="${PIPELINE_ID}" \
     --wrap="
         set -euo pipefail
@@ -55,8 +52,7 @@ TEST_JOB=$(sbatch --parsable \
     --job-name=fabric-unit-tests \
     --partition=wh-n150 \
     --time=02:00:00 \
-    --output=/weka/ci/logs/%x/%j.log \
-    --error=/weka/ci/logs/%x/%j.err \
+    --output="${LOG_DIR}/%x-%j.out" \
     --export=ALL,PIPELINE_ID="${PIPELINE_ID}",BUILD_ARTIFACT=1 \
     --wrap="
         set -euo pipefail

@@ -2,8 +2,6 @@
 #SBATCH --job-name=tt-train-post-commit
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # GHA source: .github/workflows/tt-train-post-commit.yaml
 # Runs tt-train C++ tests via ctest inside the build directory.
@@ -42,8 +40,8 @@ log_info "Running tt-train post-commit tests (arch=${ARCH}, timeout=${TIMEOUT}m)
 # ---------------------------------------------------------------------------
 # Docker environment — mirrors GHA container env block
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="TT_METAL_RUNTIME_ROOT=/work
-TEST_DATA_DIR=/work/data
+export DOCKER_EXTRA_ENV="TT_METAL_RUNTIME_ROOT=${TT_METAL_HOME}
+TEST_DATA_DIR=${TT_METAL_HOME}/data
 ENABLE_CI_ONLY_TT_TRAIN_TESTS=1
 ARCH_NAME=${ARCH}"
 

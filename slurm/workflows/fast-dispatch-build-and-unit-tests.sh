@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --array=0-7
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Fast-dispatch unit tests: 8 array tasks mapping to 7 eager test splits + 1 sweep.
 # Ports the matrix strategy from .github/workflows/fast-dispatch-build-and-unit-tests.yaml:

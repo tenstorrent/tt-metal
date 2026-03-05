@@ -2,8 +2,6 @@
 #SBATCH --job-name=test-llk-metal-integration
 #SBATCH --partition=wh-n150
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # LLK (Low-Level Kernel) integration tests with TT-Metal.
 
@@ -31,8 +29,8 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 ./tests/scripts/run_llk_metal_integration.sh \
     2>&1 | tee generated/test_reports/llk_metal_integration.log

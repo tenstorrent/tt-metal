@@ -2,8 +2,6 @@
 #SBATCH --job-name=tg-op-perf-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=05:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/galaxy-perf-tests.yaml (TG op perf subset)
 # Runs TG (Galaxy) operator performance tests on a multi-chip Galaxy system.
@@ -54,8 +52,8 @@ export ARCH_NAME="${ARCH}"
 # ---------------------------------------------------------------------------
 # Docker environment
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
 TRACY_NO_INVARIANT_CHECK=1
 ARCH_NAME=${ARCH}"
 

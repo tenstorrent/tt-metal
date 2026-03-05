@@ -4,8 +4,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Infrastructure unit tests (no hardware required).
 
@@ -30,8 +28,8 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 pytest tests/infra/ \
     --timeout=300 \

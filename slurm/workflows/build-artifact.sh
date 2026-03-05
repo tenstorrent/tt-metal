@@ -4,7 +4,6 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --output=logs/build-artifact-%j.out
 #
 # Central build job: cmake configure + compile inside the CI build Docker
 # container, then package ttm_any.tar.zst and stage to Weka shared storage.
@@ -91,8 +90,8 @@ docker_pull_with_retry "${DOCKER_IMAGE}"
 NPROC="${SLURM_CPUS_PER_TASK:-16}"
 
 BUILD_COMMANDS="
-cd /work
-git config --global --add safe.directory /work
+cd \${TT_METAL_HOME}
+git config --global --add safe.directory \${TT_METAL_HOME}
 
 # --- ccache setup ---
 mkdir -p /tmp/ccache
@@ -167,7 +166,7 @@ ARTIFACT_PATHS=\"ttnn/ttnn/*.so build/lib build/programming_examples build/test 
 if [[ \"${SKIP_TT_TRAIN}\" != \"true\" ]]; then
     ARTIFACT_PATHS=\"\${ARTIFACT_PATHS} build/tt-train data\"
 fi
-tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/build/ttm_any.tar.zst \${ARTIFACT_PATHS}
+tar -I 'zstd --adapt=min=9 -T0' -cvhf \${TT_METAL_HOME}/build/ttm_any.tar.zst \${ARTIFACT_PATHS}
 "
 
 DOCKER_EXTRA_ENV="PIPELINE_ID=${PIPELINE_ID}

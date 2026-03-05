@@ -59,7 +59,7 @@ WHEEL_JOB_ID="$(sbatch \
     --time=01:30:00 \
     --cpus-per-task=16 \
     --mem=32G \
-    --output="logs/wheels-build-${PIPELINE_ID}-%j.out" \
+    --output="${LOG_DIR}/wheels-build-${PIPELINE_ID}-%j.out" \
     --export="${WHEEL_EXPORT}" \
     "${SCRIPT_DIR}/wheels.sh")"
 
@@ -81,7 +81,7 @@ TEST_JOB_ID="$(sbatch \
     --partition="${TEST_PARTITION}" \
     --time="${TEST_TIMEOUT}" \
     --gres=tenstorrent:1 \
-    --output="logs/wheels-test-${PIPELINE_ID}-%j.out" \
+    --output="${LOG_DIR}/wheels-test-${PIPELINE_ID}-%j.out" \
     --export="${TEST_EXPORT}" \
     "${SCRIPT_DIR}/_wheel_test_runner.sh")"
 
@@ -101,7 +101,7 @@ if [[ "${PUBLISH_WHEELS}" == "true" ]]; then
         --job-name="wheels-publish-${PIPELINE_ID}" \
         --partition=build \
         --time=00:30:00 \
-        --output="logs/wheels-publish-${PIPELINE_ID}-%j.out" \
+        --output="${LOG_DIR}/wheels-publish-${PIPELINE_ID}-%j.out" \
         --export="${PUBLISH_EXPORT}" \
         "${SCRIPT_DIR}/_wheel_publish.sh")"
 

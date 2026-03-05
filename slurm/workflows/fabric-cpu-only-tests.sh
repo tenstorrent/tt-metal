@@ -2,8 +2,6 @@
 #SBATCH --job-name=fabric-cpu-only-tests
 #SBATCH --partition=build
 #SBATCH --time=00:45:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

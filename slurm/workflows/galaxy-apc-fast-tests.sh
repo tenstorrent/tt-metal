@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-apc-fast-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=01:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy APC fast tests — array job with inline matrix (Llama3 demo -k apc).
 # Equivalent to .github/workflows/galaxy-apc-fast-tests-impl.yaml
@@ -33,7 +31,7 @@ trap 'cleanup_job $?' EXIT
 if [[ -z "${MATRIX_FILE:-}" ]]; then
     MATRIX_JSON='[
         {"name": "Galaxy Llama3 demo tests",
-         "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc",
+         "cmd": "LLAMA_DIR=${MLPERF_BASE}/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc",
          "timeout": 10}
     ]'
     MATRIX_FILE="$(create_matrix_file "$MATRIX_JSON")"
@@ -48,8 +46,8 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
     ${TEST_CMD}

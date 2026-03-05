@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --time=04:00:00
 #SBATCH --array=0-3
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/ttnn-stress-tests.yaml
 # Runs TTNN stress tests split across array tasks.

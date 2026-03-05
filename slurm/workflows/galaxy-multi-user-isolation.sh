@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-multi-user-isolation
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # Galaxy multi-user isolation tests — single job running Docker Compose with
 # multiple containers to validate device isolation across 3 scenarios:

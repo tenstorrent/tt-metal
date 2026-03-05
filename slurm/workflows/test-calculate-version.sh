@@ -4,8 +4,6 @@
 #SBATCH --time=00:15:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Version calculation test: validate that version strings are correctly
 # computed from git tags and commit history.

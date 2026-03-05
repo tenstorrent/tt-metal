@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-t3k
 #SBATCH --constraint=pipeline-perf
 #SBATCH --time=06:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # T3000 perplexity/accuracy tests — array job with inline matrix of 8 model groups.
 # Equivalent to .github/workflows/t3000-perplexity-tests-impl.yaml
@@ -55,12 +53,12 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_ENV="HF_HUB_CACHE=${MLPERF_BASE}/huggingface/hub
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
-    source /work/tests/scripts/t3000/run_t3000_perplexity_tests.sh
+    source \${TT_METAL_HOME}/tests/scripts/t3000/run_t3000_perplexity_tests.sh
     ${TEST_CMD}
 "
 

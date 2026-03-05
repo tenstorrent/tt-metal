@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --constraint=viommu
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: IOMMU-specific tests from various workflows
 # Requires viommu-capable nodes (Slurm constraint=viommu).

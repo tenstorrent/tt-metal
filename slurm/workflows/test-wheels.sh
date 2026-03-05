@@ -2,8 +2,6 @@
 #SBATCH --job-name=test-wheels
 #SBATCH --partition=wh-n150
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Wheel testing: install the built wheel and run smoke tests.
 # Partition can be overridden at submission time for different hardware.
@@ -32,7 +30,7 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
+cd \${TT_METAL_HOME}
 
 WHEEL_DIR='${ARTIFACT_DIR}/build/tt_metal_wheels'
 if [ -d \"\${WHEEL_DIR}\" ]; then

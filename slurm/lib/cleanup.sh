@@ -23,7 +23,7 @@ source "${SLURM_CI_LIB_DIR}/artifacts.sh"
 #   SLACK_WEBHOOK_URL       Slack webhook URL (required if NOTIFY_ON_FAILURE=1)
 cleanup_job() {
     local exit_code="${1:-$?}"
-    local workspace="${JOB_WORKSPACE:-/work}"
+    local workspace="${JOB_WORKSPACE:-${CONTAINER_WORKDIR:-/work}}"
     local job_name="${SLURM_CI_JOB_NAME}"
 
     log_info "=== Job cleanup starting (exit_code=${exit_code}) ==="

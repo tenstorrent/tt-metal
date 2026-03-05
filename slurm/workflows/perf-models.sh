@@ -2,8 +2,6 @@
 #SBATCH --job-name=perf-models
 #SBATCH --partition=perf
 #SBATCH --time=04:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/perf-models-impl.yaml
 # Runs model performance benchmarks across model-groups (llm_javelin, cnn_javelin,
@@ -81,10 +79,10 @@ export ARCH_NAME="${ARCH}"
 # ---------------------------------------------------------------------------
 # Docker environment
 # ---------------------------------------------------------------------------
-HF_CACHE_PATH="/mnt/MLPerf/huggingface/hub"
+HF_CACHE_PATH="${MLPERF_BASE}/huggingface/hub"
 
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
 HF_HUB_CACHE=${HF_CACHE_PATH}
 ARCH_NAME=${ARCH}"
 

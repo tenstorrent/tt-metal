@@ -43,7 +43,7 @@ UBUNTU_2204_JOB_ID="$(sbatch \
     --cpus-per-task=8 \
     --mem=32G \
     --array=0-4 \
-    --output="logs/docker-ubuntu2204-${PIPELINE_ID}-%A_%a.out" \
+    --output="${LOG_DIR}/docker-ubuntu2204-${PIPELINE_ID}-%A_%a.out" \
     --export="ALL,PIPELINE_ID=${PIPELINE_ID},PLATFORM=Ubuntu 22.04" \
     "${BUILD_SCRIPT}")"
 
@@ -62,7 +62,7 @@ UBUNTU_2404_JOB_ID="$(sbatch \
     --cpus-per-task=8 \
     --mem=32G \
     --array=0-4 \
-    --output="logs/docker-ubuntu2404-${PIPELINE_ID}-%A_%a.out" \
+    --output="${LOG_DIR}/docker-ubuntu2404-${PIPELINE_ID}-%A_%a.out" \
     --export="ALL,PIPELINE_ID=${PIPELINE_ID},PLATFORM=Ubuntu 24.04" \
     "${BUILD_SCRIPT}")"
 
@@ -81,7 +81,7 @@ MANYLINUX_JOB_ID="$(sbatch \
     --cpus-per-task=8 \
     --mem=32G \
     --array=5 \
-    --output="logs/docker-manylinux-${PIPELINE_ID}-%A_%a.out" \
+    --output="${LOG_DIR}/docker-manylinux-${PIPELINE_ID}-%A_%a.out" \
     --export="ALL,PIPELINE_ID=${PIPELINE_ID},PLATFORM=Ubuntu 22.04" \
     "${BUILD_SCRIPT}")"
 

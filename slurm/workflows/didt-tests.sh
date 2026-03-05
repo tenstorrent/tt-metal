@@ -2,8 +2,6 @@
 #SBATCH --job-name=didt-tests
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # GHA source: .github/workflows/didt-tests.yaml
 # Runs di/dt (power) stress tests across multiple workloads with varying

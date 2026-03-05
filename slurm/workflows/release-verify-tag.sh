@@ -4,8 +4,6 @@
 #SBATCH --time=00:15:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Verify or create a git tag for the release.
 

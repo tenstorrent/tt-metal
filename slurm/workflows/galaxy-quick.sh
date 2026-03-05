@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-quick
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy quick tests — array job with inline matrix (health + quick).
 # Equivalent to .github/workflows/galaxy-quick-impl.yaml (WH sections only).
@@ -91,14 +89,14 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # Container execution
 # ---------------------------------------------------------------------------
 export DOCKER_EXTRA_ENV="TT_METAL_ENABLE_ERISC_IRAM=1
-GTEST_OUTPUT=xml:/work/generated/test_reports/
-DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
+DEEPSEEK_V3_HF_MODEL=${MLPERF_BASE}/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+DEEPSEEK_V3_CACHE=${MLPERF_BASE}/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
-    mkdir -p /work/generated/test_reports
+    mkdir -p \${TT_METAL_HOME}/generated/test_reports
     ${TEST_CMD}
 "
 

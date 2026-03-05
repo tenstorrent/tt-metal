@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-perf-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=05:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy performance tests — array job, dynamic matrix from
 # tests/pipeline_reorg/galaxy_perf_tests.yaml.
@@ -50,8 +48,8 @@ fi
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+export DOCKER_EXTRA_ENV="LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
     ${TEST_CMD}

@@ -2,8 +2,6 @@
 #SBATCH --job-name=t3000-fast-tests
 #SBATCH --partition=wh-t3k
 #SBATCH --time=01:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # T3000 fast tests — array job with inline matrix (fabric + CCL tests).
 # Equivalent to .github/workflows/t3000-fast-tests-impl.yaml
@@ -47,12 +45,12 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:/work/generated/test_reports/
-LD_LIBRARY_PATH=/work/build/lib"
+export DOCKER_EXTRA_ENV="GTEST_OUTPUT=xml:${TT_METAL_HOME}/generated/test_reports/
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
 export DOCKER_EXTRA_OPTS="--memory 256g"
 
 docker_run "$DOCKER_IMAGE" "
-    mkdir -p /work/generated/test_reports
+    mkdir -p \${TT_METAL_HOME}/generated/test_reports
     source tests/scripts/t3000/run_t3000_unit_tests.sh
     ${TEST_CMD}
 "

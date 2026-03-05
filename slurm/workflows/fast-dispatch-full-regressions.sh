@@ -39,8 +39,7 @@ STABLE_JOB=$(sbatch \
     --partition=wh-n300 \
     --time=04:00:00 \
     --job-name=fd-full-regressions-stable \
-    --output=/weka/ci/logs/%x/%j/%a.log \
-    --error=/weka/ci/logs/%x/%j/%a.err \
+    --output="${LOG_DIR}/%x-%j-%a.out" \
     --export="ALL,PIPELINE_ID=${PIPELINE_ID},MODEL_SET=stable,MODELS_TO_RUN=${MODELS_TO_RUN},ENABLE_OPS_RECORDING=${ENABLE_OPS_RECORDING}" \
     "${SCRIPT_DIR}/workflows/fast-dispatch-full-regressions-impl.sh" 2>&1 | awk '/Submitted batch job/{print $NF}')
 : "${STABLE_JOB:=$(echo "$STABLE_JOB" | tail -1)}"
@@ -57,8 +56,7 @@ if (( UNSTABLE_TASKS > 0 )); then
         --partition=wh-n300 \
         --time=04:00:00 \
         --job-name=fd-full-regressions-unstable \
-        --output=/weka/ci/logs/%x/%j/%a.log \
-        --error=/weka/ci/logs/%x/%j/%a.err \
+        --output="${LOG_DIR}/%x-%j-%a.out" \
         --export="ALL,PIPELINE_ID=${PIPELINE_ID},MODEL_SET=unstable,MODELS_TO_RUN=${MODELS_TO_RUN}" \
         "${SCRIPT_DIR}/workflows/fast-dispatch-full-regressions-impl.sh" 2>&1 | awk '/Submitted batch job/{print $NF}')
     : "${UNSTABLE_JOB:=$(echo "$UNSTABLE_JOB" | tail -1)}"

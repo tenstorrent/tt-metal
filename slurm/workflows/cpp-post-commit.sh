@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
 #SBATCH --array=0-8
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/cpp-post-commit.yaml
 # Runs C++ unit tests. Each TASK_ID maps to a test group from the GHA matrix.

@@ -93,8 +93,7 @@ TTNN_JOB="$(sbatch \
     ${PARTITION_FLAG} ${CONSTRAINT_FLAG} \
     --time="${TIMEOUT_FLAG}" \
     --job-name=ttnn-post-commit \
-    --output=/weka/ci/logs/%x/%j/%a.log \
-    --error=/weka/ci/logs/%x/%j/%a.err \
+    --output="${LOG_DIR}/%x-%j-%a.out" \
     --export="ALL,PIPELINE_ID=${PIPELINE_ID},MATRIX_FILE=${MATRIX_FILE}" \
     "${SCRIPT_DIR}/workflows/_ttnn-post-commit-worker.sh")"
 

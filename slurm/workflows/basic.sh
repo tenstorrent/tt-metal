@@ -2,8 +2,6 @@
 #SBATCH --job-name=basic
 #SBATCH --partition=wh-n150
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Basic sanity tests: installs .deb packages and runs the product validation-basic
 # gtest binary inside a Docker container.  Equivalent to .github/workflows/basic.yaml.
@@ -60,11 +58,11 @@ docker_run "$DOCKER_IMAGE" "
 
     # -- Run basic tests -----------------------------------------------------
     export GTEST_COLOR=yes
-    export GTEST_OUTPUT='xml:/work/test-reports/'
+    export GTEST_OUTPUT=\"xml:\${TT_METAL_HOME}/test-reports/\"
     export TT_METAL_HOME=/usr/libexec/tt-metalium
     export TT_METAL_WATCHER=5
     export TT_METAL_WATCHER_TEST_MODE=1
-    mkdir -p /work/test-reports
+    mkdir -p \${TT_METAL_HOME}/test-reports
 
     /usr/bin/${PRODUCT}-validation-basic
 "

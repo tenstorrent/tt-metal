@@ -2,8 +2,6 @@
 #SBATCH --job-name=blackhole-post-commit
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # Orchestrator: builds artifacts then fans out to all BH test suites.
 # Equivalent to .github/workflows/blackhole-post-commit.yaml.

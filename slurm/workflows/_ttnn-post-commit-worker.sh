@@ -2,8 +2,6 @@
 #SBATCH --job-name=ttnn-post-commit
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 set -euo pipefail
 

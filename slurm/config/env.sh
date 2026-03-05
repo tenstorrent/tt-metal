@@ -11,12 +11,14 @@ export GHCR_REPO="${GHCR_REGISTRY}/tenstorrent/tt-metal/tt-metalium"
 export HARBOR_REGISTRY="harbor.ci.tenstorrent.net"
 
 # ---------------------------------------------------------------------------
-# Storage paths (Weka-backed shared filesystem)
+# Site-specific paths (sourced from site.sh)
 # ---------------------------------------------------------------------------
-export WEKA_BASE="/weka/ci"
-export ARTIFACT_BASE="${WEKA_BASE}/artifacts"
-export LOG_BASE="${WEKA_BASE}/logs"
-export MLPERF_BASE="/mnt/MLPerf"
+# shellcheck source=site.sh
+source "${BASH_SOURCE[0]%/*}/site.sh"
+
+# Derived storage paths
+export ARTIFACT_BASE="${CI_STORAGE_BASE}/artifacts"
+export LOG_BASE="${CI_STORAGE_BASE}/logs"
 
 # ---------------------------------------------------------------------------
 # Default Docker image
@@ -31,7 +33,7 @@ export DOCKER_IMAGE="${DOCKER_IMAGE:-${GHCR_REPO}/${DOCKER_IMAGE_OS}-${DOCKER_IM
 # ---------------------------------------------------------------------------
 # In-container paths and build variables
 # ---------------------------------------------------------------------------
-export TT_METAL_HOME="${TT_METAL_HOME:-/work}"
+export TT_METAL_HOME="${TT_METAL_HOME:-${CONTAINER_WORKDIR}}"
 export PYTHONPATH="${PYTHONPATH:-${TT_METAL_HOME}}"
 export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
 export LOGURU_LEVEL="${LOGURU_LEVEL:-INFO}"
@@ -49,12 +51,12 @@ export TT_CACHE_HOME="${TT_CACHE_HOME:-${MLPERF_BASE}/huggingface/tt_cache}"
 # ---------------------------------------------------------------------------
 # Devices that must be passed through to every hardware job container.
 CONTAINER_DEVICES=(
-    "/dev/tenstorrent"
+    "${TT_DEVICE_PATH}"
 )
 
 # Volume mounts shared by all jobs.
 CONTAINER_VOLUMES=(
-    "/dev/hugepages-1G:/dev/hugepages-1G"
+    "${HUGEPAGES_PATH}:${HUGEPAGES_PATH}"
     "/etc/passwd:/etc/passwd:ro"
     "/etc/shadow:/etc/shadow:ro"
     "/etc/bashrc:/etc/bashrc:ro"

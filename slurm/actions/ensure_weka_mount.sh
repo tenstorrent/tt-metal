@@ -9,6 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
+source_config env
 
 # ---------------------------------------------------------------------------
 # Usage
@@ -18,7 +19,7 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [-h|--help]
 
-Ensure the Weka mount (/mnt/MLPerf) is active and hugepages are available.
+Ensure the Weka mount is active and hugepages are available.
 
 Steps:
   1. Restart the Weka mount systemd unit
@@ -30,8 +31,10 @@ Options:
   -h, --help    Show this help message
 
 Environment:
-  WEKA_MOUNT_POINT    Mount path to verify (default: /mnt/MLPerf)
-  HUGEPAGES_TIMEOUT   Seconds to wait for hugepages (default: 60)
+  MLPERF_BASE           Base mount path from config/env.sh (default: /mnt/MLPerf)
+  WEKA_MOUNT_POINT      Mount path to verify (default: \${MLPERF_BASE})
+  WEKA_SYSTEMD_UNIT     Systemd mount unit name (default: mnt-MLPerf.mount)
+  HUGEPAGES_TIMEOUT     Seconds to wait for hugepages (default: 60)
 EOF
     exit "${1:-0}"
 }
@@ -47,7 +50,8 @@ done
 # Config
 # ---------------------------------------------------------------------------
 
-WEKA_MOUNT_POINT="${WEKA_MOUNT_POINT:-/mnt/MLPerf}"
+WEKA_MOUNT_POINT="${WEKA_MOUNT_POINT:-${MLPERF_BASE:-/mnt/MLPerf}}"
+WEKA_SYSTEMD_UNIT="${WEKA_SYSTEMD_UNIT:-mnt-MLPerf.mount}"
 HUGEPAGES_TIMEOUT="${HUGEPAGES_TIMEOUT:-60}"
 HUGEPAGES_SYSFS="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
 
@@ -55,8 +59,8 @@ HUGEPAGES_SYSFS="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
 # Step 1: Restart Weka mount
 # ---------------------------------------------------------------------------
 
-log_info "Restarting Weka mount unit (mnt-MLPerf.mount)..."
-sudo systemctl restart mnt-MLPerf.mount
+log_info "Restarting Weka mount unit (${WEKA_SYSTEMD_UNIT})..."
+sudo systemctl restart "${WEKA_SYSTEMD_UNIT}"
 
 log_info "Verifying Weka mount at ${WEKA_MOUNT_POINT}..."
 if ls -al "${WEKA_MOUNT_POINT}/bit_error_tests" &>/dev/null; then

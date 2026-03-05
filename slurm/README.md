@@ -10,6 +10,7 @@ slurm/
 ├── README.md                    # This file
 ├── PLAN.md                      # Pointer to the full migration plan
 ├── config/
+│   ├── site.sh                  # Site-specific storage paths (edit for new clusters)
 │   ├── env.sh                   # Shared environment variables (registries, paths)
 │   ├── partitions.conf          # Slurm partition definitions
 │   ├── sku_map.sh               # SKU name -> partition/constraint mapping
@@ -67,6 +68,29 @@ slurm/
     └── schedules.crontab             # Scheduled job definitions for scrontab
 ```
 
+## Site Configuration
+
+All storage and mount paths are centralized in `config/site.sh` — the single file operators need to edit when deploying on a different cluster or storage back-end.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `CI_STORAGE_BASE` | Root of CI shared storage | `/weka/ci` |
+| `MLPERF_BASE` | MLPerf data / models path | `/weka/mlperf` |
+| `CONTAINER_WORKDIR` | Working directory inside containers | `/opt/tt-metal` |
+| `TT_DEVICE_PATH` | Host path to Tenstorrent device nodes | `/dev/tenstorrent` |
+| `HUGEPAGES_PATH` | Host hugepages mount path | `/dev/hugepages-1G` |
+
+All variables can be overridden via the environment before sourcing the config:
+
+```bash
+# Example: deploy on a cluster using /mnt/nfs instead of /weka
+export CI_STORAGE_BASE="/mnt/nfs/ci"
+export MLPERF_BASE="/mnt/nfs/mlperf"
+./slurm/submit.sh all-post-commit-workflows
+```
+
+Derived paths (`LOG_BASE`, `ARTIFACT_BASE`, etc.) are computed automatically from `CI_STORAGE_BASE` — see `config/site.sh` for the full list.
+
 ## Quick Start
 
 ### Submit a Workflow
@@ -114,27 +138,27 @@ sacct --format=JobID,JobName%50,State,ExitCode,Elapsed | grep <PIPELINE_ID>
 
 ## Viewing Logs
 
-Job logs are written to Weka shared storage:
+Logs are written to shared storage at `${LOG_BASE}` (default: `/weka/ci/logs/`, configured in `config/site.sh`):
 
 ```
-/weka/ci/logs/<job-name>/<job-id>/<array-task-id>.log   # stdout
-/weka/ci/logs/<job-name>/<job-id>/<array-task-id>.err   # stderr
+${LOG_BASE}/<job-name>/<job-id>/<array-task-id>.log   # stdout
+${LOG_BASE}/<job-name>/<job-id>/<array-task-id>.err   # stderr
 ```
 
 ```bash
 # Tail a running job's output
-tail -f /weka/ci/logs/build-artifact/<JOBID>/0.log
+tail -f ${LOG_BASE}/build-artifact/<JOBID>/0.log
 
 # View a specific array task
-cat /weka/ci/logs/upstream-tests/<JOBID>/2.log
+cat ${LOG_BASE}/upstream-tests/<JOBID>/2.log
 ```
 
 ## Managing Artifacts
 
-Artifacts are stored on Weka shared storage organized by pipeline ID:
+Artifacts are stored on shared storage at `${ARTIFACT_BASE}` (derived from `CI_STORAGE_BASE` in `config/site.sh`), organized by pipeline ID:
 
 ```
-/weka/ci/artifacts/<pipeline-id>/
+${ARTIFACT_BASE}/<pipeline-id>/
 ├── build/                  # Build tarballs and wheels
 │   ├── ttm_any.tar.zst
 │   └── tt_metal_wheels/
@@ -149,13 +173,13 @@ Artifacts are stored on Weka shared storage organized by pipeline ID:
 
 ```bash
 # List artifacts for a pipeline
-ls -la /weka/ci/artifacts/<PIPELINE_ID>/
+ls -la ${ARTIFACT_BASE}/<PIPELINE_ID>/
 
 # Check build artifact
-ls -lh /weka/ci/artifacts/<PIPELINE_ID>/build/ttm_any.tar.zst
+ls -lh ${ARTIFACT_BASE}/<PIPELINE_ID>/build/ttm_any.tar.zst
 
 # View test reports
-ls /weka/ci/artifacts/<PIPELINE_ID>/reports/
+ls ${ARTIFACT_BASE}/<PIPELINE_ID>/reports/
 ```
 
 ## Partition Configuration
@@ -200,7 +224,13 @@ get_arch_name bh_p100           # -> blackhole
 | `ARCH_NAME` | Target architecture | `wormhole_b0` |
 | `GIT_SHA` / `GIT_REF` | Git context | Auto-detected |
 | `SLACK_WEBHOOK_URL` | Slack notification webhook | (none) |
-| `ARTIFACT_DIR` | Pipeline artifact directory | `/weka/ci/artifacts/<PIPELINE_ID>` |
+| `CI_STORAGE_BASE` | Root of CI shared storage (from `site.sh`) | `/weka/ci` |
+| `LOG_BASE` | Log output directory (derived) | `${CI_STORAGE_BASE}/logs` |
+| `ARTIFACT_BASE` | Artifact storage root (derived) | `${CI_STORAGE_BASE}/artifacts` |
+| `ARTIFACT_DIR` | Pipeline artifact directory | `${CI_STORAGE_BASE}/artifacts/<PIPELINE_ID>` |
+| `CONTAINER_WORKDIR` | Working directory inside containers (from `site.sh`) | `/opt/tt-metal` |
+| `TT_DEVICE_PATH` | Host Tenstorrent device path (from `site.sh`) | `/dev/tenstorrent` |
+| `HUGEPAGES_PATH` | Host hugepages mount (from `site.sh`) | `/dev/hugepages-1G` |
 | `BUILD_ARTIFACT` | Fetch build tarball in setup | `0` |
 | `INSTALL_WHEEL` | Install Python wheel in setup | `0` |
 | `ENABLE_WATCHER` | Enable TT Metal Watcher | `0` |
@@ -219,8 +249,6 @@ get_arch_name bh_p100           # -> blackhole
    #SBATCH --job-name=my-new-test
    #SBATCH --partition=wh-n150
    #SBATCH --time=02:00:00
-   #SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-   #SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
    set -euo pipefail
    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -238,7 +266,7 @@ get_arch_name bh_p100           # -> blackhole
    docker_pull_with_retry "${IMAGE}"
    trap 'cleanup_job --exit-code $?' EXIT
 
-   docker_run "${IMAGE}" "cd /work && pytest tests/my_tests/"
+   docker_run "${IMAGE}" "cd ${TT_METAL_HOME} && pytest tests/my_tests/"
    ```
 
 3. **For orchestrators** (submit sub-jobs), omit SBATCH directives:
@@ -298,7 +326,7 @@ squeue -j <JOBID> -o "%i %j %T %r"
 sacct -j <JOBID> --format=JobID,State,ExitCode,Reason
 
 # View the error log
-cat /weka/ci/logs/<job-name>/<JOBID>/0.err
+cat ${LOG_BASE}/<job-name>/<JOBID>/0.err
 
 # Common failures:
 #   Exit 1     - script error (check logs)
@@ -325,14 +353,14 @@ timeout 3 bash -c 'echo >/dev/tcp/harbor.ci.tenstorrent.net/443' && echo "Harbor
 ```bash
 # Verify the pipeline ID
 echo $PIPELINE_ID
-ls /weka/ci/artifacts/$PIPELINE_ID/
+ls ${ARTIFACT_BASE}/$PIPELINE_ID/
 
-# Check if Weka is mounted
-df -h /weka
+# Check if storage is mounted (path depends on config/site.sh)
+df -h ${CI_STORAGE_BASE:-/weka/ci}
 mount | grep weka
 
 # Check artifact staging from build job logs
-grep "Staging" /weka/ci/logs/build-artifact/<BUILD_JOBID>/0.log
+grep "Staging" ${LOG_BASE}/build-artifact/<BUILD_JOBID>/0.log
 ```
 
 ### Cancel a pipeline

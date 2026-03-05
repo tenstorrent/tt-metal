@@ -2,8 +2,6 @@
 #SBATCH --job-name=wheels-publish
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # Publish tested wheels to internal PyPI / artifact store.
 #

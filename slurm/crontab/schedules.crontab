@@ -9,7 +9,7 @@
 #   scrontab -r                       # Remove all scrontab entries
 #
 # Each entry launches a pipeline via the universal submit.sh launcher.
-# Logs go to /weka/ci/logs/<workflow-name>/<job-id>/.
+# Logs go to ${LOG_BASE}/<workflow-name>/<job-id>/ (default: /weka/ci/logs, see config/site.sh).
 
 # ---------------------------------------------------------------------------
 # Nightly pipelines

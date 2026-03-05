@@ -2,8 +2,6 @@
 #SBATCH --job-name=vllm-nightly-tests
 #SBATCH --partition=wh-t3k
 #SBATCH --time=04:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # vLLM nightly tests on T3K hardware.
 
@@ -41,8 +39,8 @@ DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 export DOCKER_EXTRA_VOLUMES
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 
 pip install -e '.[vllm]' 2>/dev/null || pip install vllm
 

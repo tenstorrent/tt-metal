@@ -2,8 +2,6 @@
 #SBATCH --job-name=metal-run-microbenchmarks
 #SBATCH --partition=perf
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/metal-run-microbenchmarks-impl.yaml
 # Runs metal microbenchmarks including DRAM ubench, fabric BW/latency,

@@ -4,8 +4,6 @@
 #SBATCH --time=05:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/code-analysis.yaml
 # Runs clang-tidy (full or incremental) and optionally the Clang Static

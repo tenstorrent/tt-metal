@@ -2,8 +2,6 @@
 #SBATCH --job-name=galaxy-deepseek-tests
 #SBATCH --partition=wh-galaxy
 #SBATCH --time=03:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # Galaxy DeepSeek tests — array job with inline matrix (unit, module,
 # long-seq-module).
@@ -58,11 +56,11 @@ log_info "Running array task ${TASK_ID}: ${TEST_NAME}"
 # ---------------------------------------------------------------------------
 # Container execution
 # ---------------------------------------------------------------------------
-export DOCKER_EXTRA_ENV="DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+export DOCKER_EXTRA_ENV="DEEPSEEK_V3_HF_MODEL=${MLPERF_BASE}/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+DEEPSEEK_V3_CACHE=${MLPERF_BASE}/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
 MESH_DEVICE=TG
-LD_LIBRARY_PATH=/work/build/lib"
-export DOCKER_EXTRA_VOLUMES="/mnt/MLPerf:/mnt/MLPerf:ro"
+LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib"
+export DOCKER_EXTRA_VOLUMES="${MLPERF_BASE}:${MLPERF_BASE}:ro"
 
 docker_run "$DOCKER_IMAGE" "
     ${TEST_CMD}

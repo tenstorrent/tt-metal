@@ -2,8 +2,6 @@
 #SBATCH --job-name=tm-data-movement-unit
 #SBATCH --partition=wh-t3k
 #SBATCH --time=02:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 
 # TM data-movement unit tests across N150/N300/P150b runners.
 # Equivalent to .github/workflows/tm-data-movement-unit-impl.yaml.

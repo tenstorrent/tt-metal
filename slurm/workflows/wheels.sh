@@ -4,7 +4,6 @@
 #SBATCH --time=01:30:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --output=logs/wheels-%j.out
 #
 # Build Python wheels using cibuildwheel inside a manylinux Docker container.
 #
@@ -70,8 +69,8 @@ LTO_FLAG="OFF"
 [[ "${ENABLE_LTO}" == "true" ]] && LTO_FLAG="ON"
 
 WHEEL_COMMANDS="
-cd /work
-git config --global --add safe.directory /work
+cd \${TT_METAL_HOME}
+git config --global --add safe.directory \${TT_METAL_HOME}
 
 # ccache setup
 mkdir -p /tmp/ccache
@@ -92,13 +91,13 @@ if command -v cibuildwheel &>/dev/null; then
     export CIBW_BEFORE_TEST=\"ccache -s\"
     export CIBW_TEST_COMMAND='python -c \"import ttnn\"'
     export CIBW_MANYLINUX_X86_64_IMAGE=\"${MANYLINUX_IMAGE}\"
-    cibuildwheel --output-dir /work/wheelhouse
+    cibuildwheel --output-dir \${TT_METAL_HOME}/wheelhouse
 else
-    pip wheel . --no-deps --wheel-dir /work/wheelhouse/
+    pip wheel . --no-deps --wheel-dir \${TT_METAL_HOME}/wheelhouse/
 fi
 
 ccache -s
-ls -lh /work/wheelhouse/
+ls -lh \${TT_METAL_HOME}/wheelhouse/
 "
 
 DOCKER_EXTRA_ENV="PIPELINE_ID=${PIPELINE_ID}

@@ -2,8 +2,6 @@
 #SBATCH --job-name=tm-data-movement
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 
 # Orchestrator: builds artifacts then fans out to data-movement unit and perf
 # test suites. Equivalent to .github/workflows/tm-data-movement-wrapper.yaml.

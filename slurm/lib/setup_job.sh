@@ -28,7 +28,7 @@ source "${SLURM_CI_LIB_DIR}/artifacts.sh"
 setup_job() {
     require_env PIPELINE_ID
 
-    local workspace="${JOB_WORKSPACE:-/work}"
+    local workspace="${JOB_WORKSPACE:-${CONTAINER_WORKDIR:-/work}}"
 
     log_info "=== Job setup starting ==="
     log_info "Pipeline:  ${PIPELINE_ID}"

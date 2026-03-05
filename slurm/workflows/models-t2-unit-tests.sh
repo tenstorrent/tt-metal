@@ -2,8 +2,6 @@
 #SBATCH --job-name=models-t2-unit-tests
 #SBATCH --partition=build
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j.log
-#SBATCH --error=/weka/ci/logs/%x/%j.err
 #
 # GHA source: .github/workflows/models-unit-tests-impl.yaml (tier=2 caller)
 # Orchestrator: loads the tier-2 unit test matrix from config and submits

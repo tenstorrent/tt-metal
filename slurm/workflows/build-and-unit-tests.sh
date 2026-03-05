@@ -62,7 +62,7 @@ BUILD_JOB_ID="$(sbatch \
     --time=02:00:00 \
     --cpus-per-task=16 \
     --mem=64G \
-    --output="logs/build-${PIPELINE_ID}-%j.out" \
+    --output="${LOG_DIR}/build-${PIPELINE_ID}-%j.out" \
     --export="${BUILD_EXPORT}" \
     "${SCRIPT_DIR}/build-artifact.sh")"
 
@@ -85,7 +85,7 @@ TEST_JOB_ID="$(sbatch \
     --partition="${TEST_PARTITION}" \
     --time="${TEST_TIMEOUT}" \
     --gres=tenstorrent:1 \
-    --output="logs/unit-tests-${PIPELINE_ID}-%j.out" \
+    --output="${LOG_DIR}/unit-tests-${PIPELINE_ID}-%j.out" \
     --export="${TEST_EXPORT}" \
     "${SCRIPT_DIR}/_unit_test_runner.sh")"
 

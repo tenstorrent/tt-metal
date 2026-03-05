@@ -2,8 +2,6 @@
 #SBATCH --job-name=sdk-examples
 #SBATCH --partition=wh-n150
 #SBATCH --time=01:00:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: SDK example tests from post-commit pipelines
 # Runs SDK example tests on a single N150 node.

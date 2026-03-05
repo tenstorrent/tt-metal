@@ -2,8 +2,6 @@
 #SBATCH --job-name=test-installing-step
 #SBATCH --partition=wh-n150
 #SBATCH --time=00:30:00
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Install validation: verify build artifact extraction and wheel installation
 # work correctly on hardware nodes.
@@ -32,7 +30,7 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
+cd \${TT_METAL_HOME}
 
 echo 'Verifying build artifacts...'
 test -d build/lib || { echo 'FAIL: build/lib missing'; exit 1; }

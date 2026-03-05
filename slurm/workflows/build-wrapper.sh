@@ -101,7 +101,7 @@ if [[ "${MATRIX_MODE}" == "true" ]]; then
             --time="${BUILD_TIMEOUT}" \
             --cpus-per-task=16 \
             --mem=64G \
-            --output="logs/${job_name}-%j.out" \
+            --output="${LOG_DIR}/${job_name}-%j.out" \
             --export="${EXPORT_VARS}" \
             "${SCRIPT_DIR}/build-artifact.sh")"
 
@@ -142,7 +142,7 @@ BUILD_JOB_ID="$(sbatch \
     --time="${BUILD_TIMEOUT}" \
     --cpus-per-task=16 \
     --mem=64G \
-    --output="logs/build-${PIPELINE_ID}-%j.out" \
+    --output="${LOG_DIR}/build-${PIPELINE_ID}-%j.out" \
     --export="${EXPORT_VARS}" \
     "${SCRIPT_DIR}/build-artifact.sh")"
 

@@ -4,8 +4,6 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # GHA source: .github/workflows/clang-tidy-reusable.yaml
 # Reusable clang-tidy analysis. Supports full and incremental scans with

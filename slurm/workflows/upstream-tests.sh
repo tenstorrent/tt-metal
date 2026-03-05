@@ -3,8 +3,6 @@
 #SBATCH --partition=wh-n150
 #SBATCH --time=02:00:00
 #SBATCH --array=0-3
-#SBATCH --output=/weka/ci/logs/%x/%j/%a.log
-#SBATCH --error=/weka/ci/logs/%x/%j/%a.err
 #
 # Upstream integration tests run as a job array.
 # Matrix configuration loaded from config/upstream-tests.json.
@@ -56,8 +54,8 @@ docker_pull_with_retry "${IMAGE}"
 trap 'cleanup_job --exit-code $?' EXIT
 
 docker_run "${IMAGE}" "
-cd /work
-export PYTHONPATH=/work
+cd \${TT_METAL_HOME}
+export PYTHONPATH=\${TT_METAL_HOME}
 timeout ${TEST_TIMEOUT} ${TEST_CMD} \
     2>&1 | tee generated/test_reports/upstream_${TASK_ID}.log
 "
