@@ -252,9 +252,21 @@ void BuildEnvManager::build_firmware(ChipId device_id) {
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
     if (build_env.firmware_precompiled) {
+        log_info(
+            tt::LogBuildKernels,
+            "Firmware for device {} with build key {} is pre-compiled",
+            device_id,
+            build_env.build_key());
         return;
     }
+    log_info(
+        tt::LogBuildKernels, "Building firmware for device {} with build key {}", device_id, build_env.build_key());
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+    log_info(
+        tt::LogBuildKernels,
+        "Done building firmware for device {} with build key {}",
+        device_id,
+        build_env.build_key());
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(
