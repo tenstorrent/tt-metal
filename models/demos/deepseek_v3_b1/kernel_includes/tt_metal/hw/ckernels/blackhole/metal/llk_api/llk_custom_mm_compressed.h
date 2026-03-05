@@ -180,21 +180,17 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
         for (uint32_t pair = 0; pair < num_pairs; pair++) {
             PairInfo p;
             p.packed = FMT_FLAT[pair];  // single load
-            uint32_t fmt0 = p.fmt0;
-            uint32_t fmt1 = p.fmt1;
-            uint32_t sz0 = p.sz0;
-            uint32_t sz1 = p.sz1;
 
             wait_for_next_context(2);
-            reconfig_custom_mm_srca_raw(cfg, fmt0, reg0_base, reg2_base);
+            reconfig_custom_mm_srca_raw(cfg, p.fmt0, reg0_base, reg2_base);
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-            address_a += sz0;
+            address_a += p.sz0;
             semaphore_post(semaphore::UNPACK_SYNC);
 
             wait_for_next_context(2);
-            reconfig_custom_mm_srca_raw(cfg, fmt1, reg0_base, reg2_base);
+            reconfig_custom_mm_srca_raw(cfg, p.fmt1, reg0_base, reg2_base);
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-            address_a += sz1;
+            address_a += p.sz1;
             semaphore_post(semaphore::UNPACK_SYNC);
         }
     }));
