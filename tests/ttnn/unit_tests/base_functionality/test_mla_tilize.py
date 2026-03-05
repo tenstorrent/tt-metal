@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-from loguru import logger
 from tracy import signpost
 
 import ttnn
@@ -119,19 +118,10 @@ def test_deepseek_v3_mla_tilize_trace_mode(
         memory_config=input_memory_config,
     )
 
-    # Compile run
-    logger.info(f"Compiling tilize operation: {op_name}")
-    logger.info(f"  Input shape: {input_shape}")
-    logger.info(f"  Input layout: ROW_MAJOR")
-    logger.info(f"  Memory config: {memory_config_type}")
-    logger.info(f"  Output shape: {output_shape}")
-    logger.info(f"  Output layout: TILE_LAYOUT")
-
     tt_output_tensor = ttnn.tilize(tt_input_tensor, memory_config=output_memory_config)
     ttnn.synchronize_device(device)
 
     # Capture warmup trace
-    logger.info(f"Capturing warmup trace with {warmup_iters} iterations")
     trace_id_warmup = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(warmup_iters):
         tt_output_tensor = ttnn.tilize(tt_input_tensor, memory_config=output_memory_config)
@@ -139,7 +129,6 @@ def test_deepseek_v3_mla_tilize_trace_mode(
     ttnn.synchronize_device(device)
 
     # Capture main trace
-    logger.info(f"Capturing main trace with {num_iters} iterations")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(num_iters):
         tt_output_tensor = ttnn.tilize(tt_input_tensor, memory_config=output_memory_config)
@@ -147,7 +136,6 @@ def test_deepseek_v3_mla_tilize_trace_mode(
     ttnn.synchronize_device(device)
 
     # Execute warmup trace
-    logger.info("Executing warmup trace")
     profiler = BenchmarkProfiler()
     profiler.start("warmup")
     ttnn.execute_trace(device, trace_id_warmup, blocking=False)
@@ -156,7 +144,6 @@ def test_deepseek_v3_mla_tilize_trace_mode(
     ttnn.synchronize_device(device)
 
     # Execute main trace with signposts
-    logger.info("Executing main trace")
     signpost("start")
     profiler.start("main")
     ttnn.execute_trace(device, trace_id, blocking=False)
@@ -174,5 +161,3 @@ def test_deepseek_v3_mla_tilize_trace_mode(
     ), f"Shape mismatch: {torch_output_from_tt.shape} != {torch_output_tensor.shape}"
 
     assert_equal(torch_output_tensor, torch_output_from_tt)
-
-    logger.info(f"✓ Trace mode {op_name} test passed with correct output")
