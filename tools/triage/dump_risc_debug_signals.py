@@ -102,7 +102,7 @@ def collect_debug_bus_signals(
             # Read the signal group (this writes the 128-bit value to l1_address)
             group_sample = debug_bus.read_signal_group(group_name, l1_address)
             # Read the raw 128-bit value from l1_address
-            debug_bus_data[group_name] = f"0x{group_sample.raw_data}"
+            debug_bus_data[group_name] = f"0x{group_sample.raw_data:032x}"
 
         # Return only the core data - location/device info comes from PerBlockCheckResult
         return {
