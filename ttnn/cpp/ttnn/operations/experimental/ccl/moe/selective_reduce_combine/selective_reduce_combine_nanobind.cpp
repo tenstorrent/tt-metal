@@ -20,15 +20,13 @@ void bind_selective_reduce_combine(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Selective reduce combine operation sparsifies dense blocks of tokens coming out of MoE compute megakernel and sends tokens back to their originating devices.
-        B = local batch size/batch size per device
-        S = local sequence length/sequence length per device
+        T = total number of tokens per device (e.g. B * S for batch B, sequence S)
         H = hidden size
         K = selected experts per token
         D = total number of devices
         A = cluster axis to dispatch along
         D[A] = number of devices along the cluster axis, just D if cluster axis is not specified.
         E = local experts/experts per device
-        T = total number of tokens per device = B * S
         P = Fabric max packet size in BF16 elements
         Args:
             dense_input_tensor (ttnn.Tensor): Dense expert contributions from MoE compute. It is expected to be structured as follows
@@ -90,11 +88,11 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             dense_token_maps_tensor (ttnn.Tensor): Sparse output tokens tensor provided by all_to_all_dispatch_selective_tilize
             dense_token_counts_tensor (ttnn.Tensor): Active token counts tensor all_to_all_dispatch_selective_tilize
             hidden_size (int): H
-            batch_size (int): B*D[A]
+            batch_size (int): B
             seq_size (int): S
             select_experts_k (int): K
             experts (int) E*D, total experts across all devices
-            axis (int): A
+            cluster_axis (int, optional): Mesh axis to cluster along. 0 = column (COLS), 1 = row (ROWS). Must be 0 or 1 when set.
             topology (ttnn.Topology): Line or Ring supported
             num_links (int): Number of fabric links to utilize
             token_parallel_core_dim (int): token shard dimension (described above)
@@ -126,7 +124,7 @@ void bind_selective_reduce_combine(nb::module_& mod) {
             nb::arg("seq_size"),
             nb::arg("select_experts_k"),
             nb::arg("experts"),
-            nb::arg("cluster_axis"),
+            nb::arg("axis"),
             nb::arg("topology"),
             nb::arg("num_links"),
             nb::arg("token_parallel_core_dim"),

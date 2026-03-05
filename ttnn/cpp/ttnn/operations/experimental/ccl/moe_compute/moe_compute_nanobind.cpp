@@ -32,7 +32,13 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("layer_id"),
         nb::arg("output_height_shard_dim"),
         nb::arg("output_width_shard_dim"),
-        nb::arg("cluster_axis") = nb::none());
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("topology") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("mux_core_range_set") = nb::none(),
+        nb::arg("output_memory_config") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::arg("optional_cross_device_semaphore") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
