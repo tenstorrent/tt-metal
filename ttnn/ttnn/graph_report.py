@@ -100,7 +100,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             memory_config text,
             device_id int,
             address int,
-            buffer_type int
+            buffer_type int,
+            size int
         )
     """
     )
@@ -850,13 +851,20 @@ def import_graph(
                     layout = layout.replace("::", ".")
                 device_id = int(params["device_id"]) if "device_id" in params else None
                 address = int(params["address"]) if "address" in params else None
-                buffer_type_str = params.get("buffer_type")
+                buffer_type_raw = params.get("buffer_type")
                 buffer_type = None
-                if buffer_type_str:
-                    cleaned = buffer_type_str.split("::")[-1] if "::" in buffer_type_str else buffer_type_str
-                    buffer_type = _BUFFER_TYPE_MAP.get(cleaned, 0)
+                if buffer_type_raw is not None:
+                    if str(buffer_type_raw).isdigit():
+                        buffer_type = int(buffer_type_raw)
+                    else:
+                        cleaned = buffer_type_raw.split("::")[-1] if "::" in buffer_type_raw else buffer_type_raw
+                        buffer_type = _BUFFER_TYPE_MAP.get(cleaned, 0)
 
-                tensors_batch.append((tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type))
+                size = int(params["size"]) if "size" in params else None
+
+                tensors_batch.append(
+                    (tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type, size)
+                )
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -872,8 +880,11 @@ def import_graph(
             size = int(params.get("size", 0))
             page_size = int(params.get("page_size", 0))
             num_cores = int(params.get("num_cores", 0))
-            buffer_type_str = params.get("exact_buffer_type") or params.get("type", "DRAM")
-            buffer_type = _BUFFER_TYPE_MAP.get(buffer_type_str, 0)
+            buffer_type_raw = params.get("exact_buffer_type") or params.get("type", "DRAM")
+            if str(buffer_type_raw).isdigit():
+                buffer_type = int(buffer_type_raw)
+            else:
+                buffer_type = _BUFFER_TYPE_MAP.get(buffer_type_raw, 0)
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
@@ -909,7 +920,7 @@ def import_graph(
             dealloc_tensor_id = None
             if dealloc_address is not None:
                 for t in tensors_batch:
-                    tid, _, _, _, _, _, addr, _ = t
+                    tid, _, _, _, _, _, addr, _, _ = t
                     if addr == dealloc_address:
                         dealloc_tensor_id = _tid_int(tid)
                         break
@@ -969,7 +980,7 @@ def import_graph(
 
     filtered_tensors = []
     for t in tensors_batch:
-        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, sz = t
         tid_int = _tid_int(tid)
         if dev_id is None:
             if tid_int in referenced_tids:
@@ -993,23 +1004,27 @@ def import_graph(
     if missing_tids:
         addr_to_tensor = {}
         for t in tensors_batch:
-            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, sz = t
             if addr is not None and addr not in addr_to_tensor:
                 addr_to_tensor[addr] = t
         for mtid in missing_tids:
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
-                _, shape, dtype, layout, mem_cfg, dev_id, _, bt = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt))
+                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, sz = addr_to_tensor[addr]
+                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, sz))
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
                 bt_raw = p.get("buffer_type")
-                if isinstance(bt_raw, str):
+                if bt_raw is None:
+                    bt_val = None
+                elif str(bt_raw).isdigit():
+                    bt_val = int(bt_raw)
+                else:
                     bt_cleaned = bt_raw.split("::")[-1] if "::" in bt_raw else bt_raw
                     bt_val = _BUFFER_TYPE_MAP.get(bt_cleaned, 0)
-                else:
-                    bt_val = bt_raw if bt_raw is not None else None
+                sz_raw = p.get("size")
+                sz_val = int(sz_raw) if sz_raw is not None else None
                 tensors_batch.append(
                     (
                         mtid,
@@ -1020,6 +1035,7 @@ def import_graph(
                         p.get("device_id"),
                         p.get("address"),
                         bt_val,
+                        sz_val,
                     )
                 )
 
@@ -1089,7 +1105,7 @@ def import_graph(
     if output_tensors_batch:
         cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?)""", output_tensors_batch)
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
     if device_tensors_batch:
         cursor.executemany("""INSERT INTO device_tensors VALUES (?, ?, ?)""", device_tensors_batch)
     if buffers_batch:
