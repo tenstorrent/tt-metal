@@ -8,113 +8,17 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::experimental::prim {
-namespace detail {
+namespace ttnn {
 
-std::vector<uint32_t> data_parallel_split(
-    uint32_t token_size_bytes, const uint32_t max_packet_size_bytes, const uint32_t num_data_parallel_cores) {
-    std::vector<uint32_t> data_parallel_sizes_bytes;
+namespace experimental::prim {
 
-    const uint32_t need_data_parallel_cores =
-        std::max(num_data_parallel_cores, token_size_bytes / max_packet_size_bytes);
-    data_parallel_sizes_bytes.reserve(need_data_parallel_cores);
-
-    const uint32_t max_segment_size_bytes = token_size_bytes / need_data_parallel_cores;
-
-    for (uint32_t c = 0; c < num_data_parallel_cores; ++c) {
-        const uint32_t token_increment = std::min(token_size_bytes, max_segment_size_bytes);
-        data_parallel_sizes_bytes.push_back(token_increment);
-        token_size_bytes -= token_increment;
-
-        if (token_size_bytes == 0) {
-            break;
-        }
-    }
-
-    return data_parallel_sizes_bytes;
-}
-
-auto launch_mux_workers(
-    const MeshDevice& mesh_device,
-    const CoreRangeSet& mux_core_range_set,
-    const tt::tt_fabric::FabricNodeId src_node_id,
-    const std::vector<ttnn::MeshCoordinate>& neighbors,
-    const uint32_t num_links,
-    const uint32_t num_workers,
-    Program& program) {
-    const auto num_header_only_channels = tt::div_up(num_workers, num_links);
-    const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 20;    // parameterize?
-    constexpr auto num_buffers_header_only_channels = 20;  // parameterize?
-
-    const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t l1_unreserved_base_address =
-        mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        num_buffers_header_only_channels,
-        buffer_size_bytes_full_size_channel,
-        l1_unreserved_base_address);
-
-    const auto needed_mux_core_range_set =
-        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        needed_mux_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-
-    std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
-    mux_neigbor_core_maps.reserve(num_links);
-
-    const auto mux_cores = corerange_to_cores(needed_mux_core_range_set);
-    auto mux_core_iter = mux_cores.begin();
-    for (uint32_t link = 0; link < num_links; ++link) {
-        std::map<ttnn::MeshCoordinate, CoreCoord> mux_neigbor_core_map;
-        for (const auto& neighbor_coord : neighbors) {
-            auto mux_logical_core = *(mux_core_iter++);
-            const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
-
-            std::vector<uint32_t> mux_rt_args = {};
-            const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
-            mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                src_node_id, dst_node_id, link, program, {mux_logical_core});
-
-            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
-            mux_neigbor_core_map[neighbor_coord] = mux_virtual_core;
-        }
-        mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
-    }
-
-    return std::make_tuple(mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps);
-}
-
-void add_termination_master_rt_args(
-    const std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>>& mux_neigbor_core_maps,
-    std::vector<uint32_t>& writer_runtime_args) {
-    for (const auto& m : mux_neigbor_core_maps) {
-        for (const auto& c : m) {
-            const auto& mux_virtual_core = c.second;
-            writer_runtime_args.push_back(mux_virtual_core.x);
-            writer_runtime_args.push_back(mux_virtual_core.y);
-        }
-    }
-}
-
-}  // namespace detail
 UnifiedSelectReduce::cached_mesh_workload_t UnifiedSelectReduce::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -157,17 +61,164 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     tensor_return_value_t& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
+    tt::tt_metal::Program program{};
+    auto artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
+        program,
+        operation_attributes,
+        mesh_coordinate,
+        all_mesh_coordinates,
+        tensor_args,
+        tensor_return_value,
+        init_semaphore,
+        cross_device_semaphore);
+    return {std::move(program), std::move(artifacts)};
+}
+
+void UnifiedSelectReduce::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& coord = range.start_coord();
+        TT_FATAL(
+            coord == range.end_coord(),
+            "Expected single coordinate per program but got range of {} to {}",
+            coord,
+            range.end_coord());
+
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        ttnn::selective_reduce_combine_helper_override_runtime_arguments(
+            program,
+            shared_variables.reader_kernel_id,
+            shared_variables.writer_kernel_id,
+            shared_variables.cores,
+            tensor_args,
+            tensor_return_value,
+            shared_variables.init_semaphore,
+            shared_variables.cross_device_semaphore,
+            operation_attributes.optional_cross_device_semaphore);
+    }
+}
+
+}  // namespace experimental::prim
+
+namespace {
+
+std::vector<uint32_t> data_parallel_split(
+    uint32_t token_size_bytes, const uint32_t max_packet_size_bytes, const uint32_t num_data_parallel_cores) {
+    std::vector<uint32_t> data_parallel_sizes_bytes;
+
+    const uint32_t need_data_parallel_cores =
+        std::max(num_data_parallel_cores, token_size_bytes / max_packet_size_bytes);
+    data_parallel_sizes_bytes.reserve(need_data_parallel_cores);
+
+    const uint32_t max_segment_size_bytes = token_size_bytes / need_data_parallel_cores;
+
+    for (uint32_t c = 0; c < num_data_parallel_cores; ++c) {
+        const uint32_t token_increment = std::min(token_size_bytes, max_segment_size_bytes);
+        data_parallel_sizes_bytes.push_back(token_increment);
+        token_size_bytes -= token_increment;
+
+        if (token_size_bytes == 0) {
+            break;
+        }
+    }
+
+    return data_parallel_sizes_bytes;
+}
+
+auto launch_mux_workers(
+    const MeshDevice& mesh_device,
+    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_fabric::FabricNodeId src_node_id,
+    const std::vector<MeshCoordinate>& neighbors,
+    const uint32_t num_links,
+    const uint32_t num_workers,
+    tt::tt_metal::Program& program) {
+    const auto num_header_only_channels = tt::div_up(num_workers, num_links);
+    const auto num_full_size_channels = tt::div_up(num_workers, num_links);
+    constexpr auto num_buffers_full_size_channels = 20;    // parameterize?
+    constexpr auto num_buffers_header_only_channels = 20;  // parameterize?
+
+    const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t l1_unreserved_base_address =
+        mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        num_buffers_header_only_channels,
+        buffer_size_bytes_full_size_channel,
+        l1_unreserved_base_address);
+
+    const auto needed_mux_core_range_set =
+        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
+    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        needed_mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    std::vector<std::map<MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
+    mux_neigbor_core_maps.reserve(num_links);
+
+    const auto mux_cores = corerange_to_cores(needed_mux_core_range_set);
+    auto mux_core_iter = mux_cores.begin();
+    for (uint32_t link = 0; link < num_links; ++link) {
+        std::map<MeshCoordinate, CoreCoord> mux_neigbor_core_map;
+        for (const auto& neighbor_coord : neighbors) {
+            auto mux_logical_core = *(mux_core_iter++);
+            const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
+
+            std::vector<uint32_t> mux_rt_args = {};
+            const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
+            mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                src_node_id, dst_node_id, link, program, {mux_logical_core});
+
+            tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
+            mux_neigbor_core_map[neighbor_coord] = mux_virtual_core;
+        }
+        mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
+    }
+
+    return std::make_tuple(mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps);
+}
+
+void add_termination_master_rt_args(
+    const std::vector<std::map<MeshCoordinate, CoreCoord>>& mux_neigbor_core_maps,
+    std::vector<uint32_t>& writer_runtime_args) {
+    for (const auto& m : mux_neigbor_core_maps) {
+        for (const auto& c : m) {
+            const auto& mux_virtual_core = c.second;
+            writer_runtime_args.push_back(mux_virtual_core.x);
+            writer_runtime_args.push_back(mux_virtual_core.y);
+        }
+    }
+}
+
+}  // namespace
+
+SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(
+    tt::tt_metal::Program& program,
+    const experimental::prim::SelectiveReduceCombineParams& operation_attributes,
+    const MeshCoordinate& mesh_coordinate,
+    const std::vector<MeshCoordinate>& all_mesh_coordinates,
+    const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
+    Tensor& output_tensor,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
 
-    Program program{};
-
     const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
     const auto& dense_token_counts_tensor = tensor_args.dense_token_counts_tensor;
-
-    const auto& output_tensor = tensor_return_value;
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;
     const auto select_experts_k = operation_attributes.select_experts_k;
@@ -216,12 +267,12 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto& mux_core_range_set = operation_attributes.mux_core_range_set;
 
     const auto data_parallel_sizes_bytes =
-        detail::data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
+        data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
 
     num_data_parallel_cores = data_parallel_sizes_bytes.size();
     const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
-    const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
-    const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
+    const std::vector<CoreCoord> cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
+    const ttnn::CoreRangeSet needed_worker_core_range_set(cores);
 
     // buffer padding NOT supported because we don't rely on tensor shapes to represent the data layout
     const auto token_segment_buffer_size_bytes =
@@ -284,8 +335,16 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     // launch mux
-    const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
+    const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
+
+    // semaphore will be used for syncing with selective tilize
+    const auto sync_semaphore_id = CreateSemaphore(program, needed_worker_core_range_set, 1);
+
+    const auto start_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
+    const auto end_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
@@ -296,7 +355,13 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
-        {"select_experts_k", select_experts_k}};
+        {"select_experts_k", select_experts_k},
+        {"sync_semaphore_id", sync_semaphore_id},
+        {"noc_x_start", start_coord.x},
+        {"noc_y_start", start_coord.y},
+        {"noc_x_end", end_coord.x},
+        {"noc_y_end", end_coord.y},
+    };
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
@@ -316,12 +381,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
 
     // launch writer kernel
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
-
-    const auto start_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
-    const auto end_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
-
     const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
                                     !operation_attributes.optional_cross_device_semaphore.has_value();
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
@@ -381,7 +440,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         needed_worker_core_range_set,
         writer_config);
 
-    const auto& termination_master_core = sender_cores[0];
+    const auto& termination_master_core = cores[0];
     const auto termination_master_virtual_core = mesh_device->worker_core_from_logical_core(termination_master_core);
     const auto termination_master_semaphore_id = CreateSemaphore(program, {termination_master_core}, 0);
 
@@ -389,7 +448,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-    for (const auto& sender_core : sender_cores) {
+    for (const auto& core : cores) {
         std::vector<uint32_t> reader_runtime_args = {
             dense_token_maps_tensor.buffer()->address(),    // dense_token_maps_addr
             dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
@@ -405,7 +464,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             cross_device_semaphore.address()    // global_semaphore_addr
         };
 
-        const bool is_termination_master = (sender_core == termination_master_core);
+        const bool is_termination_master = (core == termination_master_core);
         for (const auto& neighbor_coordinate : neighbors) {
             const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
 
@@ -415,7 +474,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core,
                 link_worker_idx,
-                sender_core,
+                core,
                 mux_kernel_config,
                 program,
                 termination_master_virtual_core,
@@ -425,11 +484,11 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
 
         // termination master is responsible for tearing down all mux workers, needs their coordinates
         if (is_termination_master) {
-            detail::add_termination_master_rt_args(mux_neigbor_core_maps, writer_runtime_args);
+            add_termination_master_rt_args(mux_neigbor_core_maps, writer_runtime_args);
         }
 
-        SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
-        SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
+        SetRuntimeArgs(program, ternary_reader_kernel_id, core, reader_runtime_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
 
         if (data_parallel_size_iter == data_parallel_sizes_bytes.cend()) {
             data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
@@ -446,47 +505,36 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     }
 
     return {
-        std::move(program),
-        {.reader_kernel_id = ternary_reader_kernel_id,
-         .writer_kernel_id = unary_writer_kernel_id,
-         .cores = sender_cores,
-         .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}};
+        .reader_kernel_id = ternary_reader_kernel_id,
+        .writer_kernel_id = unary_writer_kernel_id,
+        .cores = std::move(cores),
+        .init_semaphore = init_semaphore,
+        .cross_device_semaphore = cross_device_semaphore};
 }
 
-void UnifiedSelectReduce::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& coord = range.start_coord();
-        TT_FATAL(
-            coord == range.end_coord(),
-            "Expected single coordinate per program but got range of {} to {}",
-            coord,
-            range.end_coord());
+void selective_reduce_combine_helper_override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    const std::vector<CoreCoord>& cores,
+    const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
+    Tensor& output_tensor,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
+    for (const auto& core : cores) {
+        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
 
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-        const auto& reader_kernel_id = shared_variables.reader_kernel_id;
-        const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-        const auto& cores = shared_variables.cores;
+        reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
+        reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
 
-        for (const auto& core : cores) {
-            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-
-            reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
-
-            writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
-            writer_runtime_args.at(3) = (uint32_t)shared_variables.init_semaphore.address();
-
-            writer_runtime_args.at(4) = (operation_attributes.optional_cross_device_semaphore.has_value())
-                                            ? operation_attributes.optional_cross_device_semaphore->address()
-                                            : shared_variables.cross_device_semaphore.address();
-        }
+        writer_runtime_args.at(0) = output_tensor.buffer()->address();
+        writer_runtime_args.at(3) = (uint32_t)init_semaphore.address();
+        writer_runtime_args.at(4) = optional_cross_device_semaphore.has_value()
+                                        ? optional_cross_device_semaphore->address()
+                                        : cross_device_semaphore.address();
     }
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn

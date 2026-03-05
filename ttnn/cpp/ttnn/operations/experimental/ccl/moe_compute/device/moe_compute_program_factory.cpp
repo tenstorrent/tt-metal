@@ -43,6 +43,7 @@ std::tuple<
     CoreRangeSet,            // T CoreRangeSet
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
+    CoreRangeSet,            // Combine CoreRangeSet
     std::vector<CoreCoord>,  // Combine vector of CoreCoord
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
@@ -93,6 +94,7 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         tilize_core_range_set,
         matmul_core_range_set,
         tilize_matmul_core_range_set,
+        combine_core_range_set,
         combine_cores,
         tilize_bounding_box,
         matmul_bounding_box};
@@ -116,7 +118,7 @@ namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
-    constexpr auto combine_cores_return_index = 5;
+    constexpr auto combine_cores_return_index = 6;
 
     const auto get_cores_return = get_cores(mesh_device);
 
@@ -241,6 +243,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          tilize_core_range_set,
          matmul_core_range_set,
          tilize_matmul_core_range_set,
+         combine_core_range_set,
          combine_cores,
          tilize_bounding_box,
          matmul_bounding_box] = get_cores(mesh_device);
@@ -302,13 +305,22 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
-    // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
+    // Tilize drain-sync-core propogates this to the tilize non-drain-sync cores
     auto matmul_chunk_available_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
     // Tilize drain-sync core signals to all matmul cores that a full chunk is ready
     auto matmul_chunk_ready_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
+
+    //-------------------------------------------------------------------------
+    // Tilize and Combine sync semaphore
+    //-------------------------------------------------------------------------
+
+    // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
+    // that metadata is ready and task splitting can proceed.
+    [[maybe_unused]] const auto tilize_combine_sync_semaphore =
+        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split

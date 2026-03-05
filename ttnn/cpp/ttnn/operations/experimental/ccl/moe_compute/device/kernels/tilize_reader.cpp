@@ -320,16 +320,22 @@ void kernel_main() {
     constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t matmul_bounding_box_num_cores = get_named_compile_time_arg_val("matmul_bounding_box_num_cores");
 
+    // Coordinates for combine signalling seminc
+    constexpr uint32_t combine_sync_noc_x = get_named_compile_time_arg_val("combine_sync_noc_x");
+    constexpr uint32_t combine_sync_noc_y = get_named_compile_time_arg_val("combine_sync_noc_y");
+
     // Semaphores
     constexpr uint32_t partial_metadata_ready_semaphore_id =
         get_named_compile_time_arg_val("partial_metadata_ready_semaphore_id");
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
+    constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 
     uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
+    const uint32_t combine_sync_addr = get_semaphore(combine_sync_semaphore_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -930,7 +936,7 @@ void kernel_main() {
             // Wait until previous chunk arrives on the matmul cores before reading in another chunk of tokens.
             // Since both the reader and writer use NoC1, we want writer to have priority access so that chunks
             // arrive at the matmul cores earlier. Also, to do linked mcast transactions we need NoC to be completely
-            // idle during mcast. The very last wait is technically redundant since we won't be reading in another chunk
+            // idle during mcast. The very last wait is technically redundent since we won't be reading in another chunk
             // of tokens, however it's still required so we don't use NoC1 to write out the output tensors until the
             // last linked mcast completes.
             noc_semaphore_wait(
@@ -956,6 +962,15 @@ void kernel_main() {
 
     // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
     // (drain core only issued these writes)
+
     noc_async_write_barrier();
+
+    // signal to A2A combine that metadata is available
+    if (is_drain_tilize_core) {
+        const uint64_t combine_sync_noc_addr =
+            safe_get_noc_addr(combine_sync_noc_x, combine_sync_noc_y, combine_sync_addr, 1);
+        noc_semaphore_inc(combine_sync_noc_addr, 1);
+    }
+
     noc_async_atomic_barrier();
 }
