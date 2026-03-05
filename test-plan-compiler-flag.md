@@ -7,8 +7,8 @@ Branch: `ivoitovych/issue-37907-fix-fedora-toolchain-selection`
 
 This test plan covers all code paths introduced by the `--compiler` flag,
 compiler-to-toolchain mapping, and auto-detection fallback in `build_metal.sh`
-(tests 1–37), and the `--compiler` flag, `prep_redhat_system()`, `install_llvm()`
-rewrite, and warning fixes in `install_dependencies.sh` (tests 38–55).
+(tests 1–37, 59–60), and the `--compiler` flag, `prep_redhat_system()`, `install_llvm()`
+rewrite, and warning fixes in `install_dependencies.sh` (tests 38–58).
 
 `build_metal.sh` tests use `--configure-only` and PATH manipulation.
 `install_dependencies.sh` tests run in Docker containers (require root).
@@ -190,7 +190,22 @@ WARNING, ERROR).
 | # | Test | Container | Command | Expected output |
 |---|------|-----------|---------|-----------------|
 | 51 | Fedora: no extra repos | Fedora 40 | `./install_dependencies.sh --docker` | `[INFO] Preparing Red Hat family system...` then proceeds (no EPEL) |
-| 52 | Rocky: EPEL + CRB | Rocky 9 | `./install_dependencies.sh --docker` | `[INFO] Installing EPEL repository...`, `[INFO] Enabling CRB repository` |
+| 52 | AlmaLinux: EPEL + CRB | AlmaLinux 10 | `./install_dependencies.sh --docker` | `[INFO] Installing EPEL repository...`, `[INFO] Enabling CRB repository` |
+| 56 | Oracle Linux: Oracle EPEL + CRB | Oracle Linux 10 | `./install_dependencies.sh --docker` | `oracle-epel-release-el10` installed, `ol10_codeready_builder` enabled |
+
+## Section 15b: `verify_compiler()` — GCC version guard
+
+| # | Test | Container | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 57 | GCC >= 12 passes | Ubuntu 22.04 (GCC 12) | `./install_dependencies.sh --docker --compiler gcc` | `[OK] Compiler verified:` |
+| 58 | GCC < 12 rejected | System with GCC 11 | `./install_dependencies.sh --docker --compiler gcc` | `[ERROR] GCC 11 is too old. tt-metal requires GCC >= 12.`, exit 1 |
+
+## Section 15c: `use_compiler()` — C compiler derivation check (build_metal.sh)
+
+| # | Test | PATH setup | Command | Expected output |
+|---|------|-----------|---------|-----------------|
+| 59 | Missing C compiler detected | Fake `g++` in PATH, no `gcc` | `--compiler gcc --configure-only` | `ERROR: C compiler 'gcc' not found (derived from 'g++')`, exit 1 |
+| 60 | Missing C compiler (clang) | Fake `clang++` in PATH, no `clang` | `--compiler clang --configure-only` | `ERROR: C compiler 'clang' not found (derived from 'clang++')`, exit 1 |
 
 ## Section 16: Warning fixes — MPI ULFM and hugepages
 
@@ -218,6 +233,7 @@ WARNING, ERROR).
 | `find_compiler()` search | 48–56 | 1–11, 18–26, 30–33 |
 | `use_compiler()` toolchain path | 60–64 | 1, 5, 7, 9–10, 21–22, 24–25 |
 | `use_compiler()` direct path | 65–75 | 2–4, 8, 18–20, 23 |
+| `use_compiler()` C compiler guard | 74–77 | 59–60 |
 | `--compiler clang` case | 292–296 | 1–6, 30–31 |
 | `--compiler gcc` case | 297–301 | 7–11, 32–33 |
 | `--compiler` pinned (FLAG_TOOLCHAIN) | 302–304 | 12–15 |
@@ -240,13 +256,15 @@ WARNING, ERROR).
 | `install_llvm()` RedHat: distro clang INFO | 48, 50 |
 | `install_llvm()` RedHat: skip on gcc | 49 |
 | `prep_redhat_system()` Fedora: no-op | 51 |
-| `prep_redhat_system()` RHEL/Rocky: EPEL+CRB | 52 |
+| `prep_redhat_system()` RHEL/Alma: EPEL+CRB | 52 |
+| `prep_redhat_system()` Oracle: EPEL+CRB | 56 |
+| `verify_compiler()` GCC >= 12 guard | 57–58 |
 | MPI ULFM warning → INFO | 53 |
 | Hugepages warning → INFO | 54 |
 | Help text | 55 |
 
 | Script | Tests |
 |--------|-------|
-| `build_metal.sh` | 37 |
-| `install_dependencies.sh` | 18 |
-| **Total** | **55 tests** |
+| `build_metal.sh` | 39 |
+| `install_dependencies.sh` | 21 |
+| **Total** | **60 tests** |
