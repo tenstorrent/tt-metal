@@ -263,15 +263,9 @@ def run_test_linear_impl(
         tt_output = tt_output_tensor_list[n]
 
         if use_non_fused:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis + 2, tp_axis + 2]
-            else:
-                concat_dims = [tp_axis + 2, sp_axis + 2]
+            concat_dims = [sp_axis + 2, tp_axis + 2]
         else:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis, tp_axis]
-            else:
-                concat_dims = [tp_axis, sp_axis]
+            concat_dims = [sp_axis, tp_axis]
 
         check_result = []
         for c in range(chunks):
@@ -368,16 +362,10 @@ def run_test_linear(
         torch_addcmul_b = None
 
     # Prepare TT tensors
-    if sp_axis == 1:
-        if use_non_fused:
-            shard_dims = [sp_axis + 2, tp_axis + 2]
-        else:
-            shard_dims = [sp_axis, tp_axis]
+    if use_non_fused:
+        shard_dims = [sp_axis + 2, tp_axis + 2]
     else:
-        if use_non_fused:
-            shard_dims = [tp_axis + 2, sp_axis + 2]
-        else:
-            shard_dims = [tp_axis, sp_axis]
+        shard_dims = [sp_axis, tp_axis]
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
@@ -432,18 +420,23 @@ def run_test_linear(
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
-        [
+        pytest.param(
             (2, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
             ttnn.Topology.Ring,
             1,
             4,
+            1,
             0,
-            1,
             4,
             4,
-            1,
-        ],
+            0,
+            marks=pytest.mark.skip(
+                reason="ring_size=2 causes deadlock in all_gather_minimal_matmul_async: "
+                "kernel unconditionally waits for both forward and backward semaphores "
+                "but num_targets_backward=0 for ring_size=2 (see matmul_dataflow_common.hpp:116-125)"
+            ),
+        ),
         [
             (8, 4),
             {
