@@ -357,6 +357,8 @@ class MoeRoutedExpertOp:
     ):
         """
         Set up parameters and CB descriptors for a DRAM streaming matmul operation.
+        weights_tensor is the first expert's tensor (list[0]); kernel uses its buffer
+        address as base and strides by per-expert size. Single-expert K = shard_shape[0].
         When working_buf_tensor is None, CB in1 descriptor and buf_addr are deferred
         to the overlap function (backed by SDPA buffer instead).
         When output_tensor is None, CB out descriptor is deferred to overlap function.
@@ -369,6 +371,7 @@ class MoeRoutedExpertOp:
 
         subblock_k = Kt // num_subblocks_k
         assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks ({num_subblocks_k})"
+        assert subblock_k > 0, f"subblock_k is 0 (K={K}, Kt={Kt}, num_subblocks_k={num_subblocks_k})"
 
         weights_tile_size = weights_tile.get_tile_size(weights_tensor.dtype)
         in1_page_size, in1_num_pages = MoeOp.get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
@@ -1069,7 +1072,7 @@ class MoeRoutedExpertOp:
             expert_scale_mcast_data_size_bytes = index_tile_size
 
         # ==================================================================
-        # DRAM Streaming Matmul: gate_proj
+        # DRAM Streaming Matmul: gate_proj (weights_tensor = list[0], single-expert K)
         # ==================================================================
         gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
@@ -4323,7 +4326,8 @@ class MoeOp:
 
         Args:
             shared_residual_mcast_src_tensor: Input activation on sender core (provides device, dtype, K)
-            gate_proj_weights_tensor, up_proj_weights_tensor, down_proj_weights_tensor: Expert weights
+            gate_proj_weights_tensor, up_proj_weights_tensor, down_proj_weights_tensor: First expert
+            weight tensor per projection (base address; kernel strides by per-expert size)
             final_output_tensor: Final output tensor
             rmsnorm_gamma_tensor: RMSNorm gamma weights on sender core
             shared_gate_weights_overlapped: Gate proj OverlappedTensor

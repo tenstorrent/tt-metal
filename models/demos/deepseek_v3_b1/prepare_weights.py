@@ -19,7 +19,6 @@ import time
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import torch
 from loguru import logger
@@ -62,20 +61,26 @@ _FIELD_TO_FUSION_GROUP: dict[str, str] = {
 
 @dataclass
 class AttentionWeights:
-    """Attention fusion groups: q_ab_kv_a + kv_b12 + o_proj_gate_mm_norms."""
+    """Attention fusion groups: q_ab_kv_a + kv_b12 + o_proj_gate_mm_norms (no gate routing)."""
 
     q_a_proj: OverlappedTensor
     q_b_proj: OverlappedTensor
     kv_a_proj: OverlappedTensor
     o_proj: OverlappedTensor
-    gate_mm: OverlappedTensor | None  # None for dense layers
     attn_norm: OverlappedTensor
     q_norm: OverlappedTensor
     kv_norm: OverlappedTensor
     ffn_norm: OverlappedTensor
     kv_b1_proj: OverlappedTensor
     kv_b2_proj: OverlappedTensor
-    gate_bias: ttnn.Tensor | None  # e_score_correction_bias for MoE only
+
+
+@dataclass
+class GateWeights:
+    """MoE gate routing weights."""
+
+    gate_mm: OverlappedTensor
+    gate_bias: ttnn.Tensor
 
 
 @dataclass
@@ -88,17 +93,13 @@ class SharedExpertWeights:
 
 
 @dataclass
-class DenseRoutedExpertWeights:
-    """Routed expert weights for dense layers (single tensor per proj)."""
+class RoutedExpertWeights:
+    """Routed expert weights — list of tensors per projection (one per expert).
 
-    routed_gate_proj: ttnn.Tensor
-    routed_up_proj: ttnn.Tensor
-    routed_down_proj: ttnn.Tensor
-
-
-@dataclass
-class MoERoutedExpertWeights:
-    """Routed expert weights for MoE layers (list of tensors, one per expert)."""
+    Dense: 1 element per list (single mesh-sharded tensor).
+    MoE: 256 elements per list (one ttnn.Tensor per expert).
+    Kernel uses list[0].buffer_address() as base and strides by per-expert size.
+    """
 
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
@@ -107,74 +108,24 @@ class MoERoutedExpertWeights:
 
 @dataclass
 class DeepSeekV3DenseLayerWeights:
-    """Weights for a dense layer (0..first_k_dense_replace-1).
+    """Weights for a dense layer (0..first_k_dense_replace-1)."""
 
-    Has the 3 attention fusion groups and o_proj + norms (no gate_mm).
-    """
-
-    # From get_tt_q_ab_proj_and_kv_a_proj_weights
-    q_a_proj: OverlappedTensor
-    q_b_proj: OverlappedTensor
-    kv_a_proj: OverlappedTensor
-
-    # From get_tt_o_proj_and_gate_mm_weights (no gate_mm for dense)
-    o_proj: OverlappedTensor
-    attn_norm: OverlappedTensor
-    q_norm: OverlappedTensor
-    kv_norm: OverlappedTensor
-    ffn_norm: OverlappedTensor
-
-    # From get_tt_kv_b12_proj_weights
-    kv_b1_proj: OverlappedTensor
-    kv_b2_proj: OverlappedTensor
-
-    # From get_tt_mlp_shared_expert_weights
-    shared_gate_proj: OverlappedTensor
-    shared_up_proj: OverlappedTensor
-    shared_down_proj: ttnn.Tensor
-
-    # From get_tt_mlp_routed_expert_weights (1 DRAM expert per device)
-    routed_gate_proj: ttnn.Tensor
-    routed_up_proj: ttnn.Tensor
-    routed_down_proj: ttnn.Tensor
+    attention: AttentionWeights
+    shared_expert: SharedExpertWeights
+    routed_expert: RoutedExpertWeights
 
 
 @dataclass
 class DeepSeekV3MoELayerWeights:
-    """Weights for an MoE layer (first_k_dense_replace..num_layers-1).
+    """Weights for an MoE layer (first_k_dense_replace..num_layers-1)."""
 
-    Extends dense with gate_mm and shared expert projections.
-    """
+    attention: AttentionWeights
+    gate: GateWeights
+    shared_expert: SharedExpertWeights
+    routed_expert: RoutedExpertWeights
 
-    # From get_tt_q_ab_proj_and_kv_a_proj_weights
-    q_a_proj: OverlappedTensor
-    q_b_proj: OverlappedTensor
-    kv_a_proj: OverlappedTensor
 
-    # From get_tt_o_proj_and_gate_mm_weights (includes gate_mm)
-    o_proj: OverlappedTensor
-    gate_mm: OverlappedTensor
-    attn_norm: OverlappedTensor
-    q_norm: OverlappedTensor
-    kv_norm: OverlappedTensor
-    ffn_norm: OverlappedTensor
-
-    # MoE gate e_score_correction_bias (standalone)
-    gate_bias: ttnn.Tensor
-
-    # From get_tt_kv_b12_proj_weights
-    kv_b1_proj: OverlappedTensor
-    kv_b2_proj: OverlappedTensor
-
-    # From get_tt_moe_shared_expert_weights (replaces get_tt_gate_up_proj_weights)
-    shared_gate_proj: OverlappedTensor
-    shared_up_proj: OverlappedTensor
-    shared_down_proj: ttnn.Tensor
-
-    # From get_tt_moe_routed_expert_weights (256 DRAM experts)
-    routed_gate_proj: list[ttnn.Tensor]
-    routed_up_proj: list[ttnn.Tensor]
-    routed_down_proj: list[ttnn.Tensor]
+DeepSeekV3DecoderLayerWeights = DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights
 
 
 @dataclass
@@ -194,6 +145,7 @@ class DeepSeekV3LMHeadWeights:
 
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
 _NUM_HEADS = 64
+
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = 256
 _QK_NOPE_HEAD_DIM = 128
@@ -365,43 +317,6 @@ def _get_layer_raw_tensors(
     return q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm
 
 
-# Gate routing constants (bias/indices layout on sender core)
-_GATE_BIAS_INDICES_SHAPE = (16, 16)
-_GATE_NUM_INDICES = 256
-
-
-def create_gate_indices_tensor(
-    device: Any,
-    sender_core_grid: ttnn.CoreRangeSet,
-    *,
-    mesh_mapper: Any = None,
-) -> ttnn.Tensor:
-    """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core.
-
-    Same layout as gate_bias: (16, 16), HEIGHT_SHARDED, tile 16x16, uint16.
-    """
-    indices = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32).reshape(
-        _GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1]
-    )
-    transposed = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
-    shard_spec = ttnn.ShardSpec(
-        sender_core_grid,
-        _GATE_BIAS_INDICES_SHAPE,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
-    return ttnn.from_torch(
-        transposed,
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        tile=ttnn.Tile([16, 16]),
-        **kwargs,
-    )
-
-
 def prepare_attention_weights(
     bdw: BlitzDecodeWeights,
     state_dict: dict[str, torch.Tensor],
@@ -409,8 +324,10 @@ def prepare_attention_weights(
     *,
     is_moe: bool,
     move_to_device: bool = False,
-) -> AttentionWeights:
-    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
+) -> tuple[AttentionWeights, GateWeights | None]:
+    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms).
+    Returns (AttentionWeights, GateWeights | None). GateWeights is non-None only for MoE layers.
+    """
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
     t0 = time.perf_counter()
     q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = _get_layer_raw_tensors(
@@ -439,20 +356,20 @@ def prepare_attention_weights(
             move_to_device=move_to_device,
         )
         logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
-        return AttentionWeights(
+        attn = AttentionWeights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
             kv_a_proj=kv_a_proj,
             o_proj=o_proj_ot,
-            gate_mm=gate_mm_ot,
             attn_norm=attn_norm_ot,
             q_norm=q_norm_ot,
             kv_norm=kv_norm_ot,
             ffn_norm=ffn_norm_ot,
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
-            gate_bias=gate_bias_tt,
         )
+        gate = GateWeights(gate_mm=gate_mm_ot, gate_bias=gate_bias_tt)
+        return attn, gate
     else:
         gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
         o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
@@ -460,20 +377,19 @@ def prepare_attention_weights(
         )
         o_proj_ot, _gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
         logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)
-        return AttentionWeights(
+        attn = AttentionWeights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
             kv_a_proj=kv_a_proj,
             o_proj=o_proj_ot,
-            gate_mm=None,
             attn_norm=attn_norm_ot,
             q_norm=q_norm_ot,
             kv_norm=kv_norm_ot,
             ffn_norm=ffn_norm_ot,
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
-            gate_bias=None,
         )
+        return attn, None
 
 
 def prepare_shared_expert_weights(
@@ -521,8 +437,8 @@ def prepare_routed_expert_weights(
     is_moe: bool,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
-) -> DenseRoutedExpertWeights | MoERoutedExpertWeights:
-    """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts)."""
+) -> RoutedExpertWeights:
+    """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts stacked)."""
     if is_moe:
         logger.info(
             "Loading and converting {} routed experts for layer {} (this may be slow)...",
@@ -550,7 +466,7 @@ def prepare_routed_expert_weights(
             gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
         )
         logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
-        return MoERoutedExpertWeights(
+        return RoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
             routed_up_proj=routed_up_proj,
             routed_down_proj=routed_down_proj,
@@ -559,14 +475,54 @@ def prepare_routed_expert_weights(
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
         mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
-        routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
+        gate_t, up_t, down_t = bdw.get_tt_mlp_routed_expert_weights(
             mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
         )
-        return DenseRoutedExpertWeights(
-            routed_gate_proj=routed_gate_proj,
-            routed_up_proj=routed_up_proj,
-            routed_down_proj=routed_down_proj,
+        return RoutedExpertWeights(
+            routed_gate_proj=[gate_t],
+            routed_up_proj=[up_t],
+            routed_down_proj=[down_t],
         )
+
+
+def prepare_decoder_layer_weights(
+    bdw: BlitzDecodeWeights,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    *,
+    is_moe: bool,
+    move_to_device: bool = False,
+    num_routed_experts: int = NUM_ROUTED_EXPERTS,
+) -> DeepSeekV3DecoderLayerWeights:
+    """Prepare fused weights for a single decoder layer (dense or MoE)."""
+    logger.info("Preparing {} layer {}...", "MoE" if is_moe else "dense", layer_idx)
+    t0 = time.perf_counter()
+    attn, gate = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=is_moe, move_to_device=move_to_device)
+    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=is_moe, move_to_device=move_to_device)
+    routed = prepare_routed_expert_weights(
+        bdw,
+        state_dict,
+        layer_idx,
+        is_moe=is_moe,
+        num_routed_experts=num_routed_experts,
+        move_to_device=move_to_device,
+    )
+    if is_moe:
+        assert gate is not None
+        result: DeepSeekV3DecoderLayerWeights = DeepSeekV3MoELayerWeights(
+            attention=attn,
+            gate=gate,
+            shared_expert=shared,
+            routed_expert=routed,
+        )
+    else:
+        result = DeepSeekV3DenseLayerWeights(
+            attention=attn,
+            shared_expert=shared,
+            routed_expert=routed,
+        )
+    logger.info("  layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
+    return result
 
 
 def prepare_dense_layer_weights(
@@ -577,31 +533,9 @@ def prepare_dense_layer_weights(
     move_to_device: bool = False,
 ) -> DeepSeekV3DenseLayerWeights:
     """Prepare fused weights for a single dense decoder layer."""
-    logger.info("Preparing dense layer {}...", layer_idx)
-    t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
-    routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
-    assert isinstance(routed, DenseRoutedExpertWeights)
-    return DeepSeekV3DenseLayerWeights(
-        q_a_proj=attn.q_a_proj,
-        q_b_proj=attn.q_b_proj,
-        kv_a_proj=attn.kv_a_proj,
-        o_proj=attn.o_proj,
-        attn_norm=attn.attn_norm,
-        q_norm=attn.q_norm,
-        kv_norm=attn.kv_norm,
-        ffn_norm=attn.ffn_norm,
-        kv_b1_proj=attn.kv_b1_proj,
-        kv_b2_proj=attn.kv_b2_proj,
-        shared_gate_proj=shared.shared_gate_proj,
-        shared_up_proj=shared.shared_up_proj,
-        shared_down_proj=shared.shared_down_proj,
-        routed_gate_proj=routed.routed_gate_proj,
-        routed_up_proj=routed.routed_up_proj,
-        routed_down_proj=routed.routed_down_proj,
-    )
-    logger.info("  dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
+    layer = prepare_decoder_layer_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    assert isinstance(layer, DeepSeekV3DenseLayerWeights)
+    return layer
 
 
 def prepare_moe_layer_weights(
@@ -612,37 +546,15 @@ def prepare_moe_layer_weights(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer."""
-    logger.info("Preparing MoE layer {}...", layer_idx)
-    t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True)
-    routed = prepare_routed_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts
+    layer = prepare_decoder_layer_weights(
+        bdw,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_routed_experts,
     )
-    assert isinstance(attn.gate_mm, OverlappedTensor)
-    assert attn.gate_bias is not None
-    assert isinstance(routed, MoERoutedExpertWeights)
-    return DeepSeekV3MoELayerWeights(
-        q_a_proj=attn.q_a_proj,
-        q_b_proj=attn.q_b_proj,
-        kv_a_proj=attn.kv_a_proj,
-        o_proj=attn.o_proj,
-        gate_mm=attn.gate_mm,
-        attn_norm=attn.attn_norm,
-        q_norm=attn.q_norm,
-        kv_norm=attn.kv_norm,
-        ffn_norm=attn.ffn_norm,
-        gate_bias=attn.gate_bias,
-        kv_b1_proj=attn.kv_b1_proj,
-        kv_b2_proj=attn.kv_b2_proj,
-        shared_gate_proj=shared.shared_gate_proj,
-        shared_up_proj=shared.shared_up_proj,
-        shared_down_proj=shared.shared_down_proj,
-        routed_gate_proj=routed.routed_gate_proj,
-        routed_up_proj=routed.routed_up_proj,
-        routed_down_proj=routed.routed_down_proj,
-    )
-    logger.info("  MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
+    assert isinstance(layer, DeepSeekV3MoELayerWeights)
+    return layer
 
 
 def _to_tt_embedding(embedding_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
@@ -972,11 +884,14 @@ def save_attention_weights(
     layer_idx: int,
     *,
     is_moe: bool,
+    gate: GateWeights | None = None,
     hf_model_name: str = "",
     hf_state_dict_name: str = "",
     device_mesh_shape: tuple[int, int] = (1, 1),
 ) -> None:
-    """Save attention fusion groups to layer dir; merge into existing manifest if present."""
+    """Save attention fusion groups to layer dir; merge into existing manifest if present.
+    When is_moe is True, gate must be provided and gate_mm/gate_bias are saved from it.
+    """
     logger.debug("Saving attention weights for layer {}...", layer_idx)
     t0 = time.perf_counter()
     path = Path(path)
@@ -1003,12 +918,12 @@ def save_attention_weights(
         ("kv_b1_proj", attn.kv_b1_proj),
         ("kv_b2_proj", attn.kv_b2_proj),
     ]
-    if attn.gate_mm is not None:
-        field_tuples.append(("gate_mm", attn.gate_mm))
+    if gate is not None:
+        field_tuples.append(("gate_mm", gate.gate_mm))
     new_groups = _dump_overlapped_fusion_groups(layer_dir, field_tuples)
     manifest.setdefault("fusion_groups", {}).update(new_groups)
-    if attn.gate_bias is not None:
-        ttnn.dump_tensor(layer_dir / "gate_bias.tensorbin", attn.gate_bias)
+    if gate is not None:
+        ttnn.dump_tensor(layer_dir / "gate_bias.tensorbin", gate.gate_bias)
         manifest.setdefault("standalone_tensors", {})["gate_bias"] = "gate_bias.tensorbin"
     with open(layer_dir / "manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
@@ -1057,7 +972,7 @@ def save_shared_expert_weights(
 
 
 def save_routed_expert_weights(
-    routed: DenseRoutedExpertWeights | MoERoutedExpertWeights,
+    routed: RoutedExpertWeights,
     path: str | Path,
     layer_idx: int,
     *,
@@ -1066,7 +981,10 @@ def save_routed_expert_weights(
     hf_state_dict_name: str = "",
     device_mesh_shape: tuple[int, int] = (1, 1),
 ) -> None:
-    """Save routed expert weights to layer dir; merge into existing manifest if present."""
+    """Save routed expert weights to layer dir; merge into existing manifest if present.
+    MoE: experts/e_NNN/{gate,up,down}_proj.tensorbin (one dir per expert, 3 files each).
+    Dense: 1 file per projection in layer_dir (routed_gate_proj.tensorbin, etc.).
+    """
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     layer_dir = path / f"layer_{layer_idx:03d}"
@@ -1080,12 +998,10 @@ def save_routed_expert_weights(
         device_mesh_shape=device_mesh_shape,
     )
     standalone = manifest.setdefault("standalone_tensors", {})
+    logger.debug("Saving routed expert weights for layer {}...", layer_idx)
     if is_moe:
-        assert isinstance(routed, MoERoutedExpertWeights)
         num_experts = len(routed.routed_gate_proj)
         manifest["routed_experts"] = {"num_experts": num_experts}
-        logger.info("Saving {} routed experts for layer {} to disk (this may be slow)...", num_experts, layer_idx)
-        t0 = time.perf_counter()
         experts_dir = layer_dir / "experts"
         experts_dir.mkdir(parents=True, exist_ok=True)
         for e in range(num_experts):
@@ -1096,13 +1012,10 @@ def save_routed_expert_weights(
             ttnn.dump_tensor(expert_dir / "gate_proj.tensorbin", routed.routed_gate_proj[e])
             ttnn.dump_tensor(expert_dir / "up_proj.tensorbin", routed.routed_up_proj[e])
             ttnn.dump_tensor(expert_dir / "down_proj.tensorbin", routed.routed_down_proj[e])
-        logger.info("  saved {} routed experts in {:.3f}s", num_experts, time.perf_counter() - t0)
     else:
-        assert isinstance(routed, DenseRoutedExpertWeights)
-        logger.debug("Saving dense routed MLP for layer {}...", layer_idx)
-        ttnn.dump_tensor(layer_dir / "routed_gate_proj.tensorbin", routed.routed_gate_proj)
-        ttnn.dump_tensor(layer_dir / "routed_up_proj.tensorbin", routed.routed_up_proj)
-        ttnn.dump_tensor(layer_dir / "routed_down_proj.tensorbin", routed.routed_down_proj)
+        ttnn.dump_tensor(layer_dir / "routed_gate_proj.tensorbin", routed.routed_gate_proj[0])
+        ttnn.dump_tensor(layer_dir / "routed_up_proj.tensorbin", routed.routed_up_proj[0])
+        ttnn.dump_tensor(layer_dir / "routed_down_proj.tensorbin", routed.routed_down_proj[0])
         standalone["routed_gate_proj"] = "routed_gate_proj.tensorbin"
         standalone["routed_up_proj"] = "routed_up_proj.tensorbin"
         standalone["routed_down_proj"] = "routed_down_proj.tensorbin"
@@ -1111,7 +1024,7 @@ def save_routed_expert_weights(
 
 
 def save_decoder_layer(
-    layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights,
+    layer: DeepSeekV3DecoderLayerWeights,
     path: str | Path,
     layer_idx: int,
     *,
@@ -1129,42 +1042,16 @@ def save_decoder_layer(
     logger.info(f"Saving layer {layer_idx} to {layer_dir}...")
     is_moe = isinstance(layer, DeepSeekV3MoELayerWeights)
     save_decoder_layer_t0 = time.perf_counter()
-    attn = AttentionWeights(
-        q_a_proj=layer.q_a_proj,
-        q_b_proj=layer.q_b_proj,
-        kv_a_proj=layer.kv_a_proj,
-        o_proj=layer.o_proj,
-        gate_mm=getattr(layer, "gate_mm", None),
-        attn_norm=layer.attn_norm,
-        q_norm=layer.q_norm,
-        kv_norm=layer.kv_norm,
-        ffn_norm=layer.ffn_norm,
-        kv_b1_proj=layer.kv_b1_proj,
-        kv_b2_proj=layer.kv_b2_proj,
-        gate_bias=getattr(layer, "gate_bias", None),
-    )
-    shared = SharedExpertWeights(
-        shared_gate_proj=layer.shared_gate_proj,
-        shared_up_proj=layer.shared_up_proj,
-        shared_down_proj=layer.shared_down_proj,
-    )
-    if is_moe:
-        routed = MoERoutedExpertWeights(
-            routed_gate_proj=layer.routed_gate_proj,
-            routed_up_proj=layer.routed_up_proj,
-            routed_down_proj=layer.routed_down_proj,
-        )
-    else:
-        routed = DenseRoutedExpertWeights(
-            routed_gate_proj=layer.routed_gate_proj,
-            routed_up_proj=layer.routed_up_proj,
-            routed_down_proj=layer.routed_down_proj,
-        )
+    attn = layer.attention
+    shared = layer.shared_expert
+    routed = layer.routed_expert
+    gate = layer.gate if is_moe else None
     save_attention_weights(
         attn,
         path,
         layer_idx,
         is_moe=is_moe,
+        gate=gate,
         hf_model_name=hf_model_name,
         hf_state_dict_name=hf_state_dict_name,
         device_mesh_shape=device_mesh_shape,
@@ -1194,16 +1081,14 @@ def load_moe_routed_experts(
     path: str | Path,
     device,
     layer_idx: int,
-    *,
-    num_experts: int = NUM_ROUTED_EXPERTS,
-) -> MoERoutedExpertWeights:
+) -> RoutedExpertWeights:
     """Load only the routed expert weights for an MoE layer from cache.
 
     Reads experts/e_NNN/{gate,up,down}_proj.tensorbin. Since setup_fast_dispatch can
     only be used once per program, call this under setup_fast_dispatch and pass the
     result to load_moe_decoder_layer(..., preloaded_routed_experts=...). If you do
     not use fast dispatch, omit preloaded_routed_experts and load_moe_decoder_layer
-    will load experts from disk in the current dispatch mode.
+    will load from disk.
     """
     path = Path(path)
     layer_dir = path / f"layer_{layer_idx:03d}"
@@ -1214,9 +1099,9 @@ def load_moe_routed_experts(
         manifest = json.load(f)
     if manifest.get("layer_type") != "moe":
         raise ValueError(f"Layer {layer_idx} is not MoE (layer_type={manifest.get('layer_type')})")
-    num_experts = manifest.get("routed_experts", {}).get("num_experts", num_experts)
+    num_experts = manifest.get("routed_experts", {}).get("num_experts", NUM_ROUTED_EXPERTS)
     experts_dir = layer_dir / "experts"
-    logger.info("Loading {} routed experts for layer {} from cache...", num_experts, layer_idx)
+    logger.info("Loading routed experts for layer {} from cache...", layer_idx)
     t0 = time.perf_counter()
     routed_gate_proj = []
     routed_up_proj = []
@@ -1225,23 +1110,11 @@ def load_moe_routed_experts(
         if e > 0 and e % 64 == 0:
             logger.debug("  loaded experts 0..{}", e - 1)
         expert_dir = experts_dir / f"e_{e:03d}"
-        t_load_gate_t0 = time.perf_counter()
         routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
-        t_load_gate = time.perf_counter() - t_load_gate_t0
-
-        t_load_up_t0 = time.perf_counter()
         routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
-        t_load_up = time.perf_counter() - t_load_up_t0
-
-        t_load_down_t0 = time.perf_counter()
         routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
-        t_load_down = time.perf_counter() - t_load_down_t0
-
-        logger.debug(
-            f"    Loaded expert {e}: gate_proj.tensorbin in {t_load_gate:.3f}s, up_proj.tensorbin in {t_load_up:.3f}s, down_proj.tensorbin in {t_load_down:.3f}s"
-        )
     logger.info("  routed experts for layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - t0)
-    return MoERoutedExpertWeights(
+    return RoutedExpertWeights(
         routed_gate_proj=routed_gate_proj,
         routed_up_proj=routed_up_proj,
         routed_down_proj=routed_down_proj,
@@ -1299,12 +1172,12 @@ def load_dense_decoder_layer(
 
     standalone = manifest.get("standalone_tensors", {})
     shared_down_proj = ttnn.load_tensor(layer_dir / standalone["shared_down_proj"], device=device)
-    routed_gate_proj = ttnn.load_tensor(layer_dir / standalone["routed_gate_proj"], device=device)
-    routed_up_proj = ttnn.load_tensor(layer_dir / standalone["routed_up_proj"], device=device)
-    routed_down_proj = ttnn.load_tensor(layer_dir / standalone["routed_down_proj"], device=device)
+    routed_gate_proj = [ttnn.load_tensor(layer_dir / standalone["routed_gate_proj"], device=device)]
+    routed_up_proj = [ttnn.load_tensor(layer_dir / standalone["routed_up_proj"], device=device)]
+    routed_down_proj = [ttnn.load_tensor(layer_dir / standalone["routed_down_proj"], device=device)]
     logger.info("  layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - load_t0)
 
-    return DeepSeekV3DenseLayerWeights(
+    attention = AttentionWeights(
         q_a_proj=q_a_proj,
         q_b_proj=q_b_proj,
         kv_a_proj=kv_a_proj,
@@ -1315,12 +1188,21 @@ def load_dense_decoder_layer(
         ffn_norm=ffn_norm,
         kv_b1_proj=kv_b1_proj,
         kv_b2_proj=kv_b2_proj,
+    )
+    shared_expert = SharedExpertWeights(
         shared_gate_proj=shared_gate_proj,
         shared_up_proj=shared_up_proj,
         shared_down_proj=shared_down_proj,
+    )
+    routed_expert = RoutedExpertWeights(
         routed_gate_proj=routed_gate_proj,
         routed_up_proj=routed_up_proj,
         routed_down_proj=routed_down_proj,
+    )
+    return DeepSeekV3DenseLayerWeights(
+        attention=attention,
+        shared_expert=shared_expert,
+        routed_expert=routed_expert,
     )
 
 
@@ -1329,12 +1211,12 @@ def load_moe_decoder_layer(
     device,
     layer_idx: int,
     *,
-    preloaded_routed_experts: MoERoutedExpertWeights | None = None,
+    preloaded_routed_experts: RoutedExpertWeights | None = None,
 ) -> DeepSeekV3MoELayerWeights:
     """Deserialize an MoE decoder layer from <path>/layer_{layer_idx:03d}/.
 
     If preloaded_routed_experts is provided (e.g. from load_moe_routed_experts under
-    setup_fast_dispatch, which can only be used once per program), those experts are
+    setup_fast_dispatch, which can only be used once per program), those weights are
     used. Otherwise routed experts are loaded from disk in the current dispatch mode.
     Fusion groups and standalone tensors are always loaded in the current dispatch mode.
     """
@@ -1388,28 +1270,30 @@ def load_moe_decoder_layer(
     standalone = manifest.get("standalone_tensors", {})
     shared_down_proj = ttnn.load_tensor(layer_dir / standalone["shared_down_proj"], device=device)
     gate_bias = ttnn.load_tensor(layer_dir / standalone["gate_bias"], device=device)
-    routed_gate_proj = preloaded_routed_experts.routed_gate_proj
-    routed_up_proj = preloaded_routed_experts.routed_up_proj
-    routed_down_proj = preloaded_routed_experts.routed_down_proj
+    routed_expert = preloaded_routed_experts
     logger.info("  layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - load_t0)
 
-    return DeepSeekV3MoELayerWeights(
+    attention = AttentionWeights(
         q_a_proj=q_a_proj,
         q_b_proj=q_b_proj,
         kv_a_proj=kv_a_proj,
         o_proj=o_proj,
-        gate_mm=gate_mm,
         attn_norm=attn_norm,
         q_norm=q_norm,
         kv_norm=kv_norm,
         ffn_norm=ffn_norm,
-        gate_bias=gate_bias,
         kv_b1_proj=kv_b1_proj,
         kv_b2_proj=kv_b2_proj,
+    )
+    gate = GateWeights(gate_mm=gate_mm, gate_bias=gate_bias)
+    shared_expert = SharedExpertWeights(
         shared_gate_proj=shared_gate_proj,
         shared_up_proj=shared_up_proj,
         shared_down_proj=shared_down_proj,
-        routed_gate_proj=routed_gate_proj,
-        routed_up_proj=routed_up_proj,
-        routed_down_proj=routed_down_proj,
+    )
+    return DeepSeekV3MoELayerWeights(
+        attention=attention,
+        gate=gate,
+        shared_expert=shared_expert,
+        routed_expert=routed_expert,
     )
