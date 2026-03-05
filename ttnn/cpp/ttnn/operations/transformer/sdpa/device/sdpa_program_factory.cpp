@@ -585,7 +585,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         B,
         NQH,
         NKH,
-        Skt,
+        valid_Skt,  // Unpadded K tile count — enables skip-padding optimization in v2
         DHt,
         vDHt,
         Sq_chunk_t,
