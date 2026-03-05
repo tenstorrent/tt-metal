@@ -184,7 +184,6 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
-    const auto& experts_counter_tensor = tensor_return_value.at(2);
 
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
@@ -290,13 +289,6 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         /*buffering_factor=*/2,
         /*cb_id=*/tt::CBIndex::c_5,
         "metadata_tensor");
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        experts_counter_tensor,
-        /*buffering_factor=*/2,
-        /*cb_id=*/tt::CBIndex::c_6,
-        "experts_counter_tensor");
 
     // Create CB for temporary metadata buffer (used by writer kernel)
     detail::create_tensor_cb(
@@ -358,23 +350,21 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         static_cast<uint32_t>(tt::CBIndex::c_7),  // cb_metadata_temp_id
         static_cast<uint32_t>(tt::CBIndex::c_8),  // cb_packet_header_id
 
-        // Page counts (7)
+        // Page counts (6)
         detail::get_num_pages(input_tensor),
         detail::get_num_pages(indices_tensor),
         detail::get_num_pages(weights_tensor),
         detail::get_num_pages(offsets_tensor),
         detail::get_num_pages(output_tensor),
         detail::get_num_pages(metadata_tensor),
-        detail::get_num_pages(experts_counter_tensor),
 
-        // Page sizes (7)
+        // Page sizes (6)
         detail::get_page_size(input_tensor),
         detail::get_page_size(indices_tensor),
         detail::get_page_size(weights_tensor),
         detail::get_page_size(offsets_tensor),
         detail::get_page_size(output_tensor),
         detail::get_page_size(metadata_tensor),
-        detail::get_page_size(experts_counter_tensor),
 
         // Operation parameters (8)
         mesh_view.num_devices(),  // num_devices
@@ -393,14 +383,13 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         mesh_view.num_cols(),
         linearized_mesh_coord,
 
-        // Aligned page sizes (7)
+        // Aligned page sizes (6)
         detail::get_aligned_page_size(input_tensor),
         detail::get_aligned_page_size(indices_tensor),
         detail::get_aligned_page_size(weights_tensor),
         detail::get_aligned_page_size(offsets_tensor),
         detail::get_aligned_page_size(output_tensor),
         detail::get_aligned_page_size(metadata_tensor),
-        detail::get_aligned_page_size(experts_counter_tensor),
 
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
@@ -409,14 +398,13 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         static_cast<uint32_t>(topology),
     };
 
-    // Append TensorAccessorArgs for all 7 tensors
+    // Append TensorAccessorArgs for all 6 tensors
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(experts_counter_tensor.buffer()).append_to(reader_compile_time_args);
 
     std::map<std::string, std::string> reader_defines = {
         {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},
@@ -471,7 +459,6 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         offsets_tensor.buffer()->address(),
         output_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
-        experts_counter_tensor.buffer()->address(),
         (uint32_t)cross_device_semaphore.address(),
         (uint32_t)init_semaphore.address(),
         0,  // token_start_idx (set per core)
@@ -485,13 +472,13 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         std::vector<uint32_t> writer_runtime_args = reader_runtime_args;  // Copy base args
 
         // Set token range for this core
-        reader_runtime_args[9] = tokens_per_core_start;  // token_start_idx
-        reader_runtime_args[10] =
+        reader_runtime_args[8] = tokens_per_core_start;  // token_start_idx
+        reader_runtime_args[9] =
             std::min(tokens_per_core_start + tokens_per_core, (uint32_t)tokens_per_device);  // token_end_idx
-        writer_runtime_args[9] = tokens_per_core_start;
-        writer_runtime_args[10] = reader_runtime_args[10];
+        writer_runtime_args[8] = tokens_per_core_start;
+        writer_runtime_args[9] = reader_runtime_args[9];
 
-        tokens_per_core_start = reader_runtime_args[10];
+        tokens_per_core_start = reader_runtime_args[9];
 
         // Append fabric connection args for each neighbor (only if fabric is enabled)
         if (operation_attributes.num_links > 0) {
@@ -516,8 +503,8 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
                     neighbor_coordinate[0],
                     neighbor_coordinate[1],
                     sender_core,
-                    reader_runtime_args[9],
-                    reader_runtime_args[10]);
+                    reader_runtime_args[8],
+                    reader_runtime_args[9]);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     src_fabric_node_id,
                     mesh_device->get_fabric_node_id(neighbor_coordinate),
@@ -555,37 +542,34 @@ void PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::override_run
 
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
-        const auto& experts_counter_tensor = tensor_return_value.at(2);
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
 
-            // Update buffer addresses for all 7 tensors (indices 0-6)
+            // Update buffer addresses for all 6 tensors (indices 0-5)
             reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.indices_tensor.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.weights_tensor.buffer()->address();
             reader_runtime_args.at(3) = tensor_args.chip_to_n_routed_expert_offset_tensor.buffer()->address();
             reader_runtime_args.at(4) = output_tensor.buffer()->address();
             reader_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            reader_runtime_args.at(6) = experts_counter_tensor.buffer()->address();
 
-            // Update semaphore addresses (indices 7-8)
-            reader_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            reader_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
+            // Update semaphore addresses (indices 6-7)
+            reader_runtime_args.at(6) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            reader_runtime_args.at(7) = (uint32_t)shared_variables.init_semaphore.address();
 
-            // Update writer runtime args (same first 9 args)
+            // Update writer runtime args (same first 8 args)
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.indices_tensor.buffer()->address();
             writer_runtime_args.at(2) = tensor_args.weights_tensor.buffer()->address();
             writer_runtime_args.at(3) = tensor_args.chip_to_n_routed_expert_offset_tensor.buffer()->address();
             writer_runtime_args.at(4) = output_tensor.buffer()->address();
             writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            writer_runtime_args.at(6) = experts_counter_tensor.buffer()->address();
-            writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
-            writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(6) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(7) = (uint32_t)shared_variables.init_semaphore.address();
 
-            // Note: token ranges (indices 9-10) and fabric args remain unchanged
+            // Note: token ranges (indices 8-9) and fabric args remain unchanged
         }
     }
 }

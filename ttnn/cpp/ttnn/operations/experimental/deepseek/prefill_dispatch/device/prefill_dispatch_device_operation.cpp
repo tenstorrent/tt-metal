@@ -93,7 +93,6 @@ PrefillDispatchDeviceOperation::spec_return_value_t PrefillDispatchDeviceOperati
         ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
     auto dispatch_metadata_shape =
         ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
-    auto counter_shape = ttnn::Shape({1, per_device_batch, experts_per_chip});
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
@@ -104,11 +103,7 @@ PrefillDispatchDeviceOperation::spec_return_value_t PrefillDispatchDeviceOperati
         Shape(dispatch_metadata_shape),
         tt::tt_metal::TensorLayout(DataType::INT32, tt::tt_metal::PageConfig(layout), mem_config));
 
-    auto counter_spec = TensorSpec(
-        Shape(counter_shape),
-        tt::tt_metal::TensorLayout(DataType::INT32, tt::tt_metal::PageConfig(layout), mem_config));
-
-    return {dispatch_buffer_spec, dispatch_metadata_spec, counter_spec};
+    return {dispatch_buffer_spec, dispatch_metadata_spec};
 }
 
 PrefillDispatchDeviceOperation::topology_return_value_t PrefillDispatchDeviceOperation::compute_output_topologies(
@@ -117,12 +112,12 @@ PrefillDispatchDeviceOperation::topology_return_value_t PrefillDispatchDeviceOpe
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_topology = input_tensor.tensor_topology();
 
-    // All three output tensors use the same topology as the input
+    // Both output tensors use the same topology as the input
     // (sharded on dimension 0 across the mesh)
     auto output_topology = tt::tt_metal::TensorTopology(
         input_topology.distribution_shape(), input_topology.placements(), input_topology.mesh_coords());
 
-    return {output_topology, output_topology, output_topology};
+    return {output_topology, output_topology};
 }
 
 PrefillDispatchDeviceOperation::tensor_return_value_t PrefillDispatchDeviceOperation::create_output_tensors(
@@ -135,8 +130,7 @@ PrefillDispatchDeviceOperation::tensor_return_value_t PrefillDispatchDeviceOpera
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
     auto metadata_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
-    auto experts_counter_tensor = create_device_tensor(output_spec[2], tensor_args.input_tensor.device());
-    return {output_tensor, metadata_tensor, experts_counter_tensor};
+    return {output_tensor, metadata_tensor};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::prefill_dispatch

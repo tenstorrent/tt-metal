@@ -1,0 +1,402 @@
+diff --git a/models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py b/models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py
+index 2091c11f53..e515c83480 100644
+--- a/models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py
++++ b/models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py
+@@ -24,7 +24,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+ @pytest.mark.parametrize(
+     "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
+     [
+-        (512, 7168, 16, 4, 2),
++        # (512, 7168, 16, 4, 2),
++        (32, 32, 16, 4, 2),
+     ],
+ )
+ @pytest.mark.parametrize(
+@@ -85,6 +86,17 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+             id="ring-8",
+         ),
++        pytest.param(
++            (4, 2),
++            {
++                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
++                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
++            },
++            1,
++            ttnn.Topology.Linear,
++            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
++            id="mesh-4x2",
++        ),
+     ],
+     indirect=["mesh_device", "device_params"],
+ )
+diff --git a/ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp b/ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp
+index 51417eda06..636fdcb421 100644
+--- a/ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp
++++ b/ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp
+@@ -795,7 +795,7 @@ inline void send_init_semaphore_to_configured_targets(
+
+     constexpr uint32_t row = LinearizedSrcMeshCoord / MeshCols;
+     constexpr uint32_t col = LinearizedSrcMeshCoord % MeshCols;
+-
++    DPRINT << "ALO" << ENDL();
+     if constexpr (Axis == ReplicateGroup::COLS) {
+         device_begin_idx = col;
+         device_end_idx = col + MeshRows * MeshCols;
+@@ -805,18 +805,21 @@ inline void send_init_semaphore_to_configured_targets(
+         device_end_idx = row * MeshCols + MeshCols;
+         device_stride = 1;
+     }
++    DPRINT << "Axis=" << (int)Axis << " device_begin_idx=" << device_begin_idx << ", device_end_idx=" << device_end_idx << ", device_stride=" << device_stride << ENDL();
+
+     for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
+         if (device_idx == LinearizedSrcMeshCoord) {
+             continue;
+         } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+             if constexpr (is_1d_topology<Topology>()) {
++                DPRINT << (int)is_1d_topology<Topology>() << " Sending init semaphore to device_idx=" << device_idx << ENDL();
+                 fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                     LinearizedSrcMeshCoord,
+                     Topology,
+                     MeshRows,
+                     MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+             } else {
++                DPRINT << (int)is_1d_topology<Topology>() << " Sending init semaphore to device_idx=" << device_idx << ENDL();
+                 const auto& dest_chip_id = dest_chip_ids[device_idx];
+                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
+                 fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/reader_prefill_dispatch.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/reader_prefill_dispatch.cpp
+index 062376a687..c59d1034ea 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/reader_prefill_dispatch.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/reader_prefill_dispatch.cpp
+@@ -140,7 +140,7 @@ void kernel_main() {
+     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
+     const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
+     for (uint32_t token = token_start_idx; token < token_end_idx; token++) {
+-        DPRINT_DISPATCH << "Fetching token index: " << token << ENDL();
++        // DPRINT_DISPATCH << "Fetching token index: " << token << ENDL();
+         cb_reserve_back(cb_indices_id, 1);
+         cb_reserve_back(cb_weights_id, 1);
+         cb_reserve_back(cb_input_id, 1);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/writer_prefill_dispatch.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/writer_prefill_dispatch.cpp
+index 69fddb58be..daac480d45 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/writer_prefill_dispatch.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/writer_prefill_dispatch.cpp
+@@ -13,7 +13,7 @@
+ // #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+
+ // Debug print control - set to 0 to disable dispatch debug prints, 1 to enable
+-#define ENABLE_DISPATCH_DEBUG 0
++#define ENABLE_DISPATCH_DEBUG 1
+
+ #if ENABLE_DISPATCH_DEBUG
+ #define DPRINT_DISPATCH DPRINT
+@@ -120,6 +120,46 @@ void kernel_main() {
+                     << cb_offsets_id << " tokens=[" << token_start_idx << "," << token_end_idx << ")"
+                     << " hidden_size=" << hidden_size << " experts_per_chip=" << experts_per_chip << ENDL();
+
++#ifdef AXIS
++    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
++    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
++    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
++    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
++
++    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
++    // Based on cluster axis, we only need to dispatch to the devices that are along the axis
++    // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
++    // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
++    // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
++    // device_end_idx is the end of the column
++    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
++    constexpr uint32_t device_end_idx =
++        (axis == ReplicateGroup::COLS)
++            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
++            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
++    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
++#else
++    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
++    constexpr uint32_t dispatch_devices = num_devices;
++    constexpr uint32_t dispatch_index = linearized_mesh_coord;
++    constexpr uint32_t device_begin_idx = 0;
++    constexpr uint32_t device_end_idx = num_devices;
++    constexpr uint32_t device_stride = 1;
++#endif
++
++    DPRINT_DISPATCH << "dispatch_devices=" << dispatch_devices << ". axis=" << (int)axis << " mesh_rows=" << mesh_rows << " mesh_cols=" << mesh_cols << ENDL();
++    DPRINT_DISPATCH << "Fabric configuration: max_packet_size=" << fabric_max_packet_size
++                    << " l1_alignment=" << l1_alignment << " num_links=" << num_links
++                    << " topology=" << (uint32_t)topology
++                    << " device_begin_idx=" << device_begin_idx
++                    << " device_end_idx=" << device_end_idx
++                    << " device_stride=" << device_stride << ENDL();
++
++                    if constexpr (is_1d_topology<topology>()) {
++                        DPRINT_DISPATCH << "Using 1D topology fabric send" << ENDL();
++                    } else {
++                        DPRINT_DISPATCH << "Using non-1D topology fabric send" << ENDL();
++                    }
+ #ifndef DEST_CHIP_ID
+ #define DEST_CHIP_ID  // TODO
+ #endif
+@@ -158,9 +198,9 @@ void kernel_main() {
+     // Set up packet headers from CB (cb_packet_header_id from compile-time args)
+     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
+     auto* unicast_packet_header =
+-        reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
+-    auto* metadata_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
+-        packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
++        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
++    auto* metadata_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
++        packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+
+     DPRINT_DISPATCH << "DEBUG: Before open_direction_connections_barrier" << ENDL();
+     open_direction_connections_barrier(directions, fabric_connections);
+@@ -176,39 +216,14 @@ void kernel_main() {
+         src_chip_id,
+         mesh_rows,
+         mesh_cols,
+-        ReplicateGroup::NONE,  // Send to all devices
++        axis,
+         num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+     DPRINT_DISPATCH << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
+
+-#ifdef AXIS
+-    constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
+-    constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
+-    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
+-    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
+-
+-    constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
+-    // Based on cluster axis, we only need to dispatch to the devices that are along the axis
+-    // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
+-    // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
+-    // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
+-    // device_end_idx is the end of the column
+-    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
+-    constexpr uint32_t device_end_idx =
+-        (axis == ReplicateGroup::COLS)
+-            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+-            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+-    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
+-#else
+-    constexpr ReplicateGroup axis = ReplicateGroup::NONE;
+-    constexpr uint32_t dispatch_devices = num_devices;
+-    constexpr uint32_t dispatch_index = linearized_mesh_coord;
+-    constexpr uint32_t device_begin_idx = 0;
+-    constexpr uint32_t device_end_idx = num_devices;
+-    constexpr uint32_t device_stride = 1;
+-#endif
+
+     // Wait for all devices to complete fabric initialization
+-    noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
++    // noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
++    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
+     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
+
+     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
+@@ -249,10 +264,10 @@ void kernel_main() {
+         uint16_t* weights = (uint16_t*)(get_read_ptr(cb_weights_id));  // this is really a bfloat16 data
+         for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
+             auto routed_expert = indices[k];
+-            auto expert_chip = routed_expert / experts_per_chip;
++            auto expert_chip = device_begin_idx + (routed_expert / experts_per_chip) * device_stride;
+             auto expert_index_within_chip = routed_expert % experts_per_chip;
+
+-            DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")" << ENDL();
++            DPRINT_DISPATCH << "token" << token_idx <<"  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")" << ENDL();
+
+             auto& offset = offsets[routed_expert];
+
+@@ -265,7 +280,7 @@ void kernel_main() {
+                 metadata_addr_gen.get_noc_addr(0) + page_idx * aligned_metadata_page_size * 4;  // int32 = 4 bytes
+
+             if (expert_chip == linearized_mesh_coord) {
+-                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
++                // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
+                 // For local dispatch, we can directly write to the output buffer without going through the fabric
+                 noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
+                 noc_async_writes_flushed();  // is it formally needed?
+@@ -285,23 +300,23 @@ void kernel_main() {
+                 noc_async_writes_flushed();
+
+             } else {
+-                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
+-                                << " chip." << ENDL();
++                // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
++                //                 << " chip." << ENDL();
+                 if constexpr (is_1d_topology<topology>()) {
+-                    fabric_send_chip_unicast_noc_unicast_1d<
+-                        linearized_mesh_coord,
+-                        topology,
+-                        mesh_rows,
+-                        mesh_cols,
+-                        fabric_max_packet_size>(
+-                        output_addr_gen,
+-                        fabric_connections,
+-                        unicast_packet_header,
+-                        expert_chip,  // linearized_dest_mesh_coord
+-                        input_token_read_addr,
+-                        page_idx,
+-                        (int)aligned_output_page_size,  // bfloat16 = 2 bytes
+-                        l1_alignment);
++                    // fabric_send_chip_unicast_noc_unicast_1d<
++                    //     linearized_mesh_coord,
++                    //     topology,
++                    //     mesh_rows,
++                    //     mesh_cols,
++                    //     fabric_max_packet_size>(
++                    //     output_addr_gen,
++                    //     fabric_connections,
++                    //     unicast_packet_header,
++                    //     expert_chip,  // linearized_dest_mesh_coord
++                    //     input_token_read_addr,
++                    //     page_idx,
++                    //     (int)aligned_output_page_size,  // bfloat16 = 2 bytes
++                    //     l1_alignment);
+
+                     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
+                     volatile tt_l1_ptr int32_t* metadata =
+@@ -314,60 +329,25 @@ void kernel_main() {
+                     metadata[3] = routed_expert;
+                     metadata[4] = weights[k];
+
+-                    fabric_send_chip_unicast_noc_unicast_1d<
+-                        linearized_mesh_coord,
+-                        topology,
+-                        mesh_rows,
+-                        mesh_cols,
+-                        fabric_max_packet_size>(
+-                        metadata_addr_gen,
+-                        fabric_connections,
+-                        metadata_packet_header,
+-                        expert_chip,  // linearized_dest_mesh_coord
+-                        metadata_cb_addr,
+-                        page_idx,
+-                        (int)aligned_metadata_page_size,  // int32 = 4 bytes
+-                        l1_alignment);
++                    // fabric_send_chip_unicast_noc_unicast_1d<
++                    //     linearized_mesh_coord,
++                    //     topology,
++                    //     mesh_rows,
++                    //     mesh_cols,
++                    //     fabric_max_packet_size>(
++                    //     metadata_addr_gen,
++                    //     fabric_connections,
++                    //     metadata_packet_header,
++                    //     expert_chip,  // linearized_dest_mesh_coord
++                    //     metadata_cb_addr,
++                    //     page_idx,
++                    //     (int)aligned_metadata_page_size,  // int32 = 4 bytes
++                    //     l1_alignment);
++                } else {
++                    // Not implemented
++                    DPRINT << "Error: 2D topology fabric send not implemented." << ENDL();
++                    return;
+                 }
+-                // } else {
+-                // TODO:
+-                //     // Fast fail - untested path
+-                //     DPRINT << "Fabric send for non-1D topology is currently untested. Failing fast." << ENDL();
+-                //     return;
+-
+-                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+-                //         output_addr_gen,
+-                //         fabric_connections,
+-                //         unicast_packet_header,
+-                //         dest_chip_ids[expert_chip],
+-                //         dest_mesh_ids[expert_chip],
+-                //         input_token_read_addr,
+-                //         page_idx,
+-                //         (int)aligned_output_page_size * 2,  // bfloat16 = 2 bytes
+-                //         l1_alignment);
+-
+-                //     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
+-                //     volatile tt_l1_ptr int32_t* metadata =
+-                //         reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
+-
+-                //     // Set actual metadata values
+-                //     metadata[0] = linearized_mesh_coord;
+-                //     metadata[1] = token_idx;
+-                //     metadata[2] = k;
+-                //     metadata[3] = routed_expert;
+-                //     metadata[4] = weights[k];
+-
+-                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
+-                //         metadata_addr_gen,
+-                //         fabric_connections,
+-                //         metadata_packet_header,
+-                //         dest_chip_ids[expert_chip],
+-                //         dest_mesh_ids[expert_chip],
+-                //         metadata_cb_addr,
+-                //         page_idx,
+-                //         (int)aligned_metadata_page_size,  // int32 = 4 bytes
+-                //         l1_alignment);
+-                // }
+             }
+
+             offset++;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/prefill_dispatch_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/prefill_dispatch_program_factory.cpp
+index 0923f356b3..bde0c87c7d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/prefill_dispatch_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/prefill_dispatch_program_factory.cpp
+@@ -321,11 +321,13 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
+                 .set_page_size(tt::CBIndex::c_8, packet_header_size_bytes);
+         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
+
+-        log_debug(
++        log_info(
+             tt::LogOp,
+-            "Created packet header CB with size {} bytes for {} headers",
++            "Created packet header CB: packet_header_size_bytes={}, total_cb_size={}, num_headers={}, topology={}",
++            packet_header_size_bytes,
+             packet_header_cb_size,
+-            num_packet_headers);
++            num_packet_headers,
++            static_cast<int>(topology));
+     }
+     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
+     for (const auto& coord : tensor_coords.coords()) {
+@@ -450,6 +452,31 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
+         writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+     }
+
++    // // Add fabric configuration defines BEFORE kernel creation
++    // // This ensures PACKET_HEADER_TYPE is correctly sized at compile time
++    // // For 2D mesh (both rows and cols > 1), use 2D fabric packet headers
++    // auto mesh_shape = mesh_view.shape();
++    // bool is_2d_mesh = (mesh_shape[0] > 1 && mesh_shape[1] > 1);
++
++    // if (is_2d_mesh) {
++    //     // Set ROUTING_MODE for 2D Mesh with Low Latency (HybridMeshPacketHeader)
++    //     // ROUTING_MODE_2D (0x0002) | ROUTING_MODE_MESH (0x0020) | ROUTING_MODE_LOW_LATENCY (0x0080) = 0x00A2
++    //     writer_defines["ROUTING_MODE"] = "0x00A2";
++    //     writer_defines["FABRIC_2D"] = "1";
++    //     log_info(tt::LogOp, "Added 2D routing defines for kernel compilation (mesh_shape={}x{}, ROUTING_MODE=0x00A2)", mesh_shape[0], mesh_shape[1]);
++    // } else {
++    //     // Set ROUTING_MODE for 1D with Low Latency (LowLatencyPacketHeader)
++    //     // Determine if Ring or Linear based on topology
++    //     if (topology == tt::tt_fabric::Topology::Ring) {
++    //         // ROUTING_MODE_1D (0x0001) | ROUTING_MODE_RING (0x0010) | ROUTING_MODE_LOW_LATENCY (0x0080) = 0x0091
++    //         writer_defines["ROUTING_MODE"] = "0x0091";
++    //     } else {
++    //         // ROUTING_MODE_1D (0x0001) | ROUTING_MODE_LINE (0x0008) | ROUTING_MODE_LOW_LATENCY (0x0080) = 0x0089
++    //         writer_defines["ROUTING_MODE"] = "0x0089";
++    //     }
++    //     log_info(tt::LogOp, "Added 1D routing defines for kernel compilation (topology={})", static_cast<int>(topology));
++    // }
++
+     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+         program,
+         "ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/device/kernels/dataflow/"
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/prefill_dispatch.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/prefill_dispatch.cpp
+index 5e7eed5caf..0fd7714d72 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/prefill_dispatch.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek/prefill_dispatch/prefill_dispatch.cpp
+@@ -45,7 +45,7 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
+         num_links.value_or(1));
+
+     std::optional<uint32_t> axis = cluster_axis;
+-    uint32_t num_links_ = num_links.value_or(1);
++    uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
+     auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
+     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);

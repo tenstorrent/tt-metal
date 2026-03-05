@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::experimental::deepseek::prefill_dispatch {
 
-std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
+std::array<ttnn::Tensor, 2> ExecutePrefillDispatch::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,

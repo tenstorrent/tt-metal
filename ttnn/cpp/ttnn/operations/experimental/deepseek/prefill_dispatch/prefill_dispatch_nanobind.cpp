@@ -48,13 +48,12 @@ void bind_prefill_dispatch(nb::module_& mod) {
             topology (ttnn.Topology, optional): Fabric topology (Linear or Ring). Defaults to Linear. Currently only Linear is tested.
 
         Returns:
-            Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+            Tuple[ttnn.Tensor, ttnn.Tensor]:
                 - dispatched: Dispatched tokens of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
                 - metadata: Metadata tensor of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-                - experts_counter: Counter tracking tokens per expert of shape (num_chips, experts_per_chip)
 
         Example:
-            >>> dispatched, metadata, experts_counter = ttnn.experimental.deepseek.prefill_dispatch(
+            >>> dispatched, metadata = ttnn.experimental.deepseek.prefill_dispatch(
                     input_tensor,
                     weights_tensor,
                     indices_tensor,
