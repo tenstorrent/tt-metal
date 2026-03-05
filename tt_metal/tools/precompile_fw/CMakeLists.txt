@@ -37,8 +37,8 @@ add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-c
 if(TT_INSTALL)
     install(
         DIRECTORY
-            ${PROJECT_SOURCE_DIR}/pre-compiled/
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/pre-compiled
+            ${PROJECT_SOURCE_DIR}/tt_metal/pre-compiled/
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/pre-compiled
         COMPONENT metalium-runtime
     )
 endif()
