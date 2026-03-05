@@ -366,6 +366,10 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         for mm_block_m in M_Block_range:
             for mm_block_k in K_Block_range:
                 for mm_block_n in N_Block_range:
+                    # if (mm_block_m * mm_block_k * mm_block_n) % (15*32) == 0:
+                    #    logger.info(f"Reading device profiler for -------> {mm_block_m} {mm_block_k} {mm_block_n}")
+                    #    ttnn.ReadDeviceProfiler(mesh_device)
+
                     cache_key = f"M_block={mm_block_m}-K_block={mm_block_k}-N_block={mm_block_n}"
                     if cache_key in processed_cache:
                         continue
@@ -409,3 +413,5 @@ def test_minimal_matmul_strided_reduce_scatter_async(
                         )
                     except Exception as e:
                         write_error_to_file(f"{cache_key} - Error: {e}")
+
+            ttnn.ReadDeviceProfiler(mesh_device)
