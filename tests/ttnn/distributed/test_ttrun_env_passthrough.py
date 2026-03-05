@@ -211,3 +211,68 @@ def test_rank_environment_preserves_explicit_rank_override_rank_scoped_paths(mon
 
     assert env["TT_METAL_CACHE"] == "/custom/rank/cache"
     assert env["TT_METAL_LOGS_PATH"] == "/custom/rank/logs"
+
+
+# --- TT_METAL_JIT_SCRATCH tests ---
+
+
+def test_rank_environment_provides_default_jit_scratch(monkeypatch, tmp_path):
+    """When TT_METAL_JIT_SCRATCH is not set, ttrun provides /tmp/tt-jit-build
+    and rank-scopes it so each rank compiles to a local scratch directory."""
+    monkeypatch.delenv("TT_METAL_JIT_SCRATCH", raising=False)
+
+    binding = RankBinding(rank=1, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+    rank_suffix = f"{socket.gethostname()}_rank_1"
+
+    assert "TT_METAL_JIT_SCRATCH" in env
+    assert env["TT_METAL_JIT_SCRATCH"] == f"/tmp/tt-jit-build/{rank_suffix}"
+
+
+def test_rank_environment_scopes_explicit_jit_scratch(monkeypatch, tmp_path):
+    """When TT_METAL_JIT_SCRATCH is set in the parent, ttrun still rank-scopes it."""
+    monkeypatch.setenv("TT_METAL_JIT_SCRATCH", "/fast-local/jit")
+
+    binding = RankBinding(rank=3, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+    rank_suffix = f"{socket.gethostname()}_rank_3"
+
+    assert env["TT_METAL_JIT_SCRATCH"] == f"/fast-local/jit/{rank_suffix}"
+
+
+def test_rank_environment_preserves_explicit_global_env_jit_scratch(monkeypatch, tmp_path):
+    """When TT_METAL_JIT_SCRATCH is set via global_env in the config YAML, it
+    is not overridden by the default and not rank-scoped (explicit key)."""
+    monkeypatch.delenv("TT_METAL_JIT_SCRATCH", raising=False)
+
+    binding = RankBinding(rank=2, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(
+        tmp_path,
+        binding,
+        global_env={"TT_METAL_JIT_SCRATCH": "/custom/jit"},
+    )
+
+    env = get_rank_environment(binding, config)
+
+    assert env["TT_METAL_JIT_SCRATCH"] == "/custom/jit"
+
+
+def test_rank_environment_preserves_explicit_rank_override_jit_scratch(monkeypatch, tmp_path):
+    """When TT_METAL_JIT_SCRATCH is set via rank env_overrides, it is preserved."""
+    monkeypatch.delenv("TT_METAL_JIT_SCRATCH", raising=False)
+
+    binding = RankBinding(
+        rank=4,
+        mesh_id=0,
+        mesh_host_rank=0,
+        env_overrides={"TT_METAL_JIT_SCRATCH": "/rank-local/jit"},
+    )
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["TT_METAL_JIT_SCRATCH"] == "/rank-local/jit"

@@ -83,6 +83,38 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     jit_build::utils::safe_hard_link_or_copy(target, link);
 }
 
+// Merge build artifacts from a local scratch directory to the NFS cache.
+// Copies each regular file atomically: write to a temp name, then rename.
+// Skips files that are identical in size (best-effort dedup for idempotent builds).
+void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& cache_dir) {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(scratch_dir, ec)) {
+        if (ec || !entry.is_regular_file(ec) || ec) {
+            continue;
+        }
+        const auto& src = entry.path();
+        fs::path dst = fs::path(cache_dir) / src.filename();
+
+        // Write to temp, then atomically rename within the NFS cache dir
+        auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(dst);
+        std::error_code copy_ec;
+        fs::copy_file(src, tmp_path, fs::copy_options::overwrite_existing, copy_ec);
+        if (copy_ec) {
+            log_warning(
+                tt::LogBuildKernels,
+                "Failed to copy scratch artifact {} to {}: {}",
+                src.string(),
+                tmp_path,
+                copy_ec.message());
+            continue;
+        }
+        jit_build::utils::safe_rename(tmp_path, dst, false);
+    }
+    if (ec) {
+        log_warning(tt::LogBuildKernels, "Failed to iterate scratch directory {}: {}", scratch_dir, ec.message());
+    }
+}
+
 }  // namespace
 
 std::string get_default_root_path() {
@@ -308,6 +340,17 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
     this->firmware_binary_root_ = this->out_firmware_root_;
+
+    if (rtoptions.is_jit_scratch_dir_specified()) {
+        this->scratch_root_ = rtoptions.get_jit_scratch_dir();
+        this->scratch_firmware_root_ = fmt::format("{}{}/firmware/", this->scratch_root_, build_key_);
+        this->scratch_kernel_root_ = fmt::format("{}{}/kernels/", this->scratch_root_, build_key_);
+        log_debug(
+            tt::LogBuildKernels,
+            "JIT scratch enabled: compiling to {} before merging to {}",
+            this->scratch_root_,
+            this->out_root_);
+    }
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal) :
@@ -315,6 +358,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
+    scratch_path_(
+        env_.has_scratch() ? (build_config.is_fw ? env_.scratch_firmware_root_ : env_.scratch_kernel_root_) : ""),
     cflags_(env.cflags_),
     defines_(env.defines_),
     includes_(env.includes_),
@@ -572,7 +617,7 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
+    const string& out_dir, const JitBuildSettings* settings, bool state_changed, const string& check_dir) const {
     // ZoneScoped;
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
@@ -580,14 +625,18 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         this->srcs_.size(),
         kMaxBuildBitset);
 
+    // When check_dir is provided (scratch mode), cache-hit decisions use the
+    // NFS cache directory while compilation output goes to out_dir (local scratch).
+    const string& cache_check_dir = check_dir.empty() ? out_dir : check_dir;
+
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (state_changed || need_compile(out_dir, this->objs_[i])) {
+        if (state_changed || need_compile(cache_check_dir, this->objs_[i])) {
             compiled.set(i);
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
-            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", cache_check_dir, this->objs_[i]);
         }
     }
 
@@ -694,7 +743,19 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
-    std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
+
+    // NFS cache directory -- the canonical location for build artifacts and
+    // the path runtime reads binaries from.
+    std::string cache_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
+
+    // When scratch is configured, SFPI compile+link happens on local disk to
+    // avoid NFS ESTALE errors.  Results are merged to cache_dir afterwards.
+    const bool use_scratch = !scratch_path_.empty();
+    std::string work_dir = cache_dir;
+    if (use_scratch) {
+        work_dir = fmt::format("{}{}{}/", this->scratch_path_, kernel_name, this->target_name_);
+        jit_build::utils::safe_create_directories(work_dir);
+    }
 
     // If no link targets are provided, use the current build state as the only link target
     const JitBuildState* self = this;
@@ -704,13 +765,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     const size_t num_objs = this->objs_.size();
 
     // Handle race conditions in directory creation - another thread may have created it
-    jit_build::utils::safe_create_directories(out_dir);
+    jit_build::utils::safe_create_directories(cache_dir);
 
     // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
     // have changed, force full recompilation and relinking.
-    bool state_changed = !build_state_matches(out_dir);
+    bool state_changed = !build_state_matches(cache_dir);
 
-    auto compiled = compile(out_dir, settings, state_changed);
+    auto compiled = compile(work_dir, settings, state_changed, use_scratch ? cache_dir : string{});
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -719,7 +780,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             return;
         }
         for (size_t i = 0; i < num_objs; ++i) {
-            auto temp_obj = out_dir + this->temp_objs_[i];
+            auto temp_obj = work_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
                 // 1. There is no guarantee that another process will not rename its compiled object to this .o during
@@ -727,7 +788,11 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
-                hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
+                //
+                // When using scratch, cached .o files live in cache_dir (NFS) and need
+                // to be copied to work_dir (local) for the linker.
+                const auto& src_dir = use_scratch ? cache_dir : work_dir;
+                hard_link_or_copy(src_dir + this->objs_[i], temp_obj);
             }
             link_objs += temp_obj;
             link_objs += " ";
@@ -735,42 +800,70 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     };
 
     for (const auto* target : link_targets) {
-        string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
-        jit_build::utils::safe_create_directories(target_out_dir);
-        if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
+        string target_cache_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+        string target_work_dir = target_cache_dir;
+        if (use_scratch) {
+            target_work_dir = fmt::format("{}{}{}/", target->scratch_path_, kernel_name, target->target_name_);
+            jit_build::utils::safe_create_directories(target_work_dir);
+        }
+        jit_build::utils::safe_create_directories(target_cache_dir);
+
+        if (state_changed || compiled.any() || target->need_link(target_cache_dir)) {
             populate_link_objs();
-            target->link(target_out_dir, settings, link_objs);
+            target->link(target_work_dir, settings, link_objs);
             if (target->is_fw_) {
-                target->weaken(target_out_dir);
+                target->weaken(target_work_dir);
+            }
+            if (use_scratch) {
+                merge_scratch_to_cache(target_work_dir, target_cache_dir);
             }
             // Record the build state used for linking so that future runs can detect
             // when link-affecting flags (lflags, linker script, etc.) change.
-            target->write_build_state_hash(target_out_dir);
+            target->write_build_state_hash(target_cache_dir);
         }
     }
 
     if (!link_objs.empty()) {
-        // Rename the temporary .o and .dephash files after linking is done.
-        // Handle race conditions - another thread may have already renamed/removed the file
-        fs::path src_path = out_dir;
-        fs::path dst_path = out_dir;
-        for (size_t i = 0; i < num_objs; ++i) {
-            src_path.replace_filename(this->temp_objs_[i]);
-            dst_path.replace_filename(this->objs_[i]);
-            if (compiled.test(i)) {
-                jit_build::utils::safe_rename(src_path, dst_path, true);
-                src_path += ".dephash";
-                dst_path += ".dephash";
-                jit_build::utils::safe_rename(src_path, dst_path, true);
-            } else {
-                jit_build::utils::safe_remove(src_path);
+        if (use_scratch) {
+            // Merge compiled object files from scratch to NFS cache, renaming
+            // from temp names to final names in one step.
+            for (size_t i = 0; i < num_objs; ++i) {
+                fs::path scratch_temp = fs::path(work_dir) / this->temp_objs_[i];
+                fs::path cache_final = fs::path(cache_dir) / this->objs_[i];
+                if (compiled.test(i)) {
+                    hard_link_or_copy(scratch_temp, cache_final);
+                    hard_link_or_copy(
+                        fs::path(scratch_temp).concat(".dephash"), fs::path(cache_final).concat(".dephash"));
+                }
+                // Clean up scratch temp files
+                jit_build::utils::safe_remove(scratch_temp);
+                jit_build::utils::safe_remove(fs::path(scratch_temp).concat(".dephash"));
+            }
+            // Merge any remaining artifacts (log files, etc.)
+            merge_scratch_to_cache(work_dir, cache_dir);
+        } else {
+            // Rename the temporary .o and .dephash files after linking is done.
+            // Handle race conditions - another thread may have already renamed/removed the file
+            fs::path src_path = cache_dir;
+            fs::path dst_path = cache_dir;
+            for (size_t i = 0; i < num_objs; ++i) {
+                src_path.replace_filename(this->temp_objs_[i]);
+                dst_path.replace_filename(this->objs_[i]);
+                if (compiled.test(i)) {
+                    jit_build::utils::safe_rename(src_path, dst_path, true);
+                    src_path += ".dephash";
+                    dst_path += ".dephash";
+                    jit_build::utils::safe_rename(src_path, dst_path, true);
+                } else {
+                    jit_build::utils::safe_remove(src_path);
+                }
             }
         }
     }
 
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
-    extract_zone_src_locations(out_dir);
+    extract_zone_src_locations(use_scratch ? work_dir : cache_dir);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {

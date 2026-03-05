@@ -336,6 +336,7 @@ RANK_SCOPED_PATH_ENV_VARS = frozenset(
     {
         "TT_METAL_CACHE",
         "TT_METAL_LOGS_PATH",
+        "TT_METAL_JIT_SCRATCH",
     }
 )
 
@@ -540,6 +541,12 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     if "TT_METAL_CACHE" not in env and "TT_METAL_CACHE" not in explicit_rank_scoped_keys:
         home = os.environ.get("HOME", "")
         env["TT_METAL_CACHE"] = f"{home}/.cache" if home else "/tmp"
+
+    # Provide a default TT_METAL_JIT_SCRATCH so SFPI compilation writes to
+    # local disk instead of NFS.  Rank scoping (below) appends a unique
+    # per-rank suffix, eliminating cross-rank contention entirely.
+    if "TT_METAL_JIT_SCRATCH" not in env and "TT_METAL_JIT_SCRATCH" not in explicit_rank_scoped_keys:
+        env["TT_METAL_JIT_SCRATCH"] = "/tmp/tt-jit-build"
 
     # Isolate cache/log paths per rank to avoid shared-path collisions.
     apply_rank_scoped_paths(env, binding.rank, explicit_keys=explicit_rank_scoped_keys)

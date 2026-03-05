@@ -72,6 +72,10 @@ public:
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
 
+    bool has_scratch() const { return !scratch_root_.empty(); }
+    const std::string& get_scratch_firmware_root() const { return scratch_firmware_root_; }
+    const std::string& get_scratch_kernel_root() const { return scratch_kernel_root_; }
+
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
     const std::string& get_firmware_binary_root() const { return firmware_binary_root_; }
@@ -89,6 +93,13 @@ private:
     std::string out_firmware_root_;
     std::string out_kernel_root_;
     std::string firmware_binary_root_;
+
+    // Local scratch paths for hybrid map-reduce JIT builds.
+    // When set, SFPI compilation happens here (local disk) and results are
+    // merged to out_*_root_ (NFS cache) after success.
+    std::string scratch_root_;
+    std::string scratch_firmware_root_;
+    std::string scratch_kernel_root_;
 
     // Tools
     std::string gpp_;
@@ -114,6 +125,7 @@ protected:
     bool firmware_is_kernel_object_{};
 
     std::string out_path_;
+    std::string scratch_path_;  // Empty when scratch is not configured
     std::string target_name_;
     std::string target_full_path_;
 
@@ -151,8 +163,14 @@ protected:
     void write_build_state_hash(const std::string& out_dir) const;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
+    // When check_dir is non-empty, cache-hit checks (need_compile) use check_dir
+    // while actual compilation writes to out_dir.  This enables scratch-mode:
+    // check NFS cache, compile to local disk.
     std::bitset<kMaxBuildBitset> compile(
-        const std::string& out_dir, const JitBuildSettings* settings, bool state_changed) const;
+        const std::string& out_dir,
+        const JitBuildSettings* settings,
+        bool state_changed,
+        const std::string& check_dir = {}) const;
     void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;

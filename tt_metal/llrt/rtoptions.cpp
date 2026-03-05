@@ -201,6 +201,7 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_BACKEND_DUMP_RUN_CMD,  // Dump JIT build commands to stdout
+    TT_METAL_JIT_SCRATCH,           // Local scratch directory for JIT compilation (avoids NFS during build)
 };
 
 // Environment variable name for TT-Metal root directory
@@ -327,6 +328,13 @@ const std::string& RunTimeOptions::get_cache_dir() const {
         TT_THROW("Env var {} is not set.", "TT_METAL_CACHE");
     }
     return this->cache_dir_;
+}
+
+const std::string& RunTimeOptions::get_jit_scratch_dir() const {
+    if (!this->is_jit_scratch_dir_specified()) {
+        TT_THROW("Env var {} is not set.", "TT_METAL_JIT_SCRATCH");
+    }
+    return this->jit_scratch_dir_;
 }
 
 const std::string& RunTimeOptions::get_logs_dir() const { return logs_dir_; }
@@ -1376,6 +1384,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_BACKEND_DUMP_RUN_CMD=1
         case EnvVarID::TT_METAL_BACKEND_DUMP_RUN_CMD: this->dump_build_commands = is_env_enabled(value); break;
+
+        // TT_METAL_JIT_SCRATCH
+        // Local scratch directory for JIT compilation to avoid NFS ESTALE during
+        // SFPI builds.  When set, the compiler and linker write to this local
+        // directory and artifacts are merged back to the NFS cache atomically.
+        // Default: Not set (build directly to cache)
+        // Usage: export TT_METAL_JIT_SCRATCH=/tmp/tt-jit-build
+        case EnvVarID::TT_METAL_JIT_SCRATCH:
+            this->is_jit_scratch_dir_set = true;
+            this->jit_scratch_dir_ = normalize_path(value) + "/";
+            break;
     }
 }
 
