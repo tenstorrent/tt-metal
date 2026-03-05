@@ -241,7 +241,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_reduction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
