@@ -76,6 +76,10 @@ struct MaxUtilConfig {
     uint32_t l1_buffer9_addr = 0;   // rx buffer from right neighbor
     uint32_t l1_buffer10_addr = 0;  // rx buffer from down neighbor
 
+    // FPU utilization target percentage [1, 92].
+    // Passed to the compute kernel as compile-time arg 5.
+    uint32_t fpu_utilization_pct = 92;
+
     // ETH DRAM streaming fields (filled by setup_eth_stream_config before build_program).
     uint32_t eth_dram_buffer_addr = 0;  // DRAM src base address for ETH streaming
     uint32_t eth_pages_per_bank = 0;    // pages per bank read per iteration
@@ -109,6 +113,24 @@ static std::vector<uint32_t> rng_bfp16(
     return packed_results;
 }
 
+/// Reads MAX_UTIL_FPU_UTILIZATION_PCT from the environment; defaults to 92.
+/// Valid range: [1, 92].
+static uint32_t get_fpu_utilization_pct() {
+    const char* env = std::getenv("MAX_UTIL_FPU_UTILIZATION_PCT");
+    if (env != nullptr) {
+        try {
+            int val = std::stoi(env);
+            if (val >= 1 && val <= 92) {
+                return static_cast<uint32_t>(val);
+            }
+        } catch (...) {
+        }
+        log_warning(
+            LogTest, "MAX_UTIL_FPU_UTILIZATION_PCT='{}' is not an integer in [1, 92] – using default of 92", env);
+    }
+    return 92;
+}
+
 /// Returns a MaxUtilConfig that covers every compute core on @p device.
 static MaxUtilConfig full_grid_config(
     IDevice* device, uint32_t num_tiles, uint32_t num_iterations, uint32_t num_wl_loops) {
@@ -119,6 +141,7 @@ static MaxUtilConfig full_grid_config(
     cfg.num_tiles = num_tiles;
     cfg.num_iterations = num_iterations;
     cfg.num_wl_loops = num_wl_loops;
+    cfg.fpu_utilization_pct = get_fpu_utilization_pct();
     return cfg;
 }
 
@@ -425,6 +448,48 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
 }
 
 // ---------------------------------------------------------------------------
+// FPU utilization throttle map
+//
+// Maps FPU utilization percentage → cycles_to_wait between compute operations.
+// The kernel uses cycles_to_wait to insert idle cycles and throttle the FPU.
+// Fill in the values for your target architecture; keys cover the valid [1, 92]
+// range at representative intervals.
+// ---------------------------------------------------------------------------
+
+// clang-format off
+static const std::map<uint32_t, uint32_t> kFpuUtilToCyclesMap = {
+    {10,  1100},
+    {20,  500},
+    {30,  280},
+    {40,  180},
+    {50,  120},
+    {60,  75},
+    {70,  47},
+    {80,  23},
+    {90,  6},
+    {92,  0},
+};
+// clang-format on
+
+/// Returns the key in kFpuUtilToCyclesMap nearest to @p pct.
+static uint32_t nearest_fpu_pct(uint32_t pct) {
+    TT_ASSERT(!kFpuUtilToCyclesMap.empty(), "kFpuUtilToCyclesMap must not be empty");
+    auto it = kFpuUtilToCyclesMap.lower_bound(pct);
+    if (it == kFpuUtilToCyclesMap.end()) {
+        return std::prev(it)->first;
+    }
+    if (it == kFpuUtilToCyclesMap.begin() || it->first == pct) {
+        return it->first;
+    }
+    auto prev = std::prev(it);
+    return (pct - prev->first <= it->first - pct) ? prev->first : it->first;
+}
+
+/// Converts a requested FPU utilization percentage to a cycles_to_wait value
+/// by snapping to the nearest entry in kFpuUtilToCyclesMap.
+static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) { return kFpuUtilToCyclesMap.at(nearest_fpu_pct(pct)); }
+
+// ---------------------------------------------------------------------------
 // build_program – constructs the main Program
 //
 // Decoupled kernels: BRISC and NCRISC generate NOC traffic only,
@@ -490,6 +555,15 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
     // -- Compute kernel (TRISC) ---------------------------------------------
     // Uses pre-filled L1 buffers directly, no CB waits
+    const uint32_t matched_pct = nearest_fpu_pct(cfg.fpu_utilization_pct);
+    const uint32_t cycles_to_wait = fpu_pct_to_cycles_to_wait(cfg.fpu_utilization_pct);
+    log_info(
+        LogTest,
+        "FPU utilization: requested={}%  matched={}%  cycles_to_wait={}",
+        cfg.fpu_utilization_pct,
+        matched_pct,
+        cycles_to_wait);
+
     CreateKernel(
         program,
         "tests/didt/max_util_workload/kernels/max_util_compute.cpp",
@@ -504,6 +578,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                     cfg.l1_buffer2_addr,  // 2: l1_buffer2_addr (output, 8 float16_b tiles)
                     cfg.num_tiles,        // 3: num_tiles (8)
                     cfg.num_wl_loops,     // 4: num_iterations (inner loops per dispatch)
+                    cycles_to_wait,       // 5: cycles_to_wait (derived from fpu_utilization_pct)
                 },
         });
 
@@ -835,6 +910,7 @@ void max_util_smoke(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     cfg.num_tiles = 8;
     cfg.num_iterations = 1;
     cfg.num_wl_loops = 1;
+    cfg.fpu_utilization_pct = get_fpu_utilization_pct();
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
 
