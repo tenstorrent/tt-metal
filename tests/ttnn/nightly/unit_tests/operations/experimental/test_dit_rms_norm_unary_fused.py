@@ -7,10 +7,9 @@ import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
-from scripts.debug.save_tensor_csv import save_tensor_csv
 
 
-def assert_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
+def measure_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     std = torch_output.std().item()
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / std if std > 0 else 0.0
@@ -73,10 +72,10 @@ def run_dit_rms_norm_unary_fused_test(
     """
     Test helper for dit_rms_norm_unary_fused.
 
-    When sharded=False (default): uses the interleaved path (layernorm.cpp kernel).
-    When sharded=True: wraps the input in a BLOCK_SHARDED memory config and passes a
+    When shard_params=None (default): uses the interleaved path (layernorm.cpp kernel).
+    When shard_params is provided: wraps the input in a BLOCK_SHARDED memory config and passes a
     LayerNormShardedMultiCoreProgramConfig (layernorm_sharded.cpp kernel).
-    shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt) when sharded=True.
+    shard_params must be (num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt).
 
     Weight/bias tensors use shape (1, w) regardless of path.
     """
@@ -85,9 +84,7 @@ def run_dit_rms_norm_unary_fused_test(
     w = shape[-1]
     h = shape[-2]
 
-    # torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    # torch_input = torch.randint(0, 10, shape, dtype=torch.bfloat16)
-    torch_input = torch.full(shape, 2.0, dtype=torch.bfloat16)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_weight = torch.ones(shape[-1], dtype=torch.bfloat16) if use_weight else None
     torch_bias = torch.rand(shape[-1], dtype=torch.bfloat16) if use_bias else None
 
@@ -159,13 +156,7 @@ def run_dit_rms_norm_unary_fused_test(
 
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    # save_tensor_csv(tt_output_torch, "output/tt_output_torch.csv")
-    # save_tensor_csv(torch_expected, "output/torch_expected.csv")
-
-    print(f"tt_output_torch: \n{tt_output_torch}")
-    print(f"torch_expected: \n{torch_expected}")
-
-    return assert_quality(torch_expected, tt_output_torch)
+    return measure_quality(torch_expected, tt_output_torch)
 
 
 @pytest.mark.parametrize("activation", [None, "silu", ttnn.UnaryOpType.SILU], ids=["none", "silu", "UnaryOpType.SILU"])
@@ -188,9 +179,8 @@ def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation):
         ((1, 256), "small"),
         ((1, 512), "medium"),
         ((38, 4096), "dit_norm_shape"),
-        ((1, 256), "h1_non_aligned_small"),
     ],
-    ids=["small", "medium", "dit_norm_shape", "h1_non_aligned_small"],
+    ids=["small", "medium", "dit_norm_shape"],
 )
 def test_dit_rms_norm_unary_fused_basic_shapes(device, shape, name):
     """Basic shapes test with SiLU activation."""
@@ -220,10 +210,10 @@ def test_dit_rms_norm_unary_fused_wan2_shapes(device, shape, config_name):
         activation="silu",
         dtype=ttnn.bfloat16,
     )
-    # assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
-    # assert (
-    #     check_result["relative_rmse"] < 0.04
-    # ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
+    assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
+    assert (
+        check_result["relative_rmse"] < 0.04
+    ), f"[{config_name}] Relative RMSE too high: {check_result['relative_rmse']}"
 
 
 @pytest.mark.parametrize(
@@ -346,7 +336,6 @@ def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, shape, config_na
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
-    print(f"[{config_name}] PCC: {check_result['pcc']}, Relative RMSE: {check_result['relative_rmse']}")
     assert check_result["pcc"] > 0.9995, f"[{config_name}] PCC too low: {check_result['pcc']}"
     assert (
         check_result["relative_rmse"] < 0.04
@@ -365,14 +354,8 @@ def test_dit_rms_norm_unary_fused_row_major_wan2_shapes(device, shape, config_na
 )
 @pytest.mark.parametrize(
     "shape",
-    [
-        # (64, 512),
-        (512, 4096)
-    ],
-    ids=[
-        # "small",
-        "large"
-    ],
+    [(64, 512), (512, 4096)],
+    ids=["small", "large"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 def test_dit_rms_norm_unary_fused_row_major_with_tile_weights(device, use_weight, use_bias, activation, shape, dtype):
@@ -395,6 +378,7 @@ def test_dit_rms_norm_unary_fused_row_major_with_tile_weights(device, use_weight
 
 
 def test_dit_rms_one_block_bug(device):
+    """ROW_MAJOR input, single block (32x256), gamma enabled — regression test for the 1-block RM path."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
         shape=(32, 256),
@@ -408,6 +392,106 @@ def test_dit_rms_one_block_bug(device):
     assert (
         check_result["relative_rmse"] < 0.03
     ), f"[rm/w=True,b=False,None] Relative RMSE too high: {check_result['relative_rmse']}"
+
+
+# ---------------------------------------------------------------------------
+# Program-cache tests for ROW_MAJOR input path
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fresh_program_cache(device):
+    """Ensure the program cache is empty at test start and cleaned up after."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
+def _run_twice_and_check_cache(device, shape, activation, dtype=ttnn.bfloat16, fp32_dest_acc_en=False):
+    """
+    Run dit_rms_norm_unary_fused twice with identical inputs and return
+    (quality_dict, num_cache_entries_after_second_call).
+
+    The caller is responsible for setting up an isolated program cache
+    (e.g. via the fresh_program_cache fixture) before calling this helper.
+    """
+    torch.manual_seed(42)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_expected = rms_norm_golden(torch_input, 1e-5, None, None, activation)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+    tt_output = None
+    for _ in range(2):
+        tt_output = ttnn.experimental.dit_rms_norm_unary_fused(
+            tt_input,
+            epsilon=1e-5,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
+            activation=activation,
+        )
+
+    num_entries = device.num_program_cache_entries()
+    quality = measure_quality(torch_expected, ttnn.to_torch(tt_output))
+    return quality, num_entries
+
+
+@pytest.mark.parametrize(
+    "shape, name",
+    [
+        # Regular (small) RM kernel path — W small enough to fit CBs in L1.
+        ((64, 128), "small"),
+        # Uneven rows, regular kernel — 33 rows means last tile-row is partially
+        # filled (1 valid row + 31 padding rows), exercising the H_logical path.
+        ((33, 256), "uneven_rows_small"),
+    ],
+    ids=["small", "uneven_rows_small"],
+)
+def test_dit_rms_norm_unary_fused_row_major_program_cache_small(device, fresh_program_cache, shape, name):
+    """
+    ROW_MAJOR input, regular kernel path: calling the op twice must reuse the
+    cached program (num_program_cache_entries == 1) and produce correct output.
+    """
+    quality, num_entries = _run_twice_and_check_cache(device, shape, activation="silu")
+    assert num_entries == 1, f"[{name}] Expected 1 cache entry, got {num_entries}"
+    assert quality["pcc"] > 0.9995, f"[{name}] PCC too low: {quality['pcc']}"
+    assert quality["relative_rmse"] < 0.03, f"[{name}] Relative RMSE too high: {quality['relative_rmse']}"
+
+
+@pytest.mark.parametrize(
+    "shape, name",
+    [
+        # Large-tensor RM kernel path — W=5120 overflows L1 CBs, triggering the
+        # blocked reader_unary_interleaved_ln_large_tensor_rm_input.cpp path.
+        ((1584, 5120), "large"),
+        # Uneven rows with the large-tensor kernel — H=33 is not tile-aligned
+        # (1 valid tile-row + 1 partial), testing both code paths together.
+        ((33, 5120), "uneven_rows_large"),
+    ],
+    ids=["large", "uneven_rows_large"],
+)
+def test_dit_rms_norm_unary_fused_row_major_program_cache_large(device, fresh_program_cache, shape, name):
+    """
+    ROW_MAJOR input, large-tensor kernel path: calling the op twice must reuse
+    the cached program (num_program_cache_entries == 1) and produce correct output.
+    """
+    quality, num_entries = _run_twice_and_check_cache(device, shape, activation="silu")
+    assert num_entries == 1, f"[{name}] Expected 1 cache entry, got {num_entries}"
+    assert quality["pcc"] > 0.9995, f"[{name}] PCC too low: {quality['pcc']}"
+    assert quality["relative_rmse"] < 0.04, f"[{name}] Relative RMSE too high: {quality['relative_rmse']}"
 
 
 def test_dit_rms_norm_unary_fused_row_major_sharded_fatal(device):

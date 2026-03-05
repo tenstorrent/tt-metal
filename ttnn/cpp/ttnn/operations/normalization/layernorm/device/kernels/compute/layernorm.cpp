@@ -16,8 +16,6 @@
 #include "api/compute/layernorm.h"
 #ifdef TILIZE_IN
 #include "api/compute/tilize.h"
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tensix.h"
 #endif
 #ifdef UNTILIZE_OUT
 #include "api/compute/pack_untilize.h"
@@ -31,6 +29,8 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
+#include "layernorm_compute_utils.h"
+
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -38,37 +38,6 @@ namespace policies = kutil::compute::policies;
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
-
-// DEBUG
-template <typename To>
-ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
-    return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
-}
-
-// DEBUG
-void print_cb_tile(uint32_t cb, uint32_t tile_idx) {
-    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb, tile_idx);
-    for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
-        // Iterate through 16 rows within each subtile row
-        for (int local_row = 0; local_row < 16; local_row++) {
-            // Calculate the actual row in original matrix
-            int row = subtile_i * 16 + local_row;
-            // Iterate through 2x2 subtiles horizontally
-            for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
-                // Iterate through 16 columns within each subtile
-                for (int local_col = 0; local_col < 16; local_col++) {
-                    // Calculate the actual column in original matrix
-                    int col = subtile_j * 16 + local_col;
-                    // Calculate index using only multiplication and addition
-                    auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
-                    // /*element_offset=*/index);ptr
-                    PACK(DPRINT << BF16(ptr[index]) << ", ");
-                }
-            }
-            PACK(DPRINT << ENDL());
-        }
-    }  // subtile_i
-}
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -105,12 +74,6 @@ void kernel_main() {
     constexpr int dst1 = 1;
     constexpr auto scaler0 = 0;
 
-    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
-    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
-    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
-    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
-    DPRINT << "[compute] ----------------------- W=" << W << ENDL();
-
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
@@ -131,6 +94,7 @@ void kernel_main() {
     // tilize_init — doing so puts the UNPACK into binary-AB mode with SRCA=cb_in,
     // which tilize_init does not fully undo, causing tilize_block to read from
     // cb_in instead of cb_in_rm and produce garbage output).
+    // TODO: Is there another LLK that can do the same thing more explicitly?
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #else
 #ifdef RMSNORM
@@ -153,56 +117,9 @@ void kernel_main() {
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
 
-    // DEBUG:
-    DPRINT_MATH(DPRINT << "[layernorm] NCHt=" << NCHt << " Wt=" << Wt << " block_size=" << block_size << ENDL();)
-
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
-        // Tilize ROW_MAJOR input into cb_in (CB 0) one block at a time.
-        // tilize_init/uninit wrap each ncht iteration; tilize_block is called per block.
-        // DPRINT_MATH(DPRINT << "[layernorm] TILIZE_IN ncht=" << ncht << " Wt=" << Wt << " block_size=" << block_size
-        // << ENDL();)
-        reconfig_data_format(cb_in_rm, cb_in_rm);
-        pack_reconfig_data_format(cb_in);
-        tilize_init(cb_in_rm, block_size, cb_in);
-
-        uint32_t j_debug = 0;
-        for (auto block : generic::blocks(Wt, block_size)) {
-            DPRINT_MATH(DPRINT << "[layernorm] tilize_block block.start=" << block.start() << " size=" << block.size()
-                               << " full=" << block.full_block_size() << ENDL();)
-            cb_wait_front(cb_in_rm, block.full_block_size());
-            cb_reserve_back(cb_in, block.full_block_size());
-
-            // DEBUG: DO NOT REMOVE THIS CODE
-            // for (auto i : block.local()) {
-            //     DPRINT_MATH(DPRINT << "[layernorm] tilize_block j_debug=" << j_debug << ENDL();)
-            //     tile_regs_acquire();
-            //     copy_tile_to_dst_init_short(cb_in_rm);
-            //     copy_tile(cb_in_rm, i, 0);
-
-            //     dprint_tensix_dest_reg(0);
-
-            //     tile_regs_commit();
-
-            //     tile_regs_wait();
-            //     tile_regs_release();
-
-            //     j_debug++;
-            // }
-
-            // for (auto i : block.local()) {
-            //     DPRINT_PACK(DPRINT << "[layernorm] print tile i=" << i << ENDL();)
-            //     print_cb_tile(cb_in_rm, i);
-            // }
-            tilize_block(cb_in_rm, block.full_block_size(), cb_in);
-
-            PACK(DPRINT << "[layernorm] cb_in tile 0:" << ENDL(););
-            print_cb_tile(cb_in, 0);
-
-            cb_push_back(cb_in, block.full_block_size());
-            cb_pop_front(cb_in_rm, block.full_block_size());
-        }
-        tilize_uninit(cb_in_rm, cb_in);
+        tilize_all_blocks_to_cb<block_size>(cb_in_rm, cb_in, Wt);
         // Re-init binary ops after tilize hardware reconfiguration.
 #ifdef RMSNORM
         binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
@@ -409,8 +326,6 @@ void kernel_main() {
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                                                                                          // if (i == 0) {
-                    //     dprint_tensix_dest_reg(0);
-                    // }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION
@@ -428,23 +343,8 @@ void kernel_main() {
         cb_pop_front(cb_xmm, total_buffer_size);
 
 #ifdef UNTILIZE_OUT
-        // All Wt tiles for this ncht are now in cb_out (CB 16).
-        // Pack-untilize them block-by-block into cb_out_rm (CB 28) for the RM writer.
-        // pack_untilize_block<block_size, block_size> produces true row-major output in cb_out_rm:
-        //   row r starts at offset r * block_size * TILE_W * elem_size from the CB base.
-
-        reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
-
         constexpr auto cb_out_rm = tt::CBIndex::c_28;
-        pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
-        for (auto block : generic::blocks(Wt, block_size)) {
-            cb_wait_front(cb_out, block.full_block_size());
-            cb_reserve_back(cb_out_rm, block.full_block_size());
-            pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
-            cb_push_back(cb_out_rm, block.full_block_size());
-            cb_pop_front(cb_out, block.full_block_size());
-        }
-        pack_untilize_uninit(cb_out_rm);
+        untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
         // The next ncht iteration re-initialises hardware via tilize_init, so no reinit needed here.
 #endif
     }  // NCHt loop

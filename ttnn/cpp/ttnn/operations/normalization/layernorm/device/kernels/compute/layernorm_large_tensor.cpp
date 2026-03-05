@@ -22,48 +22,12 @@
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
+#include "layernorm_compute_utils.h"
+
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
-
-/*
- * Read 1 row-major block from cb_in_rm, tilize it and write to cb_in
- */
-template <typename Block>
-ALWI void tilize_row_major_block(
-    const uint32_t cb_in_rm, const uint32_t cb_in, const uint32_t block_size, const Block& block) {
-    // TODO: Figure out where tilize unpacks to (srca or srcb)
-    reconfig_data_format(cb_in_rm, cb_in_rm);
-    pack_reconfig_data_format(cb_in);
-
-    tilize_init(cb_in_rm, block_size, cb_in);
-    cb_wait_front(cb_in_rm, block.full_block_size());
-    cb_reserve_back(cb_in, block.full_block_size());
-
-    tilize_block(cb_in_rm, block.full_block_size(), cb_in);
-    cb_push_back(cb_in, block.full_block_size());
-    cb_pop_front(cb_in_rm, block.full_block_size());
-
-    tilize_uninit(cb_in_rm, cb_in);
-}
-
-/*
- * Read 1 tiled block from cb_out, pack it and write to cb_out_rm as row-major block
- */
-template <typename Block, uint32_t block_size>
-ALWI void untilize_row_major_block(const uint32_t cb_out, const uint32_t cb_out_rm, const Block& block) {
-    // TODO: Figure out where untilize unpacks to (srca or srcb)
-    reconfig_data_format(cb_out, cb_out);  // Handle fp32_dest_acc_en=True cases
-
-    pack_untilize_init<block_size, block_size>(cb_out, cb_out_rm);
-    cb_wait_front(cb_out, block.full_block_size());
-    cb_reserve_back(cb_out_rm, block.full_block_size());
-    pack_untilize_block<block_size, block_size>(cb_out, 1, cb_out_rm);
-    cb_push_back(cb_out_rm, block.full_block_size());
-    cb_pop_front(cb_out, block.full_block_size());
-    pack_untilize_uninit(cb_out_rm);
-}
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
