@@ -148,7 +148,7 @@ class MistralVisionTower(LightweightModule):
         mode = "prefill"
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
 
-        # # positional embeddings
+        # Positional embeddings
         position_ids = position_ids_in_meshgrid_tt(
             patch_embeds_list,
             max_width=self.config.vision_image_size // self.config.vision_patch_size,

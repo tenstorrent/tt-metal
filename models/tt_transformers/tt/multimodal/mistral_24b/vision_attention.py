@@ -163,7 +163,7 @@ class TtMistralImageAttention(LightweightModule):
     def forward(self, x_11SH, position_embeddings=None):
         seq_len = x_11SH.shape[-2]
 
-        MAX_MM_SEQ_LEN = seq_len
+        MAX_MM_SEQ_LEN = getattr(self.configuration, "VISION_MAX_MM_SEQ", seq_len)
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])

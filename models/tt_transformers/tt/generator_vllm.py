@@ -536,8 +536,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Image token ID for Mistral 3 - using Pixtral's image token
-        self.MISTRAL_IMAGE_TOKEN_ID = 10  # TODO: Verify this is correct for Mistral 3
+        self.MISTRAL_IMAGE_TOKEN_ID = self.model_args[0].image_token_index
         self.max_gen_len = self.model_args[0].max_seq_len - 1
 
     @classmethod
@@ -681,15 +680,8 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
             # Create vision mask to identify image token positions in the sequence
             prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
 
-            # Use create_vision_mask if available, otherwise create simple mask
             if image is not None:
-                try:
-                    from models.common.llama_models import create_vision_mask
-
-                    vision_masks.append(create_vision_mask(prompt_tokens, self.MISTRAL_IMAGE_TOKEN_ID))
-                except ImportError:
-                    # Fallback: create a simple mask marking image token positions
-                    vision_masks.append([1 if tok == self.MISTRAL_IMAGE_TOKEN_ID else 0 for tok in prompt_tokens])
+                vision_masks.append(create_vision_mask(prompt_tokens, self.MISTRAL_IMAGE_TOKEN_ID))
             else:
                 vision_masks.append(None)
 

@@ -112,6 +112,8 @@ class RMSNorm(LightweightModule):
         self.sharded_program_config = sharded_program_config
         self.output_mem_config = output_mem_config
 
+        # packer_l1_acc disabled to avoid interaction with fp32_dest_acc_en
+        # See: https://github.com/tenstorrent/tt-metal/issues/35650
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,

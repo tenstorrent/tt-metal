@@ -2753,22 +2753,16 @@ class ModelArgs:
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings.patch_embedding
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings.position_embedding
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
@@ -2779,8 +2773,6 @@ class ModelArgs:
             layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
         else:
             layer = model.vision_tower.vision_model.post_layernorm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_attention(self, layer_idx=0):
