@@ -736,7 +736,7 @@ struct CatAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            if constexpr (has_get_aligned_page_size_v<ReaderType1>) {
+            if constexpr (has_get_aligned_page_size_v<FirstReaderType>) {
                 fill_zeros_async(dst_addr, first_reader.get_aligned_page_size());
             } else {
                 fill_zeros_async(dst_addr, first_reader.page_size);
