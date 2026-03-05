@@ -49,14 +49,17 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LOGICAL_NOT_UNARY: return "SFPU_OP_LOGICAL_NOT_INCLUDE";
         case UnaryOpType::I0: return "SFPU_OP_I0_INCLUDE";
         case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
+        case UnaryOpType::ACOS:
         case UnaryOpType::ACOSH:
+        case UnaryOpType::ASIN:
+        case UnaryOpType::ASINH:
+        case UnaryOpType::ATAN:
+        case UnaryOpType::ATANH:
         case UnaryOpType::COS:
         case UnaryOpType::COSH:
-        case UnaryOpType::SINH:
         case UnaryOpType::SIN:
-        case UnaryOpType::ASINH:
-        case UnaryOpType::TAN:
-        case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
+        case UnaryOpType::SINH:
+        case UnaryOpType::TAN: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
         case UnaryOpType::XIELU: return "SFPU_OP_XIELU_INCLUDE";
