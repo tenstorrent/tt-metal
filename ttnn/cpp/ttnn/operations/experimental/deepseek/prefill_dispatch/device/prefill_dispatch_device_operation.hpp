@@ -79,9 +79,9 @@ struct PrefillDispatchDeviceOperation {
         const Tensor chip_to_n_routed_expert_offset_tensor;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
-    using topology_return_value_t = std::array<tt::tt_metal::TensorTopology, 3>;
-    using tensor_return_value_t = std::array<Tensor, 3>;
+    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using topology_return_value_t = std::array<tt::tt_metal::TensorTopology, 2>;
+    using tensor_return_value_t = std::array<Tensor, 2>;
 
     struct PrefillDispatchProgramFactory {
         struct shared_variables_t {

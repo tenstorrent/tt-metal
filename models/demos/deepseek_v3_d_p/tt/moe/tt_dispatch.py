@@ -146,7 +146,6 @@ class TtDispatchModule(LightweightModule):
         (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
-            tt_chip_to_routed_expert_tokens,
         ) = ttnn.experimental.deepseek.prefill_dispatch(
             input_tensor=x,
             weights_tensor=weights,
@@ -172,23 +171,19 @@ class TtDispatchModule(LightweightModule):
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
-        tt_chip_to_routed_expert_tokens_shape = tt_chip_to_routed_expert_tokens.shape
         logger.info(f"{tt_dispatched_buffer_shape=}")
         logger.info(f"{tt_dispatched_metadata_shape=}")
-        logger.info(f"{tt_chip_to_routed_expert_tokens_shape=}")
         # ttnn.visualize_tensor(tt_dispatch_buffer, header="Dispatch Buffer")
         # ttnn.visualize_tensor(tt_dispatch_metadata, header="Dispatch Metadata")
-        # ttnn.visualize_tensor(tt_chip_to_routed_expert_tokens, header="Chip to Routed Expert Tokens")
 
-        # chip_to_routed_expert_tokens is needed to run experts
-        # metadata and chip_to_routed_expert_tokens are needed for combine step to route expert outputs back to original token positions
+        # chip_to_routed_expert_tokens is needed to run experts and for combine step
+        # It is computed on host (not by device kernel) since it's needed before dispatch completes
 
-        # Return actual kernel outputs (no mockup)
+        # Return kernel outputs plus host-computed counter
         return (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
-            # tt_chip_to_routed_expert_tokens,
-            chip_to_routed_expert_tokens,  # needed for combine, actually comes from previous op
+            chip_to_routed_expert_tokens,  # host-computed counter needed for combine
             chip_to_n_routed_expert_offset,  # needed for testing
             cum_sum,  # needed for testing
         )

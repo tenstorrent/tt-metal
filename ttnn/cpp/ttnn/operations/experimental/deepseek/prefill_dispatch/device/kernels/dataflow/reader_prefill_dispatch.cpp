@@ -30,64 +30,60 @@ void kernel_main() {
     constexpr uint32_t cb_metadata_temp_id = get_compile_time_arg_val(4);  // Added but not used by reader
     constexpr uint32_t cb_packet_header_id = get_compile_time_arg_val(5);  // Added but not used by reader
 
-    // Page counts (indices 6-12)
+    // Page counts (indices 6-11)
     constexpr uint32_t input_pages = get_compile_time_arg_val(6);
     constexpr uint32_t indices_pages = get_compile_time_arg_val(7);
     constexpr uint32_t weights_pages = get_compile_time_arg_val(8);
     constexpr uint32_t offsets_pages = get_compile_time_arg_val(9);
     constexpr uint32_t output_pages = get_compile_time_arg_val(10);
     constexpr uint32_t metadata_pages = get_compile_time_arg_val(11);
-    constexpr uint32_t experts_counter_pages = get_compile_time_arg_val(12);
 
-    // Page sizes (indices 13-19)
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(13);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(14);
-    constexpr uint32_t weights_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(17);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(18);
-    constexpr uint32_t experts_counter_page_size = get_compile_time_arg_val(19);
+    // Page sizes (indices 12-17)
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t indices_page_size = get_compile_time_arg_val(13);
+    constexpr uint32_t weights_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(17);
 
-    // Operation parameters (indices 20-27)
-    constexpr uint32_t num_devices = get_compile_time_arg_val(20);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(21);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(22);
-    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(23);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(24);
-    constexpr uint32_t metadata_len = get_compile_time_arg_val(25);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(26);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(27);
+    // Operation parameters (indices 18-25)
+    constexpr uint32_t num_devices = get_compile_time_arg_val(18);
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(19);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(20);
+    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(21);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(22);
+    constexpr uint32_t metadata_len = get_compile_time_arg_val(23);
+    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(24);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(25);
 
-    // Mesh information (indices 28-32)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(32);
+    // Mesh information (indices 26-30)
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(26);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(27);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(28);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(29);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(30);
 
-    // Aligned page sizes (indices 33-39)
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(33);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(35);
-    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(37);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(38);
-    constexpr uint32_t aligned_experts_counter_page_size = get_compile_time_arg_val(39);
+    // Aligned page sizes (indices 31-36)
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(31);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(32);
+    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(33);
+    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(34);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(35);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
 
-    // Fabric configuration (indices 40-43)
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(40);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(41);
-    constexpr uint32_t num_links = get_compile_time_arg_val(42);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(43);
+    // Fabric configuration (indices 37-40)
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(38);
+    constexpr uint32_t num_links = get_compile_time_arg_val(39);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(40);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 44)
-    constexpr auto input_args = TensorAccessorArgs<44>();
+    // TensorAccessorArgs for all 6 tensors (starting at index 41)
+    constexpr auto input_args = TensorAccessorArgs<41>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    constexpr auto experts_counter_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
@@ -97,7 +93,6 @@ void kernel_main() {
     uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_args++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args++);
-    uint32_t experts_counter_tensor_address = get_arg_val<uint32_t>(rt_args++);
     uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args++);
