@@ -16,12 +16,8 @@ Tenstorrent implementation of [Stable Diffusion XL Base 1.0](https://huggingface
 ### Supported Architectures
 - Wormhole N150
 - Wormhole N300
-- Wormhole T3000
+- Wormhole LoudBox/QuietBox
 - Wormhole Galaxy
-- Blackhole p100/p150
-- Blackhole p300
-- Blackhole T3000
-- Blackhole Galaxy
 
 ## Directory structure
 stable_diffusion_xl_base/</br>
@@ -42,7 +38,7 @@ stable_diffusion_xl_base/</br>
 
 Example usage:
 ```
-TT_MM_THROTTLE_PERF=5 pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
+pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
   -k "device_vae and device_encoders and with_trace and no_cfg_parallel and 1024x1024"
 ```
 
@@ -96,7 +92,7 @@ Runs the UNet simultaneously for the positive and negative prompt on 2 chips, pr
 
 usage example:
 ```
-TT_MM_THROTTLE_PERF=5 pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
+pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
 -k "device_vae and device_encoders and with_trace and use_cfg_parallel"
 ```
 
@@ -119,7 +115,7 @@ Device performance measured on Wormhole N150 (single UNet iteration):
 | CLIP encoder 1 | resolution independent | ~13.1 |
 | CLIP encoder 2 | resolution independent | ~63.6 |
 
-## E2E Performance per Architecture (SDXL base)
+## E2E Performance per Architecture (SDXL base, 20 unet iterations)
 
 | Architecture | CFG Parallel | E2E time (s) |
 |---|---|---|
