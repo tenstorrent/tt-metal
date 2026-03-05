@@ -8,6 +8,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/pack_untilize.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -62,7 +63,11 @@ void kernel_main() {
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
+#ifdef TILIZE_FUSED
+    constexpr auto cb_c2s_out = tt::CBIndex::c_14;  // untilized ROW_MAJOR output
+#else
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+#endif
 
     // Constants for MoEGPT
     // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles
@@ -163,10 +168,13 @@ void kernel_main() {
     uint32_t chunk_ready_wait_value = 1;
     bool use_second_half_buffer = false;
 
+    constexpr uint32_t source_width_tiles = moe_gpt_ring::SOURCE_WIDTH_TILES;  // 8
+
     uint32_t total_chunks_processed = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
 
+        // Phase 1: SwiGLU chunks for this expert
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for dm1 to finish reading previous chunk's output from cb_s2c_in2
             // before we overwrite it with this chunk's output
@@ -233,11 +241,71 @@ void kernel_main() {
             use_second_half_buffer = !use_second_half_buffer;
             total_chunks_processed++;
         }
+
+        // Phase 2: A2A + W2 matmul + untilize for this expert
+        // dm1 does A2A ring rotation, compute does W2 matmul + untilize.
+        cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
+
+        for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+            uint32_t dm1_step = 0;
+            uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
+            cb_wait_front(cb_w2c_rdy, 1);
+
+            // 6-buffer cycling: each A2A step uses buf (step % 6)
+            uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
+
+            tile_regs_acquire();
+
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+
+                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    if (dm1_tiles_remaining == 0) {
+                        cb_pop_front(cb_w2c_rdy, 1);
+                        cb_wait_front(cb_w2c_rdy, 1);
+                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                        in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
+                        in2_offset = in2_buf * tiles_per_step;
+                        in2_index = in2_offset;
+                    }
+                    dm1_tiles_remaining--;
+
+                    matmul_block(
+                        cb_s2c_in2,
+                        cb_r2c_w2,
+                        in2_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                }
+                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+            }
+
+            cb_pop_front(cb_w2c_rdy, 1);
+
+            tile_regs_commit();
+
+            // Untilize W2 output to cb_c2s_out (ROW_MAJOR)
+            tile_regs_wait();
+            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
+            pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(
+                cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+            pack_untilize_uninit(cb_c2s_out);
+            tile_regs_release();
+        }
+
+        cb_push_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
+
+        // Reinit packer for next expert's SwiGLU pack_tile calls
+        pack_reconfig_data_format(cb_s2c_in2);
     }
 
-    // Drain pipeline: dm0 pushes extra blocks at end
-    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    // Drain W2 pipeline: dm0 pushes extra blocks at end
+    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
 
 #else
     // NON-FUSED MODE: Standard expert loop with A2A

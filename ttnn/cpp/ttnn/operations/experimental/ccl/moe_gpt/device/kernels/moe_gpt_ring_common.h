@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <algorithm>
+#include <array>
 
 //=============================================================================
 // MoEGPT Ring All-to-All Configuration for GPT-OSS
@@ -153,5 +154,33 @@ constexpr uint32_t NUM_A2A_ITERS_B = *std::max_element(
                                          W2_TILES_PER_CORE_B + NUM_CORES,
                                          [](uint32_t a, uint32_t b) { return (a / 2) < (b / 2); }) /
                                      4;
+
+// Tokens per chunk (1 tile height)
+constexpr uint32_t TOKENS_PER_CHUNK = 32;
+
+// Combine output constants
+constexpr uint32_t COMBINE_WIDTH_SHARD_DIM = 3;
+constexpr uint32_t COMBINE_HEIGHT_SHARD_DIM = 4;
+constexpr uint32_t K_TILES = NUM_W0_W1_TILES_H;  // 90
+
+// Ring cores per combine column: 12 / 3 = 4
+constexpr uint32_t RING_CORES_PER_COMBINE_COL = NUM_CORES / COMBINE_WIDTH_SHARD_DIM;
+
+// Combine shard width in tiles: 90 / 3 = 30
+constexpr uint32_t COMBINE_SHARD_WIDTH_TILES = K_TILES / COMBINE_WIDTH_SHARD_DIM;
+
+// Source width tiles (max tiles per core for untilize page sizing)
+constexpr uint32_t SOURCE_WIDTH_TILES = IN2_TILES_PER_STEP_A;  // 8
+
+// Precomputed combine width offset per ring core (for output shard placement)
+constexpr std::array<uint32_t, NUM_CORES> COMBINE_W_OFFSET_PER_CORE_A = []() constexpr {
+    std::array<uint32_t, NUM_CORES> arr = {};
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < NUM_CORES; ++i) {
+        arr[i] = sum;
+        sum += W2_TILES_PER_CORE_A[i];
+    }
+    return arr;
+}();
 
 }  // namespace moe_gpt_ring

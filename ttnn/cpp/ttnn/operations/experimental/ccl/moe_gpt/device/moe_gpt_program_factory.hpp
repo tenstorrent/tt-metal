@@ -19,11 +19,17 @@ struct MoEGPTSharedVariables {
     // Kernel handles (tilize)
     std::vector<tt::tt_metal::KernelHandle> tilize_kernel_handles;
 
+    // Kernel handle (combine dm1, fused mode only)
+    std::optional<tt::tt_metal::KernelHandle> combine_kernel_handle;
+
     // Matmul cores
     std::vector<CoreCoord> worker_cores;
 
     // Tilize cores
     std::vector<CoreCoord> tilize_cores;
+
+    // Combine cores (fused mode only)
+    std::vector<CoreCoord> combine_cores;
 };
 
 struct MoEGPTProgramFactory {

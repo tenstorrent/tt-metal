@@ -930,14 +930,15 @@ def run_test_moe_gpt_tilize_matmul(
     experts_total,
 ):
     """
-    Integration test: tilize → W0/W1 matmul → SwiGLU (fused mode).
+    Integration test: tilize → W0/W1 matmul → SwiGLU → A2A → W2 → combine (fused mode).
 
     Invokes the op with tilize inputs but WITHOUT tilize_output, triggering
     the fused path where tilized chunks are multicast directly to matmul
-    cores.  The SwiGLU output is written to DRAM via enable_dram_output.
+    cores.  The full pipeline output (W2 matmul result) is written to
+    BLOCK_SHARDED combine cores.
 
-    Verifies the DRAM output against a torch reference:
-      tilize → per-expert W0/W1 matmul → SwiGLU
+    Verifies the combine output against a torch reference:
+      tilize → per-expert W0/W1 matmul → SwiGLU → W2 matmul
     """
     torch.manual_seed(42)
     random.seed(42)
@@ -1088,16 +1089,57 @@ def run_test_moe_gpt_tilize_matmul(
     )
 
     # ------------------------------------------------------------------
-    # Pre-allocate DRAM output tensor for SwiGLU result [E, 1, M, K]
+    # Pre-allocate BLOCK_SHARDED combine output on combine cores
+    # Combine grid: 3x4 at CoreRange({1,0},{3,3})
+    # Shard shape: [E * M / height_shard_dim, K / width_shard_dim] = [32, 960]
     # ------------------------------------------------------------------
-    dram_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    dram_out_torch = torch.zeros((E, 1, M, K), dtype=torch.bfloat16)
-    tt_dram_output = ttnn.from_torch(
-        dram_out_torch,
+    combine_width_shard_dim = 3
+    combine_height_shard_dim = 4
+    combine_shard_h = E * M // combine_height_shard_dim  # 4*32/4 = 32
+    combine_shard_w = K // combine_width_shard_dim  # 2880/3 = 960
+
+    # Dynamically find a 3x4 combine core range that avoids matmul (DRAM-bank) cores
+    # Must match the algorithm in moe_gpt_program_factory.cpp
+    bank_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.RISCV_0_default)
+    matmul_core_set = {(c.x, c.y) for c in bank_cores}
+    worker_grid = device.compute_with_storage_grid_size()
+    combine_core_range = None
+    for sy in range(worker_grid.y - combine_height_shard_dim + 1):
+        for sx in range(worker_grid.x - combine_width_shard_dim + 1):
+            valid = all(
+                (sx + dx, sy + dy) not in matmul_core_set
+                for dy in range(combine_height_shard_dim)
+                for dx in range(combine_width_shard_dim)
+            )
+            if valid:
+                combine_core_range = ttnn.CoreRange(
+                    ttnn.CoreCoord(sx, sy),
+                    ttnn.CoreCoord(sx + combine_width_shard_dim - 1, sy + combine_height_shard_dim - 1),
+                )
+                break
+        if combine_core_range is not None:
+            break
+    assert combine_core_range is not None, "Could not find 3x4 combine core range avoiding matmul cores"
+    logger.info(f"Selected combine core range: {combine_core_range}")
+    combine_core_range_set = ttnn.CoreRangeSet([combine_core_range])
+
+    combine_shard_spec = ttnn.ShardSpec(
+        grid=combine_core_range_set,
+        shard_shape=(combine_shard_h, combine_shard_w),
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    combine_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, combine_shard_spec
+    )
+
+    # Create the output tensor: [E * M, K] = [128, 2880] ROW_MAJOR BLOCK_SHARDED
+    combine_out_torch = torch.zeros((E * M, K), dtype=torch.bfloat16)
+    tt_combine_output = ttnn.from_torch(
+        combine_out_torch,
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=dram_mem_config,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=combine_mem_config,
     )
 
     # ------------------------------------------------------------------
@@ -1111,7 +1153,7 @@ def run_test_moe_gpt_tilize_matmul(
         num_experts=E,
         layer_id=0,
         enable_dram_output=True,
-        dram_output_tensor=tt_dram_output,
+        dram_output_tensor=tt_combine_output,
         sparse_buffer=tt_sparse,
         expert_indices=tt_indices,
         expert_scores=tt_scores,
@@ -1120,13 +1162,13 @@ def run_test_moe_gpt_tilize_matmul(
     )
 
     # ------------------------------------------------------------------
-    # Read back DRAM output
+    # Read back BLOCK_SHARDED combine output
     # ------------------------------------------------------------------
-    tt_dram_result = ttnn.to_torch(tt_dram_output)
-    tt_dram_result = tt_dram_result.reshape(E, M, K)
+    tt_combine_result = ttnn.to_torch(tt_combine_output)
+    tt_combine_result = tt_combine_result.reshape(E * M, K)
 
     # ------------------------------------------------------------------
-    # Torch reference: tilize → per-expert W0/W1 matmul → SwiGLU
+    # Torch reference: tilize → per-expert W0/W1 matmul → SwiGLU → W2
     # ------------------------------------------------------------------
     ref_tilized, per_expert_counts = tilize_reference(
         sparse_torch,
@@ -1154,14 +1196,16 @@ def run_test_moe_gpt_tilize_matmul(
         padded_input = torch.zeros(M, K, dtype=torch.bfloat16)
         padded_input[:count, :] = expert_input
 
-        # Torch reference: W0/W1 matmul + SwiGLU
+        # Torch reference: W0/W1 matmul + SwiGLU + W2 matmul
         with torch.no_grad():
             gate = padded_input @ torch_w0[0, e]  # [M, N]
             up = padded_input @ torch_w1[0, e]  # [M, N]
-            reference = swiglu_reference(gate, up)  # [M, N]
+            swiglu_out = swiglu_reference(gate, up)  # [M, N]
+            reference = swiglu_out @ torch_w2[0, e]  # [M, K]
 
-        # Extract device result for this expert
-        tt_expert_result = tt_dram_result[e, :, :]  # [M, K]
+        # Extract device result for this expert from combine output
+        # Each expert occupies M rows: [e*M : (e+1)*M, :]
+        tt_expert_result = tt_combine_result[e * M : (e + 1) * M, :]  # [M, K]
 
         metrics = get_accuracy_metrics(reference, tt_expert_result)
         pcc = metrics["pcc"]
