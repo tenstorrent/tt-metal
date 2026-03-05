@@ -349,13 +349,8 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         memory_config=in1_memory_config,
     )
 
-    # Output: L1 width-sharded memory config using padded dimensions
-    out_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, m, n_padded],
-        core_grid=out_core_grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+    # Output: L1 width-sharded (shard spec computed by the op)
+    out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
     # Program config
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
