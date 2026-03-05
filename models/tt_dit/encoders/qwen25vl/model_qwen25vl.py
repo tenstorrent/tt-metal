@@ -490,7 +490,7 @@ def optimal_groups(group_count: int, group_size: int, device_count: int) -> tupl
     # 3. Split groups into smaller groups defined by a split factor.
     # For a particular split factor, padding sizes follow from the requirements that the padded
     # group size must be divisible by this factor and the new group count must be divisible by the
-    # device count. We choose this factor such that memory requirments are minimized.
+    # device count. We choose this factor such that memory requirements are minimized.
 
     best_split_factor = 1
     best_size = math.inf

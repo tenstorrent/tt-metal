@@ -121,6 +121,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         tt::tt_metal::SetRuntimeArgs(program_, subordinate_kernel_id, worker_core, subordinate_rt_args);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> out_buf(data_buffer_size);
         for (size_t i = 0; i < n_cbs; i++) {
