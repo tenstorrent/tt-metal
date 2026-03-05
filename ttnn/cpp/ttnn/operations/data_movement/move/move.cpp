@@ -21,7 +21,7 @@ bool can_deallocate(const Tensor& input_tensor) {
     if (is_cpu_tensor(input_tensor)) {
         return false;
     }
-    return input_tensor.device_storage().mesh_buffer.use_count() == 1;
+    return input_tensor.device_storage().get_mesh_buffer_leak_ownership().use_count() == 1;
 }
 
 static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
@@ -34,13 +34,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
         // TODO: Should this throw error?
         return input_tensor;
     }
-    // Special handling for Mesh vs single device. Needs to be consolidated after full
-    // migration
-    if (input_tensor.device_storage().mesh_buffer) {
-        input_tensor.device_storage().mesh_buffer->deallocate();
-    } else {
-        DeallocateBuffer(*input_tensor.buffer());
-    }
+    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {
         output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
@@ -119,14 +113,7 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    // Special handling for Mesh vs single device. Needs to be consolidated after full
-    // migration
-
-    if (input_tensor.device_storage().mesh_buffer) {
-        input_tensor.device_storage().mesh_buffer->deallocate();
-    } else {
-        DeallocateBuffer(*input_tensor.buffer());
-    }
+    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();
     if (mem_config) {
