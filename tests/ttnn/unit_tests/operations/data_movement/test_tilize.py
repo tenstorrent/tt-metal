@@ -247,3 +247,37 @@ def test_run_tilize_large_row_input(device, input_shape):
 
     output = ttnn.to_torch(halos_rm)
     assert_equal(input, output)
+
+
+@pytest.mark.parametrize("shape", [(1, 7168, 2304)])
+@pytest.mark.parametrize("shard_shape", [(7168, 192)])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat4_b])
+@pytest.mark.parametrize("torch_dtype", [torch.float32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
+    device, shape, shard_shape, ttnn_dtype, torch_dtype, layout
+):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch_dtype)
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    ttnn_result_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+    )
+
+    ttnn_output_tensor = ttnn.tilize(ttnn_result_tensor)
+
+    ttnn.synchronize_device(device)
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_result_tensor)
+    assert_equal(torch_input_tensor, ttnn_output_tensor)

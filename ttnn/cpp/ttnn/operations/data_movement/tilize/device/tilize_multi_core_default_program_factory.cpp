@@ -75,7 +75,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-        "reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "reader_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
