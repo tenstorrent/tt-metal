@@ -28,6 +28,7 @@ struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> limit = {0};
     std::array<::experimental::PackedTileCounter, 4> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
+    bool broadcast_tc = false;  // DM-DM BLOCKED producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;
     uint32_t consumer_tcs = 0;
     uint8_t remapper_consumer_ids_mask = 0;
