@@ -83,7 +83,7 @@ void kernel_main() {
     constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
     constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
     static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
-    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
+    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #else
     // Runtime loop: read packed pairs from L1 tensor
