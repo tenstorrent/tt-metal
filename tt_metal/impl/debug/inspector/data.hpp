@@ -7,7 +7,9 @@
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include <deque>
+#include <array>
+#include <atomic>
+#include <cstddef>
 
 namespace tt::tt_metal::inspector {
 
@@ -60,7 +62,9 @@ private:
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
-    std::deque<inspector::MeshWorkloadRuntimeEntry> runtime_entries;
+    static constexpr size_t kRuntimeEntriesCapacity = 10000;
+    std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
+    std::atomic<size_t> runtime_entries_write_pos{0};
     // store dispatch core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_core_info;
     // store dispatch_s core info by virtual core

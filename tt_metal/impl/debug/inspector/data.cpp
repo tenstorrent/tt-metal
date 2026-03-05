@@ -179,13 +179,18 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 void Data::rpc_get_mesh_workload_runtime_entries(
     rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
     std::lock_guard<std::mutex> lock(runtime_entries_mutex);
-    auto all_runtime_entries = results.initRuntimeEntries(runtime_entries.size());
-    for (size_t i = 0; i < runtime_entries.size(); ++i) {
+    auto write_pos = runtime_entries_write_pos.load(std::memory_order_relaxed);
+    size_t count = std::min(write_pos, kRuntimeEntriesCapacity);
+    size_t start = write_pos - count;
+
+    auto all_runtime_entries = results.initRuntimeEntries(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& re = runtime_entries[(start + i) % kRuntimeEntriesCapacity];
         auto entry = all_runtime_entries[i];
-        entry.setWorkloadId(runtime_entries[i].workload_id);
-        entry.setRuntimeId(runtime_entries[i].runtime_id);
-        entry.setOperationName(std::string(runtime_entries[i].operation_name));
-        entry.setOperationParameters(stringify_tensor_specs(runtime_entries[i].tensor_specs));
+        entry.setWorkloadId(re.workload_id);
+        entry.setRuntimeId(re.runtime_id);
+        entry.setOperationName(std::string(re.operation_name));
+        entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
     }
 }
 

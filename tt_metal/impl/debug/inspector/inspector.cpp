@@ -357,17 +357,16 @@ void Inspector::emit_debug_entry(
         auto* data = get_inspector_data();
         const auto workload_id = mesh_workload->get_id();
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
-        data->runtime_entries.emplace_back(workload_id, runtime_id, operation_name, std::move(tensor_specs));
-        static constexpr size_t max_entries = 9500;
-        static constexpr size_t evict_threshold = 10000;
-        if (data->runtime_entries.size() > evict_threshold) {
-            while (data->runtime_entries.size() > max_entries) {
-                data->runtime_entries.pop_front();
-            }
-        }
+        auto pos = data->runtime_entries_write_pos.load(std::memory_order_relaxed);
+        auto& slot = data->runtime_entries[pos % inspector::Data::kRuntimeEntriesCapacity];
+        slot.workload_id = workload_id;
+        slot.runtime_id = runtime_id;
+        slot.operation_name = operation_name;
+        slot.tensor_specs = std::move(tensor_specs);
+        data->runtime_entries_write_pos.store(pos + 1, std::memory_order_relaxed);
 
         if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
-            data->logger.log_runtime_entry(data->runtime_entries.back());
+            data->logger.log_runtime_entry(slot);
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to emit debug entry: {}", e.what());
