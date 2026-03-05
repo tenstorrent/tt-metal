@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -14,7 +13,7 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 
 
 def _create_sharded_memory_configs(device, shape):
-    """Create HEIGHT_SHARDED DRAM and L1 memory configs for a 4D ROW_MAJOR tensor."""
+    """Create HEIGHT_SHARDED DRAM and L1 memory configs for tensor."""
     ndim = len(shape)
     total_height = 1
     for i in range(ndim - 1):
@@ -92,10 +91,10 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations, use_trace
 
     run_profiler_key = f"run_model_pipeline_{num_command_queues}cqs"
     profiler.start(run_profiler_key)
-    outputs = pipeline.enqueue(host_inputs).pop_all()
+    pipeline.enqueue(host_inputs).pop_all()
     profiler.end(run_profiler_key)
 
-    logger.info("Performance measurement complete (PCC validation skipped for perf test)")
+    logger.info("Performance measurement complete")
 
     pipeline.cleanup()
 
@@ -125,7 +124,6 @@ def run_perf_e2e_atss_swinl_dyhead(
         resolution=resolution,
         inputs_mesh_mapper=inputs_mesh_mapper,
         outputs_mesh_composer=output_mesh_composer,
-        input_path=".models/experimental/atss_swin_l_dyhead/demo/horse_dog.jpg",
     )
 
     num_measurement_iterations = 2

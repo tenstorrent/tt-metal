@@ -209,8 +209,6 @@ class TtATSSModel:
 
         cls_scores_ttnn, bbox_preds_ttnn, centernesses_ttnn = self.head(ttnn_feats)
 
-        # Head returns NHWC (1, H, W, C); postprocess expects NCHW (1, C, H, W).
-        # Single-device: use to_torch without mesh_composer for correct host copy.
         to_torch_kw = {} if self.output_mesh_composer is None else {"mesh_composer": self.output_mesh_composer}
         cls_scores = [
             ttnn.to_torch(ttnn.from_device(x), **to_torch_kw).float().permute(0, 3, 1, 2) for x in cls_scores_ttnn
