@@ -442,6 +442,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     }
 
     if (input_is_row_major) {
+        reader_defines.emplace_back("TILIZE_IN", "1");
         compute_defines.emplace_back("TILIZE_IN", "1");
         compute_defines.emplace_back("UNTILIZE_OUT", "1");
     }
@@ -460,21 +461,21 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (input_is_row_major) {
         reader_kernel_path = large_tensor_needed
                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor_rm_input.cpp"
+                                   "reader_unary_interleaved_ln_large_tensor_rm_and_tile.cpp"
                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_rm_input.cpp";
+                                   "reader_unary_interleaved_ln_rm_and_tile.cpp";
     } else if (large_tensor_needed) {
         reader_kernel_path = use_welford_and_not_rms_norm
                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                    "reader_unary_interleaved_ln_large_tensor_welford.cpp"
                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor.cpp";
+                                   "reader_unary_interleaved_ln_large_tensor_rm_and_tile.cpp";
     } else {
         reader_kernel_path = use_row_major_kernel
                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                    "reader_unary_interleaved_ln_rm_gb.cpp"
                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln.cpp";
+                                   "reader_unary_interleaved_ln_rm_and_tile.cpp";
     }
 
     // Build compute args
@@ -541,9 +542,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
         uint32_t tile_offset = curr_row * Wt;
 
-        // For rm_input readers, arg[3] is start_row (absolute starting row for this core).
-        // For tile readers, arg[3] is tile_offset (curr_row * Wt).
-        const uint32_t reader_start = input_is_row_major ? curr_row * TILE_HEIGHT : tile_offset;
+        // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified arg[3] = start_tile_row = curr_row.
+        // Legacy kernels (welford large-tensor, rm_gb) still expect tile_offset = curr_row * Wt.
+        const bool using_legacy_tile_reader =
+            (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
+        const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
 
         std::vector<uint32_t> reader_args = {
             a_addr,
