@@ -550,6 +550,10 @@ public:
 
     size_t get_configured_risc_count() const;
 
+    // Returns the resolved kernel build optimization level for this router.
+    // This opt-level is per-builder/router, and should not be shared across builders.
+    [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
+
     void dump_to_log() const {
         // TODO
     }
