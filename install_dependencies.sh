@@ -358,8 +358,9 @@ prep_redhat_system() {
 
     echo "[INFO] Enabling CRB repository for development packages..."
     dnf config-manager --set-enabled crb 2>/dev/null || \
+        dnf config-manager --set-enabled ol10_codeready_builder 2>/dev/null || \
         dnf config-manager --set-enabled powertools 2>/dev/null || \
-        echo "[WARNING] Could not enable CRB/PowerTools repository"
+        echo "[WARNING] Could not enable CRB/CodeReady Builder repository"
 }
 
 # Download and install official LLVM binary tarball from GitHub releases.
