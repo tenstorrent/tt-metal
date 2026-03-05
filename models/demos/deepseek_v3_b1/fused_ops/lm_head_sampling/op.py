@@ -137,6 +137,7 @@ class LMHeadSampling:
         rsqrt_fast_approx=False,
         skip_ccl=None,
         socket_output=None,
+        fabric_config=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -313,6 +314,7 @@ class LMHeadSampling:
             chunk_size_bytes=None,
             bcast_cb_id=bcast_pkt_cb,
             num_links=num_links,
+            fabric_config=fabric_config,
         )
 
         # Create mesh program descriptor

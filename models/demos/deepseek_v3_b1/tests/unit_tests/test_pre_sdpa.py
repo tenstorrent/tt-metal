@@ -63,6 +63,7 @@ def test_pre_sdpa(
     num_iters,
     position_id,
     noc_mode,
+    device_params,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
     num_devices = mesh_rows * mesh_cols
@@ -583,6 +584,7 @@ def test_pre_sdpa(
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
             noc_mode=noc_mode,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 

@@ -54,7 +54,7 @@ def _is_lm_head_sampling_perf_enabled():
     indirect=True,
 )
 def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
-    bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters
+    bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, device_params
 ):
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
@@ -244,6 +244,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
         fabric_scratch_tensor=scratch_buffers[0],
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -266,6 +267,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
             fabric_scratch_tensor=scratch_buffers[i % num_iters],
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -289,6 +291,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_perf(
             fabric_scratch_tensor=scratch_buffers[i],
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -341,6 +344,7 @@ def test_lm_head_sampling_fused_argmax_single_device(
     bh_2d_mesh_device,
     use_fp32,
     seed,
+    device_params,
 ):
     """Single-device fused LM-head + argmax sampling with pre-cached width-sharded indices."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
@@ -476,6 +480,7 @@ def test_lm_head_sampling_fused_argmax_single_device(
         semaphores=None,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=True,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -504,6 +509,7 @@ def test_lm_head_sampling_fused_argmax_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
     seed,
+    device_params,
 ):
     """Single-device fused LM-head + argmax with optional D2H token emission enabled."""
     if not is_slow_dispatch():
@@ -646,6 +652,7 @@ def test_lm_head_sampling_fused_argmax_single_device_d2h(
         fp32_dest_acc_en=use_fp32,
         skip_ccl=True,
         socket_output=d2h_socket,
+        fabric_config=device_params["fabric_config"],
     )
 
     output_index_torch = ttnn.to_torch(ttnn_output_index).to(torch.uint32).reshape(1, 1)
@@ -689,6 +696,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
     use_fp32,
     final_mesh_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh fused LM-head + k=1 sampling (argmax) with CCL enabled."""
     mesh_rows, mesh_cols = 4, 2
@@ -869,6 +877,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x(
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -901,6 +910,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2h(
     use_fp32,
     final_mesh_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh fused LM-head + argmax with optional D2H token emission on final mesh device."""
     if not is_slow_dispatch():
@@ -1088,6 +1098,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2h(
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
         socket_output=d2h_socket,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -1132,6 +1143,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
     use_fp32,
     final_mesh_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh fused LM-head + argmax with D2D output routed through D2D forwarding to D2H."""
     if not is_slow_dispatch():
@@ -1396,6 +1408,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_d2d_to_d2h_pipeline(
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
         socket_output=socket_interface.get_upstream_socket(),
+        fabric_config=device_params["fabric_config"],
     )
     d2h_page_words = socket_page_size_bytes // 4
     d2h_read_tensor = ttnn.from_torch(

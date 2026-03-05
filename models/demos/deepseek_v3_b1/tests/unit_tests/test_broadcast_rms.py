@@ -61,6 +61,7 @@ def test_broadcast_rms_fused(
     num_iters,
     num_links,
     use_socket,
+    device_params,
 ):
     num_devices = mesh_rows * mesh_cols
 
@@ -217,6 +218,7 @@ def test_broadcast_rms_fused(
         semaphores,
         num_links=num_links,
         socket=recv_socket if use_socket else None,
+        fabric_config=device_params["fabric_config"],
     )
 
     if use_socket:

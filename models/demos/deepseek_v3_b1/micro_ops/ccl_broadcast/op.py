@@ -202,6 +202,20 @@ class BroadcastConfig:
         - For torus-enabled axis, both minus/plus 1-hop candidates exist and we pick
           the one with smaller wrapped distance to target; ties choose + direction.
 
+        4x4 non-torus reference (root = R at (1,1)):
+
+            row 0:  (0,0) <- (0,1)    (0,2) <- (0,3)
+                      ^        ^        ^        ^
+            row 1:  (1,0) <-  R  ->  (1,2) -> (1,3)
+                      |                 |        |
+            row 2:  (2,0)    (2,1)    (2,2)    (2,3)
+                      |        |        |        |
+            row 3:  (3,0)    (3,1)    (3,2)    (3,3)
+
+          Parent map intuition:
+          - root row (row 1): chain away from root in X (left side uses <-, right side uses ->)
+          - other rows: stay in same column and move toward row 1 in Y
+
         8x4 example (root = R at (0,0)):
 
             FABRIC_2D (no wrap):

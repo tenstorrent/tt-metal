@@ -192,6 +192,7 @@ class PreSDPA:
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        fabric_config=None,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -576,6 +577,7 @@ class PreSDPA:
             chunk_size_bytes=None,
             bcast_cb_id=bcast_cb_id,
             num_links=num_links,
+            fabric_config=fabric_config,
         )
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
@@ -2333,6 +2335,7 @@ class PreSDPA:
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        fabric_config=None,
     ):
         io_tensors = [
             input_tensor_mesh,
@@ -2380,6 +2383,7 @@ class PreSDPA:
             fp32_dest_acc_en,
             skip_ccl,
             noc_mode,
+            fabric_config,
         )
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
