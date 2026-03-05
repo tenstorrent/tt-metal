@@ -348,6 +348,7 @@ public:
 
     bool is_worker_core(const CoreCoord& core, ChipId chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, ChipId chip_id) const;
+    bool is_dram_core(const CoreCoord& core, ChipId chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
