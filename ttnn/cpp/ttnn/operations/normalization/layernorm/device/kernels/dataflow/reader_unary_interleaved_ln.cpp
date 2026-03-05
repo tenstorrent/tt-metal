@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 // Merged reader kernel for layernorm / dit_rms_norm_unary_fused (standard / non-large-tensor path).

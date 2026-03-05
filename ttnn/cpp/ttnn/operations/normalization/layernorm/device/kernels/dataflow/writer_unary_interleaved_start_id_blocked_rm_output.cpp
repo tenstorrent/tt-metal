@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 // Writer kernel for layernorm with ROW_MAJOR output.
