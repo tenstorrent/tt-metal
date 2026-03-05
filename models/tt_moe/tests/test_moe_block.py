@@ -129,7 +129,16 @@ def test_forward_pass(
 
         # Initialize with RANDOM weights (matching test_modules.py)
         # Use a fixed seed for reproducibility between reference and TT
+        # Set multiple seeds for complete determinism
+        import random
+
+        import numpy as np
+
+        random.seed(42)
+        np.random.seed(42)
         torch.manual_seed(42)
+        torch.use_deterministic_algorithms(True)  # Ensure deterministic algorithms
+
         with torch.no_grad():
             for name, param in reference_layer.named_parameters():
                 if any(proj in name for proj in ["router", "experts", "sinks"]):
@@ -149,6 +158,12 @@ def test_forward_pass(
         from models.demos.gpt_oss.utils.substate import substate
 
         state_dict = substate(full_layer_state, "mlp")
+
+        # INSTRUMENTATION: Log the extracted state dict
+        logger.info(f"[TEST] Extracted MLP state_dict keys: {list(state_dict.keys())}")
+        for key, value in state_dict.items():
+            if hasattr(value, "shape"):
+                logger.info(f"[TEST]   {key}: shape={value.shape}, dtype={value.dtype}")
 
         # Replace hf_config with pt_config for GPT-OSS backend
         hf_config = pt_config
@@ -171,6 +186,11 @@ def test_forward_pass(
     # - DeepSeek: [batch=1, seq_len=num_tokens, hidden_size] for both modes
     # - GPT-OSS decode: [batch=num_tokens, seq_len=1, hidden_size] (high throughput)
     # - GPT-OSS prefill: [batch=1, seq_len=num_tokens, hidden_size]
+
+    # Set seed for deterministic input generation (especially for GPT-OSS)
+    if backend == "gptoss":
+        torch.manual_seed(42)  # Use same seed as weights for consistency
+
     if backend == "gptoss" and mode == "decode":
         # GPT-OSS decode uses batch dimension for parallelism
         torch_input = torch.randn(num_tokens, 1, hf_config.hidden_size, dtype=torch.bfloat16)
@@ -301,6 +321,13 @@ def test_forward_pass(
         # For testing, use None for cache_path (matches reference test_modules.py)
         run_config["moe_experts"]["cache_path"] = None
 
+        # CRITICAL: Add hf_config for GPT-OSS to ensure correct intermediate_size
+        # Without this, moe_block.py will default to 10560 instead of actual 2880
+        run_config["hf_config"] = hf_config
+
+        # Also add intermediate_size directly to cfg for fallback
+        run_config["intermediate_size"] = hf_config.intermediate_size
+
     # Convert input to TTNN
     # DeepSeek: TP-sharded (DP=4, TP=8)
     # GPT-OSS: Row-sharded only on batch dimension
@@ -361,34 +388,62 @@ def test_forward_pass(
         # GPT-OSS ThroughputExperts output is distributed: [1, 1, batch_per_device, hidden]
         # The output is row-sharded: each device in a row has part of the batch
         # Use the same conversion as successful standalone test
+        # For GPT-OSS, use proper concatenation dims based on mode
+        # decode: dims=(0, -1) to concat batch along dim 0 and hidden along dim -1
+        # prefill: dims=(-2, -1) to concat seq_len along dim -2 and hidden along dim -1
+        concat_dims = (-2, -1) if mode == "prefill" else (0, -1)
+        logger.info(f"GPT-OSS {mode} mode: using concat_dims={concat_dims}")
         tt_output_torch = ttnn.to_torch(
             tt_output,
-            # Use dims=(0, -1) as in the working standalone test
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
         )
-        logger.info(f"GPT-OSS output converted, shape: {tt_output_torch.shape}")
+        logger.info(f"GPT-OSS output converted, shape: {tt_output_torch.shape}, total_size: {tt_output_torch.numel()}")
 
-        # The output shape is [4, 1, 32, 23040] which needs proper reshaping
-        # This is [mesh_rows, 1, batch_per_row, hidden*mesh_cols]
-        # We need to reshape to [1, batch_total, hidden]
-        # First, extract the correct hidden dimension by dividing by mesh columns
+        # Handle different output formats for GPT-OSS
         mesh_rows, mesh_cols = mesh_device.shape
-        if len(tt_output_torch.shape) == 4:
-            # Shape is [mesh_rows, 1, batch_per_row, hidden*mesh_cols]
-            _, _, batch_per_row, hidden_concat = tt_output_torch.shape
-            hidden_size = hidden_concat // mesh_cols  # Divide by number of columns
-            total_batch = batch_per_row * mesh_rows  # Total batch size
 
-            # Reshape to get correct dimensions
-            # First, take only the first column's worth of hidden dims
-            tt_output_torch = tt_output_torch[:, :, :, :hidden_size]  # [4, 1, 32, 2880]
+        if mode == "prefill":
+            # Prefill mode: output is concatenated differently
+            # Following reference test_gpt_oss_moe.py which slices to [..., :num_tokens, :hidden_size]
+            # Extract the valid portion (removing padding if any)
+            hidden_size = hf_config.hidden_size
 
-            # Then reshape to combine batch dimensions
-            tt_output_torch = tt_output_torch.permute(1, 0, 2, 3)  # [1, 4, 32, 2880]
-            tt_output_torch = tt_output_torch.reshape(1, total_batch, hidden_size)  # [1, 128, 2880]
+            # Slice to get the valid output region
+            # In prefill mode, num_tokens = batch_size * seq_len
+            tt_output_torch = tt_output_torch[..., :num_tokens, :hidden_size]
 
-            logger.info(f"GPT-OSS output reshaped to: {tt_output_torch.shape}")
-            # Note: For GPT-OSS decode, we keep the shape as [1, 128, 2880] to match reference
+            # Reshape to standard format [1, num_tokens, hidden]
+            if tt_output_torch.dim() == 3:
+                # Already in [1, num_tokens, hidden] format
+                tt_output_torch = tt_output_torch.reshape(1, num_tokens, hidden_size)
+            elif tt_output_torch.dim() == 4:
+                # Need to reshape from [?, ?, ?, hidden] to [1, num_tokens, hidden]
+                tt_output_torch = tt_output_torch.reshape(-1, hidden_size)[:num_tokens]
+                tt_output_torch = tt_output_torch.unsqueeze(0)  # [1, num_tokens, hidden]
+        else:
+            # Decode mode: existing logic
+            if len(tt_output_torch.shape) == 4:
+                batch_dim0, dim1, batch_dim2, hidden_concat = tt_output_torch.shape
+                hidden_size = hidden_concat // mesh_cols  # Divide by number of columns
+
+                # Check which format we have
+                if batch_dim0 == mesh_rows and batch_dim2 > 1:
+                    # Legacy format: [mesh_rows, 1, batch_per_row, hidden*mesh_cols]
+                    total_batch = batch_dim2 * mesh_rows  # Total batch size
+                    # First, take only the first column's worth of hidden dims
+                    tt_output_torch = tt_output_torch[:, :, :, :hidden_size]  # [4, 1, 32, 2880]
+                    # Then reshape to combine batch dimensions
+                    tt_output_torch = tt_output_torch.permute(1, 0, 2, 3)  # [1, 4, 32, 2880]
+                    tt_output_torch = tt_output_torch.reshape(1, total_batch, hidden_size)  # [1, 128, 2880]
+                else:
+                    # Unified format: [total_batch, 1, 1, hidden*mesh_cols]
+                    total_batch = batch_dim0
+                    # Take only the first column's worth of hidden dims
+                    tt_output_torch = tt_output_torch[:, :, :, :hidden_size]  # [128, 1, 1, 2880]
+                    # Reshape directly
+                    tt_output_torch = tt_output_torch.reshape(1, total_batch, hidden_size)  # [1, 128, 2880]
+
+        logger.info(f"GPT-OSS output reshaped to: {tt_output_torch.shape}")
     else:
         # DeepSeek uses TP sharding on both dims
         tt_output_torch = ttnn.to_torch(
