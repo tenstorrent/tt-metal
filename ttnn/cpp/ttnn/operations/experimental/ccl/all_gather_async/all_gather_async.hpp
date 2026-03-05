@@ -11,6 +11,7 @@
 
 namespace ttnn::experimental {
 
+// Overload with sub-core grids
 ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
@@ -26,6 +27,7 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
+// Overload with persistent buffer
 ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -45,6 +47,7 @@ ttnn::Tensor all_gather_async(
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
+// Overload with multi-device input
 std::vector<ttnn::Tensor> all_gather_async(
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -62,6 +65,7 @@ std::vector<ttnn::Tensor> all_gather_async(
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
+// Overload with mesh device
 ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
@@ -81,6 +85,7 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
+// Reversed: overload with sub-core grids
 ttnn::Tensor all_gather_async_reversed(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
@@ -96,6 +101,7 @@ ttnn::Tensor all_gather_async_reversed(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
+// Reversed: overload with persistent buffer
 ttnn::Tensor all_gather_async_reversed(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -115,6 +121,7 @@ ttnn::Tensor all_gather_async_reversed(
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
+// Reversed: overload with mesh device
 ttnn::Tensor all_gather_async_reversed(
     const ttnn::Tensor& input_tensor,
     int32_t dim,

@@ -33,7 +33,8 @@ struct GlobalSemaphoreArg {
     operator const std::vector<GlobalSemaphore>&() const { return semaphores; }
 };
 
-ttnn::Tensor all_gather_async_wrapper(
+// Overload with sub-core grids
+ttnn::Tensor all_gather_async_wrapper_sub_core_grids(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const GlobalSemaphoreArg& multi_device_global_semaphore,
@@ -62,7 +63,8 @@ ttnn::Tensor all_gather_async_wrapper(
         num_buffers_per_channel);
 }
 
-ttnn::Tensor all_gather_async_wrapper_1(
+// Overload with persistent buffer
+ttnn::Tensor all_gather_async_wrapper_persistent_buffer(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -99,7 +101,8 @@ ttnn::Tensor all_gather_async_wrapper_1(
         sub_core_grids);
 }
 
-ttnn::Tensor all_gather_async_wrapper_2(
+// Overload with mesh device
+ttnn::Tensor all_gather_async_wrapper_mesh_device(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -136,7 +139,8 @@ ttnn::Tensor all_gather_async_wrapper_2(
         num_buffers_per_channel);
 }
 
-ttnn::Tensor all_gather_async_reversed_wrapper_1(
+// Reversed: overload with sub-core grids
+ttnn::Tensor all_gather_async_reversed_wrapper_sub_core_grids(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const GlobalSemaphoreArg& multi_device_global_semaphore,
@@ -165,7 +169,8 @@ ttnn::Tensor all_gather_async_reversed_wrapper_1(
         num_buffers_per_channel);
 }
 
-ttnn::Tensor all_gather_async_reversed_wrapper_2(
+// Reversed: overload with persistent buffer
+ttnn::Tensor all_gather_async_reversed_wrapper_persistent_buffer(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -202,7 +207,8 @@ ttnn::Tensor all_gather_async_reversed_wrapper_2(
         sub_core_grids);
 }
 
-ttnn::Tensor all_gather_async_reversed_wrapper_3(
+// Reversed: overload with mesh device
+ttnn::Tensor all_gather_async_reversed_wrapper_mesh_device(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -296,7 +302,7 @@ void bind_all_gather_async(nb::module_& mod) {
                 const std::optional<GlobalSemaphore>&,
                 const std::optional<CoreRangeSet>&,
                 std::optional<uint32_t>,
-                std::optional<uint32_t>>(&all_gather_async_wrapper),
+                std::optional<uint32_t>>(&all_gather_async_wrapper_sub_core_grids),
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
@@ -311,7 +317,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none()),
         ttnn::overload_t(
-            &all_gather_async_wrapper_1,
+            &all_gather_async_wrapper_persistent_buffer,
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer") = nb::none(),
             nb::arg("dim"),
@@ -330,7 +336,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("sub_core_grids") = std::nullopt),
         ttnn::overload_t(
-            &all_gather_async_wrapper_2,
+            &all_gather_async_wrapper_mesh_device,
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis"),
@@ -378,7 +384,7 @@ void bind_all_gather_async(nb::module_& mod) {
         mod,
         all_gather_async_reversed_doc,
         ttnn::overload_t(
-            &all_gather_async_reversed_wrapper_1,
+            &all_gather_async_reversed_wrapper_sub_core_grids,
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
@@ -393,7 +399,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none()),
         ttnn::overload_t(
-            &all_gather_async_reversed_wrapper_2,
+            &all_gather_async_reversed_wrapper_persistent_buffer,
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer") = nb::none(),
             nb::arg("dim"),
@@ -411,7 +417,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("sub_core_grids") = std::nullopt),
         ttnn::overload_t(
-            &all_gather_async_reversed_wrapper_3,
+            &all_gather_async_reversed_wrapper_mesh_device,
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis"),
