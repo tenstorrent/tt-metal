@@ -117,13 +117,14 @@ class ModelPipeline:
             raise RuntimeError("run_inference() must only be called on mesh id 0")
         next_token_id = self.prefill_forward(prompt_token_ids)
         on_token(next_token_id)
-        for i in range(max_new_tokens):
+        for i in range(max_new_tokens - 1):
             if eos_token_id is not None and next_token_id == eos_token_id:
                 logger.debug("EOS token {} at decode step {}", eos_token_id, i)
                 break
             next_token_id = self.decode_forward(next_token_id)
+            logger.debug("Decoded token {} at decode step {}", next_token_id, i)
             on_token(next_token_id)
-        logger.debug("Generation complete ({} tokens generated)", i + 1)
+        logger.debug("Generation complete ({} tokens generated)", max_new_tokens)
 
     def barrier(self) -> None:
         self.pipeline.barrier()
