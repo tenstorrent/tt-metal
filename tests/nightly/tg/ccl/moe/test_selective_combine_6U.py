@@ -12,9 +12,6 @@ import torch
 import ttnn
 
 # Mesh graph descriptor paths for different mesh configurations
-MESH_GRAPH_DESC_16x1 = (
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
-)
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
 )
