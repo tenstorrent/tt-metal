@@ -43,6 +43,11 @@ FORCE_INLINE void reconfig_custom_mm_srca_raw(
     cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] = reg2_base | src_format;
 }
 
+/** @brief Reconfig SrcA input format only (REG0). REG2 stays unchanged. */
+FORCE_INLINE void reconfig_custom_mm_srca_input_only(volatile uint* cfg, uint32_t src_format, uint32_t reg0_base) {
+    cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] = reg0_base | src_format;
+}
+
 // ---------------------------------------------------------------------------
 // Constexpr template-unrolled custom MM (zero runtime format lookup overhead)
 //
@@ -157,7 +162,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
     UNPACK(({
         volatile uint* cfg = get_cfg_pointer();
         uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
-        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
+        // REG2 (Out_data_format) stays at initial bfp8 — only change input format (REG0)
 
         wait_for_next_context(1);
         reset_config_context();
@@ -182,13 +187,13 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
             p.packed = FMT_FLAT[pair];  // single load
 
             wait_for_next_context(2);
-            reconfig_custom_mm_srca_raw(cfg, p.fmt0, reg0_base, reg2_base);
+            reconfig_custom_mm_srca_input_only(cfg, p.fmt0, reg0_base);
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
             address_a += p.sz0;
             semaphore_post(semaphore::UNPACK_SYNC);
 
             wait_for_next_context(2);
-            reconfig_custom_mm_srca_raw(cfg, p.fmt1, reg0_base, reg2_base);
+            reconfig_custom_mm_srca_input_only(cfg, p.fmt1, reg0_base);
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
             address_a += p.sz1;
             semaphore_post(semaphore::UNPACK_SYNC);
