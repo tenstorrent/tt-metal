@@ -3,7 +3,7 @@
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
-[[ "$COMMAND" == *tt-test.sh* || "$COMMAND" == *pytest* ]] || exit 0
+[[ "$COMMAND" == *test* ]] || exit 0
 
 jq -n '{
   hookSpecificOutput: {
