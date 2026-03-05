@@ -156,13 +156,19 @@ FORCE_INLINE uint32_t _get_packed_format_(const std::array<uint32_t, NUM_PACKED>
  * Same interface as custom_mm_compressed_block_constexpr but uses a for-loop
  * instead of template unrolling. Compact code, array lives in local memory.
  */
-template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_TILES, const std::array<uint32_t, NUM_TILES>& FMT_FLAT>
+/**
+ * @brief Runtime loop reading packed pairs from an L1 tensor.
+ *
+ * fmt_l1_addr: byte address of uint32 array in L1, one packed word per pair.
+ * Each word: [sz1:8 | sz0:8 | fmt1:8 | fmt0:8]
+ * No constexpr arrays, no stack usage — scales to any K dimension.
+ */
+template <uint32_t KT_DIM, uint32_t CT_DIM>
 FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
-    uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
+    uint32_t fmt_l1_addr, uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     UNPACK(({
         volatile uint* cfg = get_cfg_pointer();
         uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
-        // REG2 (Out_data_format) stays at initial bfp8 — only change input format (REG0)
 
         wait_for_next_context(1);
         reset_config_context();
@@ -173,8 +179,9 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
         uint32_t address_a = addr_in1;
         constexpr uint32_t num_pairs = KT_DIM * CT_DIM / 2;
 
-        // FMT_FLAT is packed: one uint32 per pair
-        // [31:24]=size1 [23:16]=size0 [15:8]=fmt1 [7:0]=fmt0
+        // Read packed pairs directly from L1 tensor
+        const volatile uint32_t* fmt_ptr = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr);
+
         union PairInfo {
             uint32_t packed;
             struct {
@@ -184,7 +191,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_loop(
 
         for (uint32_t pair = 0; pair < num_pairs; pair++) {
             PairInfo p;
-            p.packed = FMT_FLAT[pair];  // single load
+            p.packed = fmt_ptr[pair];  // direct L1 load
 
             wait_for_next_context(2);
             reconfig_custom_mm_srca_input_only(cfg, p.fmt0, reg0_base);
