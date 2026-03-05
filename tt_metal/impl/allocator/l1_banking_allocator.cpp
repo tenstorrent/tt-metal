@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -126,7 +125,9 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
         interleaved_address_limit,
         config_->l1_alignment,
         config_->l1_unreserved_base,
-        config_->disable_interleaved);
+        config_->disable_interleaved,
+        BankManager::AllocatorDependencies{},
+        config_->context_id);
     log_debug(
         tt::LogMetal,
         "Configured partition params: worker_l1_size:0x{:X}, "
@@ -159,7 +160,9 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
         small_interleaved_address_limit,
         config_->l1_alignment,
         small_alloc_offset,
-        config_->disable_interleaved);
+        config_->disable_interleaved,
+        BankManager::AllocatorDependencies{},
+        config_->context_id);
 }
 
 L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : AllocatorImpl(alloc_config) {
@@ -169,16 +172,18 @@ L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Al
 }
 
 AllocatorConfig L1BankingAllocator::generate_config(
+    int context_id,
     ChipId device_id,
     uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
     BankMapping l1_bank_remap) {
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+    const auto& hal = MetalContext::instance(context_id).hal();
     const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device_id);
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    const auto& dispatch_core_config =
+        MetalContext::instance(context_id).get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
@@ -186,7 +191,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
-    const auto& compute_size = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config);
+    const auto& compute_size = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config, context_id);
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
@@ -205,7 +210,8 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .l1_bank_remap = std::move(l1_bank_remap),
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .l1_alignment = hal.get_alignment(HalMemType::L1),
-         .disable_interleaved = false});
+         .disable_interleaved = false,
+         .context_id = context_id});
     TT_FATAL(
         config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
         "Reserved size must be less than bank size");
@@ -229,12 +235,14 @@ AllocatorConfig L1BankingAllocator::generate_config(
              AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config)) {
+    for (const CoreCoord& core :
+         tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config, context_id)) {
         const auto noc_coord =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, CoreType::WORKER);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config)) {
+    for (const CoreCoord& core :
+         tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config, context_id)) {
         const auto noc_coord =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;

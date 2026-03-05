@@ -130,6 +130,8 @@ private:
     // Key: (core, risc_type, buffer_index) -> buffer_end_index
     std::map<CoreCoord, std::map<tracy::RiscType, std::map<uint8_t, uint32_t>>> inactive_buffer_end_indices;
 
+    int context_id_;
+
     DeviceAddr getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const;
 
     // Read all control buffers

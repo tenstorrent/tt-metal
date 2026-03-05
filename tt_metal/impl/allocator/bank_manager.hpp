@@ -73,7 +73,8 @@ public:
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
-        const AllocatorDependencies& dependencies = AllocatorDependencies());
+        const AllocatorDependencies& dependencies = AllocatorDependencies(),
+        int context_id = -1);
     BankManager(
         const BufferType& buffer_type,
         const std::unordered_map<uint32_t, int64_t>& bank_id_to_bank_offset,
@@ -82,7 +83,8 @@ public:
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
-        const AllocatorDependencies& dependencies = AllocatorDependencies());
+        const AllocatorDependencies& dependencies = AllocatorDependencies(),
+        int context_id = -1);
     BankManager& operator=(BankManager&& that) noexcept;
     uint32_t num_banks() const;
 
@@ -179,6 +181,9 @@ private:
     bool tracking_high_water_mark_ = false;
     DeviceAddr allocation_high_water_mark_ = 0;
     DeviceAddr deletion_high_water_mark_ = 0;
+
+    // MetalContext
+    int context_id_ = -1;
 
     /*********************************
      * Allocator-independent methods *

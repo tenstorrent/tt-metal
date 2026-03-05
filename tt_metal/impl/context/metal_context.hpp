@@ -9,11 +9,10 @@
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
-#include "tt_metal/impl/context/context_id.hpp"
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include "tt_metal/impl/context/context_descriptor.hpp"
-#include "tt_metal/impl/context/metalium_env.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include <tt-metalium/experimental/context/metalium_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
@@ -61,16 +60,16 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance(ContextId context_id = SILICON_CONTEXT_ID);
+    static MetalContext& instance(int context_id = SILICON_CONTEXT_ID);
 
     // Create a new MetalContext instance with a given MetaliumEnv and return the ID.
     // Only one instance representing a physical cluster is allowed due to driver limitations.
     // Only one MetalContext may be associated with a given MetaliumEnv.
-    static ContextId create_instance(const std::shared_ptr<MetaliumEnv>& metalium_env);
+    static int create_instance(const std::shared_ptr<MetaliumEnv>& metalium_env);
 
     // Destroy a MetalContext instance with a given ID. This should only be called from one thread while
     // no work is being done on the MetalContext.
-    static void destroy_instance(ContextId context_id = SILICON_CONTEXT_ID, bool check_device_count = true);
+    static void destroy_instance(int context_id = SILICON_CONTEXT_ID, bool check_device_count = true);
 
     // Destroy all MetalContext instances. This function can be used to ensure MetalContext is in a clean state
     // before the program needs to be forked. This should only be called from one thread while no work is being done
@@ -179,14 +178,14 @@ private:
     friend class tt::stl::Indestructible<MetalContext>;
     // Construct MetalContext and use an existing MetaliumEnv. The MetaliumEnv must not be
     // destroyed while the MetalContext its associated MetalContext instance is alive.
-    MetalContext(ContextId context_id, const std::shared_ptr<MetaliumEnv>& metalium_env);
+    MetalContext(int context_id, const std::shared_ptr<MetaliumEnv>& metalium_env);
     ~MetalContext();
 
     // Register handlers -- caller already holds the instance lock
     static void register_handlers_locked();
 
     // Find a free context ID in g_instances. Caller must hold the instance lock. Throws if no free context ID is found.
-    static ContextId find_free_context_id_locked();
+    static int find_free_context_id_locked();
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
@@ -206,7 +205,7 @@ private:
     bool initialized_ = false;
     bool force_reinit_ = false;
 
-    ContextId context_id_;
+    int context_id_;
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
     DispatchCoreConfig dispatch_core_config_;

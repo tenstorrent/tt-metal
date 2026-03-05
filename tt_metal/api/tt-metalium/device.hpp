@@ -71,6 +71,9 @@ public:
     virtual ChipId id() const = 0;
     virtual ChipId build_id() const = 0;
 
+    // Returns the ID of the MetalContext this device is associated with.
+    virtual int context_id() const = 0;
+
     virtual uint8_t num_hw_cqs() const = 0;
 
     virtual bool is_initialized() const = 0;

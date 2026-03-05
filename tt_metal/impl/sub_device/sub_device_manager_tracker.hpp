@@ -8,6 +8,7 @@
 #include <memory>
 #include <unordered_map>
 
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
@@ -15,6 +16,7 @@
 namespace tt::tt_metal {
 
 class IDevice;
+class AllocatorImpl;
 
 class Allocator;
 class SubDeviceManager;
@@ -25,7 +27,10 @@ public:
     // TODO: Potentially move the global allocator creation into here instead of from the device
     // This creates the SubDeviceManagerTracker with a default SubDeviceManager that has the entire grid as a sub-device
     SubDeviceManagerTracker(
-        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
+        int context_id,
+        IDevice* device,
+        std::unique_ptr<AllocatorImpl>&& global_allocator,
+        tt::stl::Span<const SubDevice> sub_devices);
 
     SubDeviceManagerTracker(const SubDeviceManagerTracker& other) = delete;
     SubDeviceManagerTracker& operator=(const SubDeviceManagerTracker& other) = delete;
@@ -61,6 +66,7 @@ private:
     void reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager);
 
     IDevice* device_ = nullptr;
+    int context_id_;
 
     std::unordered_map<SubDeviceManagerId, std::unique_ptr<SubDeviceManager>> sub_device_managers_;
     SubDeviceManager* active_sub_device_manager_ = nullptr;

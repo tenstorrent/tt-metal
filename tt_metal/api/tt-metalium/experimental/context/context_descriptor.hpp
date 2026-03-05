@@ -9,7 +9,7 @@
 #include <string>
 
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt {
 class Cluster;
@@ -20,6 +20,10 @@ class RunTimeOptions;
 }  // namespace tt::llrt
 
 namespace tt::tt_metal {
+
+constexpr int SILICON_CONTEXT_ID = 0;
+
+constexpr int MAX_CONTEXT_COUNT = 16;
 
 class Hal;
 class MetalContext;
@@ -92,6 +96,8 @@ public:
     tt::tt_fabric::FabricManagerMode fabric_manager() const { return fabric_manager_; }
     const tt::tt_fabric::FabricRouterConfig& router_config() const { return router_config_; }
 
+    int context_id() const { return context_id_; }
+
 protected:
     friend class MetalContext;
     friend class DeviceManager;
@@ -158,6 +164,8 @@ protected:
     tt::tt_fabric::FabricUDMMode fabric_udm_mode_ = tt::tt_fabric::FabricUDMMode::DISABLED;
     tt::tt_fabric::FabricManagerMode fabric_manager_ = tt::tt_fabric::FabricManagerMode::DEFAULT;
     tt::tt_fabric::FabricRouterConfig router_config_ = tt::tt_fabric::FabricRouterConfig{};
+
+    int context_id_ = SILICON_CONTEXT_ID;
 };
 
 }  // namespace tt::tt_metal

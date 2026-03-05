@@ -140,11 +140,13 @@ BankManager::BankManager(
     uint32_t alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
-    const AllocatorDependencies& dependencies) :
+    const AllocatorDependencies& dependencies,
+    int context_id) :
     buffer_type_(buffer_type),
 
     alignment_bytes_(alignment_bytes),
-    allocator_dependencies_(dependencies) {
+    allocator_dependencies_(dependencies),
+    context_id_(context_id) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         bank_id_to_bank_offset_.insert({bank_id, bank_offset});
@@ -154,7 +156,8 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocators(
+        size_bytes, MetalContext::instance(context_id_).hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 BankManager::BankManager(
@@ -165,16 +168,19 @@ BankManager::BankManager(
     uint32_t alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
-    const AllocatorDependencies& dependencies) :
+    const AllocatorDependencies& dependencies,
+    int context_id) :
     buffer_type_(buffer_type),
     bank_id_to_bank_offset_(bank_id_to_bank_offset),
     interleaved_address_limit_(interleaved_address_limit),
     alignment_bytes_(alignment_bytes),
-    allocator_dependencies_(dependencies) {
+    allocator_dependencies_(dependencies),
+    context_id_(context_id) {
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocators(
+        size_bytes, MetalContext::instance(context_id_).hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }

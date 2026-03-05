@@ -12,6 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -28,7 +29,8 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_core(ChipId device_id, uint
         return assignment.prefetcher.value();
     }
     // Issue queue interface is on the MMIO device
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id =
+        tt::tt_metal::MetalContext::instance(context_id_).get_cluster().get_associated_mmio_device(device_id);
     CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.prefetcher = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
     log_dispatch_assignment("Prefetcher", assignment.prefetcher.value(), device_id, channel, cq_id);
@@ -67,7 +69,8 @@ const tt_cxy_pair& dispatch_core_manager::completion_queue_writer_core(
         return assignment.completion_queue_writer.value();
     }
     // Completion queue interface is on the MMIO device
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id =
+        tt::tt_metal::MetalContext::instance(context_id_).get_cluster().get_associated_mmio_device(device_id);
     CoreCoord completion_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.completion_queue_writer =
         tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
@@ -99,7 +102,8 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_core_locked(ChipId device_i
     if (assignment.dispatcher.has_value()) {
         return assignment.dispatcher.value();
     }
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id =
+        tt::tt_metal::MetalContext::instance(context_id_).get_cluster().get_associated_mmio_device(device_id);
     CoreCoord dispatcher_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.dispatcher = tt_cxy_pair(mmio_device_id, dispatcher_coord.x, dispatcher_coord.y);
     TT_ASSERT(
@@ -173,7 +177,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
     CoreCoord dispatcher_s_coord;
     if (this->get_dispatch_core_type() == CoreType::WORKER) {
         ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+            tt::tt_metal::MetalContext::instance(context_id_).get_cluster().get_associated_mmio_device(device_id);
         if (mmio_device_id == device_id) {
             // dispatch_s is on the same tensix core as dispatch_hd
             dispatcher_s_coord = this->dispatcher_core_locked(device_id, channel, cq_id);
@@ -209,12 +213,14 @@ void dispatch_core_manager::add_dispatch_core_to_device_locked(ChipId device_id,
 }
 
 std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(ChipId device_id) {
-    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
+    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_, context_id_);
 }
 
 // private methods
 
-dispatch_core_manager::dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
+dispatch_core_manager::dispatch_core_manager(
+    const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, int context_id) :
+    context_id_(context_id) {
     this->reset_dispatch_core_manager(dispatch_core_config, num_hw_cqs);
 }
 
@@ -224,10 +230,10 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
     this->dispatch_core_config_ = dispatch_core_config;
-    for (ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+    for (ChipId device_id : tt::tt_metal::MetalContext::instance(context_id_).get_cluster().all_chip_ids()) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
-             tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
+             tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_config, context_id_)) {
             logical_dispatch_cores.push_back(logical_dispatch_core);
         }
 
@@ -237,8 +243,9 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         // the core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
         // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
         if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
-            for (const auto& idle_eth_core :
-                 tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
+            for (const auto& idle_eth_core : tt::tt_metal::MetalContext::instance(context_id_)
+                                                 .get_control_plane()
+                                                 .get_inactive_ethernet_cores(device_id)) {
                 add_dispatch_core_to_device_locked(device_id, idle_eth_core);
             }
         }
@@ -272,7 +279,7 @@ void dispatch_core_manager::log_dispatch_assignment(
         "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",
         name,
         cxy.str(),
-        tt::tt_metal::MetalContext::instance()
+        tt::tt_metal::MetalContext::instance(context_id_)
             .get_cluster()
             .get_virtual_coordinate_from_logical_coordinates(
                 cxy, force_ethernet ? CoreType::ETH : get_dispatch_core_type())

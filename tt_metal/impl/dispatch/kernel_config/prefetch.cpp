@@ -24,7 +24,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -80,7 +80,8 @@ PrefetchKernel::PrefetchKernel(
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
-    tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
+    tt::tt_metal::Inspector::set_prefetcher_core_info(
+        virtual_core, type, cq_id, device_id, servicing_device_id, descriptor_.context_id());
 }
 
 void PrefetchKernel::GenerateStaticConfigs() {

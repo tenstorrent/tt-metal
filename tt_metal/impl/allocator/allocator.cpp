@@ -45,7 +45,9 @@ void AllocatorImpl::init_one_bank_per_channel() {
         dram_bank_size,
         config_->dram_alignment,
         config_->dram_unreserved_base,
-        config_->disable_interleaved);
+        config_->disable_interleaved,
+        BankManager::AllocatorDependencies{},
+        config_->context_id);
     for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         bank_id_to_dram_channel_.insert({bank_id, bank_id});
@@ -60,7 +62,9 @@ void AllocatorImpl::init_one_bank_per_channel() {
         config_->trace_region_size,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,
-        config_->disable_interleaved);
+        config_->disable_interleaved,
+        BankManager::AllocatorDependencies{},
+        config_->context_id);
     for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         bank_id_to_dram_channel_.insert({bank_id, bank_id});
@@ -81,7 +85,9 @@ void AllocatorImpl::init_one_bank_per_l1() {
         l1_bank_size,
         config_->l1_alignment,
         config_->l1_unreserved_base,
-        config_->disable_interleaved);
+        config_->disable_interleaved,
+        BankManager::AllocatorDependencies{},
+        config_->context_id);
 
     uint32_t bank_id = 0;
     const auto& cores = corerange_to_cores(config_->worker_grid, std::nullopt, true);

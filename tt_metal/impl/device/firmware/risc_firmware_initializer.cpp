@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
@@ -416,6 +416,7 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
     std::vector<uint16_t>& l1_bank_to_noc_xy) {
     BankMapping l1_bank_remap(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
     auto config = L1BankingAllocator::generate_config(
+        descriptor_->context_id(),
         device_id,
         num_hw_cqs_,
         DEFAULT_L1_SMALL_SIZE,      // Not required for noc table gen

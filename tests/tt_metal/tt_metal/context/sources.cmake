@@ -4,4 +4,5 @@
 set(UNIT_TESTS_CONTEXT_SMOKE_SOURCES
     test_metalium_env_api.cpp
     test_metal_context_api.cpp
+    test_integration.cpp
 )

@@ -14,6 +14,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "profiler.hpp"
 
 namespace tt {
@@ -36,12 +37,12 @@ void ReadDeviceProfilerResultsInternal(
 
 void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
-uint32_t get_profiler_dram_bank_size_per_risc_bytes();
+uint32_t get_profiler_dram_bank_size_per_risc_bytes(int context_id = SILICON_CONTEXT_ID);
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions);
 
 struct ProfilerStateManager {
 public:
-    ProfilerStateManager();
+    ProfilerStateManager(int context_id = SILICON_CONTEXT_ID);
 
     ~ProfilerStateManager() = default;
 
@@ -63,6 +64,7 @@ public:
 
     static constexpr CoreCoord SYNC_CORE = {0, 0};
 
+    int context_id_;
     std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
     mutable std::recursive_mutex device_profiler_map_mutex;
 

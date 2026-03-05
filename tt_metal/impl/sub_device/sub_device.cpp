@@ -20,22 +20,24 @@ namespace tt::tt_metal {
 
 // SubDeviceImpl implementation
 
-SubDeviceImpl::SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores) : cores_(cores) {
+SubDeviceImpl::SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores, int context_id) :
+    context_id_(context_id), cores_(cores) {
     this->validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores) {
+SubDeviceImpl::SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores, int context_id) : context_id_(context_id) {
     TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
     std::copy(cores.begin(), cores.end(), this->cores_.begin());
     this->validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores) : cores_(std::move(cores)) {
+SubDeviceImpl::SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores, int context_id) :
+    context_id_(context_id), cores_(std::move(cores)) {
     validate();
 }
 
 void SubDeviceImpl::validate() const {
-    auto num_core_types = MetalContext::instance().hal().get_programmable_core_type_count();
+    auto num_core_types = MetalContext::instance(context_id_).hal().get_programmable_core_type_count();
     for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
         TT_FATAL(
             this->cores_[i].empty(),
@@ -63,7 +65,8 @@ const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) cons
 
 // SubDevice implementation
 
-SubDevice::SubDevice(tt::stl::Span<const CoreRangeSet> cores) : pimpl_(std::make_unique<SubDeviceImpl>(cores)) {}
+SubDevice::SubDevice(tt::stl::Span<const CoreRangeSet> cores, int context_id) :
+    pimpl_(std::make_unique<SubDeviceImpl>(cores, context_id)) {}
 
 SubDevice::SubDevice(SubDeviceImpl&& impl) : pimpl_(std::make_unique<SubDeviceImpl>(std::move(impl))) {}
 

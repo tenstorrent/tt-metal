@@ -9,7 +9,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <device.hpp>
 #include "device/device_impl.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 #include <tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
@@ -31,7 +31,14 @@ void ProfilerInitializer::init(
 #if defined(TRACY_ENABLE)
     devices_ = devices;
 
-    if (!getDeviceProfilerState()) {
+    TT_FATAL(
+        std::all_of(
+            devices_.begin(),
+            devices_.end(),
+            [&](Device* dev) { return dev->context_id() == devices_[0]->context_id(); }),
+        "All devices must be of the same context id");
+
+    if (!getDeviceProfilerState(devices_[0]->context_id())) {
         return;
     }
 
@@ -59,7 +66,7 @@ void ProfilerInitializer::init(
             }
         }
     }
-    detail::ProfilerSync(ProfilerSyncState::INIT);
+    detail::ProfilerSync(ProfilerSyncState::INIT, devices_[0]->context_id());
 
     if (profiler_state_manager_ && rtoptions_.get_experimental_noc_debug_dump_enabled()) {
         tt::tt_metal::LaunchIntervalBasedProfilerReadThread(std::vector<IDevice*>(devices_.begin(), devices_.end()));
@@ -82,7 +89,7 @@ void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done
     for (auto* dev : devices_) {
         detail::ReadDeviceProfilerResults(static_cast<IDevice*>(dev), ProfilerReadState::ONLY_DISPATCH_CORES);
     }
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE, devices_[0]->context_id());
 
     devices_.clear();
     initialized_ = false;
@@ -90,7 +97,7 @@ void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done
 }
 
 void ProfilerInitializer::post_teardown() {
-    if (getDeviceProfilerState()) {
+    if (getDeviceProfilerState(devices_[0]->context_id())) {
         // Device profiling data is dumped here instead of MetalContext::teardown() because MetalContext::teardown() is
         // called as a std::atexit() function, and ProfilerStateManager::cleanup_device_profilers() cannot be safely
         // called from a std::atexit() function because it creates new threads, which is unsafe during program

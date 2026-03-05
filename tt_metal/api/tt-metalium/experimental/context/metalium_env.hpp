@@ -6,8 +6,7 @@
 
 #include <atomic>
 #include <memory>
-#include "impl/context/context_descriptor.hpp"
-#include "impl/context/context_id.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal {
 
@@ -21,20 +20,25 @@ public:
     // Destroy the object. This function may only be called when the object is no longer needed.
     void destroy();
 
-    llrt::RunTimeOptions& get_rtoptions() const;
-    const tt::tt_metal::Hal& get_hal() const;
-    tt::Cluster& get_cluster() const;
-
     bool is_initialized() const;
 
     const MetaliumEnvDescriptor& get_descriptor() const;
 
 private:
     friend class MetalContext;
+    friend class MetaliumEnvAccessor;
+
+    // Used internally. When constructed by MetalContext implicitly, we do not destroy until MetalContext is destroyed
+    // atexit
+    // explicit MetaliumEnv(MetaliumEnvDescriptor descriptor, bool skip_auto_destroy = false);
+
+    llrt::RunTimeOptions& get_rtoptions() const;
+    const tt::tt_metal::Hal& get_hal() const;
+    tt::Cluster& get_cluster() const;
 
     // Ownership tracking: ensures at most one MetalContext is bound to this env at a time.
-    void acquire(ContextId context_id);
-    void release(ContextId context_id);
+    void acquire(int context_id);
+    void release(int context_id);
     bool is_acquired() const;
 
     void initialize_base_objects();
@@ -42,10 +46,10 @@ private:
     // Verify the firmware version and enable the appropriate features
     void verify_fw_capabilities();
 
-    static constexpr ContextId NO_OWNER = -1;
+    static constexpr int NO_OWNER = -1;
 
     bool initialized_ = false;
-    std::atomic<ContextId> owning_context_id_{NO_OWNER};
+    std::atomic<int> owning_context_id_{NO_OWNER};
     MetaliumEnvDescriptor descriptor_;
 
     // Below objects are listed in the order of dependency

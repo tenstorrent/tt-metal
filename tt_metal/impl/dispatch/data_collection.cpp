@@ -22,30 +22,36 @@ void RecordDispatchData(
     uint64_t program_id,
     data_collector_t type,
     uint32_t transaction_size,
-    std::optional<HalProcessorIdentifier> processor) {
+    std::optional<HalProcessorIdentifier> processor,
+    int context_id) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
-    tt::tt_metal::MetalContext::instance().data_collector()->RecordData(program_id, type, transaction_size, processor);
+    tt::tt_metal::MetalContext::instance(context_id)
+        .data_collector()
+        ->RecordData(program_id, type, transaction_size, processor);
 }
 
-void RecordKernelGroup(ProgramImpl& program, HalProgrammableCoreType core_type, const KernelGroup& kernel_group) {
+void RecordKernelGroup(
+    ProgramImpl& program, HalProgrammableCoreType core_type, const KernelGroup& kernel_group, int context_id) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
-    tt::tt_metal::MetalContext::instance().data_collector()->RecordKernelGroup(program, core_type, kernel_group);
+    tt::tt_metal::MetalContext::instance(context_id)
+        .data_collector()
+        ->RecordKernelGroup(program, core_type, kernel_group);
 }
 
-void RecordProgramRun(uint64_t program_id) {
+void RecordProgramRun(uint64_t program_id, int context_id) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
-    tt::tt_metal::MetalContext::instance().data_collector()->RecordProgramRun(program_id);
+    tt::tt_metal::MetalContext::instance(context_id).data_collector()->RecordProgramRun(program_id);
 }
 
 }  // namespace tt

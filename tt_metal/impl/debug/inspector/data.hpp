@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -16,7 +17,8 @@ public:
     ~Data();
 
 private:
-    Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    explicit Data(int context_id = SILICON_CONTEXT_ID);  // NOLINT - False alarm, tt::tt_metal::Inspector is
+                                                         // calling this constructor.
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
@@ -44,6 +46,7 @@ private:
         const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
         const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
 
+    int context_id_;
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
     std::mutex programs_mutex;

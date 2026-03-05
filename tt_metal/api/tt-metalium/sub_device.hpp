@@ -21,7 +21,7 @@ class SubDeviceImpl;
 
 class SubDevice {
 public:
-    explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
+    explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores, int context_id = 0);
     // Internal constructor (internal use only)
     SubDevice(SubDeviceImpl&& impl);
 

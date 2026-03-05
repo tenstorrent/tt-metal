@@ -90,6 +90,7 @@ public:
     tt::ARCH arch() const override;
     int id() const override;
     ChipId build_id() const override;
+    int context_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
 
@@ -295,6 +296,18 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a mesh associated to the given context id
+    static std::shared_ptr<MeshDevice> create(
+        int context_id,
+        const MeshDeviceConfig& config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -303,7 +316,29 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a unit mesh associated to the given context id
+    static std::shared_ptr<MeshDevice> create_unit_mesh(
+        int context_id,
+        int device_id,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        const std::vector<int>& device_ids,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a unit meshes associated to the given context id
+    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        int context_id,
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,

@@ -5,11 +5,13 @@
 #pragma once
 
 #include "mesh_command_queue_base.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal::distributed {
 
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
+    int context_id_;
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 

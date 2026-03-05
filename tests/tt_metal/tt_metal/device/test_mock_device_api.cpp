@@ -10,6 +10,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "system_mesh.hpp"
 
 namespace tt::tt_metal {
 

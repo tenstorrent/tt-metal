@@ -8,6 +8,7 @@
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -188,7 +189,9 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                 program.impl().set_kernels_bin_buffer(buffer_view);
             }
         }
-        set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::InFlight);
+
+        set_program_binary_status(
+            mesh_device->id(), ProgramBinaryStatus::InFlight, mesh_cq.device()->impl().context_id());
     }
 }
 
@@ -199,9 +202,9 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
     return ProgramBinaryStatus::NotSent;
 }
 
-void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
+void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status, int context_id) {
     program_binary_status_[mesh_id] = status;
-    Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
+    Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status, context_id);
 }
 
 void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {

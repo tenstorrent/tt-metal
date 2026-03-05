@@ -12,6 +12,7 @@
 #include <hostdevcommon/common_values.hpp>
 #include "umd/device/types/cluster_descriptor_types.hpp"
 #include "device_impl.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal {
 
@@ -28,7 +29,7 @@ enum class InitializerKey;
 class DeviceManager {
 public:
     ~DeviceManager();
-    DeviceManager();
+    explicit DeviceManager(int context_id = SILICON_CONTEXT_ID);
 
     bool is_initialized() const { return is_initialized_; }
 
@@ -60,6 +61,7 @@ public:
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 
 private:
+    int context_id_;
     uint8_t num_hw_cqs_{};
     size_t l1_small_size_{};
     size_t trace_region_size_{};

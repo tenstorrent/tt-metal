@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/span.hpp>
@@ -16,9 +17,9 @@ namespace tt::tt_metal {
 class SubDeviceImpl {
 public:
     // Constructors for internal tt_metal/ use
-    explicit SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores);
-    explicit SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores);
-    explicit SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores);
+    explicit SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores, int context_id);
+    explicit SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores, int context_id);
+    explicit SubDeviceImpl(tt::stl::Span<const CoreRangeSet> cores, int context_id);
 
     // Copy/move semantics
     SubDeviceImpl(const SubDeviceImpl&) = default;
@@ -35,6 +36,7 @@ public:
 private:
     void validate() const;
 
+    int context_id_ = -1;
     std::array<CoreRangeSet, NumHalProgrammableCoreTypes> cores_;
 };
 

@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <optional>
 #include "program/program_impl.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -36,16 +37,18 @@ void RecordDispatchData(
     uint64_t program_id,
     data_collector_t type,
     uint32_t transaction_size,
-    std::optional<tt_metal::HalProcessorIdentifier> processor = std::nullopt);
+    std::optional<tt_metal::HalProcessorIdentifier> processor = std::nullopt,
+    int context_id = tt_metal::SILICON_CONTEXT_ID);
 
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.
 void RecordKernelGroup(
     tt_metal::detail::ProgramImpl& program,
     tt_metal::HalProgrammableCoreType core_type,
-    const tt_metal::KernelGroup& kernel_group);
+    const tt_metal::KernelGroup& kernel_group,
+    int context_id = tt_metal::SILICON_CONTEXT_ID);
 
 // Update stats with an enqueue of given program.
-void RecordProgramRun(uint64_t program_id);
+void RecordProgramRun(uint64_t program_id, int context_id = tt_metal::SILICON_CONTEXT_ID);
 
 }  // end namespace tt

@@ -8,6 +8,7 @@
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
+#include "dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <ranges>
@@ -96,27 +97,31 @@ using namespace tt::tt_metal;
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         return device->allocator_impl()->get_config().l1_unreserved_base -
-               MetalContext::instance().hal().get_dev_addr(
-                   HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+               MetalContext::instance(device->context_id())
+                   .hal()
+                   .get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
-    return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    return MetalContext::instance(device->context_id())
+        .hal()
+        .get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(int context_id, bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
     //      - eth kernels cannot be on idle eth cores
-    bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
+    bool slow_dispatch = !(MetalContext::instance(context_id).rtoptions().get_fast_dispatch());
 
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    const auto& dispatch_core_config =
+        MetalContext::instance(context_id).get_dispatch_core_manager().get_dispatch_core_config();
     tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
-            MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+            MetalContext::instance(context_id).get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
@@ -195,8 +200,8 @@ std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 detail::ProgramImpl::ProgramImpl() :
 
     cached_device_hash_(std::nullopt),
-    programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
-    max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
+    programmable_core_count_(MetalContext::instance(SILICON_CONTEXT_ID).hal().get_programmable_core_type_count()),
+    max_cbs_(MetalContext::instance(SILICON_CONTEXT_ID).hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -1104,7 +1109,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(device->context_id()).get_cluster().get_target_device_type() ==
+        tt::TargetDevice::Mock) {
         return;
     }
 
@@ -1459,11 +1465,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
 
+    bool is_mock = tt::tt_metal::MetalContext::instance(device->context_id()).get_cluster().get_target_device_type() ==
+                   tt::TargetDevice::Mock;
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(force_slow_dispatch, kernel);
+            validate_kernel_placement(device->context_id(), force_slow_dispatch, kernel);
             launch_build_step(
-                [kernel, device, this, &build_env] {
+                [kernel, device, this, &build_env, is_mock] {
                     JitBuildOptions build_options(build_env.build_env);
                     kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
@@ -1480,13 +1488,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                        tt::TargetDevice::Mock) {
+                    if (!is_mock) {
                         kernel->register_kernel_elf_paths_with_watcher(*device);
                     }
-
-                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                                   tt::TargetDevice::Mock;
 
                     jit_build_once(kernel_hash, [&] {
                         if (!is_mock) {
@@ -1506,8 +1510,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     sync_build_steps(events);
 
     // Mock devices don't have binaries to read
-    bool is_mock =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
@@ -1533,16 +1535,18 @@ void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
-    return base_addr + this->get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+    return base_addr + this->get_program_config(MetalContext::instance(device->context_id())
+                                                    .hal()
+                                                    .get_programmable_core_type_index(programmable_core_type))
                            .sem_offset;
 }
 
 uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
-    return base_addr + this->get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+    return base_addr + this->get_program_config(MetalContext::instance(device->context_id())
+                                                    .hal()
+                                                    .get_programmable_core_type_index(programmable_core_type))
                            .cb_offset;
 }
 
@@ -1557,7 +1561,8 @@ HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index =
+        MetalContext::instance(device->context_id()).hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
 }
@@ -1565,7 +1570,8 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index =
+        MetalContext::instance(device->context_id()).hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
 }
@@ -1694,7 +1700,7 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
-    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (MetalContext::instance(device->context_id()).rtoptions().get_fast_dispatch()) {
         populate_dispatch_data(device);  // TODO: maybe rename
     }
 }
@@ -1736,7 +1742,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(device->context_id()).hal();
 
     // Collect dataflow buffers from all programs
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -52,7 +53,8 @@ private:
     bool is_finalized() const { return this->finalized_; }
     void set_finalized() { this->finalized_ = true; };
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
-    void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
+    void set_program_binary_status(
+        std::size_t mesh_id, ProgramBinaryStatus status, int context_id = SILICON_CONTEXT_ID);
     ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);

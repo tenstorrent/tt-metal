@@ -162,7 +162,8 @@ void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
-    uint32_t worker_l1_unreserved_start);
+    uint32_t worker_l1_unreserved_start,
+    int context_id);
 
 void reset_worker_dispatch_state_on_device(
     IDevice* device,

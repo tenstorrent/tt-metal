@@ -14,6 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -62,7 +63,9 @@ public:
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
     /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
-    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+    /// @param context_id identifies which MetalContext instance to use (defaults to SILICON_CONTEXT_ID)
+    dispatch_core_manager(
+        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, int context_id = SILICON_CONTEXT_ID);
 
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
 
@@ -192,6 +195,7 @@ private:
     std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
+    int context_id_;
     static dispatch_core_manager* _inst;
 };
 

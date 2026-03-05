@@ -19,7 +19,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include "context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -59,7 +59,8 @@ DispatchSKernel::DispatchSKernel(
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log dispatch_s core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
-    Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
+    Inspector::set_dispatch_s_core_info(
+        virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id, descriptor_.context_id());
 }
 
 void DispatchSKernel::GenerateStaticConfigs() {

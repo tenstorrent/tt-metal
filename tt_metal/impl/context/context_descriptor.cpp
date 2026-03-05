@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal {
 

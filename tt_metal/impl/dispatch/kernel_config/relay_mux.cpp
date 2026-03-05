@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "relay_mux.hpp"
-#include "context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"

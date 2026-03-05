@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include "impl/context/context_descriptor.hpp"
-#include "impl/context/metalium_env.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
+#include <tt-metalium/experimental/context/metalium_env.hpp>
 #include "impl/device/mock_device_util.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "impl/context/metalium_env_accessor.hpp"
+
+#include <experimental/hal.hpp>
 
 namespace tt::tt_metal {
 
@@ -17,10 +20,10 @@ TEST(MetaliumEnv, Physical) {
 
 TEST(MetaliumEnv, Mock) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
-    auto env_1 = MetaliumEnv(MetaliumEnvDescriptor(mock_path));
-    auto env_2 = MetaliumEnv(MetaliumEnvDescriptor(mock_path));
-    EXPECT_TRUE(env_1.is_initialized());
-    EXPECT_TRUE(env_2.is_initialized());
+    auto env_1 = MetaliumEnvAccessor(std::make_unique<MetaliumEnv>(MetaliumEnvDescriptor(mock_path)));
+    auto env_2 = MetaliumEnvAccessor(std::make_unique<MetaliumEnv>(MetaliumEnvDescriptor(mock_path)));
+    EXPECT_TRUE(env_1.get_metalium_env().is_initialized());
+    EXPECT_TRUE(env_2.get_metalium_env().is_initialized());
     EXPECT_EQ(env_1.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
     EXPECT_EQ(env_2.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
 }
@@ -38,8 +41,8 @@ TEST(MetaliumEnv, OnePhysicalMultipleMock) {
     EXPECT_TRUE(env_mock_1.is_initialized());
     EXPECT_TRUE(env_mock_2.is_initialized());
 
-    EXPECT_EQ(env_mock_1.get_cluster().arch(), tt::ARCH::BLACKHOLE);
-    EXPECT_EQ(env_mock_2.get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(MetaliumEnvAccessor(env_mock_1).get_cluster().arch(), tt::ARCH::BLACKHOLE);
+    EXPECT_EQ(MetaliumEnvAccessor(env_mock_2).get_cluster().arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetaliumEnv, Destroy) {

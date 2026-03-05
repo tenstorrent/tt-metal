@@ -6,26 +6,28 @@
 
 #include <fstream>
 
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
 
-#define TT_INSPECTOR_THROW(...) \
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
-        TT_THROW(__VA_ARGS__); \
-    } else { \
-        log_warning(tt::LogInspector, __VA_ARGS__); \
-        return; \
+#define TT_INSPECTOR_THROW(context_id, ...)                                                                         \
+    if (tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_inspector_initialization_is_important()) { \
+        TT_THROW(__VA_ARGS__);                                                                                      \
+    } else {                                                                                                        \
+        log_warning(tt::LogInspector, __VA_ARGS__);                                                                 \
+        return;                                                                                                     \
     }
 
-#define TT_INSPECTOR_LOG(...) \
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_warn_on_write_exceptions()) { \
-        log_warning(tt::LogInspector, __VA_ARGS__); \
+#define TT_INSPECTOR_LOG(context_id, ...)                                                                        \
+    if (tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_inspector_warn_on_write_exceptions()) { \
+        log_warning(tt::LogInspector, __VA_ARGS__);                                                              \
     }
 
 namespace tt::tt_metal::inspector {
 
 class Logger {
 private:
+    int context_id_;
     time_point start_time;
     std::ofstream programs_ostream;
     std::ofstream kernels_ostream;
@@ -39,7 +41,7 @@ private:
     }
 
 public:
-    Logger(const std::filesystem::path& logging_path);
+    Logger(const std::filesystem::path& logging_path, int context_id = SILICON_CONTEXT_ID);
 
     std::filesystem::path get_logging_path() const noexcept {
         return logging_path;

@@ -47,7 +47,7 @@ void InitDeviceProfiler(IDevice* device);
  * Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
-void ProfilerSync(ProfilerSyncState state);
+void ProfilerSync(ProfilerSyncState state, int context_id = 0);
 
 // clang-format off
 /**

@@ -5,13 +5,13 @@
 #pragma once
 
 // needed for private members
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "system_memory_cq_interface.hpp"
 #include <umd/device/chip_helpers/tlb_manager.hpp>  // needed because tt_io.hpp requires needs TLBManager
 #include <umd/device/tt_io.hpp>                     // for umd::Writer
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -21,7 +21,7 @@ namespace tt::tt_metal {
 
 class SystemMemoryManager {
 public:
-    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs);
+    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs, int context_id);
 
     uint32_t get_next_event(uint8_t cq_id);
 
@@ -65,6 +65,8 @@ public:
 
     ChipId get_device_id() const;
 
+    int get_context_id() const;
+
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
     void* issue_queue_reserve(uint32_t cmd_size_B, uint8_t cq_id);
@@ -95,6 +97,7 @@ public:
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
 private:
+    int context_id_;
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;

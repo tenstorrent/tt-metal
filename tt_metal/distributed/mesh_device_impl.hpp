@@ -34,6 +34,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
@@ -79,12 +80,14 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
+        int context_id_;
         std::vector<MaybeRemote<IDevice*>> devices_;
         std::map<ChipId, IDevice*> opened_local_devices_;
 
     public:
         // Constructor acquires physical resources
         ScopedDevices(
+            int context_id,
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
@@ -92,6 +95,7 @@ private:
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
         ScopedDevices(
+            int context_id,
             const std::vector<MaybeRemote<int>>& all_device_ids,
             const std::vector<MaybeRemote<int>>& active_device_ids,
             size_t l1_small_size,
@@ -99,6 +103,8 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config);
+
+        int context_id() const { return context_id_; }
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -119,6 +125,7 @@ private:
     // on the device may not be thread safe.
     std::mutex api_mutex_;
     bool is_internal_state_initialized = false;
+    int context_id_;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -164,6 +171,7 @@ private:
 
 public:
     MeshDeviceImpl(
+        int context_id,
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});
@@ -363,7 +371,10 @@ public:
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();
+    int context_id() const override { return context_id_; }
+
     static std::shared_ptr<MeshDevice> create(
+        int context_id,
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -372,6 +383,7 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
+        int context_id,
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -380,6 +392,7 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        int context_id,
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,

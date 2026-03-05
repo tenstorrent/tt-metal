@@ -12,9 +12,9 @@
 
 namespace tt::tt_metal {
 
-DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
-    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-        if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+DispatchCoreAxis DispatchCoreConfig::get_default_axis(int context_id) {
+    if (MetalContext::instance(context_id).get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+        if (MetalContext::instance(context_id).get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
             return DispatchCoreAxis::COL;
         }
     }
@@ -29,8 +29,8 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
     }
 }
 
-DispatchCoreConfig get_dispatch_core_config() {
-    return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+DispatchCoreConfig get_dispatch_core_config(int context_id) {
+    return MetalContext::instance(context_id).get_dispatch_core_manager().get_dispatch_core_config();
 }
 
 }  // namespace tt::tt_metal

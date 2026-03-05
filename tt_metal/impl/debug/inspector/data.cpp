@@ -17,12 +17,11 @@
 
 namespace tt::tt_metal::inspector {
 
-
-Data::Data()
-    : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
-
+Data::Data(int context_id) :
+    context_id_(context_id),
+    logger(MetalContext::instance(context_id_).rtoptions().get_inspector_log_path(), context_id_) {
     // Initialize RPC server if enabled
-    const auto& rtoptions = MetalContext::instance().rtoptions();
+    const auto& rtoptions = MetalContext::instance(context_id_).rtoptions();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             auto address = rtoptions.get_inspector_rpc_server_address();
@@ -44,7 +43,7 @@ Data::Data()
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
-            TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
+            TT_INSPECTOR_THROW(context_id_, "Failed to start Inspector RPC server: {}", e.what());
         }
     }
 }
@@ -175,7 +174,7 @@ void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRu
 
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
     // Get all active device ids
-    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+    auto device_ids = tt_metal::MetalContext::instance(context_id_).device_manager()->get_all_active_device_ids();
 
     // Write result
     auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
@@ -239,14 +238,14 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Do an on-demand snapshot of the command queue event info
 // Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
-    if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!tt_metal::MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
         // Fast dispatch is not enabled, no dispatch core info to return
         results.initCoresByCategory(0);
         return;
     }
     // This returns a map of command queue id to event id for all active devices
     auto cq_to_event_by_device =
-        tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
+        tt_metal::MetalContext::instance(context_id_).device_manager()->get_all_command_queue_event_infos();
     // In a single lock, get the number of non-empty categories and initialize the results
     std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
 
@@ -287,8 +286,8 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 }
 
 void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
-    auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+    auto& control_plane = tt_metal::MetalContext::instance(context_id_).get_control_plane();
+    auto device_ids = tt_metal::MetalContext::instance(context_id_).device_manager()->get_all_active_device_ids();
 
     auto chips_builder = results.initChips(device_ids.size());
     size_t chip_idx = 0;
@@ -323,7 +322,7 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
 
 void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
     // Get cluster descriptor from MetalContext
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const auto& chip_id_to_unique_id = cluster.get_cluster_desc()->get_chip_unique_ids();
 
     // Populate RPC response

@@ -45,6 +45,7 @@ struct AllocatorConfig {
     CoreRangeSet compute_grid;
     uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
+    int context_id = -1;
     void reset();
     ~AllocatorConfig() { reset(); }
 };

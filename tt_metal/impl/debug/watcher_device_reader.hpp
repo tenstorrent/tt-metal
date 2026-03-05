@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
+
 #include <core_coord.hpp>
 #include <cstdint>
 #include <cstdio>
@@ -23,7 +25,8 @@ constexpr uint8_t DEBUG_SANITIZE_SENTINEL_OK_8 = 0xda;
 
 class WatcherDeviceReader {
 public:
-    WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<std::string>& kernel_names);
+    WatcherDeviceReader(
+        FILE* f, ChipId device_id, const std::vector<std::string>& kernel_names, int context_id = SILICON_CONTEXT_ID);
     ~WatcherDeviceReader();
     void Dump(FILE* file = nullptr);
 
@@ -33,6 +36,7 @@ private:
     FILE* f;
     ChipId device_id;
     const std::vector<std::string>& kernel_names;
+    int context_id_;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
 };
 

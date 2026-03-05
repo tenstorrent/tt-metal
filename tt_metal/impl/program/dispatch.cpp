@@ -341,13 +341,14 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     // Mock devices don't have real binaries, skip finalization
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(device->context_id()).get_cluster().get_target_device_type() ==
+        tt::TargetDevice::Mock) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(device->context_id()).hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
@@ -2036,8 +2037,9 @@ void assemble_device_commands(
     }
 }
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
-    const auto& hal = MetalContext::instance().hal();
+void initialize_worker_config_buf_mgr(
+    WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start, int context_id) {
+    const auto& hal = MetalContext::instance(context_id).hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t ringbuffer_size;
         if (hal.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
@@ -2686,10 +2688,11 @@ void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
-    uint32_t worker_l1_unreserved_start) {
+    uint32_t worker_l1_unreserved_start,
+    int context_id) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
-        initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start);
+        initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start, context_id);
     }
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }

@@ -6,6 +6,7 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
+#include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
@@ -24,26 +25,29 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC /*noc_index*/) :
-    id_(id), manager_(device->sysmem_manager()), device_(device) {
+HWCommandQueue::HWCommandQueue(int context_id, IDevice* device, uint32_t id, NOC /*noc_index*/) :
+    context_id_(context_id), id_(id), manager_(device->sysmem_manager()), device_(device) {
     ZoneScopedN("CommandQueue_constructor");
 
     uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+        tt::tt_metal::MetalContext::instance(context_id_).get_cluster().get_assigned_channel_for_device(device_->id());
 
     CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    CoreType core_type = MetalContext::instance(context_id_).get_dispatch_core_manager().get_dispatch_core_type();
     if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s
-        enqueue_program_dispatch_core =
-            MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
+        enqueue_program_dispatch_core = MetalContext::instance(context_id_)
+                                            .get_dispatch_core_manager()
+                                            .dispatcher_s_core(device_->id(), channel, id);
     } else {
         if (device_->is_mmio_capable()) {
-            enqueue_program_dispatch_core =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device_->id(), channel, id);
+            enqueue_program_dispatch_core = MetalContext::instance(context_id_)
+                                                .get_dispatch_core_manager()
+                                                .dispatcher_core(device_->id(), channel, id);
         } else {
-            enqueue_program_dispatch_core =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_d_core(device_->id(), channel, id);
+            enqueue_program_dispatch_core = MetalContext::instance(context_id_)
+                                                .get_dispatch_core_manager()
+                                                .dispatcher_d_core(device_->id(), channel, id);
         }
     }
     this->virtual_enqueue_program_dispatch_core_ =
@@ -72,7 +76,7 @@ void HWCommandQueue::terminate() {
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = MetalContext::instance(context_id_).hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
@@ -81,7 +85,7 @@ void HWCommandQueue::terminate() {
     this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager_.fetch_queue_reserve_back(this->id_);
     this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (MetalContext::instance(context_id_).get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);

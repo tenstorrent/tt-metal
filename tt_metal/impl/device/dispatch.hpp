@@ -7,6 +7,7 @@
 #include "device.hpp"
 #include "dispatch/topology.hpp"
 #include "hal_types.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -17,7 +18,8 @@ struct ReadCoreDataDescriptor {
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
+uint32_t calculate_max_prefetch_data_size_bytes(
+    int context_id, const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 
@@ -35,11 +37,13 @@ struct CoreDispatchParams {
 struct CoreReadDispatchParams : public CoreDispatchParams {};
 
 void validate_core_read_write_bounds(
-    IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes);
+    int context_id, IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes);
 
-DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address);
+DeviceAddr add_bank_offset_to_address(
+    int context_id, IDevice* device, const CoreCoord& virtual_core, DeviceAddr address);
 
 void write_to_core(
+    int context_id,
     IDevice* device,
     const CoreCoord& virtual_core,
     const void* src,
@@ -49,9 +53,10 @@ void write_to_core(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);
+void issue_core_read_command_sequence(int context_id, const CoreReadDispatchParams& dispatch_params);
 
 void read_core_data_from_completion_queue(
+    int context_id,
     const ReadCoreDataDescriptor& read_descriptor,
     ChipId mmio_device_id,
     uint16_t channel,

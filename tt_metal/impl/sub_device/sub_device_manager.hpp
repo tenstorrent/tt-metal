@@ -17,6 +17,7 @@
 
 #include "allocator.hpp"
 #include "hal_types.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -32,9 +33,13 @@ class SubDeviceManager {
 public:
     // Constructor used for the default/global device
     SubDeviceManager(
-        IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
+        int context_id,
+        IDevice* device,
+        std::unique_ptr<AllocatorImpl>&& global_allocator,
+        tt::stl::Span<const SubDevice> sub_devices);
     // Constructor used for regular sub-devices
-    SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
+    SubDeviceManager(
+        int context_id, tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 
     SubDeviceManager(const SubDeviceManager& other) = delete;
     SubDeviceManager& operator=(const SubDeviceManager& other) = delete;
@@ -82,6 +87,7 @@ private:
     static std::atomic<uint64_t> next_sub_device_manager_id_;
 
     SubDeviceManagerId id_;
+    int context_id_;
 
     // TODO: We have a max number of sub-devices, so we can use a fixed size array
     std::vector<SubDevice> sub_devices_;

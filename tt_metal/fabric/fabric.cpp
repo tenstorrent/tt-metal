@@ -446,6 +446,10 @@ tt::tt_fabric::Topology get_fabric_topology() {
 
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
+FabricConfig GetFabricConfigWithContext(int context_id) {
+    return tt::tt_metal::MetalContext::instance(context_id).get_fabric_config();
+}
+
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode,
@@ -462,6 +466,26 @@ void SetFabricConfig(
         fabric_udm_mode,
         fabric_manager,
         router_config);
+}
+
+void SetFabricConfigWithContext(
+    int context_id,
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode,
+    std::optional<uint8_t> num_routing_planes,
+    FabricTensixConfig fabric_tensix_config,
+    FabricUDMMode fabric_udm_mode,
+    FabricManagerMode fabric_manager,
+    FabricRouterConfig router_config) {
+    tt::tt_metal::MetalContext::instance(context_id)
+        .set_fabric_config(
+            fabric_config,
+            reliability_mode,
+            num_routing_planes,
+            fabric_tensix_config,
+            fabric_udm_mode,
+            fabric_manager,
+            router_config);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

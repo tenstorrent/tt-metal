@@ -36,10 +36,14 @@
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
-    device_(device) {
+    int context_id,
+    IDevice* device,
+    std::unique_ptr<AllocatorImpl>&& global_allocator,
+    tt::stl::Span<const SubDevice> sub_devices) :
+    device_(device), context_id_(context_id) {
     TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
-    auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
+    auto sub_device_manager =
+        std::make_unique<SubDeviceManager>(context_id_, device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();
     active_sub_device_manager_ = default_sub_device_manager_;
     sub_device_managers_.insert_or_assign(sub_device_manager->id(), std::move(sub_device_manager));
@@ -55,7 +59,7 @@ SubDeviceManagerTracker::~SubDeviceManagerTracker() {
 
 SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    auto sub_device_manager = std::make_unique<SubDeviceManager>(sub_devices, local_l1_size, device_);
+    auto sub_device_manager = std::make_unique<SubDeviceManager>(context_id_, sub_devices, local_l1_size, device_);
     auto sub_device_manager_id = sub_device_manager->id();
     sub_device_managers_.insert_or_assign(sub_device_manager_id, std::move(sub_device_manager));
     return sub_device_manager_id;
@@ -83,7 +87,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        tt::tt_metal::MetalContext::instance(context_id_).rtoptions().get_fast_dispatch(),
         "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;

@@ -47,11 +47,12 @@ static_assert(
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
 SubDeviceManager::SubDeviceManager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+    int context_id, tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
+    context_id_(context_id),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
-    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))) {
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance(context_id_).hal().get_alignment(HalMemType::L1))) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -61,8 +62,12 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    int context_id,
+    IDevice* device,
+    std::unique_ptr<AllocatorImpl>&& global_allocator,
+    tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
+    context_id_(context_id),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
     local_l1_size_(0) {
@@ -208,8 +213,9 @@ void SubDeviceManager::validate_sub_devices() const {
         if (sub_device.impl()->has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
             const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
-            const auto& device_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_->id());
+            const auto& device_eth_cores = tt::tt_metal::MetalContext::instance(context_id_)
+                                               .get_control_plane()
+                                               .get_active_ethernet_cores(device_->id());
             for (const auto& dev_eth_core : device_eth_cores) {
                 if (eth_cores.contains(dev_eth_core)) {
                     num_eth_cores++;
@@ -320,7 +326,7 @@ void SubDeviceManager::populate_noc_data() {
     num_noc_unicast_txns_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = MetalContext::instance().get_dispatch_query_manager().go_signal_noc();
+    NOC noc_index = MetalContext::instance(context_id_).get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);

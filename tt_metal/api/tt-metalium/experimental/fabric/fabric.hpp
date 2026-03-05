@@ -164,7 +164,21 @@ void SetFabricConfig(
     FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
     FabricRouterConfig router_config = FabricRouterConfig{});
 
+// This may be changed to accept a MetaliumEnv object instead of context_id
+void SetFabricConfigWithContext(
+    int context_id,
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+    std::optional<uint8_t> num_routing_planes = std::nullopt,
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+    FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+    FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+    FabricRouterConfig router_config = FabricRouterConfig{});
+
 FabricConfig GetFabricConfig();
+
+// This may be changed to accept a MetaliumEnv object instead of context_id
+FabricConfig GetFabricConfigWithContext(int context_id);
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

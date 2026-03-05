@@ -8,6 +8,7 @@
 #include <variant>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/experimental/context/metalium_env.hpp>
 
 /**
  * The APIs in this file are for initial support of Quasar, our next-generation architecture.
@@ -25,6 +26,12 @@
 
 namespace tt::tt_metal {
 class Program;
+
+namespace experimental {
+
+size_t GetNumAvailableDevices(const std::shared_ptr<MetaliumEnv>& env);
+
+}
 
 namespace experimental::quasar {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;

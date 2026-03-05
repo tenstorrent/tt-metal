@@ -4,7 +4,7 @@
 
 #include "firmware_initializer.hpp"
 
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal {
 

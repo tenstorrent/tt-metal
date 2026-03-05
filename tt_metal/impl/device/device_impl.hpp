@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
@@ -33,6 +34,7 @@ class Device : public IDevice {
 public:
     Device() = delete;
     Device(
+        int context_id,
         ChipId device_id,
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
@@ -57,6 +59,8 @@ public:
     ChipId id() const override { return id_; }
     // For a single device, build id is the same as device id
     ChipId build_id() const override { return id_; }
+
+    int context_id() const override { return context_id_; }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 
@@ -208,6 +212,7 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
+    int context_id_ = -1;
     ChipId id_;
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 

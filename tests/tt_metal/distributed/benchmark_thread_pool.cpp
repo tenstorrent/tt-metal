@@ -46,7 +46,7 @@ static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thre
 
 static void BM_DeviceBoundThreadPool(benchmark::State& state) {
     BM_ThreadPool(
-        state, [](uint32_t num_threads) { return tt::tt_metal::create_device_bound_thread_pool(num_threads); });
+        state, [](uint32_t num_threads) { return tt::tt_metal::create_device_bound_thread_pool(num_threads, 0); });
 }
 
 BENCHMARK(BM_DeviceBoundThreadPool)->RangeMultiplier(2)->Range(1, 1 << 18)->Complexity(benchmark::oN)->UseRealTime();

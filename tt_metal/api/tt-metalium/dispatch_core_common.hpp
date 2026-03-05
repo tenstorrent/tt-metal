@@ -18,7 +18,7 @@ private:
     DispatchCoreType type_;
     std::optional<DispatchCoreAxis> axis_;
 
-    static DispatchCoreAxis get_default_axis();
+    static DispatchCoreAxis get_default_axis(int context_id);
 
 public:
     DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
@@ -34,7 +34,9 @@ public:
 
     void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
 
-    DispatchCoreAxis get_dispatch_core_axis() const { return axis_.value_or(get_default_axis()); }
+    DispatchCoreAxis get_dispatch_core_axis(int context_id = 0) const {
+        return axis_.value_or(get_default_axis(context_id));
+    }
 
     void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 

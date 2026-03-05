@@ -8,7 +8,7 @@
 #include <optional>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
-#include "impl/context/context_descriptor.hpp"
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>

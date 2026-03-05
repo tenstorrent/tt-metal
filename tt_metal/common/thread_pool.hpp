@@ -27,10 +27,10 @@ public:
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
 // binding strategy will not be NUMA aware. Used for testing and benchmarking host-code.
-std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads);
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads, int context_id);
 // API accepting the physical devices the pool will be bound to. The threads will be bound to CPU cores in a
 // NUMA aware manner (will be "closest" to the device it serves). Used for production data-paths.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    const std::vector<tt::tt_metal::IDevice*>& physical_devices);
+    const std::vector<tt::tt_metal::IDevice*>& physical_devices, int context_id);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool();
 }  // namespace tt::tt_metal

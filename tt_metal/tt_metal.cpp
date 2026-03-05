@@ -8,11 +8,13 @@
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
+#include "context/metalium_env_accessor.hpp"
 #include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <experimental/host_api.hpp>
+#include <experimental/tt_metal.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -1043,7 +1045,8 @@ IDevice* CreateDeviceMinimal(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
     MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto* dev = new Device(
+        SILICON_CONTEXT_ID, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     auto& control_plane = MetalContext::instance().get_control_plane();
     MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
@@ -1580,6 +1583,56 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 
 namespace experimental {
 
+size_t GetNumAvailableDevices(const std::shared_ptr<MetaliumEnv>& env) {
+    return MetaliumEnvAccessor(*env).get_cluster().number_of_user_devices();
+}
+
+namespace detail {
+
+std::map<ChipId, IDevice*> CreateDevices(
+    int context_id,
+    const std::vector<ChipId>& device_ids,
+    const uint8_t num_hw_cqs,
+    const size_t l1_small_size,
+    const size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    const size_t worker_l1_size,
+    bool init_profiler,
+    [[maybe_unused]] bool ignored,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    bool is_galaxy = MetalContext::instance(context_id).get_cluster().is_galaxy_cluster();
+    MetalContext::instance(context_id)
+        .initialize_device_manager(
+            device_ids,
+            num_hw_cqs,
+            l1_small_size,
+            trace_region_size,
+            dispatch_core_config,
+            {},
+            worker_l1_size,
+            init_profiler,
+            initialize_fabric_and_dispatch_fw);
+
+    const auto devices = MetalContext::instance(context_id).device_manager()->get_all_active_devices();
+    std::map<ChipId, IDevice*> ret_devices;
+    // Only include the mmio device in the active devices set returned to the caller if we are not running
+    // on a Galaxy cluster.
+    // On Galaxy, gateway (mmio devices) cannot run compute workloads.
+
+    for (IDevice* dev : devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
+            continue;
+        }
+        ret_devices.insert({dev->id(), dev});
+    }
+
+    return ret_devices;
+}
+
+}  // namespace detail
+
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
@@ -1603,6 +1656,12 @@ void UpdateDynamicCircularBufferAddress(
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
+
+int CreateContext(const std::shared_ptr<MetaliumEnv>& env) { return MetalContext::create_instance(env); }
+
+void DestroyContext(int context_id) { MetalContext::destroy_instance(context_id); }
+
+void DestroyAllContexts() { MetalContext::destroy_all_instances(); }
 
 namespace quasar {
 

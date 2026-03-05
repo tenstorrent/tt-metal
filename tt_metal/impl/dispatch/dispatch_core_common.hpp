@@ -8,6 +8,7 @@
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/core_coordinates.hpp>  // CoreType
+#include <tt-metalium/experimental/context/context_descriptor.hpp>
 
 namespace tt::tt_metal {
 
@@ -29,6 +30,6 @@ enum DispatchWorkerType : uint32_t {
 CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 
 // Helper functions to get the dispatch core config/type
-DispatchCoreConfig get_dispatch_core_config();
+DispatchCoreConfig get_dispatch_core_config(int context_id = tt_metal::SILICON_CONTEXT_ID);
 
 }  // namespace tt::tt_metal
