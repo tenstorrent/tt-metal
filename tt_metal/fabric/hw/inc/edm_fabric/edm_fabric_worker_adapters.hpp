@@ -567,8 +567,8 @@ private:
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = get_fabric_worker_noc()) {
-        this->advance_buffer_slot_write_index();
         this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance>(noc);
+        this->advance_buffer_slot_write_index();
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>
