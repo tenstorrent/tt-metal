@@ -223,6 +223,27 @@ class TtATSSModel:
         ]
         return cls_scores, bbox_preds, centernesses
 
+    def forward_device(self, x_ttnn):
+        """
+        Full forward returning TTNN device tensors (no host conversion).
+        Input: preprocessed image as ttnn tensor [1, 3, H, W] NCHW.
+        Returns: (cls_scores, bbox_preds, centernesses) as lists of TTNN device tensors.
+        """
+        fpn_feats = self.forward_backbone_fpn(x_ttnn)
+        dy_feats = self.forward_dyhead(fpn_feats)
+        ttnn_feats = []
+        for feat in dy_feats:
+            t = ttnn.from_torch(
+                feat,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.inputs_mesh_mapper,
+            )
+            ttnn_feats.append(t)
+        return self.head(ttnn_feats)
+
     def forward(self, x_ttnn):
         """
         Full forward: backbone → FPN → DyHead (CPU) → ATSS Head.
