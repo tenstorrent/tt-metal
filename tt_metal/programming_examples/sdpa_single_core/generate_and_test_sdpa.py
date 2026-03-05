@@ -687,6 +687,304 @@ def test_mla_vDHt4(request):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Wan2.2 real-weights test: downloads QKV projection weights from HuggingFace,
+# projects random spatial input, saves Q/K/V bin files for the SDPA test.
+# ---------------------------------------------------------------------------
+
+# Wan2.2-14B 720p self-attention config
+_WAN_DIM = 5120
+_WAN_NUM_HEADS = 40
+_WAN_HEAD_DIM = _WAN_DIM // _WAN_NUM_HEADS  # 128
+_WAN_TARGET_SEQ = 75600  # 21×45×80 (Wan2.2 720p patch count)
+_WAN_VALID_SK = -(-_WAN_TARGET_SEQ // TILE) * TILE  # 75616 (tile-aligned)
+_WAN_SQ_CHUNK_T = 7
+_WAN_SK_CHUNK_T = 16
+_WAN_NUM_Q_CHUNKS = 1
+_WAN_NUM_K_CHUNKS = -(-(_WAN_VALID_SK // TILE) // _WAN_SK_CHUNK_T)  # 148
+_WAN_SK = _WAN_NUM_K_CHUNKS * _WAN_SK_CHUNK_T * TILE  # 75776
+_WAN_PADDED_K_TILES = (_WAN_SK - _WAN_VALID_SK) // TILE  # 5
+_WAN_HEAD_DIM_T = _WAN_HEAD_DIM // TILE  # 4
+_WAN_SQ = _WAN_NUM_Q_CHUNKS * _WAN_SQ_CHUNK_T * TILE  # 224
+_WAN_HF_REPO = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+_WAN_HF_SHARD = "transformer/diffusion_pytorch_model-00001-of-00012.safetensors"
+_WAN_TENSOR_NAMES = [
+    "blocks.0.attn1.to_q.weight",
+    "blocks.0.attn1.to_q.bias",
+    "blocks.0.attn1.to_k.weight",
+    "blocks.0.attn1.to_k.bias",
+    "blocks.0.attn1.to_v.weight",
+    "blocks.0.attn1.to_v.bias",
+    "blocks.0.attn1.norm_q.weight",
+    "blocks.0.attn1.norm_k.weight",
+]
+
+
+def _download_wan_tensors():
+    """Download specific tensors from the HF safetensors shard via HTTP range requests.
+
+    Downloads only the needed bytes (~315 MB) rather than the full 4.9 GB shard.
+    Returns a dict of {tensor_name: torch.Tensor}.
+    """
+    import struct
+    import json
+
+    import requests
+    from huggingface_hub import hf_hub_url
+
+    url = hf_hub_url(_WAN_HF_REPO, _WAN_HF_SHARD)
+
+    # Read safetensors header (first 8 bytes = header length, then JSON)
+    resp = requests.get(url, headers={"Range": "bytes=0-7"}, timeout=10)
+    resp.raise_for_status()
+    header_size = struct.unpack("<Q", resp.content)[0]
+
+    resp = requests.get(url, headers={"Range": f"bytes=8-{8 + header_size - 1}"}, timeout=30)
+    resp.raise_for_status()
+    header = json.loads(resp.content)
+    data_offset = 8 + header_size
+
+    # Collect byte ranges for needed tensors
+    ranges = []
+    for name in _WAN_TENSOR_NAMES:
+        info = header[name]
+        start = data_offset + info["data_offsets"][0]
+        end = data_offset + info["data_offsets"][1]
+        ranges.append((start, end, name, info["shape"], info["dtype"]))
+    ranges.sort(key=lambda x: x[0])
+
+    # Merge adjacent ranges (gap < 1MB) into contiguous downloads
+    groups = []
+    cs, ce, ci = ranges[0][0], ranges[0][1], [ranges[0]]
+    for r in ranges[1:]:
+        if r[0] - ce < 1_000_000:
+            ce = max(ce, r[1])
+            ci.append(r)
+        else:
+            groups.append((cs, ce, ci))
+            cs, ce, ci = r[0], r[1], [r]
+    groups.append((cs, ce, ci))
+
+    tensors = {}
+    for gs, ge, items in groups:
+        logger.info(f"Downloading {(ge - gs) / 1e6:.1f} MB ({len(items)} tensors) from {_WAN_HF_REPO}...")
+        resp = requests.get(url, headers={"Range": f"bytes={gs}-{ge - 1}"}, timeout=300)
+        resp.raise_for_status()
+        buf = resp.content
+        for start, end, name, shape, dtype in items:
+            raw = buf[start - gs : end - gs]
+            tensors[name] = torch.frombuffer(bytearray(raw), dtype=torch.float32).reshape(shape).clone()
+
+    return tensors
+
+
+def generate_wan_real_weights_data(out_dir):
+    """Generate Q/K/V test data using real Wan2.2-14B layer-0 self-attention weights.
+
+    Downloads QKV projection weights (~315 MB via HTTP range requests), projects
+    random spatial input through them, applies RMSNorm, extracts head 0, and saves
+    the resulting Q/K/V as bfloat16 bin files plus a float32 PyTorch SDPA reference.
+
+    Args:
+        out_dir: Directory to write {q.bin, k.bin, v.bin, ref_output.bin, cmd.txt}.
+    """
+    import json as _json
+
+    tensors = _download_wan_tensors()
+
+    Wq = tensors["blocks.0.attn1.to_q.weight"]
+    bq = tensors["blocks.0.attn1.to_q.bias"]
+    Wk = tensors["blocks.0.attn1.to_k.weight"]
+    bk = tensors["blocks.0.attn1.to_k.bias"]
+    Wv = tensors["blocks.0.attn1.to_v.weight"]
+    bv = tensors["blocks.0.attn1.to_v.bias"]
+    norm_q_w = tensors["blocks.0.attn1.norm_q.weight"]
+    norm_k_w = tensors["blocks.0.attn1.norm_k.weight"]
+
+    def rms_norm(x, weight, eps=1e-6):
+        return x / torch.sqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
+
+    # Random spatial input, projected through real weights
+    torch.manual_seed(42)
+    x_full = torch.randn(1, _WAN_VALID_SK, _WAN_DIM, dtype=torch.float32)
+
+    logger.info(f"Projecting Q ({_WAN_SQ} tokens)...")
+    Q = x_full[:, :_WAN_SQ, :] @ Wq.T + bq
+    logger.info(f"Projecting K ({_WAN_VALID_SK} tokens)...")
+    K = x_full @ Wk.T + bk
+    logger.info(f"Projecting V ({_WAN_VALID_SK} tokens)...")
+    V = x_full @ Wv.T + bv
+
+    logger.info("Applying RMSNorm to Q, K...")
+    Q = rms_norm(Q, norm_q_w)
+    K = rms_norm(K, norm_k_w)
+
+    # Reshape to heads, take head 0, squeeze batch
+    Q = Q.reshape(1, _WAN_SQ, _WAN_NUM_HEADS, _WAN_HEAD_DIM)[:, :, 0, :].squeeze(0)
+    K_valid = K.reshape(1, _WAN_VALID_SK, _WAN_NUM_HEADS, _WAN_HEAD_DIM)[:, :, 0, :].squeeze(0)
+    V_valid = V.reshape(1, _WAN_VALID_SK, _WAN_NUM_HEADS, _WAN_HEAD_DIM)[:, :, 0, :].squeeze(0)
+
+    # Truncate to bf16 (device precision)
+    Q = Q.to(torch.bfloat16).float()
+    K_valid = K_valid.to(torch.bfloat16).float()
+    V_valid = V_valid.to(torch.bfloat16).float()
+
+    # Zero-pad K/V for chunk alignment
+    K_padded = F.pad(K_valid, (0, 0, 0, _WAN_PADDED_K_TILES * TILE))
+    V_padded = F.pad(V_valid, (0, 0, 0, _WAN_PADDED_K_TILES * TILE))
+    assert K_padded.shape[0] == _WAN_SK
+
+    # PyTorch reference (unpadded)
+    logger.info("Computing reference SDPA...")
+    scale = 1.0 / (_WAN_HEAD_DIM**0.5)
+    ref_output = (
+        F.scaled_dot_product_attention(
+            Q.unsqueeze(0).unsqueeze(0),
+            K_valid.unsqueeze(0).unsqueeze(0),
+            V_valid.unsqueeze(0).unsqueeze(0),
+            is_causal=False,
+            scale=scale,
+        )
+        .squeeze(0)
+        .squeeze(0)
+    )
+
+    logger.info(f"Q: {Q.shape}, range [{Q.min():.4f}, {Q.max():.4f}]")
+    logger.info(f"K_valid: {K_valid.shape}, K_padded: {K_padded.shape}")
+    logger.info(f"Reference: {ref_output.shape}, range [{ref_output.min():.6f}, {ref_output.max():.6f}]")
+
+    # Save
+    os.makedirs(out_dir, exist_ok=True)
+    float32_to_bf16_bytes(Q).tofile(os.path.join(out_dir, "q.bin"))
+    float32_to_bf16_bytes(K_padded).tofile(os.path.join(out_dir, "k.bin"))
+    float32_to_bf16_bytes(V_padded).tofile(os.path.join(out_dir, "v.bin"))
+    ref_output.numpy().tofile(os.path.join(out_dir, "ref_output.bin"))
+
+    try:
+        binary = find_binary()
+    except FileNotFoundError:
+        binary = "<build>/metal_example_sdpa_single_core"
+
+    args = [
+        "--test",
+        out_dir,
+        "--Sq_chunk_t",
+        str(_WAN_SQ_CHUNK_T),
+        "--Sk_chunk_t",
+        str(_WAN_SK_CHUNK_T),
+        "--head_dim_t",
+        str(_WAN_HEAD_DIM_T),
+        "--num_q_chunks",
+        str(_WAN_NUM_Q_CHUNKS),
+        "--num_k_chunks",
+        str(_WAN_NUM_K_CHUNKS),
+        "--subblock_h",
+        "1",
+        "--mm_throttle_level",
+        "0",
+        "--exp_approx_mode",
+        "0",
+        "--padded_k_tiles",
+        str(_WAN_PADDED_K_TILES),
+    ]
+    with open(os.path.join(out_dir, "cmd.txt"), "w") as f:
+        f.write(f"{binary} {' '.join(args)}\n")
+        f.write(f'\n// launch.json args:\n"args": {_json.dumps(args)}\n')
+
+    logger.info(f"Saved wan_real_weights data to {out_dir}/")
+
+
+def test_wan_real_weights(request):
+    """Wan2.2-14B 720p self-attention dimensions with real pretrained QKV projection weights.
+
+    Q/K/V were generated by projecting random spatial input through the actual
+    Wan2.2-T2V-A14B layer-0 self-attention weights (to_q/to_k/to_v + RMSNorm),
+    then taking head 0.
+
+    Dimensions:
+      - Q: [224, 128]  (1 chunk × Sq_chunk_t=7 tiles)
+      - K/V: [75776, 128]  (148 chunks × Sk_chunk_t=16, padded from 75616 valid tokens)
+      - head_dim_t=4, padded_k_tiles=5
+      - 75616 = ceil(75600/32)*32 where 75600 = 21×45×80 (Wan2.2 720p patch count)
+
+    Data generation (requires HuggingFace access, downloads ~315 MB of weights):
+        pytest generate_and_test_sdpa.py --save-inputs -k wan_real_weights
+    """
+    test_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_inputs", "wan_real_weights")
+
+    save_only = request.config.getoption("--save-inputs", default=False)
+    if save_only:
+        generate_wan_real_weights_data(test_dir)
+        pytest.skip("--save-inputs: wan_real_weights data generated")
+
+    if not os.path.isdir(test_dir) or not os.path.isfile(os.path.join(test_dir, "q.bin")):
+        pytest.skip(
+            "wan_real_weights data not found. Generate with:\n"
+            "  pytest generate_and_test_sdpa.py --save-inputs -k wan_real_weights"
+        )
+
+    Sq = _WAN_SQ
+    Sk = _WAN_SK
+    d = _WAN_HEAD_DIM
+
+    # Load pre-generated reference
+    ref_output = torch.from_numpy(
+        np.fromfile(os.path.join(test_dir, "ref_output.bin"), dtype=np.float32).reshape(Sq, d)
+    )
+
+    logger.info(
+        f"Wan real weights: Sq={Sq}, Sk={Sk}, " f"valid_Sk={_WAN_VALID_SK}, d={d}, padded_k_tiles={_WAN_PADDED_K_TILES}"
+    )
+    logger.info(f"Reference range: [{ref_output.min():.6f}, {ref_output.max():.6f}]")
+
+    binary = find_binary()
+    cmd = [
+        binary,
+        "--test",
+        test_dir,
+        "--Sq_chunk_t",
+        str(_WAN_SQ_CHUNK_T),
+        "--Sk_chunk_t",
+        str(_WAN_SK_CHUNK_T),
+        "--head_dim_t",
+        str(_WAN_HEAD_DIM_T),
+        "--num_q_chunks",
+        str(_WAN_NUM_Q_CHUNKS),
+        "--num_k_chunks",
+        str(_WAN_NUM_K_CHUNKS),
+        "--subblock_h",
+        "1",
+        "--mm_throttle_level",
+        "0",
+        "--exp_approx_mode",
+        "0",
+        "--padded_k_tiles",
+        str(_WAN_PADDED_K_TILES),
+    ]
+
+    logger.info(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    logger.info(f"C++ stdout:\n{result.stdout}")
+    if result.stderr:
+        logger.warning(f"C++ stderr:\n{result.stderr}")
+    assert result.returncode == 0, f"C++ binary exited with code {result.returncode}"
+
+    device_output_path = os.path.join(test_dir, "device_output.bin")
+    assert os.path.isfile(device_output_path), f"Device output not found: {device_output_path}"
+
+    device_raw = np.fromfile(device_output_path, dtype=np.uint16)
+    assert device_raw.size == Sq * d, f"Expected {Sq * d} elements, got {device_raw.size}"
+    device_output = bf16_bytes_to_float32(device_raw).reshape(Sq, d)
+
+    diff = (device_output - ref_output).abs()
+    max_abs_err = diff.max().item()
+    rmse = ((device_output - ref_output) ** 2).mean().sqrt().item()
+    pcc = compute_pcc(ref_output, device_output)
+
+    logger.info(f"PCC={pcc:.6f}  Max Abs Error={max_abs_err:.6f}  RMSE={rmse:.6f}")
+    assert pcc > PCC_THRESHOLD, f"PCC {pcc:.6f} below threshold {PCC_THRESHOLD}"
+
+
 def test_padded_s160_k512_sbh2(request):
     """Reproduces d128-s160-k512-q128-noncausal failure: Sq_chunk_t=4, Sk_chunk_t=16,
     sbh=2, 11 padded K tiles out of 16 (Sk=160 padded to 512)."""
