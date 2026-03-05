@@ -88,6 +88,7 @@ enum class EnvVarID {
     TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
     TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
     TT_METAL_FORCE_REINIT,                     // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
@@ -559,6 +560,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: empty (no profile import)
         // Usage: export TT_METAL_FABRIC_TRIMMING_PROFILE=/path/to/channel_trimming_capture.yaml
         case EnvVarID::TT_METAL_FABRIC_TRIMMING_PROFILE: this->fabric_trimming_profile_path = std::string(value); break;
+
+        // TT_METAL_FABRIC_TRIMMING_OVERRIDE
+        // Path to a global override YAML file for channel trimming. When set, override entries
+        // replace capture-driven decisions for specified VCs (force-enable/disable channels).
+        // Can be used with or without TT_METAL_FABRIC_TRIMMING_PROFILE.
+        // Default: empty (no override)
+        // Usage: export TT_METAL_FABRIC_TRIMMING_OVERRIDE=/path/to/override.yaml
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_OVERRIDE:
+            this->fabric_trimming_override_path = std::string(value);
+            break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).

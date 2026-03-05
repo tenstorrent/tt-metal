@@ -159,7 +159,7 @@ extern "C" __attribute__((naked, used)) void resume_from_reset() {
 
 // After running the base firmware, some core state (for erisc0) seems broken, so jumps into the kernel may occasionally
 // hang. Resetting the core fixes the issue. We need to save all the GPR and local memory to L1, because local memory is
-// cleared on reset. ERISC1 is responsible for triggering the reset, which willl start execution in resume_from_reset.
+// cleared on reset. ERISC1 is responsible for triggering the reset, which will start execution in resume_from_reset.
 extern "C" __attribute__((naked)) void enter_reset(void) {
     __asm__ volatile(
         // Save contents to stack
