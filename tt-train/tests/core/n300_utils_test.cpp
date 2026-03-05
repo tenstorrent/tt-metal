@@ -55,7 +55,6 @@ TEST_F(N300UtilsTest, TestXTensorReplicateInt32) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateUInt32) {
-    SKIP_FOR_LLK_ASSERTS("Hits LLK assert check for are_packers_configured_correctly.");
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     xt::xarray<uint32_t> test_data = {30U, 20U, 2U};
