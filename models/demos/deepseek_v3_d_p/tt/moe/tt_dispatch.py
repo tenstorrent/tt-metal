@@ -12,7 +12,6 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import get_gate_outputs
 
 
 class TtDispatchModule(LightweightModule):
@@ -61,6 +60,7 @@ class TtDispatchModule(LightweightModule):
         x: torch.Tensor,
         weights: torch.Tensor,
         indices: torch.Tensor,
+        chip_to_n_routed_expert_offset: torch.Tensor,
     ):
         """
         Route tokens from their original positions to expert-specific buffers distributed across chips.
@@ -72,48 +72,19 @@ class TtDispatchModule(LightweightModule):
             x: Input tensor of shape (num_chips, seq_len, hidden_dim)
             weights: Router weights of shape (num_chips, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
+            chip_to_n_routed_expert_offset: Base offset for each expert from each chip
+                Shape: (num_chips, n_routed_experts) - from get_gate_outputs()
 
         Returns:
             dispatched: Dispatched tokens of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
             metadata: Metadata tensor of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
-            experts_counter: Counter tracking tokens per expert of shape (num_chips, experts_per_chip)
         """
-
-        # assert (
-        #     self.num_chips == x.shape[0] == weights.shape[0] == indices.shape[0]
-        # ), f"Mismatched num_chips across inputs. Expected {self.num_chips}, got {x.shape[0]}, {weights.shape[0]}, {indices.shape[0]}"
-        # assert (
-        #     self.seq_len_per_chip == x.shape[1] == weights.shape[1] == indices.shape[1]
-        # ), f"Mismatched seq_len_per_chip across inputs. Expected {self.seq_len_per_chip}, got {x.shape[1]}, {weights.shape[1]}, {indices.shape[1]}"
-        # assert (
-        #     self.num_experts_per_tok == indices.shape[-1]
-        # ), f"Last dimension of indices must match num_experts_per_tok {self.num_experts_per_tok}, got {indices.shape[-1]}"
-
-        # Compute gate outputs on host (temporary fallback until device-side implementation)
-        mesh_composer = ttnn.create_mesh_composer(
-            self.mesh_device,
-            ttnn.MeshComposerConfig(
-                dims=[0, 1],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
-            ),
-        )
-        fallback_indices = ttnn.to_torch(indices, mesh_composer=mesh_composer)
-
-        chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, cum_sum = get_gate_outputs(
-            fallback_indices,
-            self.num_chips,
-            self.n_routed_experts,
-            self.experts_per_chip,
-            self.seq_len_per_chip,
-            self.num_experts_per_tok,
-        )
 
         mesh_mapper = ttnn.ShardTensor2dMesh(
             self.mesh_device,
             mesh_shape=self.mesh_device.shape,
             dims=(0, None),
         )
-
-        ###
 
         # Convert chip_to_n_routed_expert_offset to ttnn tensor
         chip_to_n_routed_expert_offset_ttnn = ttnn.from_torch(
@@ -157,14 +128,4 @@ class TtDispatchModule(LightweightModule):
         # ttnn.visualize_tensor(tt_dispatch_buffer, header="Dispatch Buffer")
         # ttnn.visualize_tensor(tt_dispatch_metadata, header="Dispatch Metadata")
 
-        # chip_to_routed_expert_tokens is needed to run experts and for combine step
-        # It is computed on host (not by device kernel) since it's needed before dispatch completes
-
-        # Return kernel outputs plus host-computed counter
-        return (
-            tt_dispatched_buffer,
-            tt_dispatch_metadata,
-            chip_to_routed_expert_tokens,  # host-computed counter needed for combine
-            chip_to_n_routed_expert_offset,  # needed for testing
-            cum_sum,  # needed for testing
-        )
+        return (tt_dispatched_buffer, tt_dispatch_metadata)
