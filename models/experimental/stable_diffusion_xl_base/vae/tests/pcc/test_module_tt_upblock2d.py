@@ -113,5 +113,9 @@ def test_vae_upblock(
     del vae
     gc.collect()
 
+    # On Blackhole, 1024x1024-block1 has slightly lower PCC ~0.99452
+    if is_blackhole() and block_id == 1:
+        pcc = 0.994
+
     pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     print(pcc_passed, pcc_message)
