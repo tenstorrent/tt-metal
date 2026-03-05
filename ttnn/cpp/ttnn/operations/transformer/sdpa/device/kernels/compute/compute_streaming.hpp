@@ -349,7 +349,6 @@ void mul_bcast_cols_l1_acc(
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
-    PACK((llk_pack_reconfig_l1_acc(1)));
     tile_regs_acquire();
     for (uint32_t i = 0; i < tiles_per_row; i++) {
         uint32_t src_tile_index = read_row_base + i;
@@ -362,7 +361,6 @@ void mul_bcast_cols_l1_acc(
         pack_tile<true>(i, out_cb, write_row_base + i);
     }
     tile_regs_release();
-    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 /**
@@ -383,7 +381,6 @@ void mul_block_bcast_cols_acc(
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
-    PACK((llk_pack_reconfig_l1_acc(1)));
     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += COL_BATCH) {
         constexpr uint32_t last_batch = tiles_per_column % COL_BATCH;
         const uint32_t cur_cols =
@@ -399,15 +396,15 @@ void mul_block_bcast_cols_acc(
         tile_regs_commit();
         tile_regs_wait();
         dst_index = 0;
+        PACK((llk_pack_mop_config<false, false, false>(out_cb, cur_cols)));
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            for (uint32_t j = 0; j < cur_cols; j++) {
-                uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base + j;
-                pack_tile<true>(dst_index++, out_cb, out_tile_index);
-            }
+            uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
+            pack_tile<true>(dst_index, out_cb, out_tile_index);
+            dst_index += cur_cols;
         }
+        PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
         tile_regs_release();
     }
-    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 /**
@@ -478,8 +475,12 @@ void normalize_row_streaming(
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
-            recip_tile_init();
-            MATH((recip_tile_first_column(0)));
+            // legacy_compat=false uses hardware SFPARECIP + loadmacro pipeline instead of
+            // the slow SFPI Newton-Raphson loop. Full-tile RC mode is safe: only column 0
+            // has meaningful data (from the matmul), and mul_tiles_bcast_cols downstream
+            // only reads column 0.
+            recip_tile_init<false>();
+            MATH((recip_tile<false>(0)));
             tile_regs_commit();
 
             tile_regs_wait();
@@ -937,6 +938,7 @@ static void sdpa_inner_loop_step(
 
         // SALAD correction + optional normalization lambda
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
+            PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
                 mul_bcast_cols_l1_acc<sbh>(prev_sum, cb_exp_max_diff, cur_sum, salad_row, w_salad);
@@ -945,6 +947,7 @@ static void sdpa_inner_loop_step(
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
                 mul_block_bcast_cols_acc<sbh, vDHt>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
             }
+            PACK((llk_pack_reconfig_l1_acc(0)));
             if (last_iter) {
                 normalize_row(w_salad, pushed);
             }
@@ -958,8 +961,6 @@ static void sdpa_inner_loop_step(
             uint32_t w_salad = salad_row - pushed_rows;
             uint32_t w_q = q_subblock - pushed_rows;
 
-            cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, sbh);
                 sub_exp_first_col_blocks<PROFILING_ENABLED, scale_fp32, sbh>(
@@ -967,6 +968,7 @@ static void sdpa_inner_loop_step(
                 cb_push_back(cb_exp_max_diff, sbh);
             }
 
+            cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
             // Full matmul for current row
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
