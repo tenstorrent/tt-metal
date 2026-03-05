@@ -107,6 +107,142 @@ FORCE_INLINE void _custom_mm_compressed_unroll_(
         cfg, address_a, reg0_base, reg2_base, std::make_index_sequence<KT_DIM * CT_DIM / 2>{});
 }
 
+// ---------------------------------------------------------------------------
+// Compact constexpr: per-format non-inlined pair functions + constexpr dispatch
+//
+// Instead of unrolling 112 unique code blocks, generate 4 shared functions
+// (one per format pair type) and a constexpr sequence of calls.
+// Code size: ~200 bytes (4 functions) + ~450 bytes (112 calls) ≈ 650 bytes
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Per-format pair processor. Template on FMT_IDX so each format gets
+ *        one shared function body. __attribute__((noinline)) prevents the compiler
+ *        from duplicating the body at each call site.
+ */
+/**
+ * @brief Process n_pairs with a fixed constexpr format in a tight loop.
+ *        noinline so only one copy per format exists. n_pairs is runtime.
+ *        Inner loop: all immediates (tile size, reconfig values), no data loads.
+ */
+template <uint32_t FMT_IDX>
+__attribute__((noinline)) void _run_fmt_(
+    volatile uint* cfg, uint32_t& address_a, uint32_t reg0_base, uint32_t reg2_base, uint32_t n_pairs) {
+    UNPACK(({
+        constexpr uint32_t sz = TILE_SIZES[FMT_IDX] >> cb_addr_shift;
+        reconfig_custom_mm_srca(cfg, FMT_IDX, reg0_base, reg2_base);
+        // Use local copy to keep address_a in a register (avoid ref load-modify-store)
+        uint32_t addr = address_a;
+        for (uint32_t i = 0; i < n_pairs; i++) {
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = addr;
+            addr += sz;
+            semaphore_post(semaphore::UNPACK_SYNC);
+            wait_for_next_context(2);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = addr;
+            addr += sz;
+            semaphore_post(semaphore::UNPACK_SYNC);
+        }
+        address_a = addr;
+    }));
+}
+
+// Helper: extract format for tile K from packed array
+template <size_t K, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+constexpr uint32_t _get_fmt_() {
+    return (FMT_PACKED[K / TILES_PER_UINT32] >> ((K % TILES_PER_UINT32) * ASSIGN_BITS)) & ASSIGN_MASK;
+}
+
+// ---------------------------------------------------------------------------
+// Compile-time run detection: scan FMT_PACKED at compile time, emit one
+// noinline call per format run. Each call has a runtime pair count but
+// constexpr format/tile-size (all immediates in the inner loop).
+//
+// For uniform bfp8: 1 call to _run_fmt_<0>(..., 112)
+// For mostly bfp4 with some bfp8: few calls, e.g. _run_fmt_<1>(..., 100), _run_fmt_<0>(..., 12)
+// For fully interleaved: many calls but each to a shared ~80 byte function body
+// ---------------------------------------------------------------------------
+
+// Check if a pair (2 tiles) is uniform (both same format)
+template <size_t PAIR_IDX, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+constexpr bool _pair_uniform_() {
+    return _get_fmt_<PAIR_IDX * 2, NUM_PACKED, FMT_PACKED>() == _get_fmt_<PAIR_IDX * 2 + 1, NUM_PACKED, FMT_PACKED>();
+}
+
+// Find the number of consecutive same-format PAIRS starting at PAIR_START
+// (where each pair is also internally uniform)
+template <size_t PAIR_START, size_t TOTAL_PAIRS, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+constexpr size_t _pair_run_length_() {
+    if constexpr (!_pair_uniform_<PAIR_START, NUM_PACKED, FMT_PACKED>()) {
+        return 0;  // first pair itself is mixed — no uniform run
+    } else if constexpr (PAIR_START + 1 >= TOTAL_PAIRS) {
+        return 1;
+    } else {
+        constexpr uint32_t fmt = _get_fmt_<PAIR_START * 2, NUM_PACKED, FMT_PACKED>();
+        constexpr uint32_t next_fmt = _get_fmt_<(PAIR_START + 1) * 2, NUM_PACKED, FMT_PACKED>();
+        if constexpr (next_fmt != fmt || !_pair_uniform_<PAIR_START + 1, NUM_PACKED, FMT_PACKED>()) {
+            return 1;
+        } else {
+            return 1 + _pair_run_length_<PAIR_START + 1, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
+        }
+    }
+}
+
+// Emit calls for all pairs starting at PAIR_START
+template <size_t PAIR_START, size_t TOTAL_PAIRS, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+FORCE_INLINE void _emit_runs_(volatile uint* cfg, uint32_t& address_a, uint32_t reg0_base, uint32_t reg2_base) {
+    if constexpr (PAIR_START < TOTAL_PAIRS) {
+        constexpr size_t run = _pair_run_length_<PAIR_START, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
+
+        if constexpr (run > 0) {
+            // Uniform run: all pairs have the same format
+            constexpr uint32_t fmt = _get_fmt_<PAIR_START * 2, NUM_PACKED, FMT_PACKED>();
+            _run_fmt_<fmt>(cfg, address_a, reg0_base, reg2_base, run);
+            _emit_runs_<PAIR_START + run, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+        } else {
+            // Mixed pair: inline with constexpr immediates
+            constexpr uint32_t fmt0 = _get_fmt_<PAIR_START * 2, NUM_PACKED, FMT_PACKED>();
+            constexpr uint32_t fmt1 = _get_fmt_<PAIR_START * 2 + 1, NUM_PACKED, FMT_PACKED>();
+            constexpr uint32_t sz0 = TILE_SIZES[fmt0] >> cb_addr_shift;
+            constexpr uint32_t sz1 = TILE_SIZES[fmt1] >> cb_addr_shift;
+            UNPACK(({
+                wait_for_next_context(2);
+                reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+                address_a += sz0;
+                semaphore_post(semaphore::UNPACK_SYNC);
+                wait_for_next_context(2);
+                reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+                address_a += sz1;
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }));
+            _emit_runs_<PAIR_START + 1, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+        }
+    }
+}
+
+template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+FORCE_INLINE void custom_mm_compressed_block_compact(
+    uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
+    UNPACK(({
+        volatile uint* cfg = get_cfg_pointer();
+        uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
+
+        wait_for_next_context(1);
+        reset_config_context();
+
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = addr_in0;
+        TT_MOP(0, (KT_DIM / 2) - 1, 0);
+
+        uint32_t address_a = addr_in1;
+        constexpr size_t total_pairs = KT_DIM * CT_DIM / 2;
+        _emit_runs_<0, total_pairs, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+    }));
+    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+}
+
 /**
  * @brief Constexpr custom MM block. Zero runtime format lookup.
  *
