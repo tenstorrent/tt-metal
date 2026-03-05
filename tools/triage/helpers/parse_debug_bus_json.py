@@ -4,20 +4,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 Parse debug bus signal groups from JSON produced by tt-triage and print selected groups
-for selected devices and locations. Each group is printed as its own table: first column
-is the group name (header), second column is "Value" (header); rows are either decoded
-signal names and values (when tt-exalens is available and a device is connected) or a
-single raw hex row.
+of selected block typesfor selected devices and locations. Each group is printed as its own table: first column
+is the group name (header), second column is "Value" (header); rows are decoded
+signal names and values.
 
 Usage:
     parse_debug_bus_json.py <json_path> [--groups=<pattern>] [--devices=<devices>] [--block-types=<types>] [--locations=<locations>]
 
 Options:
-    -h --help              Show this message.
-    --groups=<pattern>     Regex to match group names (comma-separated). Default: all.
-    --devices=<devices>    Comma-separated device IDs (e.g. 0,1). Default: all.
-    --block-types=<types>  Comma-separated block types (e.g. tensix, idle_eth). Default: all.
-    --locations=<locations>  Comma-space-separated: x-y (e.g. 1-1), x,y (e.g. 0,0). Default: all.
+    -h --help                Show this message.
+    --groups=<pattern>       Regex to match group names (comma-separated). Default: all.
+    --devices=<devices>      Comma-separated device IDs (e.g. 0,1). Default: all.
+    --block-types=<types>    Comma-separated block types (e.g. tensix, idle_eth). Default: all.
+    --locations=<locations>  Colon(:)-separated locations: x-y(e.g. 1-1):x,y(e.g. 0,0). Default: all.
 """
 
 from __future__ import annotations
@@ -32,8 +31,6 @@ from rich.console import Console
 from rich.table import Table
 
 from ttexalens.tt_exalens_init import init_ttexalens
-
-_console = Console()
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_bus_signal_store import DebugBusSignalStore
 from ttexalens.hardware.noc_block import NocBlock
@@ -41,6 +38,8 @@ from ttexalens.hardware.wormhole.eth_block import WormholeEthBlock
 from ttexalens.hardware.wormhole.functional_worker_block import WormholeFunctionalWorkerBlock
 from ttexalens.hardware.blackhole.eth_block import BlackholeEthBlock
 from ttexalens.hardware.blackhole.functional_worker_block import BlackholeFunctionalWorkerBlock
+
+from tools.triage.utils import ERROR, INFO, WARN
 
 
 def _get_selected_devices(devices_arg: str | None, device_keys: set[str]) -> list[str]:
@@ -108,6 +107,9 @@ def _get_selected_groups(groups_arg: str | None, groups: list[str]) -> list[str]
     return selected
 
 
+_console = Console()
+
+
 def _print_signal_group_table(group_name: str, hex_value: str, debug_bus) -> None:
     """Print one table per group: column 1 = group name (header), column 2 = Value (header).
     Rows: signal names and corresponding values when decoded; otherwise single row with raw hex.
@@ -158,24 +160,23 @@ def create_noc_block(device_arch: str, block_type: str, location: OnChipCoordina
             raise ValueError(f"Unknown architecture: {device_arch}")
 
 
-context = init_ttexalens()
-mock_location = OnChipCoordinate.create("0,0", context.devices[0])
-
-
 def main() -> None:
     args = docopt(__doc__, argv=sys.argv[1:])
 
     json_path = Path(args["<json_path>"])
     if not json_path.is_file():
-        print(f"Error: file not found: {json_path}")
+        ERROR(f"Error: file not found: {json_path}")
         return
 
     try:
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
-        print(f"Error loading JSON: {e}")
+        ERROR(f"Error loading JSON: {e}")
         return
+
+    context = init_ttexalens()
+    mock_location = OnChipCoordinate.create("0,0", context.devices[0])
 
     selected_devices = _get_selected_devices(args["--devices"], data.keys())
     printed_any = False
@@ -193,7 +194,7 @@ def main() -> None:
                 debug_bus = noc_block.debug_bus
                 assert debug_bus is not None
             except ValueError as e:
-                print(f"Error: {e}")
+                ERROR(f"Error: {e}")
                 continue
             selected_locations = _get_selected_locations(args["--locations"], list(block_data.keys()))
             if not selected_locations:
@@ -206,12 +207,12 @@ def main() -> None:
                 if not selected_groups:
                     continue
                 printed_any = True
-                print(f"\n[{device_key}] {block_type} — {loc_key}")
-                print(f"Failed RISCs: {loc_data['failed_riscs']}")
+                INFO(f"\n[{device_key}] {block_type} — {loc_key}")
+                WARN(f"Failed RISCs: {loc_data['failed_riscs']}")
                 _print_groups_for_location(selected_groups, debug_bus, groups_data)
 
     if not printed_any:
-        print("No matching data to display.")
+        WARN("No matching data to display.")
 
 
 if __name__ == "__main__":
