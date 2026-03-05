@@ -1400,6 +1400,7 @@ class AttentionBlock:
         # Flash MLA named compile-time args
         # a lot of the setup is reused from the FlashMLADecode op
         flash_mla_program_config = FlashMLADecode.ProgramConfig()
+        device_chunk_size = flash_mla_program_config.device_chunk_size
         k_chunk_size = flash_mla_program_config.k_chunk_size
         num_q_heads_per_core = 8
         k_shape = kv_cache_tensor.padded_shape
@@ -3125,6 +3126,12 @@ class AttentionBlock:
                 krope_cores = ttnn.corerange_to_cores(krope_grid)
                 krope_start_tile_offset_core_values = [(core, idx * krope_Wt) for idx, core in enumerate(krope_cores)]
 
+                kv_cache_sp_named_compile_time_args = [
+                    ("kv_cache_device_chunk_size", device_chunk_size),
+                    ("kv_cache_sp_device_idx", row),
+                    ("kv_cache_num_sp_devices", mesh_rows),
+                ]
+
                 ncrisc_named_compile_time_args = (
                     bcast_ncrisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
@@ -3143,6 +3150,7 @@ class AttentionBlock:
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
                     + krope_ncrisc_addr_args
+                    + kv_cache_sp_named_compile_time_args
                     + mla_ncrisc_named_compile_time_args
                     + post_sdpa_ncrisc_named_compile_time_args
                 )
@@ -3164,6 +3172,7 @@ class AttentionBlock:
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args
+                    + kv_cache_sp_named_compile_time_args
                     + mla_brisc_named_compile_time_args
                     + post_sdpa_brisc_named_compile_time_args
                 )
@@ -3183,6 +3192,7 @@ class AttentionBlock:
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args
                     + kv_cache_trisc_named_compile_time_args
+                    + kv_cache_sp_named_compile_time_args
                     + mla_trisc_named_compile_time_args
                     + post_sdpa_trisc_named_compile_time_args
                 )
