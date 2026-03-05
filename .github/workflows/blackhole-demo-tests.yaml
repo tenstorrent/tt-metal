@@ -31,6 +31,7 @@ on:
         options:
           - all
           - P150 (1xP150)
+          - P150 CIv2 (1xP150)
           - Quietbox (4xP150)
           - DeskBox (2xP150)
           - LoudBox (8xP150)
@@ -107,6 +108,7 @@ jobs:
           all_systems='[
             {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
             {"name": "P150 (1xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
+            {"name": "P150 CIv2 (1xP150)", "weights-cache-mode": "lfc", "num_devices": 1, "sku": "bh_p150b_civ2"},
             {"name": "Quietbox (4xP150)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
             {"name": "DeskBox (2xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
             {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
