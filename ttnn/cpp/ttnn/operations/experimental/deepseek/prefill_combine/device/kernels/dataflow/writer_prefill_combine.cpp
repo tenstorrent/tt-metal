@@ -112,8 +112,16 @@ void kernel_main() {
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
     DPRINT_COMBINE << "Opening fabric connections async..." << ENDL();
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
-    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
+    std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            if (directions[dir]) {
+                fabric_connections[dir][link] =
+                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+                fabric_connections[dir][link].open_start();
+            }
+        }
+    }
 
     // Set up packet header from CB (cb_id 4)
     constexpr uint32_t cb_packet_header_id = 4;
@@ -122,7 +130,21 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
 
     DPRINT_COMBINE << "Waiting for fabric connections barrier..." << ENDL();
-    open_direction_connections_barrier(directions, fabric_connections);
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            if (directions[dir]) {
+                fabric_connections[dir][link].open_finish();
+            }
+        }
+    }
+
+    // Use link 0 connections for init semaphore exchange
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        if (directions[dir]) {
+            init_connections[dir] = fabric_connections[dir][0];
+        }
+    }
 
     // Send init semaphore to all devices
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
@@ -134,12 +156,20 @@ void kernel_main() {
         mesh_rows,
         mesh_cols,
         ReplicateGroup::NONE,
-        num_chips>(fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        num_chips>(init_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        if (directions[dir]) {
+            fabric_connections[dir][0] = init_connections[dir];
+        }
+    }
 
     // Wait for all devices to complete initialization
     DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
     noc_semaphore_wait((uint32_t*)init_semaphore_address, num_chips - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+
+    uint32_t fabric_send_counter = 0;
 
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();
 #endif
@@ -186,16 +216,19 @@ void kernel_main() {
                 //                << dst_chip << ENDL();
 #ifdef DEST_CHIP_ID
                 if constexpr (is_1d_topology<topology>()) {
-                    fabric_send_chip_unicast_noc_unicast_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
+                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    uint32_t link = fabric_send_counter % num_links;
+                    fabric_send_counter++;
+
+                    uint32_t distance =
+                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    fabric_set_unicast_route<false>(
+                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
                         output_addr_gen,
-                        fabric_connections,
+                        fabric_connections[route][link],
                         unicast_packet_header,
-                        dst_chip,
                         buffer_cb_addr,
                         output_page_idx,
                         (int)aligned_output_page_size,
@@ -211,6 +244,12 @@ void kernel_main() {
 
 #ifdef DEST_CHIP_ID
     // Close fabric connections to prevent resource conflicts with subsequent operations
-    close_direction_connections(directions, fabric_connections);
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            if (directions[dir]) {
+                fabric_connections[dir][link].close();
+            }
+        }
+    }
 #endif
 }

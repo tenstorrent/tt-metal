@@ -516,13 +516,15 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
                     sender_core,
                     reader_runtime_args[9],
                     reader_runtime_args[10]);
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    src_fabric_node_id,
-                    mesh_device->get_fabric_node_id(neighbor_coordinate),
-                    0,  // link_id - use 0 for single link
-                    program,
-                    sender_core,
-                    writer_runtime_args);
+                for (uint32_t link = 0; link < num_links; link++) {
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        src_fabric_node_id,
+                        mesh_device->get_fabric_node_id(neighbor_coordinate),
+                        link,
+                        program,
+                        sender_core,
+                        writer_runtime_args);
+                }
             }
         }
 

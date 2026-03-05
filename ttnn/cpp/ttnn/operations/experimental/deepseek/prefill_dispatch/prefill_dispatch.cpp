@@ -39,10 +39,7 @@ std::array<ttnn::Tensor, 3> ExecutePrefillDispatch::invoke(
         cluster_axis.value_or(0) == 0,
         "cluster_axis must be 0 (current value: {}). Other values are not tested.",
         cluster_axis.value_or(0));
-    TT_FATAL(
-        num_links.value_or(1) == 1,
-        "num_links must be 1 (current value: {}). Other values are not tested.",
-        num_links.value_or(1));
+    TT_FATAL(num_links.value_or(1) >= 1, "num_links must be >= 1 (current value: {}).", num_links.value_or(1));
 
     std::optional<uint32_t> axis = cluster_axis;
     uint32_t num_links_ = num_links.value_or(1);

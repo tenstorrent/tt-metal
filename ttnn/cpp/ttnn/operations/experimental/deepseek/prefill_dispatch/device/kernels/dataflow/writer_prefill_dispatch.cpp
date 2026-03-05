@@ -150,10 +150,18 @@ void kernel_main() {
     DPRINT_DISPATCH << ENDL();
     //
 
-    DPRINT_DISPATCH << "DEBUG: Before open_direction_connections_async" << ENDL();
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
-    open_direction_connections_async(directions, fabric_connections, rt_args_idx);
-    DPRINT_DISPATCH << "DEBUG: After open_direction_connections_async" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: Before opening fabric connections" << ENDL();
+    std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            if (directions[dir]) {
+                fabric_connections[dir][link] =
+                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+                fabric_connections[dir][link].open_start();
+            }
+        }
+    }
+    DPRINT_DISPATCH << "DEBUG: After opening fabric connections" << ENDL();
 
     // Set up packet headers from CB (cb_packet_header_id from compile-time args)
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
@@ -162,9 +170,23 @@ void kernel_main() {
     auto* metadata_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
         packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
 
-    DPRINT_DISPATCH << "DEBUG: Before open_direction_connections_barrier" << ENDL();
-    open_direction_connections_barrier(directions, fabric_connections);
-    DPRINT_DISPATCH << "DEBUG: After open_direction_connections_barrier" << ENDL();
+    DPRINT_DISPATCH << "DEBUG: Before fabric connections barrier" << ENDL();
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            if (directions[dir]) {
+                fabric_connections[dir][link].open_finish();
+            }
+        }
+    }
+    DPRINT_DISPATCH << "DEBUG: After fabric connections barrier" << ENDL();
+
+    // Use link 0 connections for init semaphore exchange
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        if (directions[dir]) {
+            init_connections[dir] = fabric_connections[dir][0];
+        }
+    }
 
     // CRITICAL: Send init semaphore increments to other devices BEFORE waiting
     // Each device sends to configured targets, then waits for (num_devices - 1) increments
@@ -177,7 +199,13 @@ void kernel_main() {
         mesh_rows,
         mesh_cols,
         ReplicateGroup::NONE,  // Send to all devices
-        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        num_devices>(init_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        if (directions[dir]) {
+            fabric_connections[dir][0] = init_connections[dir];
+        }
+    }
     DPRINT_DISPATCH << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
 
 #ifdef AXIS
@@ -210,6 +238,8 @@ void kernel_main() {
     // Wait for all devices to complete fabric initialization
     noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
+
+    uint32_t fabric_send_counter = 0;
 
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif
@@ -288,45 +318,49 @@ void kernel_main() {
                 DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
                                 << " chip." << ENDL();
                 if constexpr (is_1d_topology<topology>()) {
-                    fabric_send_chip_unicast_noc_unicast_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
+                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                    uint32_t link = fabric_send_counter % num_links;
+                    fabric_send_counter++;
+
+                    uint32_t distance =
+                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                    fabric_set_unicast_route<false>(
+                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
                         output_addr_gen,
-                        fabric_connections,
+                        fabric_connections[route][link],
                         unicast_packet_header,
-                        expert_chip,  // linearized_dest_mesh_coord
                         input_token_read_addr,
                         page_idx,
-                        (int)aligned_output_page_size,  // bfloat16 = 2 bytes
+                        (int)aligned_output_page_size,
                         l1_alignment);
 
                     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
                     volatile tt_l1_ptr int32_t* metadata =
                         reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
 
-                    // Set actual metadata values
                     metadata[0] = linearized_mesh_coord;
                     metadata[1] = token_idx;
                     metadata[2] = k;
                     metadata[3] = routed_expert;
                     metadata[4] = weights[k];
 
-                    fabric_send_chip_unicast_noc_unicast_1d<
-                        linearized_mesh_coord,
-                        topology,
-                        mesh_rows,
-                        mesh_cols,
-                        fabric_max_packet_size>(
+                    uint32_t meta_distance =
+                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                    fabric_set_unicast_route<false>(
+                        (volatile tt_l1_ptr LowLatencyPacketHeader*)metadata_packet_header, meta_distance);
+
+                    uint32_t meta_link = fabric_send_counter % num_links;
+                    fabric_send_counter++;
+
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
                         metadata_addr_gen,
-                        fabric_connections,
+                        fabric_connections[route][meta_link],
                         metadata_packet_header,
-                        expert_chip,  // linearized_dest_mesh_coord
                         metadata_cb_addr,
                         page_idx,
-                        (int)aligned_metadata_page_size,  // int32 = 4 bytes
+                        (int)aligned_metadata_page_size,
                         l1_alignment);
                 }
                 // } else {
@@ -383,7 +417,12 @@ void kernel_main() {
     cb_push_back(cb_metadata_temp_id, 1);
 
 #ifdef DEST_CHIP_ID
-    // Close fabric connections to prevent resource conflicts with subsequent operations
-    close_direction_connections(directions, fabric_connections);
+    for (uint32_t dir = 0; dir < 4; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            if (directions[dir]) {
+                fabric_connections[dir][link].close();
+            }
+        }
+    }
 #endif
 }

@@ -374,13 +374,15 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
                 neighbor_coordinate[1],
                 worker_core);
 
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                mesh_device->get_fabric_node_id(neighbor_coordinate),
-                0,  // link_id - use 0 for single link
-                program,
-                worker_core,
-                writer_runtime_args);
+            for (uint32_t link = 0; link < num_links; link++) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    mesh_device->get_fabric_node_id(neighbor_coordinate),
+                    link,
+                    program,
+                    worker_core,
+                    writer_runtime_args);
+            }
         }
     }
 
