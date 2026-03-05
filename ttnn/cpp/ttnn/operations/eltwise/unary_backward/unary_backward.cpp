@@ -1685,15 +1685,12 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 }
 
 // Autoformat support
-Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& /*output_mem_config*/) {
-    auto formatted_input_tensor = temp;
-    if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
-        auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
-        if (need_format) {
-            formatted_input_tensor =
-                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
-        }
+Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& /*output_mem_config*/) {
+    auto formatted_input_tensor = input_tensor;
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        formatted_input_tensor =
+            ttnn::tilize_with_val_padding(input_tensor, a_pad_shape, PadValue(1.0f), input_tensor.memory_config());
     }
     return formatted_input_tensor;
 }
