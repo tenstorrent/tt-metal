@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 class ModelOptimizations:
@@ -24,6 +24,12 @@ class ModelOptimizations:
 class VisionModelArgs(ModelArgs):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        vision_depth = self.hf_config.vision_config.depth
+        if vision_depth > self.n_layers:
+            self.model_config["DECODERS_OPTIMIZATIONS"] = DecodersPrecision.accuracy(
+                num_decoders=vision_depth, model_name=self.model_name
+            )
 
         # Core dimensions from HF config
         self.vision_dim = self.hf_config.vision_config.hidden_size

@@ -443,7 +443,9 @@ class ModelArgs:
         "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+        "Qwen2.5-7B-Instruct": "models/tt_transformers/model_params/Qwen2.5-7B-Instruct",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
+        "Qwen2.5-VL-7B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
@@ -603,8 +605,8 @@ class ModelArgs:
             assert (
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
-
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
@@ -2251,7 +2253,7 @@ class ModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 32, "TG": None, "P150x4": None},
                 "olmOCR-2-7B": {"N150": 4, "N300": 16, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
@@ -2529,6 +2531,13 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+
+        # Pad heads so T3K TP=8 divisibility is satisfied for Qwen2.5-VL-7B and olmOCR-2-7B-1025
+        # Also apply to N150x4 when running with T3K configuration (T3K4 mode)
+        if self.device_name == "T3K" and self.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B-1025"):
+            self.n_heads = 32  # padded from 28 (nearest mult of 8)
+            self.n_kv_heads = 8  # padded from 4 (nearest mult of 8)
+
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
 
@@ -2562,9 +2571,14 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"] and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"] and self.num_devices not in [
+            0,
+            2,
+            4,
+            8,
+        ]:
             raise AssertionError(
-                "Qwen2.5-7B, Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-7B, Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), or 8 devices (T3K), run on an N300 or use MESH_DEVICE=N150x4"
             )
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -3819,6 +3833,10 @@ class HfAttentionWrapper:
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
 
+        if self.rotary_emb is not None and position_ids.dim() == 2:
+            if type(self.rotary_emb).__name__ == "Qwen2_5_VLRotaryEmbedding":
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
@@ -3888,6 +3906,9 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        if self.rotary_emb is not None and position_ids.dim() == 2:
+            if type(self.rotary_emb).__name__ == "Qwen2_5_VLRotaryEmbedding":
+                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
         position_embeddings = None
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)

@@ -161,13 +161,20 @@ class Attention(LightweightModule):
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in state_dict:
+            wq_bias = state_dict[f"{wq_str}.bias"]
+            wk_bias = state_dict[f"{wk_str}.bias"]
+            wv_bias = state_dict[f"{wv_str}.bias"]
+
+            if self._needs_head_rearrangement():
+                wq_bias, wk_bias, wv_bias = self._rearrange_qkv_1d(wq_bias, wk_bias, wv_bias)
+
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(wq_bias, configuration.num_devices)[i],
+                            torch.chunk(wk_bias, configuration.num_devices)[i],
+                            torch.chunk(wv_bias, configuration.num_devices)[i],
                         ],
                         dim=-1,
                     )
@@ -175,6 +182,7 @@ class Attention(LightweightModule):
                 ],
                 dim=-1,
             )
+
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
@@ -212,7 +220,6 @@ class Attention(LightweightModule):
                 )
                 self.wqkv_bias_decode.append(bias_tensor)
 
-        # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
         assert self.n_kv_heads % self.num_devices_per_group == 0
         assert configuration.qkv_size % self.num_devices_per_group == 0
@@ -223,14 +230,19 @@ class Attention(LightweightModule):
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
 
+        wq_weight = state_dict[f"{wq_str}.weight"]
+        wk_weight = state_dict[f"{wk_str}.weight"]
+        wv_weight = state_dict[f"{wv_str}.weight"]
+
+        if self._needs_head_rearrangement():
+            wq_weight, wk_weight, wv_weight = self._rearrange_qkv_2d(wq_weight, wk_weight, wv_weight)
+
         qkv_list = []
         for i in range(self.num_devices_per_group):
-            # Chunk weights
-            wq_selected = torch.chunk(state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wq_selected = torch.chunk(wq_weight, self.num_devices_per_group, dim=0)[i]
+            wk_selected = torch.chunk(wk_weight, self.num_devices_per_group, dim=0)[i]
+            wv_selected = torch.chunk(wv_weight, self.num_devices_per_group, dim=0)[i]
 
-            # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
             wk = torch.transpose(wk_selected, -2, -1)
             wv = torch.transpose(wv_selected, -2, -1)
@@ -300,7 +312,12 @@ class Attention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.args.use_fused_all_gather_matmul
-        pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        wo_weight = state_dict[f"{wo_str}.weight"]
+
+        if self._needs_head_rearrangement():
+            wo_weight = self._rearrange_wo(wo_weight)
+
+        pt_wo = wo_weight.transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
@@ -361,6 +378,95 @@ class Attention(LightweightModule):
                 self.prefetcher.insert_tensor(self.wo_sharded_ring)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _needs_head_rearrangement(self):
+        return (
+            self.args.device_name == "T3K"
+            and hasattr(self.args, "base_model_name")
+            and self.args.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B-1025")
+        )
+
+    def _head_rearrangement_params(self):
+        original_n_heads = 28
+        original_n_kv_heads = 4
+        gqa_ratio = original_n_heads // original_n_kv_heads
+        heads_per_device = self.n_heads // self.num_devices_per_group
+        devices_per_kv_group = self.num_devices_per_group // original_n_kv_heads
+        return original_n_heads, original_n_kv_heads, gqa_ratio, heads_per_device, devices_per_kv_group
+
+    def _build_q_head_order(self):
+        """Returns a list of (original_q_head_index_or_None) for each padded head slot."""
+        (
+            original_n_heads,
+            original_n_kv_heads,
+            gqa_ratio,
+            heads_per_device,
+            devices_per_kv_group,
+        ) = self._head_rearrangement_params()
+        q_order = []
+        for kv_group in range(original_n_kv_heads):
+            group_q_start = kv_group * gqa_ratio
+            for dev_in_group in range(devices_per_kv_group):
+                for h in range(heads_per_device):
+                    q_idx = group_q_start + dev_in_group * heads_per_device + h
+                    if q_idx < group_q_start + gqa_ratio and q_idx < original_n_heads:
+                        q_order.append(q_idx)
+                    else:
+                        q_order.append(None)
+        return q_order
+
+    def _build_kv_head_order(self):
+        """Returns a list of original_kv_head_index for each padded KV slot (duplicated)."""
+        _, original_n_kv_heads, _, _, devices_per_kv_group = self._head_rearrangement_params()
+        kv_order = []
+        for kv_group in range(original_n_kv_heads):
+            for _ in range(devices_per_kv_group):
+                kv_order.append(kv_group)
+        return kv_order
+
+    def _rearrange_qkv_1d(self, wq_bias, wk_bias, wv_bias):
+        """Rearrange 1D Q/K/V biases to preserve GQA mapping across devices."""
+        hd = self.head_dim
+        q_order = self._build_q_head_order()
+        kv_order = self._build_kv_head_order()
+
+        new_q = torch.cat(
+            [
+                wq_bias[idx * hd : (idx + 1) * hd] if idx is not None else torch.zeros(hd, dtype=wq_bias.dtype)
+                for idx in q_order
+            ]
+        )
+        new_k = torch.cat([wk_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        new_v = torch.cat([wv_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        return new_q, new_k, new_v
+
+    def _rearrange_qkv_2d(self, wq, wk, wv):
+        """Rearrange 2D Q/K/V weight matrices [out_features, in_features] to preserve GQA mapping."""
+        hd = self.head_dim
+        q_order = self._build_q_head_order()
+        kv_order = self._build_kv_head_order()
+
+        new_q = torch.cat(
+            [
+                wq[idx * hd : (idx + 1) * hd] if idx is not None else torch.zeros(hd, wq.shape[1], dtype=wq.dtype)
+                for idx in q_order
+            ]
+        )
+        new_k = torch.cat([wk[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        new_v = torch.cat([wv[idx * hd : (idx + 1) * hd] for idx in kv_order])
+        return new_q, new_k, new_v
+
+    def _rearrange_wo(self, wo_weight):
+        """Rearrange wo weight columns to match Q head rearrangement. wo_weight: [out_features, in_features]."""
+        hd = self.head_dim
+        q_order = self._build_q_head_order()
+        new_cols = [
+            wo_weight[:, idx * hd : (idx + 1) * hd]
+            if idx is not None
+            else torch.zeros(wo_weight.shape[0], hd, dtype=wo_weight.dtype)
+            for idx in q_order
+        ]
+        return torch.cat(new_cols, dim=1)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """

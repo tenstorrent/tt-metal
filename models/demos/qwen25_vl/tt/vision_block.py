@@ -55,7 +55,10 @@ class VisionBlock(LightweightModule):
         )
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
-        if args.base_model_name in ("Qwen2.5-VL-7B",):
+        if args.base_model_name in (
+            "Qwen2.5-VL-7B",
+            "olmOCR-2-7B-1025",
+        ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = RMSNorm(
             device=mesh_device,
