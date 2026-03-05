@@ -134,7 +134,7 @@ _demo_timeout() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
         "$@"
 }

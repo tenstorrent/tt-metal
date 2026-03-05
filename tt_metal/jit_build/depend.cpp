@@ -69,6 +69,10 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
+    // Validate stream is in good state before hashing
+    if (!file) {
+        return 0;
+    }
     tt::FNV1a hasher;
     hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return hasher.digest();

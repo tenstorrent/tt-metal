@@ -516,23 +516,31 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
     std::string hash_path = out_dir + string(BUILD_STATE_HASH_FILE);
 
     for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
-        std::ifstream file(hash_path);
-        if (!file.is_open()) {
-            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
+        std::error_code ec;
+
+        // First check if file exists using filesystem API which properly sets error codes
+        bool exists = std::filesystem::exists(hash_path, ec);
+        if (ec) {
+            if (tt::filesystem::is_estale_error(ec) && attempt < tt::filesystem::kMaxFsRetries - 1) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
                 continue;
             }
             return false;
         }
+        if (!exists) {
+            return false;
+        }
+
+        std::ifstream file(hash_path);
+        if (!file.is_open()) {
+            return false;
+        }
         uint64_t stored_hash{};
         file >> stored_hash;
         if (file.fail()) {
-            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
-                continue;
-            }
+            return false;
         }
-        if (file.fail() || stored_hash != build_state_hash_) {
+        if (stored_hash != build_state_hash_) {
             log_debug(
                 tt::LogBuildKernels,
                 "Build state hash mismatch in {}: stored={}, current={}",
@@ -747,7 +755,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
-    static std::atomic<bool> new_log = true;
+    static std::atomic<bool> new_log{true};
     if (env_.get_rtoptions().get_profiler_enabled()) {
         if (new_log.exchange(false) &&
             tt::filesystem::safe_exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).value_or(false)) {

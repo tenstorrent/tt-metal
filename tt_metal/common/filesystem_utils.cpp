@@ -5,13 +5,48 @@
 #include "common/filesystem_utils.hpp"
 
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
+#include <random>
 #include <system_error>
 #include <thread>
 
 #include <tt-logger/tt-logger.hpp>
+#include <fcntl.h>
 #include <unistd.h>
+
+namespace {
+// Thread-local random number generator for jitter in retry delays.
+// Using thread_local ensures thread-safety (avoids data races on rand()).
+thread_local std::mt19937 rng{std::random_device{}()};
+thread_local std::uniform_int_distribution<> jitter_dist(0, tt::filesystem::kFsRetryJitterMs);
+
+int get_retry_jitter_ms() { return jitter_dist(rng); }
+
+// Sync the filesystem containing the given path.
+// Uses syncfs() when available (Linux) to limit scope to specific filesystem,
+// falling back to sync() on other platforms. This reduces impact on concurrent
+// I/O operations in other threads compared to process-wide sync().
+void sync_filesystem(const std::filesystem::path& path) {
+#ifdef __linux__
+    // Try to open the path (or its parent directory if it's not a directory itself)
+    // and sync just that filesystem using syncfs().
+    std::error_code ec;
+    std::filesystem::path sync_target = path;
+    if (!std::filesystem::is_directory(path, ec)) {
+        sync_target = path.parent_path();
+    }
+    // Open directory to get file descriptor for syncfs
+    int fd = ::open(sync_target.c_str(), O_RDONLY | O_DIRECTORY);
+    if (fd != -1) {
+        ::syncfs(fd);
+        ::close(fd);
+        return;
+    }
+#endif
+    // Fallback to process-wide sync() on non-Linux platforms or if open fails
+    ::sync();
+}
+}  // namespace
 
 namespace tt::filesystem {
 
@@ -20,7 +55,7 @@ bool safe_remove(const std::filesystem::path& path) {
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::remove(path, ec);
         if (!ec) {
-            ::sync();
+            sync_filesystem(path);
             return true;
         }
         if (is_not_found_error(ec)) {
@@ -31,7 +66,8 @@ bool safe_remove(const std::filesystem::path& path) {
             return false;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
         }
     }
     log_warning(tt::LogMetal, "Failed to remove {} after {} retries: {}", path.string(), kMaxFsRetries, ec.message());
@@ -43,7 +79,7 @@ bool safe_remove_all(const std::filesystem::path& path) {
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::remove_all(path, ec);
         if (!ec) {
-            ::sync();
+            sync_filesystem(path);
             return true;
         }
         if (is_not_found_error(ec) || ec == std::errc::directory_not_empty) {
@@ -54,7 +90,8 @@ bool safe_remove_all(const std::filesystem::path& path) {
             return false;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -67,7 +104,7 @@ bool safe_rename(const std::filesystem::path& src, const std::filesystem::path& 
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::rename(src, dst, ec);
         if (!ec) {
-            ::sync();
+            sync_filesystem(dst);
             return true;
         }
         if (ignore_missing && is_not_found_error(ec)) {
@@ -78,7 +115,8 @@ bool safe_rename(const std::filesystem::path& src, const std::filesystem::path& 
             return false;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -96,14 +134,14 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::create_hard_link(target, link, ec);
         if (!ec) {
-            ::sync();
+            sync_filesystem(link);
             return true;
         }
         if (!is_estale_error(ec)) {
             ec.clear();
             std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
             if (!ec) {
-                ::sync();
+                sync_filesystem(link);
                 return true;
             }
             if (!is_estale_error(ec)) {
@@ -117,7 +155,8 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
             }
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -135,7 +174,7 @@ bool safe_create_directories(const std::filesystem::path& path) {
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::create_directories(path, ec);
         if (!ec || ec == std::errc::file_exists) {
-            ::sync();
+            sync_filesystem(path);
             return true;
         }
         if (!is_estale_error(ec)) {
@@ -143,7 +182,8 @@ bool safe_create_directories(const std::filesystem::path& path) {
             return false;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -167,7 +207,7 @@ std::optional<bool> safe_exists(const std::filesystem::path& path) {
             return std::nullopt;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
         }
     }
     log_warning(
@@ -191,7 +231,7 @@ std::optional<bool> safe_is_directory(const std::filesystem::path& path) {
             return std::nullopt;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
         }
     }
     log_warning(
@@ -215,7 +255,7 @@ std::optional<bool> safe_is_regular_file(const std::filesystem::path& path) {
             return std::nullopt;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
         }
     }
     log_warning(
@@ -242,7 +282,7 @@ std::optional<std::uintmax_t> safe_file_size(const std::filesystem::path& path) 
             return std::nullopt;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
         }
     }
     log_warning(
@@ -265,7 +305,7 @@ std::optional<std::filesystem::file_time_type> safe_last_write_time(const std::f
             return std::nullopt;
         }
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
         }
     }
     log_warning(
@@ -295,8 +335,7 @@ std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::
                 return entries;
             }
             if (attempt < kMaxFsRetries - 1) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+                std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
             }
             continue;
         }
@@ -305,8 +344,9 @@ std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::
         while (it != std::filesystem::directory_iterator()) {
             try {
                 entries.push_back(*it);
-            } catch (...) {
-                // Entry may have disappeared during iteration, skip it
+            } catch (const std::filesystem::filesystem_error& e) {
+                // Entry may have disappeared during iteration (ESTALE, ENOENT), skip it.
+                // Only ignore filesystem errors; other exceptions propagate.
             }
             it.increment(ec);
             if (ec) {
@@ -324,7 +364,7 @@ std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::
         }
 
         if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + (rand() % 100)));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
         }
     }
 

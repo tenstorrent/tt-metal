@@ -94,7 +94,9 @@ namespace tt::filesystem {
 // Maximum number of retries for filesystem operations on NFS
 inline constexpr int kMaxFsRetries = 5;
 // Base delay between retries (in milliseconds), multiplied by attempt number
-inline constexpr int kFsRetryDelayMs = 500;
+inline constexpr int kFsRetryDelayMs = 250;
+// Maximum random jitter for write operations (in milliseconds) to prevent thundering herd
+inline constexpr int kFsRetryJitterMs = 100;
 
 // Check if error code is ESTALE (stale file handle) - NFS specific error
 inline bool is_estale_error(const std::error_code& ec) { return ec.value() == ESTALE; }

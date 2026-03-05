@@ -140,19 +140,38 @@ private:
     [[nodiscard]] auto GetShdr(unsigned ix) const -> const Shdr& { return shdrs_[ix]; }
     using Impl::GetContents;
     [[nodiscard]] auto GetContents(const Phdr& phdr) const -> std::span<std::byte> {
-        return GetContents().subspan(phdr.p_offset, phdr.p_filesz);
+        // Validate offset and size are within bounds before calling subspan
+        auto contents = GetContents();
+        if (phdr.p_offset >= contents.size() || phdr.p_filesz > contents.size() - phdr.p_offset) {
+            return {};
+        }
+        return contents.subspan(phdr.p_offset, phdr.p_filesz);
     }
     [[nodiscard]] auto GetContents(const Shdr& shdr) const -> std::span<std::byte> {
-        return GetContents().subspan(shdr.sh_offset, shdr.sh_size);
+        // Validate offset and size are within bounds before calling subspan
+        auto contents = GetContents();
+        if (shdr.sh_offset >= contents.size() || shdr.sh_size > contents.size() - shdr.sh_offset) {
+            return {};
+        }
+        return contents.subspan(shdr.sh_offset, shdr.sh_size);
     }
     [[nodiscard]] auto GetString(size_t offset, const Shdr& shdr) const -> const char* {
-        return ByteOffset<char const>(GetContents(shdr).data(), offset);
+        auto section = GetContents(shdr);
+        // Validate offset is within bounds and there's room for at least a null terminator
+        if (offset >= section.size()) {
+            return nullptr;
+        }
+        return ByteOffset<const char>(section.data(), offset);
     }
     [[nodiscard]] auto GetName(const Shdr& shdr) const -> const char* {
         return GetString(shdr.sh_name, GetShdr(GetHeader().e_shstrndx));
     }
     [[nodiscard]] auto GetSymbols(const Shdr& shdr) const -> std::span<Sym> {
         auto section = GetContents(shdr);
+        // Validate entry size is non-zero and entries fit within section
+        if (shdr.sh_entsize == 0 || section.size() < shdr.sh_entsize) {
+            return {};
+        }
         return std::span(ByteOffset<Sym>(section.data()), section.size() / shdr.sh_entsize);
     }
     [[nodiscard]] auto GetName(const Sym& sym, unsigned link) const -> const char* {
@@ -160,6 +179,10 @@ private:
     }
     [[nodiscard]] auto GetRelocations(const Shdr& shdr) const -> std::span<Rela> {
         auto section = GetContents(shdr);
+        // Validate entry size is non-zero and entries fit within section
+        if (shdr.sh_entsize == 0 || section.size() < shdr.sh_entsize) {
+            return {};
+        }
         return std::span(ByteOffset<Rela>(section.data()), section.size() / shdr.sh_entsize);
     }
 
@@ -198,10 +221,22 @@ private:
     }
 
     uint32_t Read32(const Shdr& shdr, address_t addr) {
-        return *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr);
+        auto section = GetContents(shdr);
+        size_t offset = addr - shdr.sh_addr;
+        // Validate there are at least 4 bytes available at the offset
+        if (offset + sizeof(uint32_t) > section.size()) {
+            TT_THROW("Read32 out of bounds: offset {} exceeds section size {}", offset, section.size());
+        }
+        return *ByteOffset<uint32_t>(section.data(), offset);
     }
     void Write32(const Shdr& shdr, address_t addr, uint32_t value) {
-        *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr) = value;
+        auto section = GetContents(shdr);
+        size_t offset = addr - shdr.sh_addr;
+        // Validate there are at least 4 bytes available at the offset
+        if (offset + sizeof(uint32_t) > section.size()) {
+            TT_THROW("Write32 out of bounds: offset {} exceeds section size {}", offset, section.size());
+        }
+        *ByteOffset<uint32_t>(section.data(), offset) = value;
     }
 
 private:
