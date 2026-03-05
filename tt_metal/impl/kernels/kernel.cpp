@@ -285,6 +285,16 @@ std::vector<std::string> Kernel::file_paths(IDevice& device) const {
     return file_paths;
 }
 
+std::vector<uint32_t> Kernel::get_processor_indices_for_binary(int binary_index) const {
+    TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t idx = hal.get_processor_index(
+        this->get_kernel_programmable_core_type(),
+        this->get_kernel_processor_class(),
+        this->get_kernel_processor_type(binary_index));
+    return {idx};
+}
+
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
 uint8_t EthernetKernel::expected_num_binaries() const { return 1; }
@@ -312,44 +322,14 @@ uint32_t DataMovementKernel::get_kernel_processor_type(int index) const {
     return enchantum::to_underlying(this->config_.processor);
 }
 
-std::vector<uint32_t> DataMovementKernel::get_processor_indices_for_binary(int binary_index) const {
-    TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
-    const auto& hal = MetalContext::instance().hal();
-    uint32_t idx = hal.get_processor_index(
-        this->get_kernel_programmable_core_type(),
-        this->get_kernel_processor_class(),
-        this->get_kernel_processor_type(binary_index));
-    return {idx};
-}
-
 uint32_t EthernetKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return enchantum::to_underlying(this->config_.processor);
 }
 
-std::vector<uint32_t> EthernetKernel::get_processor_indices_for_binary(int binary_index) const {
-    TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
-    const auto& hal = MetalContext::instance().hal();
-    uint32_t idx = hal.get_processor_index(
-        this->get_kernel_programmable_core_type(),
-        this->get_kernel_processor_class(),
-        this->get_kernel_processor_type(binary_index));
-    return {idx};
-}
-
 uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return index;
-}
-
-std::vector<uint32_t> ComputeKernel::get_processor_indices_for_binary(int binary_index) const {
-    TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
-    const auto& hal = MetalContext::instance().hal();
-    uint32_t idx = hal.get_processor_index(
-        this->get_kernel_programmable_core_type(),
-        this->get_kernel_processor_class(),
-        this->get_kernel_processor_type(binary_index));
-    return {idx};
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -842,13 +822,12 @@ uint32_t QuasarDataMovementKernel::get_kernel_processor_type(int index) const {
 
 std::vector<uint32_t> QuasarDataMovementKernel::get_processor_indices_for_binary(int binary_index) const {
     TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
+    if (config_.is_legacy_kernel) {
+        return Kernel::get_processor_indices_for_binary(binary_index);
+    }
     const auto& hal = MetalContext::instance().hal();
     auto core_type = this->get_kernel_programmable_core_type();
     auto proc_class = this->get_kernel_processor_class();
-    if (config_.is_legacy_kernel) {
-        uint32_t idx = hal.get_processor_index(core_type, proc_class, this->get_kernel_processor_type(binary_index));
-        return {idx};
-    }
     std::vector<uint32_t> indices;
     indices.reserve(this->dm_processors_.size());
     for (const auto& proc : this->dm_processors_) {
@@ -971,16 +950,6 @@ uint8_t QuasarDataMovementKernel::expected_num_binaries() const {
 uint32_t QuasarComputeKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < this->compute_processors_.size(), "index out of bounds");
     return enchantum::to_underlying(this->compute_processors_[index]);
-}
-
-std::vector<uint32_t> QuasarComputeKernel::get_processor_indices_for_binary(int binary_index) const {
-    TT_ASSERT(0 <= binary_index && binary_index < expected_num_binaries(), "binary_index out of bounds");
-    const auto& hal = MetalContext::instance().hal();
-    uint32_t idx = hal.get_processor_index(
-        this->get_kernel_programmable_core_type(),
-        this->get_kernel_processor_class(),
-        this->get_kernel_processor_type(binary_index));
-    return {idx};
 }
 
 void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
