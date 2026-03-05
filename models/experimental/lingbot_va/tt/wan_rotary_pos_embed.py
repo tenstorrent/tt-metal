@@ -87,11 +87,10 @@ class WanRotaryPosEmbed(Module):
         # Concatenate frequencies along the last dimension
         freqs = ttnn.concat([f_freqs, h_freqs, w_freqs], dim=-1)  # [batch, seq_len, attention_head_dim//2]
 
-        # Create complex frequencies (cos + i*sin)
-        cos_freqs = ttnn.cos(freqs)
+        cos_freqs = ttnn.cos(freqs)  # [batch, seq_len, head_dim//2]
         sin_freqs = ttnn.sin(freqs)
 
-        # Stack cos and sin to match the expected format for rotary embedding
-        freqs_cis = ttnn.concat([cos_freqs, sin_freqs], dim=-1)  # [batch, seq_len, attention_head_dim]
-
-        return freqs_cis
+        # Repeat to full head_dim (kernel expects 128): [B, L, 64] -> [B, L, 128]
+        rope_cos = ttnn.concat([cos_freqs, cos_freqs], dim=-1)
+        rope_sin = ttnn.concat([sin_freqs, sin_freqs], dim=-1)
+        return rope_cos, rope_sin
