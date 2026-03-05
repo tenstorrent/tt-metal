@@ -17,6 +17,7 @@
 #include <ios>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <span>
@@ -289,16 +290,6 @@ private:
 // New DEVICE_PRINT implementation
 using DevicePrintHeader = device_print_detail::structures::DevicePrintHeader;
 static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
-using DevicePrintStringInfo = device_print_detail::structures::DevicePrintStringInfo32;
-
-struct FormatPlaceholderInfo {
-    uint32_t arg_id;
-    char type_id;
-    std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
-};
-
-std::vector<FormatPlaceholderInfo> parse_format_string(std::string_view format_str);
-std::size_t get_argument_size_from_type_id(char type_id);
 
 class DevicePrintImpl : public DPrintServer::Impl {
 public:
@@ -314,93 +305,20 @@ protected:
         ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
 
 private:
-    struct ParsedStringInfo {
-        std::string_view format_string;
-        std::string_view file;
-        uint32_t line = 0;
-        std::vector<FormatPlaceholderInfo> placeholders;
-        std::vector<char> argument_types;
-        uint32_t arguments_size = 0;
-    };
-
-    struct ElfFileCacheEntry {
-        uint32_t ref_count;
-        ll_api::ElfFile elf_file;
-        std::span<std::byte> format_strings_info_bytes;
-        uint64_t format_strings_info_address;
-        std::span<std::byte> format_strings_bytes;
-        uint64_t format_strings_address;
-        DevicePrintStringInfo* string_info_ptr = nullptr;
-        size_t string_info_size = 0;
-        std::vector<ParsedStringInfo> parsed_string_info;
-
-        ParsedStringInfo* get_string_info(uint32_t info_id) {
-            if (info_id >= string_info_size) {
-                return nullptr;
-            }
-            auto& parsed_info = parsed_string_info[info_id];
-            if (parsed_info.format_string.empty()) {
-                // This entry has not been parsed yet, so parse it now and cache the result.
-                const DevicePrintStringInfo& info = string_info_ptr[info_id];
-                if (info.format_string_ptr >= format_strings_address &&
-                    info.format_string_ptr < format_strings_address + format_strings_bytes.size()) {
-                    const char* format_string = reinterpret_cast<const char*>(
-                        format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
-                    parsed_info.format_string = format_string;
-                    parsed_info.placeholders = parse_format_string(format_string);
-                    uint32_t max_arg_id = 0;
-                    for (const auto& placeholder : parsed_info.placeholders) {
-                        max_arg_id = std::max(max_arg_id, placeholder.arg_id);
-                    }
-                    parsed_info.argument_types.resize(max_arg_id + 1);
-                    for (const auto& placeholder : parsed_info.placeholders) {
-                        parsed_info.argument_types[placeholder.arg_id] = placeholder.type_id;
-                        parsed_info.arguments_size += get_argument_size_from_type_id(placeholder.type_id);
-                    }
-                }
-                if (info.file >= format_strings_address &&
-                    info.file < format_strings_address + format_strings_bytes.size()) {
-                    const char* file = reinterpret_cast<const char*>(
-                        format_strings_bytes.data() + (info.file - format_strings_address));
-                    parsed_info.file = file;
-                }
-                parsed_info.line = info.line;
-            }
-            return &parsed_info;
-        }
-
-        void load_elf(const std::filesystem::path& elf_path) {
-            try {
-                elf_file.ReadImage(elf_path);
-                format_strings_info_bytes =
-                    elf_file.GetSectionContents(".device_print_strings_info", format_strings_info_address);
-                format_strings_bytes = elf_file.GetSectionContents(".device_print_strings", format_strings_address);
-                string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
-                string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
-                parsed_string_info.resize(string_info_size);
-            } catch (...) {
-                // Failed to load ELF file
-                log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path.string());
-            }
-        }
-    };
-
     struct RiscData {
         std::string firmware_elf_path;
-        ElfFileCacheEntry* firmware_elf_cache_entry = nullptr;
+        std::shared_ptr<DevicePrintParser> firmware_elf_parser;
         std::string kernel_elf_path;
-        ElfFileCacheEntry* kernel_elf_cache_entry = nullptr;
+        std::shared_ptr<DevicePrintParser> kernel_elf_parser;
         std::string message_buffer;
         std::optional<std::string> line_prefix;
         int last_loaded_kernel_id = -1;
     };
 
-    std::map<std::string, ElfFileCacheEntry> elf_cache_;
     std::map<RiscKey, RiscData, RiscKeyComparator> risc_data_;
 
     void print_buffer_data(
         ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data);
-    std::string format_message(ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes);
 };
 
 void DPrintImpl::init_print_buffers_for_core(
@@ -445,231 +363,6 @@ bool DPrintImpl::core_has_outstanding_prints(
 
 // DEVICE_PRINT implementations — single shared buffer per core.
 
-// TODO: Add more types here
-using ArgumentValue =
-    std::variant<bool, int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t, float, double>;
-
-std::optional<FormatPlaceholderInfo> parse_placeholder(std::string_view format_str, std::size_t& pos) {
-    if (pos >= format_str.size() || format_str[pos] != '{') {
-        return std::nullopt;
-    }
-
-    // Start of a placeholder. Read until the closing '}' to extract the placeholder content.
-    pos++;  // Skip '{'
-
-    // We are trying to mimic fmtlib format specifiers here, but device already changed it a bit:
-    // replacement_field ::= "{" arg_id "," type_id [":" (format_spec | chrono_format_spec)] "}"
-    // type_id           ::= "a"..."z" | "A"..."Z"
-    // arg_id            ::= integer
-    // integer           ::= digit+
-    // digit             ::= "0"..."9"
-    // But we don't support using identifiers to reduce kernel size, only integers for arg_id.
-
-    // Regarding format_spec:
-    // format_spec ::= [[fill]align][sign]["#"]["0"][width]["." precision]["L"][type]
-    // fill        ::= <a character other than '{' or '}'>
-    // align       ::= "<" | ">" | "^"
-    // sign        ::= "+" | "-" | " "
-    // width       ::= integer | "{" [arg_id] "}"
-    // precision   ::= integer | "{" [arg_id] "}"
-    // type        ::= "a" | "A" | "b" | "B" | "c" | "d" | "e" | "E" | "f" | "F" |
-    //                 "g" | "G" | "o" | "p" | "s" | "x" | "X" | "?"
-    // We don't support using arg_id for width/precision.
-
-    // As everything is verified during kernel compile time, we can parse format_spec just by reading until the closing
-    // '}' without needing to fully understand it on the host side.
-    uint32_t arg_id = 0;
-
-    // arg_id parsing
-    if (!std::isdigit(format_str[pos])) {
-        return std::nullopt;
-    }
-    while (pos < format_str.size() && std::isdigit(format_str[pos])) {
-        arg_id = arg_id * 10 + (format_str[pos] - '0');
-        pos++;
-    }
-
-    // Read type_id (the character after arg_id and ',')
-    if (pos >= format_str.size() || format_str[pos] != ',') {
-        return std::nullopt;
-    }
-    pos++;  // Skip ','
-    char type_id = format_str[pos++];
-
-    uint32_t format_spec_start = pos;
-    while (pos < format_str.size() && format_str[pos] != '}') {
-        pos++;
-    }
-    pos++;  // Skip '}'
-    return {{arg_id, type_id, format_str.substr(format_spec_start, pos - format_spec_start - 1)}};
-}
-
-std::vector<FormatPlaceholderInfo> parse_format_string(std::string_view format_str) {
-    std::vector<FormatPlaceholderInfo> placeholders;
-    for (size_t i = 0; i < format_str.size(); i++) {
-        if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
-            // Escaped '{', add a single '{' to the result and skip the next character.
-            i++;
-            continue;
-        }
-        if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
-            // Escaped '}', add a single '}' to the result and skip the next character.
-            i++;
-            continue;
-        }
-        if (format_str[i] == '{') {
-            auto placeholder = parse_placeholder(format_str, i);
-            if (!placeholder) {
-                TT_THROW("Invalid format string: failed to parse placeholder at position {}", i);
-            }
-            placeholders.push_back(*placeholder);
-            i--;  // Step back so that the main loop can correctly identify the end of the placeholder
-        } else {
-            // Regular character, add it to the result.
-            continue;
-        }
-    }
-    return placeholders;
-}
-
-template <typename T>
-T read_value_from_payload(std::span<const std::byte> payload_bytes, std::size_t& offset) {
-    static_assert(std::is_trivially_copyable_v<T>);
-    if (offset + sizeof(T) > payload_bytes.size()) {
-        TT_THROW("Payload does not contain enough bytes to read type");
-    }
-    T value;
-    std::memcpy(&value, payload_bytes.data() + offset, sizeof(T));
-    offset += sizeof(T);
-    return value;
-}
-
-ArgumentValue read_argument_from_payload(char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset) {
-    switch (type_id) {
-        case 'b':  // int8_t
-            return read_value_from_payload<int8_t>(payload_bytes, offset);
-        case 'B':  // uint8_t
-            return read_value_from_payload<uint8_t>(payload_bytes, offset);
-        case 'h':  // int16_t
-            return read_value_from_payload<int16_t>(payload_bytes, offset);
-        case 'H':  // uint16_t
-            return read_value_from_payload<uint16_t>(payload_bytes, offset);
-        case 'i':  // int32_t
-            return read_value_from_payload<int32_t>(payload_bytes, offset);
-        case 'I':  // uint32_t
-            return read_value_from_payload<uint32_t>(payload_bytes, offset);
-        case 'q':  // int64_t
-            return read_value_from_payload<int64_t>(payload_bytes, offset);
-        case 'Q':  // uint64_t
-            return read_value_from_payload<uint64_t>(payload_bytes, offset);
-        case 'f':  // float
-            return read_value_from_payload<float>(payload_bytes, offset);
-        case 'd':  // double
-            return read_value_from_payload<double>(payload_bytes, offset);
-        case '?':  // bool
-            return read_value_from_payload<bool>(payload_bytes, offset);
-        default: TT_THROW("Unsupported type_id in format placeholder: {}", type_id);
-    }
-}
-
-std::size_t get_argument_size_from_type_id(char type_id) {
-    static std::byte empty_bytes[16];
-    std::size_t offset = 0;
-    read_argument_from_payload(type_id, std::span<const std::byte>(empty_bytes), offset);
-    return offset;
-}
-
-std::vector<ArgumentValue> read_arguments_from_payload(
-    std::span<char> argument_types, std::span<const std::byte> payload_bytes) {
-    std::vector<ArgumentValue> arguments;
-    std::size_t payload_offset = 0;
-
-    arguments.reserve(argument_types.size());
-    for (char argument_type : argument_types) {
-        arguments.push_back(read_argument_from_payload(argument_type, payload_bytes, payload_offset));
-    }
-
-    return arguments;
-}
-
-std::string DevicePrintImpl::format_message(ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes) {
-    // Iterate over format_str and replace {} with format of payload values.
-    std::stringstream result;
-    auto format_str = string_info.format_string;
-    if (string_info.arguments_size > payload_bytes.size()) {
-        log_warning(
-            tt::LogMetal,
-            "Payload size {} is smaller than expected arguments size {} for format string '{}'",
-            payload_bytes.size(),
-            string_info.arguments_size,
-            format_str);
-        return {};
-    }
-    auto argument_values = read_arguments_from_payload(string_info.argument_types, payload_bytes);
-
-    for (size_t i = 0; i < format_str.size(); i++) {
-        if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
-            // Escaped '{', add a single '{' to the result and skip the next character.
-            result << '{';
-            i++;
-        } else if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
-            // Escaped '}', add a single '}' to the result and skip the next character.
-            result << '}';
-            i++;
-        } else if (format_str[i] == '{') {
-            auto placeholder = parse_placeholder(format_str, i);
-            if (!placeholder) {
-                return {};
-            }
-            i--;  // Step back so that the main loop can correctly identify the end of the placeholder
-
-            // Do the actual formatting of the argument
-            auto format = fmt::runtime("{0" + std::string(placeholder->format_spec) + "}");
-
-            switch (placeholder->type_id) {
-                case 'b':  // int8_t
-                    result << fmt::format(format, std::get<int8_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'B':  // uint8_t
-                    result << fmt::format(format, std::get<uint8_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'h':  // int16_t
-                    result << fmt::format(format, std::get<int16_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'H':  // uint16_t
-                    result << fmt::format(format, std::get<uint16_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'i':  // int32_t
-                    result << fmt::format(format, std::get<int32_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'I':  // uint32_t
-                    result << fmt::format(format, std::get<uint32_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'q':  // int64_t
-                    result << fmt::format(format, std::get<int64_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'Q':  // uint64_t
-                    result << fmt::format(format, std::get<uint64_t>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'f':  // float
-                    result << fmt::format(format, std::get<float>(argument_values[placeholder->arg_id]));
-                    break;
-                case 'd':  // double
-                    result << fmt::format(format, std::get<double>(argument_values[placeholder->arg_id]));
-                    break;
-                case '?':  // bool
-                    result << fmt::format(format, std::get<bool>(argument_values[placeholder->arg_id]));
-                    break;
-                default: TT_THROW("Unsupported type_id in format placeholder: {}", placeholder->type_id);
-            }
-        } else {
-            // Regular character, add it to the result.
-            result << format_str[i];
-        }
-    }
-    return result.str();
-}
-
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
     std::size_t word_index = 0;
@@ -693,15 +386,9 @@ void DevicePrintImpl::print_buffer_data(
                 continue;
             }
 
-            if (risc_data.last_loaded_kernel_id != -1 && risc_data.kernel_elf_cache_entry != nullptr) {
-                // Decrease reference count of previously loaded kernel and remove it from cache if reference count
-                // reaches 0.
-                if (risc_data.kernel_elf_cache_entry->ref_count <= 1) {
-                    elf_cache_.erase(risc_data.kernel_elf_path);
-                } else {
-                    risc_data.kernel_elf_cache_entry->ref_count--;
-                }
-                risc_data.kernel_elf_cache_entry = nullptr;
+            if (risc_data.last_loaded_kernel_id != -1) {
+                // Remove reference to previous kernel elf parser so that it can be freed if needed.
+                risc_data.kernel_elf_parser = nullptr;
             }
 
             // Update kernel id
@@ -715,20 +402,7 @@ void DevicePrintImpl::print_buffer_data(
                 risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
             risc_data.kernel_elf_path = elf_path.string();
-
-            auto elf_cache_it = elf_cache_.find(risc_data.kernel_elf_path);
-            if (elf_cache_it != elf_cache_.end()) {
-                // Kernel already in cache, just increase reference count and continue.
-                elf_cache_it->second.ref_count++;
-                risc_data.kernel_elf_cache_entry = &elf_cache_it->second;
-                continue;
-            }
-
-            // Load elf file
-            auto& elf_cache_entry = elf_cache_[risc_data.kernel_elf_path];
-            elf_cache_entry.ref_count = 1;
-            risc_data.kernel_elf_cache_entry = &elf_cache_entry;
-            elf_cache_entry.load_elf(elf_path);
+            risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
@@ -740,13 +414,13 @@ void DevicePrintImpl::print_buffer_data(
             RiscData& risc_data = risc_data_[risc_key];
 
             // Find elf file
-            ElfFileCacheEntry* elf_entry_ptr = nullptr;
+            std::shared_ptr<DevicePrintParser> elf_parser = nullptr;
 
             if (header->is_kernel) {
-                elf_entry_ptr = risc_data.kernel_elf_cache_entry;
+                elf_parser = risc_data.kernel_elf_parser;
             } else {
                 // Check if firmware elf is already loaded for this risc.
-                if (risc_data.firmware_elf_cache_entry == nullptr) {
+                if (risc_data.firmware_elf_parser == nullptr) {
                     // Find firmware elf path from BuildEnvManager.
                     auto [processor_class, processor_type_idx] =
                         MetalContext::instance().hal().get_processor_class_and_type_from_index(
@@ -758,33 +432,18 @@ void DevicePrintImpl::print_buffer_data(
                         processor_type_idx);
 
                     risc_data.firmware_elf_path = firmware_elf_path;
-
-                    // Find firmware elf. If it is still not loaded, load it into cache.
-                    auto elf_cache_it = elf_cache_.find(risc_data.firmware_elf_path);
-                    if (elf_cache_it != elf_cache_.end()) {
-                        // Firmware already in cache, just increase reference count and continue.
-                        elf_cache_it->second.ref_count++;
-                        risc_data.firmware_elf_cache_entry = &elf_cache_it->second;
-                    } else {
-                        // Load elf file
-                        auto& elf_cache_entry = elf_cache_[risc_data.firmware_elf_path];
-                        elf_cache_entry.ref_count = 1;
-                        risc_data.firmware_elf_cache_entry = &elf_cache_entry;
-                        elf_cache_entry.load_elf(firmware_elf_path);
-                    }
+                    risc_data.firmware_elf_parser = DevicePrintParser::get_parser_for_elf(firmware_elf_path);
                 }
-                elf_entry_ptr = risc_data.firmware_elf_cache_entry;
+                elf_parser = risc_data.firmware_elf_parser;
             }
 
             // Check if we found elf file for this print message.
-            if (elf_entry_ptr != nullptr) {
-                auto* string_info = elf_entry_ptr->get_string_info(header->info_id);
-                if (string_info != nullptr) {
-                    // Format message
-                    auto payload_bytes =
-                        std::as_bytes(std::span(data).subspan(word_index)).subspan(0, header->message_payload);
-                    auto formatted_message = format_message(*string_info, payload_bytes);
-
+            if (elf_parser != nullptr) {
+                // Format message
+                auto payload_bytes =
+                    std::as_bytes(std::span(data).subspan(word_index)).subspan(0, header->message_payload);
+                auto formatted_message = elf_parser->format_message(header->info_id, payload_bytes);
+                if (!formatted_message.empty()) {
                     // Find if we have something buffered from before
                     if (!risc_data.message_buffer.empty()) {
                         // We have something in the buffer, prepend it to the current message and clear the buffer.
