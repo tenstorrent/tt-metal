@@ -713,6 +713,7 @@ class TestImportGraphUnit:
                     "device_id": "0",
                     "address": "12345678",
                     "buffer_type": "DRAM",
+                    "size": "2048",
                 },
                 "connections": [],
             },
@@ -723,7 +724,7 @@ class TestImportGraphUnit:
         conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute(
-            "SELECT tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type FROM tensors"
+            "SELECT tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type, size FROM tensors"
         )
         rows = cursor.fetchall()
 
@@ -737,6 +738,7 @@ class TestImportGraphUnit:
         assert row[5] == 0  # device_id
         assert row[6] == 12345678  # address
         assert row[7] == 0  # buffer_type (0=DRAM)
+        assert row[8] == 2048  # size in bytes
 
         conn.close()
 
