@@ -62,14 +62,16 @@ void kernel_main() {
     //---------------------------------------------------------------------
     // Compute in @ W
     //---------------------------------------------------------------------
-    uint32_t in0_index = 0;
+    uint32_t in0_index_base = 0;
 
     // We should read in0 at an offset that corresponds to the range of K that this core uses.
     for (uint32_t core_id = 0; core_id < dram_bank_id; ++core_id) {
-        in0_index += matmul_wo_ring::K_TILES_PER_CORE_A[core_id] * tt::constants::TILE_WIDTH;
+        in0_index_base += matmul_wo_ring::K_TILES_PER_CORE_A[core_id];
     }
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
+        uint32_t in0_index = in0_index_base;
+
         tile_regs_acquire();
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);

@@ -191,7 +191,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     //-------------------------------------------------------------------------
     // Collector cores - these collect all data and reduce them.
     //-------------------------------------------------------------------------
-    tt::tt_metal::CreateKernel(
+    auto dm1_collector_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1_collector.cpp",
         collector_cores_set,
@@ -202,7 +202,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             .defines = kernel_defines,
             .named_compile_args = named_compile_time_args});
 
-    tt::tt_metal::CreateKernel(
+    auto compute_collector_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp",
         collector_cores_set,
@@ -252,6 +252,16 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
     }
 
+    std::vector<uint32_t> collector_runtime_args;
+    collector_runtime_args.push_back(0);  // Core ID placeholder
+
+    uint32_t core_id = 0;
+    for (const auto& core : collector_core_coords) {
+        collector_runtime_args[0] = core_id++;
+        tt::tt_metal::SetRuntimeArgs(program, dm1_collector_kernel_handle, core, collector_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_collector_kernel_handle, core, collector_runtime_args);
+    }
+
     return cached_program_t{
         std::move(program),
         MatmulWOSharedVariables{
@@ -271,6 +281,9 @@ void MatmulWOProgramFactory::override_runtime_arguments(
     // Update sharded circular buffer addresses
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, shared_variables.cb_handles_sharded["cb_s2c_in"], *tensor_args.input_tensor.buffer());
+
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, shared_variables.cb_handles_sharded["cb_s2c_out"], *tensor_args.output_tensor.buffer());
 
     // Update runtime args for all kernels with new tensor addresses
     // Runtime args layout: [3] = w_tensor address

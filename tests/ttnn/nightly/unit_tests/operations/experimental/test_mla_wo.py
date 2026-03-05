@@ -167,11 +167,11 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
 
     # Start at the bottom right and pick the 7 cores that are not in the dram adjacent cores.
     out_core_coords = []
-    for x, y in itertools.product(range(all_cores.x - 1, 0, -1), range(all_cores.y - 1, 0, -1)):
+    for y, x in itertools.product(range(all_cores.y - 1, -1, -1), range(all_cores.x - 1, -1, -1)):
         if (x, y) not in in0_raw_coords:
             out_core_coords.append(ttnn.CoreCoord(x, y))
-        if len(out_core_coords) == 7:
-            break
+            if len(out_core_coords) == 7:
+                break
     out_core_range = [ttnn.CoreRange(out_core_coord, out_core_coord) for out_core_coord in out_core_coords]
     out_core_range_set = ttnn.CoreRangeSet(out_core_range)
 
