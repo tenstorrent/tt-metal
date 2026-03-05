@@ -26,7 +26,6 @@
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
 #include "layernorm_compute_utils.h"
@@ -94,7 +93,6 @@ void kernel_main() {
     // tilize_init — doing so puts the UNPACK into binary-AB mode with SRCA=cb_in,
     // which tilize_init does not fully undo, causing tilize_block to read from
     // cb_in instead of cb_in_rm and produce garbage output).
-    // TODO: Is there another LLK that can do the same thing more explicitly?
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #else
 #ifdef RMSNORM
@@ -283,11 +281,11 @@ void kernel_main() {
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, block.full_block_size());
-                cb_wait_front(cb_gamma, block.start() + block.full_block_size());  // we don't pop
+                cb_wait_front(
+                    cb_gamma, block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-
 #ifdef SFPU_OP_INIT_ACTIVATION
                     // Activation must be applied last. If do_beta != 0 then
                     // activation will be applied after the beta addition.
@@ -320,7 +318,6 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
@@ -339,7 +336,6 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
         constexpr auto cb_out_rm = tt::CBIndex::c_28;
         untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
-        // The next ncht iteration re-initialises hardware via tilize_init, so no reinit needed here.
 #endif
     }  // NCHt loop
 }

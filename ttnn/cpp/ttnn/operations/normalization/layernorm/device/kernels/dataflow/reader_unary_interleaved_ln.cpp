@@ -33,7 +33,7 @@
 //   arg[6] = gamma_dram_addr
 //   arg[7] = beta_dram_addr
 //   arg[8] = b_dram_addr       (residual, unused if no FUSE_PRE_ADD)
-//   arg[9] = W / W_logical     (logical width in elements)
+//   arg[9] = W                 (width in elements)
 //   arg[10] = H_logical        (TILIZE_IN only: total valid rows; unused for TILE path)
 
 #include <stdint.h>
@@ -55,7 +55,7 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
-    const uint32_t W_logical = get_arg_val<uint32_t>(9);
+    const uint32_t W = get_arg_val<uint32_t>(9);
 #ifdef TILIZE_IN
     const uint32_t H_logical = get_arg_val<uint32_t>(10);
 #endif
@@ -83,7 +83,7 @@ void kernel_main() {
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t cb_id_in_rm = tt::CBIndex::c_27;
 
-    const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
+    const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
     // TILE path: input a is already in tile layout.
     const uint32_t src0_page_bytes = get_tile_size(cb_id_in0);
@@ -104,13 +104,14 @@ void kernel_main() {
     const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
 #endif
 
-    // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
+    // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
+        // Scaler(s) for reduce
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        const uint32_t scaler = get_arg_val<uint32_t>(4);
+        uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
-        if (partial_last_tile_cols > 0) {
+        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        if (partial_last_tile_cols > 0 && !use_welford) {
             norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
         }
     }
