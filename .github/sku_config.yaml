@@ -122,6 +122,46 @@ skus:
       - BH-LLMBox
       - pipeline-perf
 
+  bh_llmbox_qbgh02:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+      - qb-gh02
+
+  bh_llmbox_qbgh03:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+      - qb-gh03
+
+  bh_llmbox_qbgh04:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+      - qb-gh04
+
+  bh_quietbox_2_qbge01:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-QB-GE
+      - pipeline-perf
+      - qbge-metal-01
+
+  bh_quietbox_2_qbge03:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-QB-GE
+      - pipeline-perf
+      - qbge-metal-03
+
   bh_loudbox:
     runs_on:
       - in-service
