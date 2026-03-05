@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 Parse debug bus signal groups from JSON produced by tt-triage and print selected groups
-of selected block typesfor selected devices and locations. Each group is printed as its own table: first column
+of selected block types for selected devices and locations. Each group is printed as its own table: first column
 is the group name (header), second column is "Value" (header); rows are decoded
 signal names and values.
 
@@ -46,11 +46,11 @@ def _get_selected_devices(devices_arg: str | None, device_keys: set[str]) -> lis
     """Return set of device keys to include (e.g. {'Device 0', 'Device 1'})."""
     if devices_arg is None:
         return device_keys
-    requested = [f"Device {(d.strip())}" for d in devices_arg.split(",") if d.strip()]
     selected = []
-    for req in requested:
-        if req in device_keys:
-            selected.append(req)
+    for d in devices_arg.split(","):
+        d = d.strip()
+        if d and f"Device {d}" in device_keys:
+            selected.append(f"Device {d}")
     return selected
 
 
@@ -58,11 +58,11 @@ def _get_selected_block_types(block_types_arg: str | None, block_types: set[str]
     """Return set of block types to include (e.g. {'tensix', 'idle_eth'})."""
     if block_types_arg is None:
         return block_types
-    requested = [b.strip() for b in block_types_arg.split(",") if b.strip()]
     selected = []
-    for req in requested:
-        if req in block_types:
-            selected.append(req)
+    for b in block_types_arg.split(","):
+        b = b.strip()
+        if b and b in block_types:
+            selected.append(b)
     return selected
 
 
@@ -95,15 +95,9 @@ def _get_selected_groups(groups_arg: str | None, groups: list[str]) -> list[str]
     selected = []
     for group in groups:
         for pat in patterns:
-            try:
-                if re.search(pat, group):
-                    selected.append(group)
-                    break
-            except re.error:
-                # Treat as literal substring if regex invalid
-                if pat in group:
-                    selected.append(group)
-                    break
+            if re.search(pat, group):
+                selected.append(group)
+                break
     return selected
 
 
