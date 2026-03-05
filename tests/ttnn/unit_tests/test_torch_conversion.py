@@ -732,26 +732,30 @@ def test_from_torch_deep_seek_sharded_weights_single_device(device, shape, shard
     assert torch.equal(torch_input_tensor, torch_result_tensor)
 
 
-# TODO: Increte shape size according to shard_dims
+# TODO: Increase shape size according to shard_dims
 @pytest.mark.parametrize(
     "shape,shard_shape,memory_layout,shard_dims",
     [
         # wq_b: WIDTH_SHARDED, shard [1536, 256], 12 DRAM banks, shard_dims=(0, -1)
-        ((1, 1536, 3072), (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 1536, 3072], (1536, 256), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
         # wo: WIDTH_SHARDED, shard [16384, 96], 12 DRAM banks, shard_dims=(0, -1)
-        ((1, 16384, 1152), (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
+        ([1, 16384, 1152], (16384, 96), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -1)),
         # wq_kv_a: WIDTH_SHARDED, shard [896, 192], 12 DRAM banks, shard_dims=(0, -2)
-        ((1, 896, 2304), (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
+        ([1, 896, 2304], (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
         # wkv_b1: HEIGHT_SHARDED, shard [256, 512], 12 DRAM banks, shard_dims=(0, -3)
-        ((1, 3072, 512), (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
+        ([1, 3072, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
         # wkv_b2: HEIGHT_SHARDED, shard [5632, 128], 12 DRAM banks, shard_dims=(0, None)
-        ((1, 67584, 128), (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, None)),
+        ([1, 67584, 128], (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, None)),
     ],
     ids=["wq_b", "wo", "wq_kv_a", "wkv_b1", "wkv_b2"],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b])
 def test_from_torch_deep_seek_sharded_weights_galaxy(device, shape, shard_shape, memory_layout, shard_dims, ttnn_dtype):
     torch.manual_seed(0)
+    if shard_dims[0] is not None and shard_dims[1] is not None:
+        shape[shard_dims[0]] = shape[shard_dims[0]] * device.shape[shard_dims[0]]
+        shape[shard_dims[1]] = shape[shard_dims[1]] * device.shape[shard_dims[1]]
+
     if ttnn_dtype == ttnn.bfloat4_b:
         torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)
         torch_input_tensor = quantize_to_bf4(torch_input_tensor)
