@@ -62,7 +62,7 @@ ttnn::Tensor all_gather_async_wrapper(
         num_buffers_per_channel);
 }
 
-ttnn::Tensor all_gather_async_wrapper(
+ttnn::Tensor all_gather_async_wrapper_1(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -73,6 +73,7 @@ ttnn::Tensor all_gather_async_wrapper(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     bool use_optimal_ccl_for_llama,
+    bool use_broadcast,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -90,6 +91,7 @@ ttnn::Tensor all_gather_async_wrapper(
         cluster_axis,
         use_optimal_ccl_for_llama,
         barrier_semaphore,
+        use_broadcast,
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
@@ -97,7 +99,7 @@ ttnn::Tensor all_gather_async_wrapper(
         sub_core_grids);
 }
 
-ttnn::Tensor all_gather_async_wrapper(
+ttnn::Tensor all_gather_async_wrapper_2(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -109,6 +111,7 @@ ttnn::Tensor all_gather_async_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
+    bool use_broadcast,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<uint32_t> num_workers_per_link,
@@ -125,6 +128,7 @@ ttnn::Tensor all_gather_async_wrapper(
         num_preferred_links,
         subdevice_id,
         use_optimal_ccl_for_llama,
+        use_broadcast,
         barrier_semaphore,
         false,
         sub_core_grids,
@@ -132,7 +136,7 @@ ttnn::Tensor all_gather_async_wrapper(
         num_buffers_per_channel);
 }
 
-ttnn::Tensor all_gather_async_reversed_wrapper(
+ttnn::Tensor all_gather_async_reversed_wrapper_1(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const GlobalSemaphoreArg& multi_device_global_semaphore,
@@ -161,7 +165,7 @@ ttnn::Tensor all_gather_async_reversed_wrapper(
         num_buffers_per_channel);
 }
 
-ttnn::Tensor all_gather_async_reversed_wrapper(
+ttnn::Tensor all_gather_async_reversed_wrapper_2(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -172,6 +176,7 @@ ttnn::Tensor all_gather_async_reversed_wrapper(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     bool use_optimal_ccl_for_llama,
+    bool use_broadcast,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -189,6 +194,7 @@ ttnn::Tensor all_gather_async_reversed_wrapper(
         cluster_axis,
         use_optimal_ccl_for_llama,
         barrier_semaphore,
+        use_broadcast,
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
@@ -196,7 +202,7 @@ ttnn::Tensor all_gather_async_reversed_wrapper(
         sub_core_grids);
 }
 
-ttnn::Tensor all_gather_async_reversed_wrapper(
+ttnn::Tensor all_gather_async_reversed_wrapper_3(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -305,22 +311,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none()),
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const std::optional<ttnn::Tensor>&,
-                const int32_t,
-                const GlobalSemaphoreArg&,
-                const uint32_t,
-                const std::optional<ttnn::MemoryConfig>&,
-                const ttnn::ccl::Topology,
-                std::optional<tt::tt_metal::SubDeviceId>,
-                std::optional<uint32_t>,
-                bool,
-                const std::optional<GlobalSemaphore>&,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>,
-                const std::optional<CoreRangeSet>&>(&all_gather_async_wrapper),
+            &all_gather_async_wrapper_1,
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer") = nb::none(),
             nb::arg("dim"),
@@ -332,28 +323,14 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("sub_core_grids") = std::nullopt),
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const int32_t,
-                const uint32_t,
-                const MeshDevice&,
-                const ttnn::ccl::Topology,
-                const GlobalSemaphoreArg&,
-                const std::optional<ttnn::Tensor>&,
-                const std::optional<size_t>,
-                const std::optional<MemoryConfig>&,
-                std::optional<tt::tt_metal::SubDeviceId>,
-                bool,
-                const std::optional<GlobalSemaphore>&,
-                const std::optional<CoreRangeSet>&,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>>(&all_gather_async_wrapper),
+            &all_gather_async_wrapper_2,
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis"),
@@ -366,6 +343,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
@@ -400,19 +378,7 @@ void bind_all_gather_async(nb::module_& mod) {
         mod,
         all_gather_async_reversed_doc,
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const int32_t,
-                const GlobalSemaphoreArg&,
-                const uint32_t,
-                const std::optional<ttnn::MemoryConfig>&,
-                const ttnn::ccl::Topology,
-                std::optional<tt::tt_metal::SubDeviceId>,
-                bool,
-                const std::optional<GlobalSemaphore>&,
-                const std::optional<CoreRangeSet>&,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>>(&all_gather_async_reversed_wrapper),
+            &all_gather_async_reversed_wrapper_1,
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
@@ -427,22 +393,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none()),
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const std::optional<ttnn::Tensor>&,
-                const int32_t,
-                const GlobalSemaphoreArg&,
-                const uint32_t,
-                const std::optional<ttnn::MemoryConfig>&,
-                const ttnn::ccl::Topology,
-                std::optional<tt::tt_metal::SubDeviceId>,
-                std::optional<uint32_t>,
-                bool,
-                const std::optional<GlobalSemaphore>&,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>,
-                const std::optional<CoreRangeSet>&>(&all_gather_async_reversed_wrapper),
+            &all_gather_async_reversed_wrapper_2,
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer") = nb::none(),
             nb::arg("dim"),
@@ -460,22 +411,7 @@ void bind_all_gather_async(nb::module_& mod) {
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("sub_core_grids") = std::nullopt),
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const int32_t,
-                const uint32_t,
-                const MeshDevice&,
-                const ttnn::ccl::Topology,
-                const GlobalSemaphoreArg&,
-                const std::optional<ttnn::Tensor>&,
-                const std::optional<size_t>,
-                const std::optional<MemoryConfig>&,
-                std::optional<tt::tt_metal::SubDeviceId>,
-                bool,
-                const std::optional<GlobalSemaphore>&,
-                const std::optional<CoreRangeSet>&,
-                std::optional<uint32_t>,
-                std::optional<uint32_t>>(&all_gather_async_reversed_wrapper),
+            &all_gather_async_reversed_wrapper_3,
             nb::arg("input_tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis"),
