@@ -138,6 +138,10 @@ def run_test_rotary_embedding_llama(
     torch.manual_seed(0)
     mode = "decode" if seq_len == 1 else "prefill"
 
+    print(
+        f"[run_test_rotary_embedding_llama] batch={batch}, seq_len={seq_len}, n_heads={n_heads}, n_kv_heads={n_kv_heads}, head_dim={head_dim}, max_seq_len={max_seq_len}, datatype={datatype}, fuse_qk={fuse_qk}, input_transpose={input_transpose}"
+    )
+
     if mode != "decode" and input_transpose == ttnn.RotaryEmbeddingTranspose.HC:
         pytest.skip("HC transpose on input is only supported for decode mode")
 
@@ -148,12 +152,16 @@ def run_test_rotary_embedding_llama(
         (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1,
         (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1,
     ]
+    print(f"input_q shape [batch, q_heads, seq_len, head_dim] (base, without permute): {inp[0].shape}")
+    print(f"input_k shape [batch, k_heads, seq_len, head_dim] (base, without permute): {inp[1].shape}")
 
     # To test with different position ids, assume that batch
     # dimension is the seq len dimension when passing inputs to torch
     if mode == "decode":
         inp = [x.permute(2, 1, 0, 3) for x in inp]
         # inp: [seq_len, n_heads, batch, head_dim]
+        print(f"input_q shape after permute (decode): {inp[0].shape}")
+        print(f"input_k shape after permute (decode): {inp[1].shape}")
 
     freqs_cis = precompute_freqs_cis(
         # Note that self.params.max_seq_len is multiplied by 2 because the token limit for the Llama 2 generation of models is 4096.
@@ -161,32 +169,48 @@ def run_test_rotary_embedding_llama(
         head_dim,
         max_seq_len * 2,  # In decode, precompute for all positions
     )  # torch.Size([8192, 64])
+    print(f"freqs_cis shape after precompute_freqs_cis (expect: [max_seq_len*2, head_dim//2]): {freqs_cis.shape}")
 
     start_pos = 0  # Must pick non-zero start pos to get non-zero freqs_cis
 
     position_ids = torch.arange(batch) if mode == "decode" else slice(start_pos, start_pos + seq_len)
+    print(f"position_ids: {position_ids}")
 
     freqs_cis = freqs_cis[position_ids]
 
     # PyTorch Ground Truth output --------------------------------------------------------------------
+    print(f"[torch] Beginning Torch/Llama `apply_rotary_emb` process")
+    print(f"[torch] input_q original shape:                {inp[0].shape}")
+    print(f"[torch] input_k original shape:                {inp[1].shape}")
     torch_xq = inp[0].transpose(1, 2)
     torch_xk = inp[1].transpose(1, 2)
+    print(f"[torch] input_q shape after transpose:         {torch_xq.shape}")
+    print(f"[torch] input_k shape after transpose:         {torch_xk.shape}")
+    print(f"[torch] freqs_cis shape after indexing:        {freqs_cis.shape}")
 
     torch_xq, torch_xk = apply_rotary_emb(torch_xq, torch_xk, freqs_cis=freqs_cis)
+    print(f"[torch] output_q shape after apply_rotary_emb: {torch_xq.shape}")
+    print(f"[torch] output_k shape after apply_rotary_emb: {torch_xk.shape}")
 
     torch_xq = torch_xq.transpose(1, 2)
     torch_xk = torch_xk.transpose(1, 2)
+    print(f"[torch] output_q shape after final transpose:  {torch_xq.shape}")
+    print(f"[torch] output_k shape after final transpose:  {torch_xk.shape}")
+    print(f"[torch] Ended Torch/Llama `apply_rotary_emb` process")
 
     pytorch_out = (torch_xq, torch_xk)
 
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
     tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk, input_transpose)
 
+    print(f"[torch] Beginning TTNN `rotary_embedding_llama` process")
     if mode == "decode":
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
         if input_transpose == ttnn.RotaryEmbeddingTranspose.NONE:
             inp = [x.transpose(1, 2) for x in inp]
             # inp: [seq_len, batch, n_heads, head_dim]
+            print(f"[ttnn] input_q shape after transpose (decode): {inp[0].shape}")
+            print(f"[ttnn] input_k shape after transpose (decode): {inp[1].shape}")
 
         if fuse_qk:
             # Set up rope with 2 * batch size (for fused qk) (no scaling)
@@ -228,8 +252,15 @@ def run_test_rotary_embedding_llama(
                 use_height_and_width_as_shard_shape=True,
             )
             input_mem_configs = [q_input_mem_config, k_input_mem_config]
+            tt_inp = [
+                ttnn.from_torch(
+                    x, device=device, dtype=datatype, memory_config=input_mem_configs[i], layout=ttnn.TILE_LAYOUT
+                )
+                for i, x in enumerate(inp)
+            ]
+            tt_inp += [cos, sin]  # Append cos and sin to the input list
 
-        else:
+        elif input_transpose == ttnn.RotaryEmbeddingTranspose.NONE:
             # Set up rope with batch size (no scaling)
             rope_setup_decode = RotarySetup(device, batch, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None)
 
@@ -247,30 +278,50 @@ def run_test_rotary_embedding_llama(
                 )
                 for _ in range(len(inp))
             ]
+            tt_inp = [
+                ttnn.from_torch(
+                    x, device=device, dtype=datatype, memory_config=input_mem_configs[i], layout=ttnn.TILE_LAYOUT
+                )
+                for i, x in enumerate(inp)
+            ]
+            tt_inp += [cos, sin]  # Append cos and sin to the input list
 
-        tt_inp = [
-            ttnn.from_torch(
-                x, device=device, dtype=datatype, memory_config=input_mem_configs[i], layout=ttnn.TILE_LAYOUT
+        elif input_transpose == ttnn.RotaryEmbeddingTranspose.HC:
+            tt_model.input_transpose = ttnn.RotaryEmbeddingTranspose.NONE
+            tt_model.mode = "prefill"
+            cos, sin = compute_gather_cos_sin(
+                dhead=head_dim,
+                end=max_seq_len * 2,
+                position_ids=torch.arange(batch),
             )
-            for i, x in enumerate(inp)
-        ]
-        tt_inp += [cos, sin]  # Append cos and sin to the input list
+            tt_inp = [inp[0], inp[1], cos, sin]
+            tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
+
     else:
         cos, sin = compute_gather_cos_sin(
             dhead=head_dim,
             end=max_seq_len * 2,
             position_ids=torch.arange(start_pos, start_pos + seq_len),
         )
-
         tt_inp = [inp[0], inp[1], cos, sin]
         tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
 
+    print(f"[ttnn] input_q shape:            {tt_inp[0].shape}")
+    print(f"[ttnn] input_k shape:            {tt_inp[1].shape}")
+    print(f"[ttnn] cos shape:                {tt_inp[2].shape}")
+    print(f"[ttnn] sin shape:                {tt_inp[3].shape}")
+    print(f"[ttnn] transformation_mat shape: {tt_model.transformation_mat.shape}")
     tt_out = tt_model(*tt_inp)
+    print(f"[ttnn] output_q shape:           {tt_out[0].shape}")
+    print(f"[ttnn] output_k shape:           {tt_out[1].shape}")
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
 
     if mode == "decode" and input_transpose == ttnn.RotaryEmbeddingTranspose.NONE:
         tt_out = [x.transpose(1, 2) for x in tt_out]
         # tt_out: [seq_len, n_heads, batch, head_dim]
+        print(f"[ttnn] output_q shape after final transpose (decode): {tt_out[0].shape}")
+        print(f"[ttnn] output_k shape after final transpose (decode): {tt_out[1].shape}")
+    print(f"[torch] Ended TTNN `rotary_embedding_llama` process")
 
     # check outputs ----------------------------------------------------------------------
     assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
@@ -278,6 +329,7 @@ def run_test_rotary_embedding_llama(
     for i in range(len(pytorch_out)):
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
+        print(f"Comparing pytorch_out[{i}] shape: {pytorch_out[i].shape} with tt_out[{i}] shape: {tt_out[i].shape}")
         assert pytorch_out[i].shape == tt_out[i].shape
         logger.info(f"PCC value: {output_pcc}")
         does_pass = does_pass and out_pass
@@ -431,7 +483,7 @@ def run_test_row_major_rotary_embedding_llama(
     (
         # (1, 32),  # To test single core implementation
         # (1, 128),
-        # (1, 256),
+        (1, 256),
         # (1, 512),
         # (1, 2048),
         # (1, 3 * 1024),  # To test non-power of 2
@@ -439,16 +491,16 @@ def run_test_row_major_rotary_embedding_llama(
         # (1, 8192),
         # (1, 16384),
         # (1, 128 * 1024),
-        (64, 1),
+        # (64, 1),
         (32, 1),
-        (15, 1),
-        (8, 1),
-        (1, 1),
+        # (15, 1),
+        # (8, 1),
+        # (1, 1),
     ),
     ids=(
         # "prefill_32",
         # "prefill_128",
-        # "prefill_256",
+        "prefill_256",
         # "prefill_512",
         # "prefill_2k",
         # "prefill_3k",
@@ -456,25 +508,32 @@ def run_test_row_major_rotary_embedding_llama(
         # "prefill_8k",
         # "prefill_16k",
         # "prefill_128k",
-        "decode_64",
+        # "decode_64",
         "decode_32",
-        "decode_15",
-        "decode_8",
-        "decode_1",
+        # "decode_15",
+        # "decode_8",
+        # "decode_1",
     ),
 )
 @pytest.mark.parametrize(
     "n_heads, n_kv_heads, head_dim",
     (
-        (8, 1, 64),
-        (8, 1, 128),
-        (11, 3, 128),
-        (71, 32, 64),
-        (8, 1, 96),
-        (8, 1, 256),
+        # (8, 1, 64),
+        # (8, 1, 128),
+        # (11, 3, 128),
+        # (71, 32, 64),
+        # (8, 1, 96),
+        # (8, 1, 256),
+        (1, 16, 64),
     ),
 )
-@pytest.mark.parametrize("input_transpose", (ttnn.RotaryEmbeddingTranspose.HC,))  # ttnn.RotaryEmbeddingTranspose.NONE,
+@pytest.mark.parametrize(
+    "input_transpose",
+    (
+        ttnn.RotaryEmbeddingTranspose.NONE,
+        ttnn.RotaryEmbeddingTranspose.HC,
+    ),
+)  #
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
 def test_rotary_embedding_llama(

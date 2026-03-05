@@ -126,6 +126,40 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
 
         } else if (operation_attributes.input_transpose == RotaryEmbeddingTranspose::HC) {
             TT_FATAL(
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Input tensor must be interleaved in decode mode with input_transpose=RotaryEmbeddingTranspose::HC");
+
+            // Checks for cos and sin
+            TT_FATAL(
+                cos.logical_shape()[0] == 1 && cos.logical_shape()[-1] == head_dim,
+                "Cos dims must match input dims: cos.shape = {}, head_dim = {}",
+                cos.logical_shape(),
+                head_dim);
+            // Check num_heads in cos/sin
+            TT_FATAL(
+                cos.logical_shape()[1] == input_tensor.logical_shape()[1] || cos.logical_shape()[1] == 1,
+                "Num heads in cos/sin must match input tensor num heads or be 1. Expected {}, got {}",
+                input_tensor.logical_shape()[1],
+                cos.logical_shape()[1]);
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout() == sin.memory_config().memory_layout(),
+                "Input tensor and sin tensor must have same memory layout");
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout() == cos.memory_config().memory_layout(),
+                "Input tensor and cos tensor must have same memory layout");
+
+            // Checks for transformation matrix
+            TT_FATAL(
+                trans_mat.logical_shape()[0] == 1 && trans_mat.logical_shape()[1] == 1,
+                "Transformation matrix must have 1st & 2nd dim equal to 1");
+            TT_FATAL(
+                trans_mat.logical_shape()[-2] == TILE_HEIGHT,
+                "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
+            TT_FATAL(
+                trans_mat.logical_shape()[-1] == TILE_WIDTH,
+                "Transformation matrix must have 4th dim equal to TILE_WIDTH");
+
+            TT_FATAL(
                 (false),
                 "In decode mode, optional input_transpose = RotaryEmbeddingTranspose::HC is currently not supported.");
         }
