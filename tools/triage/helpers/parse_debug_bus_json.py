@@ -45,7 +45,7 @@ from tools.triage.utils import ERROR, INFO, WARN
 def _get_selected_devices(devices_arg: str | None, device_keys: set[str]) -> list[str]:
     """Return set of device keys to include (e.g. {'Device 0', 'Device 1'})."""
     if devices_arg is None:
-        return device_keys
+        return list(device_keys)
     selected = []
     for d in devices_arg.split(","):
         d = d.strip()
@@ -57,7 +57,7 @@ def _get_selected_devices(devices_arg: str | None, device_keys: set[str]) -> lis
 def _get_selected_block_types(block_types_arg: str | None, block_types: set[str]) -> list[str]:
     """Return set of block types to include (e.g. {'tensix', 'idle_eth'})."""
     if block_types_arg is None:
-        return block_types
+        return list(block_types)
     selected = []
     for b in block_types_arg.split(","):
         b = b.strip()
