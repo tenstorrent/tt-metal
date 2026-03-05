@@ -49,6 +49,7 @@ void kernel_main() {
     constexpr uint8_t collector_core_coords[num_collectors][2] = COLLECTOR_CORE_COORDS;
 
     // Get dst address
+    // Since we write to 7 different collector cores, get all their addresses in an array
     const uint32_t local_collector_base_addr = get_write_ptr(cb_s2c_in2);
     uint64_t collector_dst_base_addr[num_collectors];
     for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
@@ -58,7 +59,7 @@ void kernel_main() {
             local_collector_base_addr);
     }
 
-    constexpr uint32_t collector_dst_stride = 12 * out_tile_size;
+    constexpr uint32_t collector_dst_stride = num_cores * out_tile_size;
     const uint32_t collector_offset = dram_bank_id * out_tile_size;
     uint32_t local_collector_dst_addr = local_collector_base_addr + collector_offset;
 
@@ -97,9 +98,6 @@ void kernel_main() {
             noc_async_write_one_packet_with_state</*posted=*/true>(local_collector_src_addr, local_collector_dst_addr);
             noc_semaphore_inc</*posted=*/true>(
                 partial_semaphore_noc_addr[collector_idx], /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
-
-            // // Ensure write and semaphore have left the core before continuing
-            // noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
 
             local_collector_src_addr += out_tile_size;
         }

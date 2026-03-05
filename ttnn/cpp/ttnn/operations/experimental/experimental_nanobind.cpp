@@ -136,7 +136,6 @@ void py_module(nb::module_& mod) {
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
     isin::detail::bind_isin_operation(mod);
-
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
 }

@@ -8,7 +8,7 @@
 #include <algorithm>
 
 //=============================================================================
-// MoE Ring All-to-All Configuration
+// Matmul WO Ring Configuration
 // Two arrangements supported:
 // 1. Boundary-optimized
 // 2. Evenly distributed
@@ -16,14 +16,22 @@
 
 namespace matmul_wo_ring {
 
+// Number of cores in the ring
 constexpr uint32_t NUM_CORES = 12;
 
+// Total number of tiles in the "N" dimension
 constexpr uint32_t NUM_W_TILES_W = 28;
+
+// Total number of tiles in the "K" dimension
 constexpr uint32_t NUM_W_TILES_H = 512;
 
+// Number of transactions in each TRID when reading from DRAM
 constexpr uint32_t W_TXNS_PER_BLOCK = 2;
+
+// Number of tiles per transaction when reading from DRAM
 constexpr uint32_t W_TILES_PER_TXN = 7;
 
+// Number of N tiles worked on at a time when calling matmul_block
 constexpr uint32_t N_TILES_PER_ITER = 7;
 
 //-----------------------------------------------------------------------------

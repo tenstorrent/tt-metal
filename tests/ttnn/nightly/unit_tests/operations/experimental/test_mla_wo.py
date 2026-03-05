@@ -11,7 +11,7 @@ from loguru import logger
 
 from models.common.utility_functions import comp_pcc, comp_allclose
 
-PCC_THRESHOLD = 0.99
+PCC_THRESHOLD = 0.999
 
 """
 There are total of 512 tiles in K dimension for the weight tensor. These are split non-uniformly

@@ -35,6 +35,8 @@ void kernel_main() {
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
         cb_reserve_back(cb_s2c_in2, num_cores);
+
+        // Wait for all 12 cores to send their data to this core
         noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
         cb_push_back(cb_s2c_in2, num_cores);
         semaphore_value += num_cores;
