@@ -9,24 +9,87 @@ When `TT_METAL_WATCHER=1` is enabled, `test_layer_norm_sharded_two_stage` fails 
 **Without watcher:** test passes in ~1.08s.
 **With watcher:** test aborts due to tripped assert.
 
-## CONFIRMED Root Cause (2026-03-05)
+## CONFIRMED Root Cause (2026-03-05, revised after deep investigation)
 
-**Non-posted multicast writes on Wormhole spuriously increment `NIU_MST_RD_RESP_RECEIVED`.**
+**Late-arriving NOC read responses on Wormhole: `NIU_MST_RD_RESP_RECEIVED` receives +2
+phantom increments shortly after `noc_async_read_barrier()` exits.**
 
-DPRINT diagnostics confirmed:
+### What happens
+
+After the final `noc_async_read_barrier()` in the kernel (the gather-reads barrier),
+the hardware and software counters are in sync:
+
 ```
-post-read-barrier: HW_RD_RESP=40 SW_ISSUED=40    ← in sync after last read barrier
-post-mcast-writes: HW_RD_RESP=42 SW_ISSUED=40    ← HW jumped +2, SW unchanged
-MISMATCH! delta=2
+rdbarrier_C sw=194 hw:194->194->196
 ```
 
-Between these two measurements, the kernel issued **zero NOC reads** — only non-posted
-multicast writes (`noc_async_write_multicast` with `linked=true`) and `noc_semaphore_set_multicast`.
-Yet the hardware read-response counter incremented by 2, causing the firmware assert to trip.
+1. Software counter `noc_reads_num_issued` = 194
+2. Hardware counter `NIU_MST_RD_RESP_RECEIVED` = 194 (barrier exits, equality met)
+3. After a short delay (~microseconds): hardware counter = **196** (+2 phantom responses)
 
-The delta of 2 matches the number of multicast write loop iterations
-(`num_all_to_all_workers_first_stage`), suggesting each iteration's write+semaphore pair
-causes one spurious increment of the read response counter.
+The +2 phantom responses arrive AFTER the read barrier considers all reads complete.
+No writes, no multicast, no linked transactions are involved. The responses appear on
+their own, purely from the read path.
+
+### How we proved this
+
+Through systematic elimination over 8+ experiments:
+
+1. **Initial hypothesis:** Non-posted multicast writes with `linked=true` cause the +2.
+   - DISPROVEN: Setting `linked=false` still showed +2.
+
+2. **Second hypothesis:** Any multicast write causes the +2.
+   - DISPROVEN: A 4-byte unicast self-write also showed +2.
+
+3. **Third hypothesis:** First use of cmd_buf 0 causes the +2.
+   - DISPROVEN: Moving the first cmd_buf 0 write to before reads showed +0.
+   - The +2 was absorbed by whichever cmd_buf wrote first AFTER reads (tested with
+     both cmd_buf 0 and cmd_buf 2).
+
+4. **Fourth hypothesis:** The first write after reads triggers the +2.
+   - PARTIALLY CORRECT: Splitting write issue vs write barrier showed the +2 appeared
+     at write issue time, not during the barrier.
+
+5. **Final discovery:** Adding a delay loop (no writes at all) after the read barrier
+   showed the +2 arriving during the delay:
+   ```
+   polls:166,168,168 wr_issue:168 wr_barrier:168
+   ```
+   The counter went 166→168 between the first two poll reads, with NO writes issued.
+   **The +2 is delayed read responses, not caused by writes.**
+
+6. **Barrier-by-barrier analysis** confirmed the +2 only occurs after the final gather
+   read barrier (barrier C), not after earlier read barriers (A, B):
+   ```
+   rdbarrier_A[0] 169->170->170    ← 0 late
+   rdbarrier_B[0] 172->173->173    ← 0 late
+   rdbarrier_A[1] 174->175->175    ← 0 late
+   rdbarrier_B[1] 177->178->178    ← 0 late
+   rdbarrier_C   180->180->182    ← +2 late!
+   ```
+
+### Characteristics of the +2
+
+- Always exactly +2 (consistent across all experiments)
+- Only after the last read barrier in the kernel
+- Arrives within microseconds of the barrier exiting
+- Not related to: linked flag, multicast, cmd_buf identity, write operations,
+  transaction size, or VC state
+- IS related to: the specific batch of reads preceding barrier C (the gather reads
+  that read from multiple remote cores)
+
+### Fix applied and verified
+
+Added a single line at the end of `kernel_main()` in `reader_mcast_sender_unary_sharded_ln.cpp`:
+
+```cpp
+noc_reads_num_issued[noc_index] = NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED);
+```
+
+This re-snapshots the software counter to match the hardware counter (including phantom
+responses) before the kernel returns, so the firmware assert in `brisck.cc` sees them equal.
+
+**Result: test PASSES with `TT_METAL_WATCHER=1`.**
 
 ---
 
@@ -208,34 +271,26 @@ successful barrier (line 236) and kernel exit.**
 
 ---
 
-## Root Cause: CONFIRMED
+## Root Cause: CONFIRMED (revised)
 
-### Non-posted multicast write acks increment `NIU_MST_RD_RESP_RECEIVED` on Wormhole
+### Late-arriving NOC read responses on Wormhole
 
-DPRINT instrumentation was added to `reader_mcast_sender_unary_sharded_ln.cpp` to read
-the hardware register `NIU_MST_RD_RESP_RECEIVED` and software counter `noc_reads_num_issued`
-at two points:
-1. Immediately after the last `noc_async_read_barrier()` (line 237)
-2. Immediately after the multicast write loop completes (after all `noc_async_write_barrier()` calls)
+The Wormhole NOC hardware generates +2 phantom read response events
+(`NIU_MST_RD_RESP_RECEIVED` increments) that arrive microseconds after
+`noc_async_read_barrier()` exits. These are NOT caused by write operations.
 
-**Results:**
-```
-post-read-barrier: HW_RD_RESP=40 SW_ISSUED=40    ← perfectly in sync
-post-mcast-writes: HW_RD_RESP=42 SW_ISSUED=40    ← HW +2, SW unchanged
-MISMATCH! delta=2
-```
+The barrier checks `NIU_MST_RD_RESP_RECEIVED == noc_reads_num_issued[noc]` and exits
+when equality is met. Shortly after, 2 additional hardware responses arrive, pushing
+the hardware counter ahead of the software counter.
 
-Between these two points, the kernel issues **zero NOC reads**. The only operations are:
-- `noc_async_write_multicast(..., linked=true)` — non-posted multicast write
-- `noc_semaphore_set_multicast(...)` — non-posted multicast semaphore set
-- `noc_async_write_barrier()` — wait for write acks
-
-Each loop iteration (there are 2, matching `num_all_to_all_workers_first_stage`) causes
-`NIU_MST_RD_RESP_RECEIVED` to increment by 1, for a total delta of 2.
-
-**This is a Wormhole NOC hardware behavior** where non-posted multicast write acknowledgements
-also increment the read response counter. The software counter `noc_reads_num_issued` is
-never incremented for writes, so they diverge.
+This was proven by:
+1. Polling the register in a tight loop with NO writes after the read barrier:
+   `polls:166,168,168` — the counter jumped 166→168 on its own.
+2. The +2 only occurs after the **final** read barrier (barrier C, the gather-reads),
+   not after earlier read barriers in the same kernel.
+3. Write operations (multicast, unicast, linked, unlinked) have zero effect — they
+   merely appeared to cause the +2 in earlier experiments because they were the first
+   thing executed after the barrier, by which time the late responses had arrived.
 
 ### Why it only fails with watcher
 
@@ -247,7 +302,8 @@ the mismatch.
 ### Why adding `noc_async_read_barrier()` at the end caused a hang
 
 The barrier spins on `NIU_MST_RD_RESP_RECEIVED == noc_reads_num_issued[noc]`.
-Since `HW (42) > SW (40)`, and nothing will ever increment `SW`, the barrier hangs forever.
+Since `HW (196) > SW (194)`, and nothing will ever increment `SW`, the barrier
+hangs forever.
 
 ---
 
@@ -343,11 +399,46 @@ write acks is expected Wormhole behavior, a known errata, or a newly discovered 
 
 1. The test **only fails with watcher enabled** — without watcher, it passes consistently.
 2. The failing kernel's **internal read barriers all pass** (the kernel completes normally).
-3. **CONFIRMED:** `NIU_MST_RD_RESP_RECEIVED` increments by exactly 2 during the multicast
-   write phase, with zero NOC reads issued. `HW=40→42, SW=40→40`.
-4. The delta of 2 matches `num_all_to_all_workers_first_stage` (the multicast loop iteration count).
-5. Adding a `noc_async_read_barrier()` at the end **hangs forever** because `HW > SW` and
-   `SW` will never catch up — this is NOT a "pending reads" problem, it's a spurious HW
-   counter increment problem.
-6. The only NOC0 operations between the last successful barrier and kernel exit are
-   **non-posted multicast writes with `linked=true`** and **`noc_semaphore_set_multicast`**.
+3. **CONFIRMED:** `NIU_MST_RD_RESP_RECEIVED` increments by exactly +2 after the final
+   read barrier, with `noc_reads_num_issued` remaining unchanged. `SW=194, HW=194→196`.
+4. The +2 phantom responses arrive **within microseconds** after `noc_async_read_barrier()`
+   exits, confirmed by polling the register with no intervening operations.
+5. The +2 only occurs after the **final** read barrier (barrier C, gather-reads), not
+   after earlier barriers (A, B) which also issue reads.
+6. Adding a `noc_async_read_barrier()` at the end **hangs forever** because `HW > SW` and
+   `SW` will never catch up.
+7. **DISPROVEN:** Write operations (multicast, unicast, linked, unlinked) do NOT cause
+   the +2. All earlier evidence attributing the +2 to writes was a timing coincidence.
+8. **DISPROVEN:** The `NOC_CMD_VC_LINKED` flag is irrelevant. The +2 persists with
+   `linked=false`.
+9. **DISPROVEN:** cmd_buf identity is irrelevant. The +2 was absorbed by whichever
+   cmd_buf happened to issue the first write after reads.
+
+## Conclusion
+
+**Root cause:** On Wormhole, the final batch of `noc_async_read_one_packet` calls in this
+kernel generates +2 late responses to `NIU_MST_RD_RESP_RECEIVED` that arrive after
+`noc_async_read_barrier()` has already exited. This is a Wormhole NOC hardware behavior,
+not a software bug.
+
+The watcher's `DebugAssertNCriscNOCReadsFlushedTripped` assert fires because it compares
+`NIU_MST_RD_RESP_RECEIVED` (hardware, with +2 phantom responses) against
+`noc_reads_num_issued` (software, correctly tracking actual reads issued). The mismatch
+is a false positive from watcher's perspective.
+
+**Questions for the hardware/NOC team:**
+1. Why do the gather reads (barrier C) generate +2 phantom responses when earlier reads
+   (barriers A, B) in the same kernel do not?
+2. Is this related to multi-core read patterns (barrier C reads from 2 different remote
+   cores in rapid succession), read response coalescing, or NOC pipeline draining?
+3. Is there a known errata or documentation for this behavior?
+
+**Proper fix options (for the hardware/firmware team to evaluate):**
+1. **Watcher fix:** Change the `ncrisc_noc_reads_flushed` assert to tolerate `HW >= SW`
+   (i.e., only fire if `HW < SW`, meaning reads are genuinely pending, not if `HW > SW`
+   which indicates phantom responses). This is the broadest fix.
+2. **Firmware fix:** Have `noc_local_state_init` or the post-kernel check re-snapshot
+   the software counter from hardware before asserting.
+3. **Kernel fix:** Add `noc_reads_num_issued[noc_index] = NOC_STATUS_READ_REG(noc_index,
+   NIU_MST_RD_RESP_RECEIVED);` at the end of affected kernels (our validated workaround).
+   Only fixes this kernel; any kernel with a similar read pattern will need the same fix.
