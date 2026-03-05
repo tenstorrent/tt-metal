@@ -8,32 +8,16 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+
+include(sources.cmake)
+
 target_sources(
     metalium_firmware
     INTERFACE
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            blackhole/noc.c
-            wormhole/noc.c
-            active_erisc.cc
-            active_erisc-crt0.cc
-            active_erisck.cc
-            brisc.cc
-            brisck.cc
-            erisc.cc
-            erisc-crt0.cc
-            erisck.cc
-            idle_erisc.cc
-            idle_erisck.cc
-            ncrisc.cc
-            ncrisck.cc
-            subordinate_erisc.cc
-            tdma_xmov.c
-            trisc.cc
-            trisck.cc
-            tt_eth_api.cpp
+        FILES ${FIRMWARE_JIT_API_FILES}
 )
 
 install(

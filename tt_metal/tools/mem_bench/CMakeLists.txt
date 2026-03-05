@@ -1,19 +1,9 @@
-set(IMPL_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/mem_bench.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/host_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/device_utils.cpp
-)
-
-set(HEADERS_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/host_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/device_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/work_thread.hpp
-)
+include(sources.cmake)
 
 add_executable(
     mem_bench
-    ${IMPL_SRC}
-    ${HEADERS_SRC}
+    ${MEM_BENCH_SOURCES}
+    ${MEM_BENCH_HEADERS}
 )
 target_link_libraries(
     mem_bench
