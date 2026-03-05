@@ -106,6 +106,25 @@ class ModelPipeline:
         next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
         return next_token_id
 
+    def run_inference(
+        self,
+        prompt_token_ids: list[int],
+        max_new_tokens: int,
+        on_token: Callable[[int], None],
+        eos_token_id: int | None = None,
+    ) -> None:
+        if self.pipeline.my_mesh_id != 0:
+            raise RuntimeError("run_inference() must only be called on mesh id 0")
+        next_token_id = self.prefill_forward(prompt_token_ids)
+        on_token(next_token_id)
+        for i in range(max_new_tokens):
+            if eos_token_id is not None and next_token_id == eos_token_id:
+                logger.debug("EOS token {} at decode step {}", eos_token_id, i)
+                break
+            next_token_id = self.decode_forward(next_token_id)
+            on_token(next_token_id)
+        logger.debug("Generation complete ({} tokens generated)", i + 1)
+
     def barrier(self) -> None:
         self.pipeline.barrier()
 
