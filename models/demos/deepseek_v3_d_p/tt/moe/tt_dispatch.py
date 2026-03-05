@@ -55,12 +55,41 @@ class TtDispatchModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
 
+    @staticmethod
+    def shard_offset_tensor(
+        mesh_device: ttnn.MeshDevice,
+        chip_to_n_routed_expert_offset: torch.Tensor,
+    ) -> ttnn.Tensor:
+        """
+        Convert and shard the offset tensor for dispatch operation.
+
+        Args:
+            mesh_device: The mesh device to place the tensor on
+            chip_to_n_routed_expert_offset: Base offset for each expert from each chip
+                Shape: (num_chips, n_routed_experts) - from get_gate_outputs()
+
+        Returns:
+            TTNN tensor sharded across mesh devices
+        """
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(0, None),
+        )
+        return ttnn.from_torch(
+            chip_to_n_routed_expert_offset,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
+        )
+
     def forward(
         self,
-        x: torch.Tensor,
-        weights: torch.Tensor,
-        indices: torch.Tensor,
-        chip_to_n_routed_expert_offset: torch.Tensor,
+        x: ttnn.Tensor,
+        weights: ttnn.Tensor,
+        indices: ttnn.Tensor,
+        tt_chip_to_n_routed_expert_offset: ttnn.Tensor,
     ):
         """
         Route tokens from their original positions to expert-specific buffers distributed across chips.
@@ -72,29 +101,13 @@ class TtDispatchModule(LightweightModule):
             x: Input tensor of shape (num_chips, seq_len, hidden_dim)
             weights: Router weights of shape (num_chips, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
-            chip_to_n_routed_expert_offset: Base offset for each expert from each chip
-                Shape: (num_chips, n_routed_experts) - from get_gate_outputs()
+            tt_chip_to_n_routed_expert_offset: Base offset for each expert from each chip (TTNN tensor)
+                Shape: (num_chips, n_routed_experts) - use shard_offset_tensor() to create
 
         Returns:
             dispatched: Dispatched tokens of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
             metadata: Metadata tensor of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
-
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device,
-            mesh_shape=self.mesh_device.shape,
-            dims=(0, None),
-        )
-
-        # Convert chip_to_n_routed_expert_offset to ttnn tensor
-        chip_to_n_routed_expert_offset_ttnn = ttnn.from_torch(
-            chip_to_n_routed_expert_offset,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-        )
-
         (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
@@ -102,7 +115,7 @@ class TtDispatchModule(LightweightModule):
             input_tensor=x,
             weights_tensor=weights,
             indices_tensor=indices,
-            chip_to_n_routed_expert_offset_tensor=chip_to_n_routed_expert_offset_ttnn,
+            chip_to_n_routed_expert_offset_tensor=tt_chip_to_n_routed_expert_offset,
             num_chips=self.num_chips,
             experts_per_chip=self.experts_per_chip,
             n_routed_experts=self.n_routed_experts,
