@@ -356,13 +356,14 @@ void Inspector::emit_debug_entry(
     try {
         auto* data = get_inspector_data();
         const auto workload_id = mesh_workload->get_id();
-
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
-        data->runtime_entries.emplace_back(
-            workload_id, runtime_id, std::string(operation_name), std::move(tensor_specs));
-        const auto max_entries = MetalContext::instance().rtoptions().get_inspector_max_runtime_entries();
-        while (data->runtime_entries.size() > max_entries) {
-            data->runtime_entries.pop_front();
+        data->runtime_entries.emplace_back(workload_id, runtime_id, operation_name, std::move(tensor_specs));
+        static constexpr size_t max_entries = 9500;
+        static constexpr size_t evict_threshold = 10000;
+        if (data->runtime_entries.size() > evict_threshold) {
+            while (data->runtime_entries.size() > max_entries) {
+                data->runtime_entries.pop_front();
+            }
         }
 
         if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {

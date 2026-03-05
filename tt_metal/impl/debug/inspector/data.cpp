@@ -184,7 +184,7 @@ void Data::rpc_get_mesh_workload_runtime_entries(
         auto entry = all_runtime_entries[i];
         entry.setWorkloadId(runtime_entries[i].workload_id);
         entry.setRuntimeId(runtime_entries[i].runtime_id);
-        entry.setOperationName(runtime_entries[i].operation_name);
+        entry.setOperationName(std::string(runtime_entries[i].operation_name));
         entry.setOperationParameters(stringify_tensor_specs(runtime_entries[i].tensor_specs));
     }
 }
