@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     create_single_galaxy_pipeline_configuration,
     create_single_pod_pipeline_configuration,
 )
-from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -1911,11 +1911,11 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -1974,11 +1974,11 @@ def test_persistent_mode(mesh_device, use_fp32):
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
             logger.info(f"Writing token for iteration {iteration}")
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -2038,11 +2038,11 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
 
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
