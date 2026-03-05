@@ -1013,14 +1013,14 @@ void RiscFirmwareInitializer::initialize_firmware(
             uint64_t go_message_index_addr =
                 hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX) + dram_l1_noc_offset;
             cluster_.write_core(
-                init_launch_msg_data.data(), init_launch_msg_data.size(), tt_cxy_pair(device_id, virtual_core),
+                init_launch_msg_data.data(),
+                init_launch_msg_data.size(),
+                tt_cxy_pair(device_id, virtual_core),
                 launch_addr);
             cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
             uint32_t zero = 0;
-            cluster_.write_core(
-                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
-            cluster_.write_core(
-                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
+            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
 
             // Write reset PC (register address, no L1 NOC offset needed)
             cluster_.write_core(
@@ -1154,11 +1154,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             {static_cast<size_t>(device_id), virtual_dram_core},
             core_info_addr);
         initialize_firmware(
-            device_id,
-            HalProgrammableCoreType::DRAM,
-            virtual_dram_core,
-            dram_launch_msg.view(),
-            dram_go_msg.view());
+            device_id, HalProgrammableCoreType::DRAM, virtual_dram_core, dram_launch_msg.view(), dram_go_msg.view());
         dram_not_done_cores.insert(virtual_dram_core);
     }
 
@@ -1196,8 +1192,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     if (!dram_not_done_cores.empty()) {
         log_debug(LogDevice, "Waiting for DRAM firmware init complete");
         try {
-            llrt::internal_::wait_until_cores_done(
-                device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
+            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
         } catch (std::runtime_error&) {
             TT_THROW("Device {} init: failed to initialize DRAM FW!", device_id);
         }

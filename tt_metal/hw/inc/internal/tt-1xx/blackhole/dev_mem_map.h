@@ -324,7 +324,7 @@
 // Private data memory is 8KB at 0xFFB00000
 
 #define MEM_DRISC_LOCAL_SIZE MEM_BRISC_LOCAL_SIZE  // 8KB private data at MEM_LOCAL_BASE (0xFFB00000)
-#define MEM_DRISC_RESERVED_SIZE 64  // Reserved at address 0 for corruption detection
+#define MEM_DRISC_RESERVED_SIZE 64                 // Reserved at address 0 for corruption detection
 #define MEM_DRISC_MAILBOX_BASE MEM_DRISC_RESERVED_SIZE
 #define MEM_DRISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
