@@ -136,7 +136,12 @@ def run(
             shape = tuple(input_a_shape)
         else:
             shape = input_a_shape
-        shape_a = shape_b = shape
+        shape_a = shape
+        input_b_shape_raw = kwargs.get("input_b_shape", None)
+        if input_b_shape_raw is not None:
+            shape_b = tuple(input_b_shape_raw) if isinstance(input_b_shape_raw, (tuple, list)) else input_b_shape_raw
+        else:
+            shape_b = shape
         shape_c = kwargs.get("update_idxs_tensor_shape", shape)
         shape_d = kwargs.get("page_table_shape", shape)
 

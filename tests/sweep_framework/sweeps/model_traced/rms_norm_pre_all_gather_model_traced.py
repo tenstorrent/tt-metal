@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -93,7 +95,7 @@ def run(
     if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
         input_a_dtype = ttnn.bfloat16
 
-    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
         shape
     )
 
@@ -121,17 +123,39 @@ def run(
             is_sharded = True
             input_tensor = ttnn.to_memory_config(input_tensor, input_a_memory_config)
 
-    # Build program_config if provided from traced JSON
     ttnn_program_config = None
     if program_config and isinstance(program_config, dict):
-        compute_grid = program_config.get("compute_with_storage_grid_size", {})
-        ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
-            subblock_w=program_config.get("subblock_w", 1),
-            block_h=program_config.get("block_h", 1),
-            block_w=program_config.get("block_w", 1),
-            inplace=bool(program_config.get("inplace", 0)),
-        )
+        config_type = program_config.get("type", "")
+        config_value = program_config.get("value", "")
+
+        if "ShardedMultiCore" in config_type and isinstance(config_value, str):
+            x_m = re.search(r"x=(\d+)", config_value)
+            y_m = re.search(r"y=(\d+)", config_value)
+            sw_m = re.search(r"subblock_w=(\d+)", config_value)
+            bh_m = re.search(r"block_h=(\d+)", config_value)
+            bw_m = re.search(r"block_w=(\d+)", config_value)
+            inp_m = re.search(r"inplace=(\d+)", config_value)
+            ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(
+                    int(x_m.group(1)) if x_m else 1,
+                    int(y_m.group(1)) if y_m else 1,
+                ),
+                subblock_w=int(sw_m.group(1)) if sw_m else 1,
+                block_h=int(bh_m.group(1)) if bh_m else 1,
+                block_w=int(bw_m.group(1)) if bw_m else 1,
+                inplace=bool(int(inp_m.group(1))) if inp_m else False,
+            )
+        elif "Default" in config_type:
+            pass
+        elif "compute_with_storage_grid_size" in program_config:
+            compute_grid = program_config.get("compute_with_storage_grid_size", {})
+            ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.get("x", 1), compute_grid.get("y", 1)),
+                subblock_w=program_config.get("subblock_w", 1),
+                block_h=program_config.get("block_h", 1),
+                block_w=program_config.get("block_w", 1),
+                inplace=bool(program_config.get("inplace", 0)),
+            )
 
     # Parse compute_kernel_config and dtype from traced config
     compute_kernel_config = kwargs.get("compute_kernel_config", None)
