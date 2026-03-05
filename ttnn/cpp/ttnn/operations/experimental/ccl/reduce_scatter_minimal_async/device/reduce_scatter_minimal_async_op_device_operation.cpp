@@ -84,7 +84,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs(
     const ReduceScatterMinimalAsyncParams& operation_attributes, const ReduceScatterMinimalAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto inter_shape = input_tensor.logical_shape();
+    auto inter_shape = input_tensor.padded_shape();
 
     MemoryConfig adjusted_intermediate_mem_config,
         intermediate_mem_config =
