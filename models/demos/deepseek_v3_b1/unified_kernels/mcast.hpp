@@ -293,7 +293,6 @@ struct Mcast {
         void init([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                DPRINT << "MCAST INIT STARTED" << ENDL();
                 // Compute multicast NOC address and store for later use
                 uint64_t mcast_flag_noc_addr = get_noc_multicast_addr<noc_index>(
                     args.dest_noc_start_x,
@@ -314,7 +313,6 @@ struct Mcast {
                         posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
                 }
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
-                DPRINT << "MCAST INIT ENDED" << ENDL();
             }
 #endif
         }
@@ -334,13 +332,11 @@ struct Mcast {
         void teardown() {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                DPRINT << "MCAST TEARDOWN STARTED" << ENDL();
                 // Teardown persistent mcast sender
                 teardown_persistent_mcast_sender<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
                     CTArgsT::is_part_of_receiver_grid>();
-                DPRINT << "MCAST TEARDOWN ENDED" << ENDL();
             }
 #endif
         }
@@ -349,7 +345,6 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                DPRINT << "MCAST SEND STARTED" << ENDL();
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
@@ -379,10 +374,8 @@ struct Mcast {
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
-                DPRINT << "MCAST SEND ENDED" << ENDL();
             }
 #elif defined(COMPILE_FOR_NCRISC)
-            DPRINT << "MCAST RECEIVER STARTED" << ENDL();
             // ================================================================
             // NCRISC - Receiver cores: reserve, wait, push (all in operator)
             // ================================================================
@@ -402,7 +395,6 @@ struct Mcast {
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
             }
-            DPRINT << "MCAST RECEIVER ENDED" << ENDL();
 #endif
         }
 

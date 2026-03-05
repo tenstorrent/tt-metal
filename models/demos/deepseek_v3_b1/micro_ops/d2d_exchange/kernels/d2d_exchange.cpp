@@ -80,9 +80,7 @@ FORCE_INLINE void send_pages_over_socket(
         uint32_t l1_read_addr_1 = l1_read_addr + page_size_per_link;
         uint64_t dst_addr_0 = dst_addr;
         uint64_t dst_addr_1 = dst_addr + page_size_per_link;
-        DPRINT << "NUm Whole packets: " << num_whole_fabric_packets_per_link
-               << " WHole packet size: " << whole_packet_size << ENDL();
-        DPRINT << "Partial packet size: " << partial_packet_size << ENDL();
+
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
             write_data_to_remote_core_with_ack<false>(
                 downstream_fabric_connection,
@@ -149,8 +147,6 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    DPRINT << "Starting d2d exchange kernel" << ENDL();
-
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -178,12 +174,6 @@ void kernel_main() {
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
 
-        DPRINT << "Set unicast route to mesh: " << downstream_enc.d2d.downstream_mesh_id
-               << " chip: " << downstream_enc.d2d.downstream_chip_id << ENDL();
-        DPRINT << "Downstream Bytes sent NOC Addr: " << downstream_bytes_sent_noc_addr << ENDL();
-        DPRINT << "Downstream NOC " << downstream_enc.d2d.downstream_noc_x << " " << downstream_enc.d2d.downstream_noc_y
-               << ENDL();
-
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
     }
@@ -199,16 +189,12 @@ void kernel_main() {
     uint32_t iteration = 0;
     while (true) {
         socket_reserve_pages(sender_socket, 1);
-        DPRINT << "Waiting for pages with termination iteration " << iteration << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        DPRINT << "Pages with termination received iteration " << iteration << ENDL();
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
-
-        DPRINT << "Send pages downstream iteration " << iteration << ENDL();
 
         send_pages_over_socket(
             sender_socket,
@@ -219,16 +205,13 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
-        DPRINT << "Send pages downstream done iteration " << iteration << ENDL();
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
-            DPRINT << "Send notifications downstream iteration " << iteration << ENDL();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
-            DPRINT << "Send notifications upstream done iteration " << iteration << ENDL();
         } else {
             socket_notify_sender(receiver_socket);
         }
