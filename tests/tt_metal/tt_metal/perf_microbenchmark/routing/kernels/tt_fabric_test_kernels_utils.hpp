@@ -1033,8 +1033,7 @@ struct SenderKernelTrafficConfig {
     // All timestamps are local variables (registers), deltas accumulated directly.
     // STATEFUL_NOC: when true, uses pre-configured NOC cmd buf state for credit updates.
     template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false, bool enable_l1_dcache = true>
-    FORCE_INLINE bool send_one_packet(
-        uint32_t& wait_accum, uint32_t& advance_accum, uint32_t& noc_accum, uint32_t& loop_accum, uint32_t& prev_t) {
+    FORCE_INLINE bool send_one_packet() {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
             if (!credit_manager_.has_credits_available(num_packets_processed)) {
