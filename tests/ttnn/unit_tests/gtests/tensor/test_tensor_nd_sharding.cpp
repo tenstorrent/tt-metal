@@ -137,7 +137,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
 
     const auto& storage = tensor.device_storage();
-    auto buffer = storage.get_mesh_buffer();
+    auto buffer = storage.get_mesh_buffer_leak_ownership();
 
     size_t region_size = buffer->page_size();
     while (buffer->size() % (region_size * 2) == 0) {
