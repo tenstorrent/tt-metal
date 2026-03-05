@@ -535,13 +535,29 @@ def _enrich_ops_from_perf_csv(
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
+        # Also build a set of valid op_ids for early filtering
+        valid_op_ids: Set[int] = set()
         for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            valid_op_ids.add(op_id)
+
+        # Pre-filter host ops to only those that have device perf data - speeds up processing significantly
+        original_op_count = len(host_ops_by_device[device_id])
+        filtered_host_ops = [
+            op for op in host_ops_by_device[device_id] if int(op.get("global_call_count", -1)) in valid_op_ids
+        ]
+
+        if len(filtered_host_ops) < original_op_count:
+            skipped_count = original_op_count - len(filtered_host_ops)
+            logger.info(
+                f"Pre-filtered {skipped_count} ops (out of {original_op_count}) for device {device_id} "
+                f"that don't have device performance data (speeding up report generation)."
+            )
 
         enriched_ops = []
         missing_device_data_count = 0
         _max_missing_warnings = 5  # Log first N per device to avoid flooding / blocking report generation
-        for host_op in host_ops_by_device[device_id]:
+        for host_op in filtered_host_ops:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
             # Normalize host_trace_id: it may be None, "", or already an int
@@ -562,20 +578,17 @@ def _enrich_ops_from_perf_csv(
 
             if not candidates:
                 # Host op has no device perf row (e.g. model op count exceeds profiler limit or DRAM capacity).
-                # Add op without device data so report generation can continue; downstream handles missing _device_perf_row.
+                # Skip this op entirely to speed up report generation; only include ops with device performance data.
                 missing_device_data_count += 1
                 if missing_device_data_count <= _max_missing_warnings:
                     logger.warning(
                         "Device data missing: Op {} not present in {} for device {} (trace_id={}); "
-                        "op will appear in report without device metrics.",
+                        "op will be excluded from report.",
                         op_id,
                         PROFILER_CPP_DEVICE_PERF_REPORT,
                         device_id,
                         host_trace_id,
                     )
-                enriched_op = copy.deepcopy(host_op)
-                enriched_op["_device_perf_row"] = None
-                enriched_ops.append(enriched_op)
                 continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
@@ -604,10 +617,26 @@ def _enrich_ops_from_perf_csv(
         if missing_device_data_count > _max_missing_warnings:
             logger.warning(
                 "Device data missing: {} more ops (total {}) without device metrics for device {}; "
-                "report will include them without device data.",
+                "these ops will be excluded from report.",
                 missing_device_data_count - _max_missing_warnings,
                 missing_device_data_count,
                 device_id,
+            )
+        if missing_device_data_count > 0:
+            logger.info(
+                "Excluded {} ops without device performance data from report for device {} "
+                "(to speed up report generation).",
+                missing_device_data_count,
+                device_id,
+            )
+
+        if len(enriched_ops) == 0 and original_op_count > 0:
+            logger.warning(
+                "All {} ops for device {} were excluded (not found in {}). "
+                "Device will appear in report with no ops.",
+                original_op_count,
+                device_id,
+                PROFILER_CPP_DEVICE_PERF_REPORT,
             )
 
         host_ops_by_device[device_id] = enriched_ops
@@ -1142,6 +1171,25 @@ def generate_reports(
     """Emit the final CSV report plus supporting artifacts."""
 
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
+
+    # Build set of op IDs that have device data for fast lookup
+    ops_with_device_data: Set[int] = set()
+    for device_id in deviceOps:
+        for device_op in deviceOps[device_id]:
+            op_id = device_op.get("global_call_count")
+            if op_id is not None:
+                ops_with_device_data.add(int(op_id))
+
+    # Filter ops to only include those with device data - significantly speeds up report generation
+    original_ops_count = len(ops)
+    filtered_ops = {op_id: op_data for op_id, op_data in ops.items() if op_id in ops_with_device_data}
+    if len(filtered_ops) < original_ops_count:
+        skipped_count = original_ops_count - len(filtered_ops)
+        logger.info(
+            f"Filtered {skipped_count} ops (out of {original_ops_count}) that don't have device performance data "
+            f"to speed up report generation."
+        )
+    ops = filtered_ops
     outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
         outFolder = outputFolder
@@ -1165,6 +1213,8 @@ def generate_reports(
         os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
     if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if os.path.isfile(f"{logFolder / PROFILER_CPP_DEVICE_PERF_REPORT}"):
+        os.system(f"cp {logFolder / PROFILER_CPP_DEVICE_PERF_REPORT} {outFolder}")
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 
