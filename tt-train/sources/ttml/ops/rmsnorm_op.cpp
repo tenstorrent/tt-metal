@@ -27,7 +27,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     }
 
     auto ashape_arr = a_shape.to_array_4D();
-    auto [B, N, S, C] = ashape_arr;
+    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
     assert((N == 1));  // one sequence per batch
 
     // one gain parameter per channel
@@ -72,7 +72,7 @@ autograd::TensorPtr rmsnorm_composite(
     }
 
     auto ashape_arr = a_shape.to_array_4D();
-    auto [B, N, S, C] = ashape_arr;
+    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
     assert((N == 1));  // one sequence per batch
 
     // one gain parameter per channel

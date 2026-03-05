@@ -11,9 +11,8 @@ training_config:
   weight_decay: 0.1
   use_moreh_adamw: true
   use_kahan_summation: false
-  gradient_accumulation_steps: 1
-  data_path: "data/tokenized_shakespeare.csv"
-  model_config: "configs/model_configs/gpt2s.yaml"
+  data_path: "tokenized_shakespeare.yaml"
+  model_config: "model_configs/gpt2s.yaml"
   tokenizer_type: "bpe"
 
 device_config:

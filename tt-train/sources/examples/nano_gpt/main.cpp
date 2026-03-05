@@ -33,6 +33,8 @@
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
+#include "utils/config_path.hpp"
+#include "utils/data_path.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -187,7 +189,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_config = training_config["model_config"].as<std::string>("");
-    config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
+    config.data_path = training_config["data_path"].as<std::string>("shakespeare.txt");
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
@@ -354,8 +356,7 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name = "training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -363,8 +364,12 @@ int main(int argc, char **argv) {
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
 
-    app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
-    app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
+    app.add_option(
+           "-c,--config", training_config_name, "Training config name (resolved from configs/training_configs/)")
+        ->default_val(training_config_name);
+    app.add_option(
+           "--multihost", multihost_config_name, "Multihost config name (resolved from configs/multihost_configs/)")
+        ->default_val(multihost_config_name);
 
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
@@ -375,18 +380,19 @@ int main(int argc, char **argv) {
         ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
-    auto yaml_config = YAML::LoadFile(training_config_name);
+    auto resolved_training_config = ttml::utils::resolve_training_config(training_config_name);
+    auto yaml_config = YAML::LoadFile(resolved_training_config.string());
 
     TrainingConfig training_config = parse_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
-    // Resolve model_config path relative to tt-train root (configs/training_configs/ -> configs/ -> tt-train)
-    auto training_config_path = std::filesystem::path(training_config_name).parent_path();
-    std::string model_config_path =
-        (training_config_path.parent_path().parent_path() / training_config.model_config).string();
-    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
+    // Resolve model_config path relative to configs root
+    auto model_config_path = ttml::utils::resolve_config_path(training_config.model_config);
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path.string()));
+
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
-        multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
+        auto resolved_multihost_config = ttml::utils::resolve_multihost_config(multihost_config_name);
+        multihost_config = parse_multihost_config(YAML::LoadFile(resolved_multihost_config.string()));
     }
 
     // Calculate total number of devices from mesh shape (handles both 1D and 2D meshes)
@@ -474,11 +480,13 @@ int main(int argc, char **argv) {
     std::variant<std::string, YAML::Node> text_or_tokens;
 
     try {
+        // Resolve data path (can be relative to data root or absolute)
+        auto resolved_data_path = ttml::utils::resolve_data_path(training_config.data_path);
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(training_config.data_path);
+            text_or_tokens = read_file_to_str(resolved_data_path.string());
         } else {
-            auto yaml_data = YAML::LoadFile(training_config.data_path);
+            auto yaml_data = YAML::LoadFile(resolved_data_path.string());
             yaml_data["sequence_length"] = sequence_length;
             text_or_tokens = yaml_data;
         }

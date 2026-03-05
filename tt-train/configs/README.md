@@ -63,7 +63,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  model_config: "tt-train/configs/model_configs/tinyllama.yaml"
   data_path: "data/my_dataset.txt"
   scheduler_type: "warmup_linear"
   tokenizer_type: "bpe"
@@ -260,7 +260,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "configs/model_configs/tinyllama.yaml"
+  model_config: "tt-train/configs/model_configs/tinyllama.yaml"
   data_path: "data/shakespeare.txt"
   scheduler_type: "warmup_linear"
   tokenizer_type: "char"

@@ -14,6 +14,7 @@
 #include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
 #include "utils.hpp"
+#include "utils/config_path.hpp"
 
 using ttml::autograd::TensorPtr;
 
@@ -280,8 +281,8 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    // Use default LLaMA config path
-    std::string model_config_path = "./configs/model_configs/tinyllama.yaml";
+    // Use default LLaMA config path (resolved from configs/model_configs/)
+    auto model_config_path = ttml::utils::resolve_model_config("tinyllama.yaml");
 
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("LLaMA Inference {}\n", inference_config.use_kv_cache ? "with KV Cache" : "without KV Cache");
@@ -292,8 +293,8 @@ int main(int argc, char** argv) {
     fmt::print("Random seed: {}\n", inference_config.seed);
 
     // Load model configuration
-    fmt::print("Loading model configuration from: {}\n", model_config_path);
-    YAML::Node yaml_config = YAML::LoadFile(model_config_path);
+    fmt::print("Loading model configuration from: {}\n", model_config_path.string());
+    YAML::Node yaml_config = YAML::LoadFile(model_config_path.string());
     auto llama_config = ttml::models::llama::read_config(yaml_config["transformer_config"]);
 
     fmt::print("\n1. Model Configuration:\n");

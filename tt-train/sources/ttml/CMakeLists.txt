@@ -91,6 +91,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/config_path.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/data_path.cpp
 )
 
 # Manually select only specific files from metal ops
@@ -171,113 +173,13 @@ set(METAL_OPS_FILES
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
 
-# Check if TT::Metalium target exists
-# If it does not exist, assume that we are building with tt-train as top level project
+# TT::Metalium must be available (provided by tt-metal parent build)
 if(NOT TARGET TT::Metalium)
-    find_package(TT-NN)
-
-    if(NOT TT-NN_FOUND)
-        # Try to get TT_METAL_HOME from environment, otherwise infer from directory structure
-        if(DEFINED ENV{TT_METAL_HOME})
-            set(TT_METAL_HOME "$ENV{TT_METAL_HOME}")
-            message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
-        else()
-            # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
-            # From tt-train/, go up ONE level to reach the repository root
-            set(TT_METAL_HOME "${CMAKE_SOURCE_DIR}/..")
-            if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
-                message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
-            else()
-                message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
-            endif()
-        endif()
-
-        set(METALIUM_INCLUDE_DIRS
-            # Metalium
-            "${TT_METAL_HOME}"
-            "${TT_METAL_HOME}/tt_metal"
-            "${TT_METAL_HOME}/tt_metal/third_party/umd"
-            "${TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
-            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
-            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
-            "${TT_METAL_HOME}/tt_metal/api/"
-            "${TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
-            "${TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-            "${TT_METAL_HOME}/tt_metal/hw/inc"
-            "${TT_METAL_HOME}/tt_stl"
-            # TTNN
-            "${TT_METAL_HOME}/ttnn"
-            "${TT_METAL_HOME}/ttnn/api"
-            "${TT_METAL_HOME}/ttnn/cpp"
-            "${reflect_SOURCE_DIR}"
-        )
-
-        message(STATUS "Metalium not found, attempting to locate")
-
-        # Define the path to look for the library
-        set(METALIUM_LIB_PATH "${TT_METAL_HOME}/build/lib")
-
-        # Try to find the library
-        find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-        find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-        find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-        find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-
-        if(TT_STL_LIBRARY)
-            add_library(Metalium::TT_STL SHARED IMPORTED)
-            set_target_properties(
-                Metalium::TT_STL
-                PROPERTIES
-                    IMPORTED_LOCATION
-                        "${TT_STL_LIBRARY}"
-                    INTERFACE_INCLUDE_DIRECTORIES
-                        "${TT_METAL_HOME}/tt_stl"
-            )
-            message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
-        else()
-            message(FATAL_ERROR "libtt_stl.so not found in ${METALIUM_LIB_PATH}")
-        endif()
-
-        if(TT_METAL_LIBRARY)
-            add_library(TT::Metalium SHARED IMPORTED)
-            set_target_properties(
-                TT::Metalium
-                PROPERTIES
-                    IMPORTED_LOCATION
-                        "${TT_METAL_LIBRARY}"
-                    INTERFACE_INCLUDE_DIRECTORIES
-                        "${METALIUM_INCLUDE_DIRS}"
-            )
-            target_link_libraries(
-                TT::Metalium
-                INTERFACE
-                    ${DEVICE_LIBRARY}
-                    Metalium::TT_STL
-                    nlohmann_json::nlohmann_json
-            )
-            message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
-        else()
-            message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
-        endif()
-        if(TTNNCPP_LIBRARY)
-            add_library(TTNN::TTNN SHARED IMPORTED)
-            set_target_properties(
-                TTNN::TTNN
-                PROPERTIES
-                    IMPORTED_LOCATION
-                        "${TTNNCPP_LIBRARY}"
-                    INTERFACE_INCLUDE_DIRECTORIES
-                        "${METALIUM_INCLUDE_DIRS}"
-            )
-            target_link_libraries(TTNN::TTNN INTERFACE TT::Metalium)
-            message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
-        else()
-            message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
-        endif()
-    endif()
-else()
-    message(STATUS "Metalium targets already exists")
+    message(
+        FATAL_ERROR
+        "TT::Metalium target not found. "
+        "tt-train must be built as part of tt-metal using: ./build_metal.sh --build-tt-train"
+    )
 endif()
 
 # Include helper functions for flatbuffer generation
@@ -303,6 +205,15 @@ endforeach()
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
+# Define TTML_ROOT and TTML_DATA_ROOT for path resolution
+# These are used by ttml::utils::get_tt_train_root() and get_data_root() as fallbacks
+# when TT_TRAIN_ROOT/TT_METAL_HOME environment variables are not set
+target_compile_definitions(
+    ttml
+    PRIVATE
+        TTML_ROOT="${CMAKE_SOURCE_DIR}/tt-train"
+        TTML_DATA_ROOT="${CMAKE_SOURCE_DIR}/data"
+)
 # Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
 # Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
 target_compile_options(

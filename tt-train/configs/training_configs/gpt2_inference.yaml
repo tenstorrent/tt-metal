@@ -11,8 +11,8 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 1
   tokenizer_type: bpe
-  tokenizer_path: "data/gpt2-tokenizer.json"
-  model_config: "configs/model_configs/gpt2s.yaml"
+  tokenizer_path: "gpt2-tokenizer.json"
+  model_config: "model_configs/gpt2s.yaml"
 
 device_config:
     enable_ddp: false

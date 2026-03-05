@@ -5,7 +5,10 @@
 """Python module base inheriting from C++ ModuleBase with auto-registration."""
 
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union, overload
-from .._ttml.modules import ModuleBase as CppModuleBase
+
+# Note: _ttml is a top-level module, not a subpackage of ttml
+from _ttml.modules import ModuleBase as CppModuleBase
+
 from .parameter import Buffer, Parameter
 
 
@@ -186,11 +189,7 @@ class ModuleList(AbstractModuleBase):
         """Return string representation."""
         lines = [f"{self.__class__.__name__}("]
         for idx, module in enumerate(self._modules_list):
-            module_name = (
-                module.get_name()
-                if hasattr(module, "get_name")
-                else type(module).__name__
-            )
+            module_name = module.get_name() if hasattr(module, "get_name") else type(module).__name__
             lines.append(f"  ({idx}): {module_name}")
         lines.append(")")
         return "\n".join(lines)
@@ -304,9 +303,7 @@ class ModuleDict(AbstractModuleBase):
 
     def __init__(
         self,
-        modules: Optional[
-            Union[Dict[str, CppModuleBase], Iterable[Tuple[str, CppModuleBase]]]
-        ] = None,
+        modules: Optional[Union[Dict[str, CppModuleBase], Iterable[Tuple[str, CppModuleBase]]]] = None,
     ) -> None:
         """Initialize ModuleDict.
 
@@ -358,11 +355,7 @@ class ModuleDict(AbstractModuleBase):
         """Return string representation."""
         lines = [f"{self.__class__.__name__}("]
         for key, module in self._modules_dict.items():
-            module_name = (
-                module.get_name()
-                if hasattr(module, "get_name")
-                else type(module).__name__
-            )
+            module_name = module.get_name() if hasattr(module, "get_name") else type(module).__name__
             lines.append(f"  ({key}): {module_name}")
         lines.append(")")
         return "\n".join(lines)
@@ -379,9 +372,7 @@ class ModuleDict(AbstractModuleBase):
         """Return iterator over (key, module) pairs."""
         return iter(self._modules_dict.items())
 
-    def get(
-        self, key: str, default: Optional[CppModuleBase] = None
-    ) -> Optional[CppModuleBase]:
+    def get(self, key: str, default: Optional[CppModuleBase] = None) -> Optional[CppModuleBase]:
         """Get module by key with optional default."""
         return self._modules_dict.get(key, default)
 
@@ -397,9 +388,7 @@ class ModuleDict(AbstractModuleBase):
             for key, module in modules:
                 self[key] = module
 
-    def pop(
-        self, key: str, default: Optional[CppModuleBase] = None
-    ) -> Optional[CppModuleBase]:
+    def pop(self, key: str, default: Optional[CppModuleBase] = None) -> Optional[CppModuleBase]:
         """Remove and return module at key.
 
         Note: Due to C++ backend limitations, the registration remains.
