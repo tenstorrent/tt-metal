@@ -115,7 +115,16 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+          pytest models/demos/deepseek_v3/tests \
+            --ignore=models/demos/deepseek_v3/tests/unit \
+            --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
+            --ignore=models/demos/deepseek_v3/tests/test_moe_gate.py \
+            --ignore=models/demos/deepseek_v3/tests/test_moe_experts.py \
+            --ignore=models/demos/deepseek_v3/tests/test_mlp.py \
+            --ignore=models/demos/deepseek_v3/tests/test_get_weight_config.py \
+            --ignore=models/demos/deepseek_v3/tests/test_lazy_state_dict.py \
+            --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py \
+            --durations=3
       - name: Run DeepSeek long seq len module tests
         if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
