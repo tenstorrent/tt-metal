@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <pthread.h>
 #include <taskflow/taskflow.hpp>
 #include <thread>
-#include <stdexcept>
 
 namespace tt::tt_metal::detail {
 inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
@@ -17,8 +17,18 @@ using Executor = tf::Executor;
 using ExecTask = tf::Task;
 
 inline Executor& GetExecutor() {
-    static Executor exec(EXECUTOR_NTHREADS);
-    return exec;
+    // Child process needs to reinitialize the executor after fork()
+    // otherwise it will hang because it will try to reference stale thread state
+    // copied from the parent process
+    static Executor* exec = [] {
+        auto* e = new Executor(EXECUTOR_NTHREADS);
+        pthread_atfork(
+            /*prepare=*/nullptr,
+            /*parent=*/nullptr,
+            /*child=*/[] { exec = new Executor(EXECUTOR_NTHREADS); });
+        return e;
+    }();
+    return *exec;
 }
 
 inline std::mutex& GetExecutorMutex() {
