@@ -45,11 +45,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             "ROW_MAJOR input requires W ({}) to be a multiple of TILE_WIDTH ({})",
             a.logical_shape()[-1],
             TILE_WIDTH);
-        // TT_FATAL(
-        //     a.padded_shape()[-2] % TILE_HEIGHT == 0,
-        //     "ROW_MAJOR input requires H ({}) to be a multiple of TILE_HEIGHT ({})",
-        //     a.padded_shape()[-2],
-        //     TILE_HEIGHT);
     }
     TT_FATAL(
         a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
