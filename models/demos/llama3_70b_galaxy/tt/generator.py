@@ -395,9 +395,7 @@ class Generator(WarmupForwardMixin):
             sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
             # sampled_tokens has 32 entries ordered by slot.
-            # Cast to int64: ttnn.to_torch returns uint32 for token ids which doesn't
-            # support CPU fancy-indexing on PyTorch.
-            sampled_tensor = sampled_tokens[0, 0, 0, :].to(torch.int64)  # Shape: [32]
+            sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
             output_toks = sampled_tensor[empty_slots]
 
             if tt_log_probs is not None:

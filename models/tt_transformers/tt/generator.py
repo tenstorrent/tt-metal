@@ -216,8 +216,7 @@ class Generator(WarmupForwardMixin):
             # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
-            # host_inputs[5] is the user_id tensor for batched prefill KV cache filling
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -230,7 +229,6 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
-                user_id_tensor=transformed_inputs[3],
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
             logger.info("Done Compiling Model")
@@ -247,7 +245,6 @@ class Generator(WarmupForwardMixin):
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
-                user_id_tensor=transformed_inputs[3],
             )
             ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -386,11 +383,7 @@ class Generator(WarmupForwardMixin):
         if global_user_id is not None:
             prefill_kwargs["global_user_id"] = global_user_id
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-        if batch_size > 1:
-            # host_inputs[5] is the user_id tensor for batched prefill KV cache filling
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
-        else:
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
@@ -876,24 +869,13 @@ class Generator(WarmupForwardMixin):
                     user_id=CHUNK_USER_ID,
                     **kwargs,
                 )
-                if batch_size > 1:
-                    (
-                        chunk_prefill_input,
-                        chunk_rot_mats_global_prefill,
-                        chunk_rot_mats_local_prefill,
-                        page_table_tt,
-                        chunk_page_table_tt,
-                        chunk_user_id_tensor,
-                    ) = chunk_inputs
-                else:
-                    (
-                        chunk_prefill_input,
-                        chunk_rot_mats_global_prefill,
-                        chunk_rot_mats_local_prefill,
-                        page_table_tt,
-                        chunk_page_table_tt,
-                    ) = chunk_inputs
-                    chunk_user_id_tensor = None
+                (
+                    chunk_prefill_input,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                ) = chunk_inputs
 
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
@@ -906,7 +888,6 @@ class Generator(WarmupForwardMixin):
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                     batch_size=batch_size,
-                    user_id_tensor=chunk_user_id_tensor,
                 )
 
                 if chunk_start_relative == last_chunk_start:
@@ -921,18 +902,7 @@ class Generator(WarmupForwardMixin):
                 user_id=user_id,
                 **kwargs,
             )
-            if batch_size > 1:
-                (
-                    prefill_input,
-                    rot_mats_global_prefill,
-                    rot_mats_local_prefill,
-                    page_table_tt,
-                    _,
-                    user_id_tensor,
-                ) = inputs
-            else:
-                prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _ = inputs
-                user_id_tensor = None
+            prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _ = inputs
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
@@ -943,7 +913,6 @@ class Generator(WarmupForwardMixin):
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
-                user_id_tensor=user_id_tensor,
             )
             return tt_logits
 

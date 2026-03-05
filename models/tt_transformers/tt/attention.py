@@ -893,7 +893,6 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         batch_size=1,
-        user_id_tensor=None,
     ):
         # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
         # Following 70B Galaxy: concat before QKV matmul, then reshape back to batch after
@@ -1191,7 +1190,6 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         batch_size=1,
-        user_id_tensor=None,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1203,7 +1201,6 @@ class Attention(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
-                user_id_tensor=user_id_tensor,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

@@ -64,12 +64,11 @@ class Transformer(LightweightModule):
 
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
-        rope_max_seq_len = max(args.max_seq_len, args.max_batch_size * 1024)
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
             head_dim=args.head_dim,
-            max_seq_len=rope_max_seq_len,
+            max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
@@ -270,10 +269,10 @@ class Transformer(LightweightModule):
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, tt_user_id=None):
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table, tt_user_id
+        return tt_tokens, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_prefill(
         self,
@@ -292,9 +291,6 @@ class Transformer(LightweightModule):
         tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
-
-        trace_enabled = kwargs.get("trace_enabled", False)
-        last_token_idx = kwargs.get("last_token_idx", None)
 
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
@@ -393,30 +389,13 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        if batch_size > 1:
-            tt_user_id = ttnn.from_torch(
-                torch.tensor([0], dtype=torch.int32),
-                device=device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            return (
-                tokens if trace_enabled else tokens_embd,
-                tt_rot_mats_prefill_global,
-                tt_rot_mats_prefill_local,
-                tt_page_table,
-                tt_chunk_page_table,
-                tt_user_id,
-            )
-        else:
-            return (
-                tokens if trace_enabled else tokens_embd,
-                tt_rot_mats_prefill_global,
-                tt_rot_mats_prefill_local,
-                tt_page_table,
-                tt_chunk_page_table,
-            )
+        return (
+            tokens if trace_enabled else tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+        )
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -581,7 +560,6 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
-        user_id_tensor=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -600,7 +578,6 @@ class Transformer(LightweightModule):
             get_last_token=get_last_token,
             kv_cache=kv_cache,
             batch_size=batch_size,
-            user_id_tensor=user_id_tensor,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -696,7 +673,6 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
-        user_id_tensor=None,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
@@ -730,7 +706,6 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
-                user_id_tensor=user_id_tensor,
             )
 
         if mode == Mode.DECODE:
