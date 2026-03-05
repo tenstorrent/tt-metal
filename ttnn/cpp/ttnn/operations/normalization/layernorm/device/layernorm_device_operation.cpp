@@ -35,7 +35,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
         "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
-        "with non-sharded tensors), got: {}",
         a.layout());
     TT_FATAL(
         !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");

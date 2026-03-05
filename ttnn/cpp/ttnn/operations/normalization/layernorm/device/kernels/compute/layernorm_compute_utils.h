@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @file layernorm_dataflow_utils.h
- * @brief Utility functions for the layernorm dataflow kernels.
+ * @file layernorm_compute_utils.h
+ * @brief Utility functions for the layernorm compute kernels (tilize/untilize).
  */
 
 #pragma once
