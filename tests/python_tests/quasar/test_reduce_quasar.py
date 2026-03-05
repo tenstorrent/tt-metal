@@ -75,7 +75,7 @@ def generate_pool_type_and_math_fidelity_combinations():
             DataFormat.Float16,
         ],
     ),
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
