@@ -704,7 +704,7 @@ DRAM_CORE_GRID_12 = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b])
 def test_from_torch_deep_seek_sharded_weights_single_device(device, shape, shard_shape, memory_layout, ttnn_dtype):
     torch.manual_seed(0)
-    if ttnn_dtype == ttnn.bfloat8_b:
+    if ttnn_dtype == ttnn.bfloat4_b or ttnn_dtype == ttnn.bfloat8_b:
         torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)
         torch_input_tensor = quantize_to_bf4(torch_input_tensor)
     else:
@@ -741,7 +741,7 @@ def test_from_torch_deep_seek_sharded_weights_single_device(device, shape, shard
         # wq_kv_a: WIDTH_SHARDED, shard [896, 192], 12 DRAM banks, shard_dims=(0, -2)
         ([1, 896, 2304], (896, 192), ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, -2)),
         # wkv_b1: HEIGHT_SHARDED, shard [256, 512], 12 DRAM banks, shard_dims=(0, -3)
-        ([1, 3072, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
+        ([1, 16, 128, 512], (256, 512), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, -3)),
         # wkv_b2: HEIGHT_SHARDED, shard [5632, 128], 12 DRAM banks, shard_dims=(0, None)
         # ([1, 67584, 128], (5632, 128), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (0, None)),
     ],
@@ -754,7 +754,7 @@ def test_from_torch_deep_seek_sharded_weights_galaxy(device, shape, shard_shape,
         shape[shard_dims[0]] = shape[shard_dims[0]] * device.shape[shard_dims[0]]
         shape[shard_dims[1]] = shape[shard_dims[1]] * device.shape[shard_dims[1]]
 
-    if ttnn_dtype == ttnn.bfloat4_b:
+    if ttnn_dtype == ttnn.bfloat4_b or ttnn_dtype == ttnn.bfloat8_b:
         torch_input_tensor = generate_bfloat4_b_exact_tensor(shape)
         torch_input_tensor = quantize_to_bf4(torch_input_tensor)
     else:
