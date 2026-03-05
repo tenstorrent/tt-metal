@@ -6,7 +6,7 @@
 set -e
 
 # Valid --compiler flag values (same as build_metal.sh)
-COMPILER_FLAGS=(clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14)
+COMPILER_FLAGS=(clang gcc clang-20 clang-19 clang-18 clang-17 clang-20-libcpp gcc-14 gcc-13 gcc-12)
 
 # Pinned LLVM tarball version for non-Debian platforms (update on new patch releases)
 LLVM_TARBALL_VERSION_20="20.1.8"
@@ -640,6 +640,12 @@ verify_compiler() {
     case "$comp" in
         clang-20|clang-20-libcpp)
             expected_cxx="clang++-20"; expected_cc="clang-20" ;;
+        clang-19)
+            expected_cxx="clang++-19"; expected_cc="clang-19" ;;
+        clang-18)
+            expected_cxx="clang++-18"; expected_cc="clang-18" ;;
+        clang-17)
+            expected_cxx="clang++-17"; expected_cc="clang-17" ;;
         clang)
             if command -v clang++ >/dev/null 2>&1; then
                 echo "[OK] Compiler verified: $(clang++ --version 2>/dev/null | head -1)"
@@ -648,10 +654,12 @@ verify_compiler() {
             echo "[ERROR] Verification failed: clang++ not found in PATH"
             exit 1
             ;;
-        gcc-12)
-            expected_cxx="g++-12"; expected_cc="gcc-12" ;;
         gcc-14)
             expected_cxx="g++-14"; expected_cc="gcc-14" ;;
+        gcc-13)
+            expected_cxx="g++-13"; expected_cc="gcc-13" ;;
+        gcc-12)
+            expected_cxx="g++-12"; expected_cc="gcc-12" ;;
         gcc)
             if command -v g++ >/dev/null 2>&1; then
                 local gcc_major
@@ -710,6 +718,15 @@ install_compiler() {
         clang-20)
             install_clang_versioned 20
             ;;
+        clang-19)
+            install_clang_versioned 19
+            ;;
+        clang-18)
+            install_clang_versioned 18
+            ;;
+        clang-17)
+            install_clang_versioned 17
+            ;;
         clang-20-libcpp)
             install_clang_versioned 20
             install_libcxx 20
@@ -717,11 +734,14 @@ install_compiler() {
         clang)
             install_clang_any
             ;;
-        gcc-12)
-            install_gcc_versioned 12
-            ;;
         gcc-14)
             install_gcc_versioned 14
+            ;;
+        gcc-13)
+            install_gcc_versioned 13
+            ;;
+        gcc-12)
+            install_gcc_versioned 12
             ;;
         gcc)
             install_gcc_any

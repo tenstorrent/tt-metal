@@ -22,22 +22,28 @@ GCC_SEARCH=(g++-14 g++-13 g++-12 g++)
 # Missing entry = no dedicated toolchain, use direct compiler path
 declare -A BINARY_TOOLCHAIN=(
     [clang++-20]=clang-20-libstdcpp
+    [clang++-19]=clang-19-libstdcpp
+    [clang++-18]=clang-18-libstdcpp
+    [clang++-17]=clang-17-libstdcpp
     [clang++]=clang-libstdcpp
     [g++-14]=gcc-14
+    [g++-13]=gcc-13
     [g++-12]=gcc-12
     [g++]=gcc
-    # clang++-19, clang++-18, clang++-17, g++-13: no dedicated toolchain,
-    # use_compiler() falls back to direct compiler path
 )
 
 # Valid --compiler flag values, in display order
-COMPILER_FLAGS=(clang gcc clang-20 clang-20-libcpp gcc-12 gcc-14)
+COMPILER_FLAGS=(clang gcc clang-20 clang-19 clang-18 clang-17 clang-20-libcpp gcc-14 gcc-13 gcc-12)
 
 # CLI flag → toolchain ID (for --compiler pinned versions)
 declare -A FLAG_TOOLCHAIN=(
     [clang-20]=clang-20-libstdcpp
+    [clang-19]=clang-19-libstdcpp
+    [clang-18]=clang-18-libstdcpp
+    [clang-17]=clang-17-libstdcpp
     [clang-20-libcpp]=clang-20-libcpp
     [gcc-14]=gcc-14
+    [gcc-13]=gcc-13
     [gcc-12]=gcc-12
 )
 

@@ -84,6 +84,46 @@
         "toolchainFile": "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
       },
       {
+        "name": "clang-19",
+        "inherits": "default",
+        "description": "Build with Clang 19",
+        "binaryDir": "${sourceDir}/.build/clang-19",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-19-libstdcpp-toolchain.cmake"
+      },
+      {
+        "name": "clang-18",
+        "inherits": "default",
+        "description": "Build with Clang 18",
+        "binaryDir": "${sourceDir}/.build/clang-18",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-18-libstdcpp-toolchain.cmake"
+      },
+      {
+        "name": "clang-17",
+        "inherits": "default",
+        "description": "Build with Clang 17",
+        "binaryDir": "${sourceDir}/.build/clang-17",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+      },
+      {
+        "name": "gcc-13",
+        "inherits": "default",
+        "description": "Build with GCC 13",
+        "binaryDir": "${sourceDir}/.build/gcc-13",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-gcc-13-toolchain.cmake"
+      },
+      {
         "name": "gcc-system",
         "inherits": "default",
         "description": "Build with system GCC (unversioned gcc/g++)",
@@ -126,6 +166,30 @@
       {
         "name": "dev-gcc-system",
         "configurePreset": "gcc-system",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
+        "name": "dev-clang-19",
+        "configurePreset": "clang-19",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
+        "name": "dev-clang-18",
+        "configurePreset": "clang-18",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
+        "name": "dev-clang-17",
+        "configurePreset": "clang-17",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
+        "name": "dev-gcc-13",
+        "configurePreset": "gcc-13",
         "configuration": "Release",
         "targets": ["all"]
       },
