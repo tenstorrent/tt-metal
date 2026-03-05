@@ -27,10 +27,13 @@ import re
 import sys
 from pathlib import Path
 
-import tabulate
 from docopt import docopt
+from rich.console import Console
+from rich.table import Table
 
 from ttexalens.tt_exalens_init import init_ttexalens
+
+_console = Console()
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_bus_signal_store import DebugBusSignalStore
 from ttexalens.hardware.noc_block import NocBlock
@@ -114,21 +117,13 @@ def _print_signal_group_table(group_name: str, hex_value: str, debug_bus) -> Non
 
     sample = SignalGroupSample(int(hex_value, 16), debug_bus.signal_groups[group_name])
     rows = [[signal_name, str(value)] for signal_name, value in sample.items()]
-    if tabulate:
-        print(
-            tabulate.tabulate(
-                rows,
-                headers=[group_name, "Value"],
-                tablefmt="simple_outline",
-                colalign=("left", "left"),
-                disable_numparse=True,
-            )
-        )
-    else:
-        print(f"\n{group_name} | Value")
-        print("-" * 60)
-        for name, value in rows:
-            print(f"{name} | {value}")
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column(group_name, style="dim")
+    table.add_column("Value")
+    for name, value in rows:
+        table.add_row(name, value)
+    _console.print(table)
 
 
 def _print_groups_for_location(
@@ -149,8 +144,6 @@ def create_noc_block(device_arch: str, block_type: str, location: OnChipCoordina
                     return WormholeFunctionalWorkerBlock(location)
                 case "idle_eth":
                     return WormholeEthBlock(location)
-                case "active_eth":
-                    return WormholeEthBlock(location)
                 case _:
                     raise ValueError(f"Unknown block type: {block_type}")
         case "blackhole":
@@ -158,8 +151,6 @@ def create_noc_block(device_arch: str, block_type: str, location: OnChipCoordina
                 case "tensix":
                     return BlackholeFunctionalWorkerBlock(location)
                 case "idle_eth":
-                    return BlackholeEthBlock(location)
-                case "active_eth":
                     return BlackholeEthBlock(location)
                 case _:
                     raise ValueError(f"Unknown block type: {block_type}")
