@@ -12,7 +12,7 @@ if [[ "$ERROR" == *"status code 2"* || "$ERROR" == *"exit code 2"* ]] || ls /tmp
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PostToolUseFailure",
-      additionalContext: "HANG DETECTED. You MUST: 1) If logging is enabled, log a hang_detected breadcrumb with the test path and CB state from triage. 2) Read the triage callstacks and watcher log above — identify which RISC-V is stuck and on which CB. 3) If logging is enabled, log a hypothesis breadcrumb. 4) Cross-check against the design CB Sync Summary table before changing code."
+      additionalContext: "HANG DETECTED. You MUST: 1) Log a hang_detected breadcrumb with the test path and CB state from triage. 2) Read the triage callstacks and watcher log above — identify which RISC-V is stuck and on which CB. 3) Log a hypothesis breadcrumb. 4) Cross-check against the design CB Sync Summary table before changing code."
     }
   }'
 else
@@ -20,7 +20,7 @@ else
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PostToolUseFailure",
-      additionalContext: "Test FAILED. You MUST: 1) If logging is enabled, log a test_run breadcrumb (status=fail, include error summary). 2) Classify: numerical_error (wrong values), compile_error, or assert failure. 3) If logging is enabled, log a hypothesis breadcrumb BEFORE making any code changes."
+      additionalContext: "Test FAILED. You MUST: 1) Log a test_run breadcrumb (status=fail, include error summary). 2) Classify: numerical_error (wrong values), compile_error, or assert failure. 3) Log a hypothesis breadcrumb BEFORE making any code changes."
     }
   }'
 fi

@@ -69,13 +69,7 @@ Checkpoints affected by mode:
 
 ## Logging Setup
 
-If the user requests breadcrumbs, logging, or tracing:
-
-```bash
-touch .claude/active_logging
-```
-
-A hook automatically injects breadcrumb instructions into every subagent's context. No need to mention logging in agent prompts. Logs appear at `{op_path}/agent_logs/`.
+Breadcrumbs are **always enabled**. All agents log to `{op_path}/agent_logs/` automatically — no signal file or prompt keyword needed.
 
 ---
 

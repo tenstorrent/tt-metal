@@ -144,20 +144,9 @@ Proceed with analysis, or suggest different references?"
 - User confirms → proceed to Phase 1
 - User suggests alternatives → update references and re-confirm
 
-### Step 5: Enable Logging (If Requested)
+### Step 5: Logging
 
-If the user requests breadcrumbs or logging, check that the signal file exists:
-
-```bash
-ls .claude/active_logging 2>/dev/null && echo "Logging ON" || echo "Logging OFF"
-```
-
-If logging is requested but the file doesn't exist, create it:
-```bash
-touch .claude/active_logging
-```
-
-A `SubagentStart` hook automatically injects breadcrumb instructions into every agent's context. No need to mention logging in agent prompts. See `.claude/references/logging-mechanism.md` for details.
+Breadcrumbs are always enabled. A `SubagentStart` hook automatically injects breadcrumb instructions into every agent's context. See `.claude/references/logging-mechanism.md` for details.
 
 ### Step 6: Execute Workflow
 

@@ -3,25 +3,16 @@
 #
 # Usage: .claude/scripts/logging/enable_breadcrumbs.sh
 #
-# Does two things:
-# 1. Creates the .claude/active_logging signal file
-# 2. Adds the SubagentStart hook to .claude/settings.local.json (if not already present)
-#
-# To disable: rm -f .claude/active_logging
-# (The hook stays registered but does nothing without the signal file)
+# Adds the SubagentStart hook to .claude/settings.local.json (if not already present).
+# Breadcrumbs are always enabled — this script only needs to run once to register the hook.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SETTINGS="$REPO_ROOT/.claude/settings.local.json"
-SIGNAL_FILE="$REPO_ROOT/.claude/active_logging"
 
-# 1. Create signal file
-touch "$SIGNAL_FILE"
-echo "Created $SIGNAL_FILE"
-
-# 2. Add hook to settings.local.json
+# Add hook to settings.local.json
 if [[ ! -f "$SETTINGS" ]]; then
     cat > "$SETTINGS" <<'EOF'
 {

@@ -18,7 +18,7 @@ hooks:
   PreCompact:
     - hooks:
         - type: command
-          command: "echo 'REMEMBER: 1) You are in the TDD loop — run tdd_orchestrator.py status to find current stage. Do NOT restart passed stages. 2) If {op_path}/agent_logs/ exists, breadcrumbs are enabled — continue logging. 3) You owe a FINAL REPORT when done. 4) Git commits are MANDATORY after every stage pass. 5) Do NOT skip stages. Make sure that these facts stay in your context after compaction.'"
+          command: "echo 'REMEMBER: 1) You are in the TDD loop — run tdd_orchestrator.py status to find current stage. Do NOT restart passed stages. 2) Breadcrumbs are ALWAYS enabled — continue logging to {op_path}/agent_logs/. 3) You owe a FINAL REPORT when done. 4) Git commits are MANDATORY after every stage pass. 5) Do NOT skip stages. Make sure that these facts stay in your context after compaction.'"
   Stop:
     - hooks:
         - type: command
@@ -430,11 +430,9 @@ After all stages pass (or a stage exhausts its budget), report:
 
 ---
 
-## BREADCRUMBS (CONDITIONAL)
+## BREADCRUMBS
 
-If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
-
-**If ENABLED**: Read `.claude/references/agent-execution-logging.md` Part 2 and `.claude/references/logging/kernel-writer.md` for the full protocol.
+Breadcrumbs are **always enabled** when running in the pipeline. Read `.claude/references/agent-execution-logging.md` Part 2 and `.claude/references/logging/kernel-writer.md` for the full protocol.
 
 **Initialize breadcrumbs:**
 ```bash

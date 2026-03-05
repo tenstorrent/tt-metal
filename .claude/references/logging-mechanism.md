@@ -2,41 +2,19 @@
 
 ## Overview
 
-Agent breadcrumb logging uses a **SubagentStart hook** to inject logging instructions into every subagent's context automatically. Logging is controlled by the presence of a single signal file.
-
-## Quick Start
-
-```bash
-# Enable logging (persists across runs):
-touch .claude/active_logging
-
-# Disable logging:
-rm -f .claude/active_logging
-```
-
-That's it. When the file exists, every subagent gets breadcrumb instructions injected into its context. When it doesn't, logging is silent.
+Agent breadcrumb logging is **always enabled**. A SubagentStart hook injects logging instructions into every subagent's context automatically.
 
 ## How It Works
 
 ```
-.claude/active_logging exists?
-        │
-        ├── NO  → SubagentStart hook exits silently → agent runs without logging
-        │
-        └── YES → SubagentStart hook injects additionalContext:
-                   "BREADCRUMBS ENABLED — write to {op_path}/agent_logs/{agent}_breadcrumbs.jsonl"
-                   → agent sees this in its context and writes breadcrumbs
+SubagentStart hook fires → injects additionalContext:
+  "BREADCRUMBS ENABLED — write to {op_path}/agent_logs/{agent}_breadcrumbs.jsonl"
+  → agent sees this in its context and writes breadcrumbs
 ```
 
+Additionally, agent instructions and PostToolUse/PostToolUseFailure hooks unconditionally require breadcrumb logging on every test run.
+
 ## Components
-
-### Signal File
-
-**Path**: `.claude/active_logging`
-
-**Format**: Empty file — just needs to exist. No JSON, no content.
-
-**Created by**: The user (manually) or the orchestrator.
 
 ### SubagentStart Hook
 
@@ -46,9 +24,7 @@ That's it. When the file exists, every subagent gets breadcrumb instructions inj
 
 **Behavior**:
 1. Fires whenever any subagent starts
-2. Checks if `.claude/active_logging` exists in the repo root
-3. If it exists, outputs JSON with `additionalContext` containing breadcrumb instructions
-4. If it doesn't exist, exits silently (logging disabled)
+2. Outputs JSON with `additionalContext` containing breadcrumb instructions
 
 The `additionalContext` is injected directly into the agent's context by Claude Code — it is not prompt text that the agent might ignore.
 

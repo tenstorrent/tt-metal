@@ -235,11 +235,9 @@ tests: N/A
 
 ---
 
-## Breadcrumbs (Conditional)
+## Breadcrumbs
 
-If the caller includes **"enable detailed logging"**, **"with execution logging"**, or **"enable logging"** in the prompt, enable breadcrumbs. Otherwise skip breadcrumb steps (git commits still required).
-
-**If ENABLED**: Read `.claude/references/agent-execution-logging.md` Part 2 for the full breadcrumb protocol.
+Breadcrumbs are **always enabled** when running in the pipeline. Read `.claude/references/agent-execution-logging.md` Part 2 for the full breadcrumb protocol.
 
 **Initialize breadcrumbs:**
 ```bash
