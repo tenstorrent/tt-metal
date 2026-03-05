@@ -10,6 +10,7 @@
 #include <algorithm>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::prim::detail {
@@ -319,6 +320,7 @@ static inline uint32_t configure_mcast_for_chains(
 
         if (!same_row) {
             all_eligible = false;
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
             break;
         }
 
@@ -354,6 +356,7 @@ static inline uint32_t configure_mcast_for_chains(
 
         if (has_gap) {
             all_eligible = false;
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - non-chain worker core inside mcast rectangle", head_id);
             break;
         }
 
@@ -369,7 +372,19 @@ static inline uint32_t configure_mcast_for_chains(
 
         if (!uniform_q_mcast) {
             all_eligible = false;
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - mixed q_chunk_counts", head_id);
             break;
+        }
+
+        // Defensive: crash in all builds if a non-uniform chain slips past the check above.
+        for (const auto& ci : chain_core_indices) {
+            TT_FATAL(
+                core_chain_info[ci].q_chunk_count == ref_q_chunks,
+                "Mcast chain for head {} has non-uniform q_chunk_count: core {} has {} vs ref {}",
+                head_id,
+                ci,
+                core_chain_info[ci].q_chunk_count,
+                ref_q_chunks);
         }
 
         candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
