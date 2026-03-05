@@ -27,9 +27,8 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
     }
 
     if (is_device_tensor(tensor)) {
-        const auto& storage = tensor.device_storage();
-        if (storage.mesh_buffer != nullptr) {
-            auto* mesh_device = storage.mesh_buffer->device();
+        if (tensor.is_allocated()) {
+            auto* mesh_device = tensor.device();
 
             if (mesh_device->num_devices() == 1) {
                 auto cpu_tensor = tensor.cpu();
