@@ -642,5 +642,32 @@ def test_wan_transformer_model_action_mode(
     del tt_model
     gc.collect()
 
+    print(ref_out.shape, tt_spatial_out.shape)
+    print(ref_out[0, 0, :], tt_spatial_out[0, 0, :])
+
+    ref_max = ref_out.max()
+    tt_max = tt_spatial_out.max()
+    ref_min = ref_out.min()
+    tt_min = tt_spatial_out.min()
+
+    ref_max_idx = ref_out.argmax()
+    tt_max_idx = tt_spatial_out.argmax()
+    ref_min_idx = ref_out.argmin()
+    tt_min_idx = tt_spatial_out.argmin()
+
+    import numpy as np
+
+    # Convert flat indices to coordinates
+    ref_max_coord = np.unravel_index(ref_max_idx, ref_out.shape)
+    tt_max_coord = np.unravel_index(tt_max_idx, tt_spatial_out.shape)
+    ref_min_coord = np.unravel_index(ref_min_idx, ref_out.shape)
+    tt_min_coord = np.unravel_index(tt_min_idx, tt_spatial_out.shape)
+
+    print("ref max:", ref_max, "at", ref_max_coord)
+    print("tt max:", tt_max, "at", tt_max_coord)
+    print("ref min:", ref_min, "at", ref_min_coord)
+    print("tt min:", tt_min, "at", tt_min_coord)
+    print()
+
     assert ref_out.shape == tt_spatial_out.shape, (ref_out.shape, tt_spatial_out.shape)
     assert_quality(ref_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)

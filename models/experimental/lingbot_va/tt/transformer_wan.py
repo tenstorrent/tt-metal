@@ -467,7 +467,7 @@ class WanTransformer3DModel(Module):
         encoder_hidden_states: torch.Tensor | ttnn.Tensor,
         action_mode: bool = False,
     ):
-        embedder = self.condition_embedder_action if action_mode else self.condition_embedder
+        embedder = self.condition_embedder
         if isinstance(encoder_hidden_states, torch.Tensor):
             encoder_hidden_states = from_torch(
                 encoder_hidden_states,
