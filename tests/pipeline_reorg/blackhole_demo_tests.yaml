@@ -104,8 +104,6 @@
   skus:
     bh_llmbox:
       timeout: 10
-    bh_loudbox:
-      timeout: 10
     bh_quietbox_2:
       timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum
