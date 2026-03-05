@@ -146,8 +146,6 @@ def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage,
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, two_stage, tensor_type, dtype):
-    if is_watcher_enabled() and not two_stage:
-        pytest.skip("Skipping the test with watcher enabled due to failure, see github issue #37171")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
     weight = generate_input_tensor(1, w, "random", dtype)
