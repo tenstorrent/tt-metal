@@ -25,6 +25,30 @@ _ASSIGN_BITS = 2
 _ASSIGN_MASK = (1 << _ASSIGN_BITS) - 1
 _TILES_PER_UINT32 = 32 // _ASSIGN_BITS  # 16
 
+# Pre-resolved values (must match tensix_types.h and llk_unpack_compressed.h)
+_DATA_FORMATS = [6, 7, 15, 0]  # bfp8=Bfp8_b(6), bfp4=Bfp4_b(7), bfp2=Bfp2_b(15), bfp0=0
+_TILE_SIZES_SHIFTED = [68, 36, 20, 0]  # tile_bytes >> 4 (cb_addr_shift)
+
+
+def pack_pairs_as_ctas(assignment_flat: np.ndarray) -> list[int]:
+    """Pack pairs of tiles into uint32 CTAs for runtime loop.
+
+    Each uint32: [size1:8 | size0:8 | fmt1:8 | fmt0:8]
+    where fmt = DATA_FORMATS[idx] and size = TILE_SIZES_SHIFTED[idx].
+    """
+    assert len(assignment_flat) % 2 == 0, f"Need even tile count, got {len(assignment_flat)}"
+    result = []
+    for i in range(0, len(assignment_flat), 2):
+        a0, a1 = int(assignment_flat[i]), int(assignment_flat[i + 1])
+        packed = (
+            _DATA_FORMATS[a0]
+            | (_DATA_FORMATS[a1] << 8)
+            | (_TILE_SIZES_SHIFTED[a0] << 16)
+            | (_TILE_SIZES_SHIFTED[a1] << 24)
+        )
+        result.append(packed)
+    return result
+
 
 def pack_formats_as_ctas(assignment_flat: np.ndarray) -> list[int]:
     """Pack flat format indices into uint32 CTAs.
@@ -130,8 +154,8 @@ class MatmulCustomCompressed:
                 # Packed: multiple formats per uint32 (for template-unrolled path)
                 ctas = pack_formats_as_ctas(shard_assignment)
             else:
-                # Flat: one format index per CTA element (for runtime loop path)
-                ctas = [int(x) for x in shard_assignment]
+                # Packed pairs: [sz1:sz0:fmt1:fmt0] per pair (for runtime loop path)
+                ctas = pack_pairs_as_ctas(shard_assignment)
             core_values.append((core_coord, ctas))
         per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
 
