@@ -27,15 +27,16 @@
 
 inline void kernel_sleep(uint32_t loop_count = 1000) { for (volatile uint32_t i = 0; i < loop_count; ++i); }
 
-template <uint32_t in_cb_id, uint32_t out_cb_id>
-inline void tilize_in(uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks) {
+template <uint32_t in_block_w, uint32_t in_cb_id, uint32_t out_cb_id>
+inline void tilize_in(uint32_t in_num_subblocks_x_in_subblock_h) {
     compute_kernel_lib::tilize<
+        in_block_w,
         in_cb_id,
         out_cb_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(
-        in_block_w, in_num_subblocks * in_subblock_h);
+        in_num_subblocks_x_in_subblock_h);
 }  // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -99,7 +100,7 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
 }
 
 void kernel_main() {
-    uint32_t in0_block_w = get_compile_time_arg_val(0);             // inner block size in tiles
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);   // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);       // outer row block size (in inner row blocks)
     uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);     // out_subblock_h*in0_block_w*in0_num_subblocks;
     uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
@@ -146,7 +147,7 @@ void kernel_main() {
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
-                    tilize_in<in0_cb_id, tilized_in0_cb_id>(in0_subblock_h, in0_block_w, in0_num_subblocks);
+                    tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_subblock_h * in0_num_subblocks);
                     mm_init_short_with_dt(tilized_in0_cb_id, in1_cb_id, in0_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
