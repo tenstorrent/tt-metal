@@ -283,16 +283,11 @@ void kernel_main() {
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, block.full_block_size());
-                cb_wait_front(
-                    cb_gamma, block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                cb_wait_front(cb_gamma, block.start() + block.full_block_size());  // we don't pop
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
 
-                    // DEBUG:
-                    // if (i == 0) {
-                    //     dprint_tensix_dest_reg(0);
-                    // }
 #ifdef SFPU_OP_INIT_ACTIVATION
                     // Activation must be applied last. If do_beta != 0 then
                     // activation will be applied after the beta addition.
@@ -325,7 +320,6 @@ void kernel_main() {
                 cb_wait_front(cb_fusion, block.full_block_size());
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-                                                                                         // if (i == 0) {
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION

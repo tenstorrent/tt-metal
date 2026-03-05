@@ -153,7 +153,6 @@ void kernel_main() {
                 pack_tile(i, cb_xmm2);
             }
             tile_regs_release();
-
             cb_push_back(cb_xmm2, block.full_block_size());
 
             tile_regs_acquire();
@@ -254,9 +253,6 @@ void kernel_main() {
 #ifdef TILIZE_IN
             // Tilize one block from cb_in_rm → cb_in per loop iteration (Pass 2).
             // Reader supplies this second pass of data after the variance data.
-            // DPRINT_MATH(DPRINT << "[lt normalize] tilize block_size =" << block_size << " block.start=" <<
-            // block.start()
-            //                    << ENDL();)
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
 
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
@@ -336,7 +332,6 @@ void kernel_main() {
             cb_pop_front(cb_xmm, block.full_block_size());
 
             if constexpr (do_gamma == 1) {
-                // DPRINT << "[compute] applying gamma for block" << block.start() << ENDL();
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_fusion, cb_gamma);
@@ -376,10 +371,8 @@ void kernel_main() {
                 }
 
                 tile_regs_release();
-                // DPRINT << "[compute] applied gamma for block" << block.start() << ENDL();
             }
             if constexpr (do_beta == 1) {
-                // DPRINT << "[compute] applying beta for block" << block.start() << ENDL();
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_fusion, cb_beta);
@@ -403,18 +396,12 @@ void kernel_main() {
                 }
                 tile_regs_release();
                 cb_push_back(cb_out, block.full_block_size());
-                // DPRINT << "[compute] applied beta for block" << block.start() << ENDL();
             }
 
 #ifdef UNTILIZE_OUT
-            // DPRINT_PACK(DPRINT << "[lt normalize] untilize block_size =" << block_size
-            //                    << " block.start=" << block.start() << ENDL();)
             constexpr auto cb_out_rm = tt::CBIndex::c_28;
             untilize_row_major_block<decltype(block), block_size>(cb_out, cb_out_rm, block);
 #endif
-            // DPRINT_PACK(DPRINT << "[lt normalize] end of block_size =" << block_size << " block.start=" <<
-            // block.start()
-            //                    << ENDL();)
         }  // block loop
         // End of
         // Final Val Calc
@@ -426,6 +413,4 @@ void kernel_main() {
 #endif
         cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
-
-    DPRINT << "end of compute kernel" << ENDL();
 }
