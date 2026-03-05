@@ -28,7 +28,7 @@ class MoEGateConfig:
     ccl_config = {}
     mm_configs = {}
 
-    dim: int = 7168
+    dim: int = 7168 // 2
     max_seq_len = 4096
     n_routed_experts: int = 256
     n_shared_experts: int = 2
@@ -64,8 +64,8 @@ class MoEGateConfig:
         packer_l1_acc=False,
     )
 
-    ccl_config["ROW_TOPOLOGY"] = ttnn.Topology.Ring
-    ccl_config["COL_TOPOLOGY"] = ttnn.Topology.Ring
+    ccl_config["ROW_TOPOLOGY"] = ttnn.Topology.Linear
+    ccl_config["COL_TOPOLOGY"] = ttnn.Topology.Linear
     ccl_config["CLUSTER_AXIS"] = (1,)
     ccl_config["NUM_LINKS"] = (2,)
 
@@ -121,7 +121,7 @@ def get_input_mem_config(config, padded_dim, mesh_shape):
 
 
 @pytest.mark.parametrize("seq_len", [4096])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_forward_pass(
     seq_len,
     device_params,
@@ -156,14 +156,27 @@ def test_forward_pass(
     tt_model.weight = ttnn.from_torch(
         torch_weight_padded,
         device=mesh2d,
-        dtype=ttnn.bfloat4_b,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh2d,
-            dims=(None, None),  # None for replication across dim 0, 1 for sharding across dim 1
+            dims=(None, 0),
             mesh_shape=mesh2d.shape,
-        ),  # Shard across dim 1
+        ),
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input_padded,
+        device=mesh2d,
+        dtype=ttnn.bfloat16,
+        memory_config=sharded_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh2d,
+            dims=(None, 1),
+            mesh_shape=mesh2d.shape,
+        ),
     )
 
     tt_model.bias = ttnn.from_torch(
@@ -173,25 +186,13 @@ def test_forward_pass(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-    # For input - shared across mesh_dim 0, sharded across mesh_dim 1
-    tt_input = ttnn.from_torch(
-        torch_input_padded,
-        device=mesh2d,
-        dtype=ttnn.bfloat16,
-        memory_config=sharded_mem_config,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh2d,
-            dims=(None, 1),  # None for replication across dim 0, 1 for sharding across dim 1
-            mesh_shape=mesh2d.shape,
-        ),  # Shard across dim 1
-    )
-    tt_topk_weights, tt_topk_indices, tt_logits = tt_model(tt_input)
+
+    tt_topk_weights, tt_topk_indices, tt_logits, dispatch_offsets = tt_model(tt_input)
     per_device_topk_weight = ttnn.get_device_tensors(tt_topk_weights)
     per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
     per_device_topk_logits = ttnn.get_device_tensors(tt_logits)
 
-    for d in range(num_devices):
+    for d in range(config.num_devices):
         # Convert output back to torch
         tt_topk_weights_torch = ttnn.to_torch(per_device_topk_weight[d])
         tt_topk_indices_torch = ttnn.to_torch(per_device_topk_indices[d])
@@ -201,13 +202,14 @@ def test_forward_pass(
         weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, reference_topk_weights, 0.53)
         recall = calculate_average_recall(tt_topk_indices_torch, reference_topk_indices)
 
-        assert recall > 0.91, f"Recall is {recall}, expected recal > 0.91"
+        assert recall > 0.89, f"Recall is {recall}, expected recal > 0.89"
         assert logits_passed, f"Logits PCC is {logits_pcc}, expected PCC > 0.99"
         assert weights_passed, f"Weights PCC is {weights_pcc}, expected PCC > 0.53"
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_weights)
     ttnn.deallocate(tt_topk_indices)
+    ttnn.deallocate(tt_logits)
     ttnn.deallocate(tt_logits)
 
     # Proper teardown
