@@ -176,6 +176,12 @@ while IFS= read -r FILE; do
             TTNN_OPS_CHANGED[all]=1
             ;;
 
+        # TT-Metalium test files (restored from main; not changed by this PR)
+        tests/tt_metal/**/*.@(h|hpp|c|cpp|py))
+            TTMETALIUM_TESTS_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+
         # =====================================================================
         # Fine-grained TTNN test file detection
         # =====================================================================
