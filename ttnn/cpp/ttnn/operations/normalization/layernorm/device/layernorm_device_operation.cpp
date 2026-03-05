@@ -33,8 +33,8 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& stats = tensor_args.stats;
 
     TT_FATAL(
-        a.layout() == Layout::TILE || (operation_attributes.allow_row_major_input && !a.is_sharded()),
-        "Input tensor must have TILE layout (ROW_MAJOR is only supported via dit_rms_norm_unary_fused "
+        a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
+        "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
         "with non-sharded tensors), got: {}",
         a.layout());
     TT_FATAL(
@@ -410,10 +410,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_shape,
                         output_padded_shape));
             } else {
-                const auto output_layout =
-                    (operation_attributes.allow_row_major_input && input_tensor.layout() == Layout::ROW_MAJOR)
-                        ? Layout::ROW_MAJOR
-                        : Layout::TILE;
+                const auto output_layout = input_tensor.layout();
                 return TensorSpec(
                     output_shape,
                     TensorLayout(
@@ -454,8 +451,7 @@ Tensor layer_norm(
     DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats,
     const std::optional<const Tensor>& recip_tensor,
-    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    bool allow_row_major_input) {
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -464,9 +460,7 @@ Tensor layer_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
-        .fused_activation = fused_activation,
-        .allow_row_major_input = allow_row_major_input,
-    };
+        .fused_activation = fused_activation};
     auto tensor_args = LayerNormInputs{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,
