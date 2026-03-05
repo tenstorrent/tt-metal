@@ -259,13 +259,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     if (output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(output_buffer_type == BufferType::L1, "We don't support DRAM block sharding");
     }
-
-    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
-    if (!operation_attributes.use_pack_untilize) {
-        TT_FATAL(
-            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
-            "Pack untilize must be enabled to support uint32/int32 data types");
-    }
 }
 
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
@@ -416,7 +409,6 @@ Tensor untilize(
     const Tensor& input,
     tt::tt_metal::MemoryConfig output_mem_config,
     bool use_multicore,
-    bool use_pack_untilize,
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_width,
@@ -426,7 +418,6 @@ Tensor untilize(
         UntilizeOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,
-            .use_pack_untilize = use_pack_untilize,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
             .enough_space_width = enough_space_width,
