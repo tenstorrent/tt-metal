@@ -62,6 +62,8 @@ public:
 
     static void destroy_instance(bool check_device_count = true);
 
+    static bool instance_exists();
+
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
     const Cluster& get_cluster() const;
@@ -102,9 +104,6 @@ public:
         size_t worker_l1_size,
         bool minimal = false);
     void teardown();
-
-    // Switch from mock mode to real hardware (requires all devices to be closed)
-    void reinitialize_for_real_hardware();
 
     // Set fast dispatch mode and automatically reinitialize dispatch managers
     // This ensures dispatch/compute core allocations stay in sync with the mode
@@ -196,9 +195,6 @@ private:
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
-
-    // Mutex to protect reinitialization operations (switching between mock and real hardware)
-    std::mutex reinitialization_mutex_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
