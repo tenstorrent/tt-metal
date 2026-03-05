@@ -58,6 +58,9 @@ models/experimental/atss_swin_l_dyhead/
 │   ├── test_ttnn_fpn.py               #   TTNN FPN vs reference
 │   ├── test_ttnn_atss_head.py         #   TTNN ATSS Head vs reference
 │   └── test_ttnn_e2e.py               #   Full E2E TTNN vs reference
+├── tests/perf/                         # Performance tests
+│   ├── test_atss_swin_l_dyhead_device_perf.py   # Device perf
+│   └── test_atss_swin_l_dyhead_e2e_perf.py      # E2E pipeline perf (2CQ + no trace)
 ├── demo/                               # Demo scripts
 │   ├── demo_inference.py              #   Single-image inference + visualization
 │   ├── demo_batch.py                  #   Multi-image batch inference
@@ -126,6 +129,21 @@ pytest models/experimental/atss_swin_l_dyhead/tests/pcc/test_ttnn_atss_head.py -
 
 # Full E2E test
 pytest models/experimental/atss_swin_l_dyhead/tests/pcc/test_ttnn_e2e.py -v
+```
+
+### Run performance tests
+
+
+```bash
+# Device performance
+pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_device_perf.py -v
+
+# E2E single-device pipeline (2 CQs + no Trace)
+pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_single_device_2cq -v
+
+# E2E multi-device pipeline (2 CQs + no trace)
+pytest models/experimental/atss_swin_l_dyhead/tests/perf/test_atss_swin_l_dyhead_e2e_perf.py::test_atss_swinl_dyhead_perf_multi_device_2cq -v
+
 ```
 
 ### Demo

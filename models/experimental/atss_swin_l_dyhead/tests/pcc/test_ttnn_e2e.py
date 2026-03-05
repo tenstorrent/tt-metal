@@ -124,25 +124,16 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
     ttnn_cent_rp = []
 
     for i in range(5):
-        # Classification
-        N, C, H, W = ref_cls[i].shape
-        ttnn_cls[i] = ttnn_cls[i].reshape(N, H, W, C).permute(0, 3, 1, 2)
         ttnn_cls_rp.append(ttnn_cls[i])
         passing, pcc = comp_pcc(ref_cls[i], ttnn_cls[i], 0.96)
         logger.info(f"  Head level {i} cls: PCC={pcc:.6f}")
         assert passing, f"Head cls level {i} PCC {pcc:.6f} < 0.96"
 
-        # Regression
-        N, C, H, W = ref_reg[i].shape
-        ttnn_reg[i] = ttnn_reg[i].reshape(N, H, W, C).permute(0, 3, 1, 2)
         ttnn_reg_rp.append(ttnn_reg[i])
         passing, pcc = comp_pcc(ref_reg[i], ttnn_reg[i], 0.96)
         logger.info(f"  Head level {i} reg: PCC={pcc:.6f}")
         assert passing, f"Head reg level {i} PCC {pcc:.6f} < 0.96"
 
-        # Centerness
-        N, C, H, W = ref_cent[i].shape
-        ttnn_cent[i] = ttnn_cent[i].reshape(N, H, W, C).permute(0, 3, 1, 2)
         ttnn_cent_rp.append(ttnn_cent[i])
         passing, pcc = comp_pcc(ref_cent[i], ttnn_cent[i], 0.96)
         logger.info(f"  Head level {i} cent: PCC={pcc:.6f}")
