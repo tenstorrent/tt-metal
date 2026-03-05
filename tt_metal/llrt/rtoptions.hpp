@@ -273,6 +273,9 @@ class RunTimeOptions {
     // Path to channel trimming profile YAML for import-driven router construction
     std::string fabric_trimming_profile_path;
 
+    // Path to channel trimming global override YAML
+    std::string fabric_trimming_override_path;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -663,6 +666,11 @@ public:
     const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
     void set_fabric_trimming_profile_path(const std::string& path) { fabric_trimming_profile_path = path; }
 
+    // Channel trimming global override path
+    bool has_fabric_trimming_override() const { return !fabric_trimming_override_path.empty(); }
+    const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
+    void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
@@ -725,7 +733,7 @@ public:
     void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
 
 private:
-    // Helper functions to parse feature-specific environment vaiables.
+    // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     bool ParseFeatureChipIds(
