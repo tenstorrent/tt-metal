@@ -30,17 +30,15 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Compile-time args
-    constexpr auto tensor_args = TensorAccessorArgs<0>();
-    constexpr uint32_t enable_fabric_reduce = get_compile_time_arg_val(TensorAccessorArgs<0>::NumArgsCT);
-
     // Runtime args
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t D_tiles = get_arg_val<uint32_t>(1);
     const uint32_t num_experts = get_arg_val<uint32_t>(2);
     // Per expert (packed sequentially starting at arg 3):
     //   out_buf_addr, M_e, token_row[0..M_e-1], weight_bf16[0..M_e-1]
-    // When enable_fabric_reduce: last 3 args are reduce_core_noc_x, reduce_core_noc_y, sem_combine_done_l1
+
+    // Compile-time args: TensorAccessorArgs for output (reused for all same-shape tensors)
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_out = 4;  // output tile (read-modify-write)
     constexpr uint32_t cb_exp = 5;  // expert out_buf tile
@@ -131,18 +129,6 @@ void kernel_main() {
         }
 
         arg_idx += 2 + 2 * M_e;
-    }
-
-    // Signal fabric_reduce_dm that local combine is complete
-    if constexpr (enable_fabric_reduce) {
-        uint32_t reduce_core_noc_x = get_arg_val<uint32_t>(arg_idx);
-        uint32_t reduce_core_noc_y = get_arg_val<uint32_t>(arg_idx + 1);
-        uint32_t sem_combine_done_id = get_arg_val<uint32_t>(arg_idx + 2);
-        // Convert semaphore ID to L1 address (same on all cores)
-        uint64_t reduce_sem_addr =
-            get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, get_semaphore(sem_combine_done_id));
-        noc_async_write_barrier();  // ensure all output writes are flushed
-        noc_semaphore_inc(reduce_sem_addr, 1);
     }
 
     // Release CB buffers at the end

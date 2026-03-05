@@ -125,7 +125,6 @@ void kernel_main() {
             // Signal combine core that this expert's output is done
             uint64_t combine_sem_addr = get_noc_addr(combine_phys_x, combine_phys_y, get_semaphore(SEM_EXPERT_DONE));
             noc_semaphore_inc(combine_sem_addr, 1);
-            noc_async_write_barrier();  // flush before kernel exits
         }
     }
 }

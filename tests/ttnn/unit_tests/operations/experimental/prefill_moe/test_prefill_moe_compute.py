@@ -2440,16 +2440,22 @@ def test_moe_device_dispatch_host_combine(device):
     gate_up_ws = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
     down_ws = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
 
-    # Pre-shuffle gate_up weights
+    # Pre-shuffle gate_up weights (handles padding: only copy real columns)
+    real_half_cols = D_FF_HALF // NUM_CORES  # actual gate/up cols per core (unpadded)
     shuffled_ws = []
     for w in gate_up_ws:
         gate_cols = w[:, :D_FF_HALF]
         up_cols = w[:, D_FF_HALF:]
-        s = torch.empty_like(w)
+        s = torch.zeros(D, D_FF_padded, dtype=torch.bfloat16) if D_FF_padded != D_FF else torch.empty_like(w)
         for c in range(NUM_CORES):
-            s[:, c * cols_per_core : c * cols_per_core + half_cols] = gate_cols[:, c * half_cols : (c + 1) * half_cols]
-            s[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core] = up_cols[
-                :, c * half_cols : (c + 1) * half_cols
+            real_src = min(real_half_cols, D_FF_HALF - c * real_half_cols)
+            if real_src <= 0:
+                break  # No more real columns for remaining cores
+            s[:, c * cols_per_core : c * cols_per_core + real_src] = gate_cols[
+                :, c * real_half_cols : c * real_half_cols + real_src
+            ]
+            s[:, c * cols_per_core + half_cols : c * cols_per_core + half_cols + real_src] = up_cols[
+                :, c * real_half_cols : c * real_half_cols + real_src
             ]
         shuffled_ws.append(s)
 
@@ -2922,7 +2928,7 @@ def test_moe_device_dispatch_device_combine(device):
             continue
 
         ref_gu = hidden_states.float() @ gu_w_dequant[e]
-        ref_inter = torch.empty(P, D_FF_HALF, dtype=torch.float32)
+        ref_inter = torch.empty(P, D_FF_HALF_padded, dtype=torch.float32)
         for c in range(NUM_CORES):
             g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
             u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
@@ -2933,7 +2939,7 @@ def test_moe_device_dispatch_device_combine(device):
             t = meta["token_indices"][i]
             k = meta["k_indices"][i]
             w = topk_weights[t, k].float().item()
-            ref_output[t] += w * ref_out[t]
+            ref_output[t] += w * ref_out[t, :D]  # Extract unpadded columns
 
     # ---- Verify PCC ----
     pcc = torch.corrcoef(torch.stack([combined_output.flatten(), ref_output.flatten()]))[0, 1].item()
@@ -3543,28 +3549,12 @@ def test_moe_semaphore_chained(device):
     logger.info("[moe_semaphore_chained] PASSED")
 
 
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
-
-
-# Kernel paths for multi-expert fused pipeline
+def _compute_n_block(n_per_core, max_block=7):
+    """Find largest divisor of n_per_core that is <= max_block."""
+    for b in range(min(n_per_core, max_block), 0, -1):
+        if n_per_core % b == 0:
+            return b
+    return 1
 
 
 # Kernel paths for multi-expert fused pipeline
@@ -3573,9 +3563,17 @@ EXPERT_WRITER_MULTI_KERNEL = f"{KERNEL_DIR}/expert_writer_multi.cpp"
 COMPUTE_EXPERT_MULTI_KERNEL = f"{KERNEL_DIR}/compute_expert_multi.cpp"
 
 
-@pytest.mark.parametrize("num_experts_to_run", [1, 2, 4])
+@pytest.mark.parametrize(
+    "grid_config",
+    [
+        pytest.param((15, 5, 3), id="15cores_5x3"),
+        pytest.param((30, 5, 6), id="30cores_5x6"),
+        pytest.param((64, 8, 8), id="64cores_8x8"),
+    ],
+)
+@pytest.mark.parametrize("num_experts_to_run", [4])
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
-def test_moe_all_expert_fused(device, num_experts_to_run):
+def test_moe_all_expert_fused(device, num_experts_to_run, grid_config):
     """Phase 4 Step 4.6: All experts in a single program launch.
 
     Expert loop moved inside kernels. dispatch fires once (copies hs->pkt_buf),
@@ -3594,16 +3592,41 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
     NUM_EXPERTS_TOTAL = 4  # Total experts for routing
     NUM_EXPERTS = num_experts_to_run  # How many experts to compute in fused program
     TOP_K = 2
-    NUM_CORES = 15
-    GRID_X, GRID_Y = 5, 3
+    NUM_CORES, GRID_X, GRID_Y = grid_config
 
-    k_tiles = D // TILE
+    import math
+
+    k_tiles_gu = D // TILE  # 90 (K for gate_up, always D/32)
     D_tiles = D // TILE  # 90
-    n_weight_tiles_gu = D_FF // TILE
-    n_weight_per_core_gu = n_weight_tiles_gu // NUM_CORES
+
+    # Compute per-core tile counts (with padding if needed)
+    _raw_gu = (D_FF // TILE) / NUM_CORES
+    n_weight_per_core_gu = math.ceil(_raw_gu)
+    if n_weight_per_core_gu % 2 != 0:
+        n_weight_per_core_gu += 1  # Must be even for gate/up pairing
+    n_weight_tiles_gu = n_weight_per_core_gu * NUM_CORES  # padded total
+
     n_out_per_core = n_weight_per_core_gu // 2
-    n_tiles_dn = D // TILE
-    n_per_core_dn = n_tiles_dn // NUM_CORES
+    n_swiglu_tiles = n_out_per_core * NUM_CORES  # padded D_FF/2
+
+    _raw_dn = (D // TILE) / NUM_CORES
+    n_per_core_dn = math.ceil(_raw_dn)
+    n_tiles_dn = n_per_core_dn * NUM_CORES  # padded total D for down output
+
+    k_tiles_dn = n_swiglu_tiles  # K for down = intermediate SwiGLU tiles
+    D_FF_HALF_padded = n_swiglu_tiles * TILE
+    D_padded = n_tiles_dn * TILE
+    D_FF_padded = n_weight_tiles_gu * TILE
+
+    N_BLOCK_GU = _compute_n_block(n_weight_per_core_gu)
+    N_BLOCK_DN = _compute_n_block(n_per_core_dn)
+
+    is_padded = (n_weight_tiles_gu != D_FF // TILE) or (n_tiles_dn != D // TILE)
+    if is_padded:
+        logger.info(
+            f"Padding: gate_up N {D_FF//TILE}->{n_weight_tiles_gu} tiles, "
+            f"down K {D//TILE}->{k_tiles_dn}, down N {D//TILE}->{n_tiles_dn}"
+        )
 
     cols_per_core = n_weight_per_core_gu * TILE
     half_cols = n_out_per_core * TILE
@@ -3624,16 +3647,22 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
     gate_up_ws = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS_TOTAL)]
     down_ws = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS_TOTAL)]
 
-    # Pre-shuffle gate_up weights
+    # Pre-shuffle gate_up weights (handles padding: only copy real columns)
+    real_half_cols = D_FF_HALF // NUM_CORES  # actual gate/up cols per core (unpadded)
     shuffled_ws = []
     for w in gate_up_ws:
         gate_cols = w[:, :D_FF_HALF]
         up_cols = w[:, D_FF_HALF:]
-        s = torch.empty_like(w)
+        s = torch.zeros(D, D_FF_padded, dtype=torch.bfloat16) if D_FF_padded != D_FF else torch.empty_like(w)
         for c in range(NUM_CORES):
-            s[:, c * cols_per_core : c * cols_per_core + half_cols] = gate_cols[:, c * half_cols : (c + 1) * half_cols]
-            s[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core] = up_cols[
-                :, c * half_cols : (c + 1) * half_cols
+            real_src = min(real_half_cols, D_FF_HALF - c * real_half_cols)
+            if real_src <= 0:
+                break  # No more real columns for remaining cores
+            s[:, c * cols_per_core : c * cols_per_core + real_src] = gate_cols[
+                :, c * real_half_cols : c * real_half_cols + real_src
+            ]
+            s[:, c * cols_per_core + half_cols : c * cols_per_core + half_cols + real_src] = up_cols[
+                :, c * real_half_cols : c * real_half_cols + real_src
             ]
         shuffled_ws.append(s)
 
@@ -3654,6 +3683,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Shuffled weights already have D_FF_padded columns (zeros in padding positions)
     gu_w_tensors = [
         ttnn.from_torch(
             s.unsqueeze(0).unsqueeze(0),
@@ -3664,6 +3694,16 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
         )
         for s in shuffled_ws[:NUM_EXPERTS]
     ]
+    # Pad down weights if needed: [D_FF/2, D] -> [D_FF_HALF_padded, D_padded]
+    if D_FF_HALF_padded != D_FF_HALF or D_padded != D:
+        padded_dn_ws = []
+        for w in down_ws[:NUM_EXPERTS]:
+            pw = torch.zeros(D_FF_HALF_padded, D_padded, dtype=torch.bfloat16)
+            pw[:D_FF_HALF, :D] = w
+            padded_dn_ws.append(pw)
+    else:
+        padded_dn_ws = down_ws[:NUM_EXPERTS]
+
     dn_w_tensors = [
         ttnn.from_torch(
             w.unsqueeze(0).unsqueeze(0),
@@ -3672,7 +3712,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        for w in down_ws[:NUM_EXPERTS]
+        for w in padded_dn_ws
     ]
 
     # Shared buffers (reused across experts)
@@ -3684,7 +3724,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
         ttnn.DRAM_MEMORY_CONFIG,
     )
     inter_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, P, D_FF_HALF]),
+        ttnn.Shape([1, 1, P, D_FF_HALF_padded]),
         ttnn.bfloat16,
         ttnn.TILE_LAYOUT,
         device,
@@ -3694,7 +3734,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
     # Per-expert output buffers
     out_tensors = [
         ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, P, D]),
+            ttnn.Shape([1, 1, P, D_padded]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
@@ -3703,9 +3743,9 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
         for _ in range(NUM_EXPERTS)
     ]
 
-    # Zero-filled final output tensor
+    # Zero-filled final output tensor (use D_padded to match out_tensors page layout)
     output_tensor = ttnn.from_torch(
-        torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
+        torch.zeros(1, 1, P, D_padded, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -3745,7 +3785,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
     writer_ct_args.extend(ttnn.TensorAccessorArgs(dn_w_tensors[0]).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(out_tensors[0]).get_compile_time_args())
 
-    compute_ct_args = [k_tiles, n_weight_per_core_gu, n_per_core_dn, NUM_EXPERTS]
+    compute_ct_args = [k_tiles_gu, n_weight_per_core_gu, n_per_core_dn, NUM_EXPERTS, N_BLOCK_GU, N_BLOCK_DN, k_tiles_dn]
 
     dispatch_ct_args = list(ttnn.TensorAccessorArgs(hs_tensor).get_compile_time_args())
     dispatch_ct_args.extend(ttnn.TensorAccessorArgs(pkt_buf_tensor).get_compile_time_args())
@@ -3760,13 +3800,14 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
             is_leader = 1 if core_idx == 0 else 0
             args = [
                 pkt_buf_tensor.buffer_address(),
-                k_tiles,
+                k_tiles_gu,
                 inter_tensor.buffer_address(),
                 is_leader,
                 NUM_CORES,
                 combine_phys_x,
                 combine_phys_y,
                 NUM_EXPERTS,
+                k_tiles_dn,
             ]
             for px, py in phys_coords:
                 args.append(px)
@@ -3780,7 +3821,8 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
             core_idx = y * GRID_X + x
             args = [
                 inter_tensor.buffer_address(),
-                k_tiles,
+                k_tiles_gu,
+                k_tiles_dn,
                 n_weight_per_core_gu,
                 n_weight_tiles_gu,
                 core_idx * n_weight_per_core_gu,  # core_weight_offset_gu
@@ -3813,7 +3855,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
     # ---- Runtime args: combine reader (single core, all experts) ----
     combine_args_list = [
         output_tensor.buffer_address(),
-        D_tiles,
+        n_tiles_dn,  # Use padded D tiles (= D_tiles when no padding)
         NUM_EXPERTS,
     ]
     for e in range(NUM_EXPERTS):
@@ -3974,7 +4016,9 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
     logger.info(f"All-expert fused program completed! ({NUM_EXPERTS} experts)")
 
     # ---- Read output ----
-    combined_output = ttnn.to_torch(output_tensor).squeeze().float()
+    combined_output_raw = ttnn.to_torch(output_tensor).squeeze().float()
+    # Extract only the first D columns (discard padding)
+    combined_output = combined_output_raw[:, :D] if D_padded != D else combined_output_raw
 
     # ---- Reference (same as Step 4.5) ----
     gu_w_dequant = [ttnn.to_torch(t).squeeze().float() for t in gu_w_tensors]
@@ -3987,14 +4031,17 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
             logger.info(f"Expert {e}: M_e=0, skipped")
             continue
         ref_gu = hidden_states.float() @ gu_w_dequant[e]
-        ref_inter = torch.empty(P, D_FF_HALF, dtype=torch.float32)
+        ref_inter = torch.empty(P, D_FF_HALF_padded, dtype=torch.float32)
         for c in range(NUM_CORES):
             g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
             u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
             ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
         ref_out_e = ref_inter.bfloat16().float() @ dn_w_dequant[e]
         dev_out_e = ttnn.to_torch(out_tensors[e]).squeeze().float()
-        e_pcc = torch.corrcoef(torch.stack([dev_out_e.flatten(), ref_out_e.flatten()]))[0, 1].item()
+        # Compare only unpadded region
+        ref_cmp = ref_out_e[:, :D] if D_padded != D else ref_out_e
+        dev_cmp = dev_out_e[:, :D] if D_padded != D else dev_out_e
+        e_pcc = torch.corrcoef(torch.stack([dev_cmp.flatten(), ref_cmp.flatten()]))[0, 1].item()
         logger.info(f"Expert {e}: out_tensor PCC={e_pcc:.6f} (M_e={meta['M_e']})")
 
     # Full reference output with combine
@@ -4005,7 +4052,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
             continue
 
         ref_gu = hidden_states.float() @ gu_w_dequant[e]
-        ref_inter = torch.empty(P, D_FF_HALF, dtype=torch.float32)
+        ref_inter = torch.empty(P, D_FF_HALF_padded, dtype=torch.float32)
         for c in range(NUM_CORES):
             g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
             u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
@@ -4016,7 +4063,7 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
             t = meta["token_indices"][i]
             k = meta["k_indices"][i]
             w = topk_weights[t, k].float().item()
-            ref_output[t] += w * ref_out[t]
+            ref_output[t] += w * ref_out[t, :D]
 
     # ---- Verify PCC ----
     pcc = torch.corrcoef(torch.stack([combined_output.flatten(), ref_output.flatten()]))[0, 1].item()
@@ -4028,3 +4075,189 @@ def test_moe_all_expert_fused(device, num_experts_to_run):
 
     assert pcc >= 0.96, f"All-expert fused MoE output PCC {pcc:.6f} < 0.96"
     logger.info(f"[all_expert_fused] PASSED ({NUM_EXPERTS} experts)")
+
+
+@pytest.mark.parametrize("grid_config", [(30, 5, 6)], ids=["30cores_5x6"])
+def test_cpp_op_vs_generic_op(device, grid_config):
+    """Test that ttnn.experimental.prefill_moe_compute produces the same results as generic_op."""
+    D = 2880
+    D_FF = 5760
+    D_FF_HALF = D_FF // 2
+    P = 32
+    N_TOKENS = 32
+    NUM_EXPERTS = 4
+    TOP_K = 2
+    NUM_CORES, GRID_X, GRID_Y = grid_config
+
+    import math
+
+    k_tiles_gu = D // TILE
+    n_weight_per_core_gu = (D_FF // TILE) // NUM_CORES
+    n_out_per_core = n_weight_per_core_gu // 2
+    n_per_core_dn = (D // TILE) // NUM_CORES
+    n_tiles_dn = n_per_core_dn * NUM_CORES
+    D_padded = n_tiles_dn * TILE
+    n_weight_tiles_gu = n_weight_per_core_gu * NUM_CORES
+    D_FF_padded = n_weight_tiles_gu * TILE
+    D_FF_HALF_padded = n_out_per_core * NUM_CORES * TILE
+    k_tiles_dn = D_FF_HALF_padded // TILE
+    D_tiles = D // TILE
+    cols_per_core = n_weight_per_core_gu * TILE
+    half_cols = n_out_per_core * TILE
+    N_BLOCK_GU = _compute_n_block(n_weight_per_core_gu)
+    N_BLOCK_DN = _compute_n_block(n_per_core_dn)
+
+    torch.manual_seed(123)
+    hidden_states = torch.randn(N_TOKENS, D, dtype=torch.bfloat16)
+    topk_indices = torch.zeros(N_TOKENS, TOP_K, dtype=torch.int64)
+    for t in range(N_TOKENS):
+        topk_indices[t] = torch.randperm(NUM_EXPERTS)[:TOP_K]
+    raw_weights = torch.rand(N_TOKENS, TOP_K, dtype=torch.float32)
+    topk_weights = raw_weights / raw_weights.sum(dim=1, keepdim=True)
+    gate_up_ws = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+    down_ws = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS)]
+
+    real_half_cols = D_FF_HALF // NUM_CORES
+    shuffled_ws = []
+    for w in gate_up_ws:
+        gate_cols = w[:, :D_FF_HALF]
+        up_cols = w[:, D_FF_HALF:]
+        s = torch.empty_like(w)
+        for c in range(NUM_CORES):
+            real_src = min(real_half_cols, D_FF_HALF - c * real_half_cols)
+            if real_src <= 0:
+                break
+            s[:, c * cols_per_core : c * cols_per_core + real_src] = gate_cols[
+                :, c * real_half_cols : c * real_half_cols + real_src
+            ]
+            s[:, c * cols_per_core + half_cols : c * cols_per_core + half_cols + real_src] = up_cols[
+                :, c * real_half_cols : c * real_half_cols + real_src
+            ]
+        shuffled_ws.append(s)
+
+    routing_meta = host_dispatch(hidden_states, topk_indices, NUM_EXPERTS, P)
+
+    hs_tensor = ttnn.from_torch(
+        hidden_states.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gu_w_tensors = [
+        ttnn.from_torch(
+            s.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for s in shuffled_ws
+    ]
+    dn_w_tensors = [
+        ttnn.from_torch(
+            w.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for w in down_ws
+    ]
+
+    pkt_buf = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, P, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    inter_buf = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, P, D_FF_HALF_padded]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_bufs = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, P, D_padded]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        for _ in range(NUM_EXPERTS)
+    ]
+    output = ttnn.from_torch(
+        torch.zeros(1, 1, P, D_padded, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    combine_metadata = []
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        combine_metadata.append(out_bufs[e].buffer_address())
+        combine_metadata.append(meta["M_e"])
+        for i in range(meta["M_e"]):
+            combine_metadata.append(meta["token_indices"][i])
+        for i in range(meta["M_e"]):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights[t, k].item()
+            w_bf16 = int(torch.tensor(w, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+            combine_metadata.append(w_bf16)
+
+    logger.info("Calling ttnn.experimental.prefill_moe_compute...")
+    result = ttnn.experimental.prefill_moe_compute(
+        hs_tensor,
+        gate_up_weights=gu_w_tensors,
+        down_weights=dn_w_tensors,
+        pkt_buf=pkt_buf,
+        inter_buf=inter_buf,
+        out_bufs=out_bufs,
+        output=output,
+        combine_metadata=combine_metadata,
+        num_experts=NUM_EXPERTS,
+        num_cores=NUM_CORES,
+        grid_x=GRID_X,
+        grid_y=GRID_Y,
+    )
+    ttnn.synchronize_device(device)
+
+    combined_raw = ttnn.to_torch(result).squeeze().float()
+    combined = combined_raw[:, :D]
+
+    gu_dequant = [ttnn.to_torch(t).squeeze().float() for t in gu_w_tensors]
+    dn_dequant = [ttnn.to_torch(t).squeeze().float() for t in dn_w_tensors]
+
+    # Per-expert PCC
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        if meta["M_e"] == 0:
+            continue
+        ref_gu = hidden_states.float() @ gu_dequant[e]
+        ref_inter = torch.empty(P, D_FF_HALF_padded, dtype=torch.float32)
+        for c in range(NUM_CORES):
+            g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
+            u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
+            ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
+        ref_out = ref_inter.bfloat16().float() @ dn_dequant[e]
+        dev_out = ttnn.to_torch(out_bufs[e]).squeeze().float()
+        pcc = torch.corrcoef(torch.stack([dev_out.flatten(), ref_out.flatten()]))[0, 1].item()
+        logger.info(f"Expert {e}: PCC={pcc:.6f}")
+
+    # Full reference
+    ref_output = torch.zeros(N_TOKENS, D, dtype=torch.float32)
+    for e in range(NUM_EXPERTS):
+        meta = routing_meta[e]
+        if meta["M_e"] == 0:
+            continue
+        ref_gu = hidden_states.float() @ gu_dequant[e]
+        ref_inter = torch.empty(P, D_FF_HALF_padded, dtype=torch.float32)
+        for c in range(NUM_CORES):
+            g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
+            u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
+            ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
+        ref_out = ref_inter.bfloat16().float() @ dn_dequant[e]
+        for i in range(meta["M_e"]):
+            t = meta["token_indices"][i]
+            k = meta["k_indices"][i]
+            w = topk_weights[t, k].float().item()
+            ref_output[t] += w * ref_out[t, :D]
+
+    pcc = torch.corrcoef(torch.stack([combined.flatten(), ref_output.flatten()]))[0, 1].item()
+    logger.info(f"COMBINED PCC={pcc:.6f}")
+    assert pcc >= 0.96, f"C++ op PCC {pcc:.6f} < 0.96"
+    logger.info("test_cpp_op_vs_generic_op PASSED")
