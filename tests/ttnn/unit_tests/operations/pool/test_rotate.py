@@ -6,9 +6,8 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_llk_assert
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_with_llk_assert
 
 
 def get_rotate_tolerances(input_shape, angle, interpolation_mode):
