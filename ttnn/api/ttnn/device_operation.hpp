@@ -319,8 +319,6 @@ void create_and_cache_mesh_workload(
                 }
             }
             bool should_cache = program_cache.is_enabled() && !hook_blocks;
-            log_warning(tt::LogOp, "Program cache caching decision: enabled={}, hook_blocks={}, should_cache={}, mesh_workload_hash={}", program_cache.is_enabled(), hook_blocks, should_cache, program_hash);
-            std::cerr << "[CACHE_DECISION] enabled=" << program_cache.is_enabled() << " hook_blocks=" << hook_blocks << " should_cache=" << should_cache << " mesh_workload_hash=" << program_hash << std::endl;
             if (should_cache) {
                 program_cache.insert(
                     program_hash, CachedProgramFactory{std::move(cached_workload), program_factory_index});
@@ -367,9 +365,6 @@ void launch_operation_with_adapter(
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
         }
     }
-
-    log_warning(tt::LogOp, "Program cache debug: program_hash={}, mesh_workload_hash={}, cache_hit={}", program_hash, mesh_workload_hash, program_cache_hit);
-    std::cerr << "[CACHE_DEBUG] program_hash=" << program_hash << " mesh_workload_hash=" << mesh_workload_hash << " cache_hit=" << program_cache_hit << std::endl;
 
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
