@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random, skip_with_llk_assert
+from models.common.utility_functions import is_blackhole, torch_random, skip_with_llk_assert
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

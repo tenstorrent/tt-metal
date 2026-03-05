@@ -19,7 +19,6 @@ welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
 
 # for debug purpose
-@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     N, C, H, W = input_tensor.shape
     assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
