@@ -174,9 +174,8 @@ bool test_load_write_read_risc_binary(
         tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id) or
         static_cast<tt_metal::HalProgrammableCoreType>(core_type_idx) == tt_metal::HalProgrammableCoreType::DRAM);
 
-    const auto& jit_build_config = tt::tt_metal::MetalContext::instance()
-                                       .hal()
-                                       .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx);
+    const auto& jit_build_config = tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(
+        core_type_idx, processor_class_idx, processor_type_idx);
     uint64_t local_init_addr = jit_build_config.local_init_addr;
     uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
 
