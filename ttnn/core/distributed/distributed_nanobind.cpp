@@ -1026,6 +1026,45 @@ void py_module(nb::module_& mod) {
                 >>> # All processes continue from here
         )doc");
 
+    mod.def(
+        "send_token",
+        [](uint32_t token, Rank peer_rank) {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            DistributedContext::get_current_world()->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&token), sizeof(token)), peer_rank, Tag(0));
+        },
+        nb::arg("token"),
+        nb::arg("peer_rank"),
+        R"doc(
+            Send a token to a peer rank.
+
+            Args:
+                token (uint32_t): The token to send.
+                peer_rank (Rank): The rank of the peer to send the token to.
+        )doc");
+    mod.def(
+        "recv_token",
+        [](Rank source_rank) -> uint32_t {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            uint32_t token = 0;
+            DistributedContext::get_current_world()->recv(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&token), sizeof(token)), source_rank, Tag(0));
+            return token;
+        },
+        nb::arg("source_rank"),
+        R"doc(
+            Receive a token from a source rank.
+
+            Args:
+                source_rank (Rank): The rank of the source to receive the token from.
+
+            Returns:
+                uint32_t: The received token.
+        )doc");
     auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
     ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
 }
