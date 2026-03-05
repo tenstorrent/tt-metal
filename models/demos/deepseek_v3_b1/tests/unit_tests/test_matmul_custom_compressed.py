@@ -391,3 +391,92 @@ def test_matmul_custom_compressed_interleaved_by16(device):
 def test_matmul_custom_compressed_interleaved_by32(device):
     """Alternating every 32 tiles: 7 runs of 32."""
     _run_matmul_interleaved_by_n(device, 32)
+
+
+def test_matmul_custom_compressed_hybrid(device):
+    """Mixed interleaving: sections of by-2, by-4, by-8, by-16 in one tensor."""
+    import numpy as np
+
+    M, K, N = 1, 7168, 32
+    num_cores = 1
+    n_per_core = N
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, N)).float()
+
+    tiles_h = K // 32  # 224
+    tiles_w = N // 32  # 1
+
+    # Build hybrid pattern:
+    # tiles 0-31:   interleave by 2  (16 runs of 2)
+    # tiles 32-63:  interleave by 4  (8 runs of 4)
+    # tiles 64-127: interleave by 8  (8 runs of 8)
+    # tiles 128-223: interleave by 16 (6 runs of 16)
+    assignment = np.zeros((tiles_h, tiles_w), dtype=np.int8)
+    for tr in range(tiles_h):
+        if tr < 32:
+            assignment[tr, :] = (tr // 2) % 2
+        elif tr < 64:
+            assignment[tr, :] = ((tr - 32) // 4) % 2
+        elif tr < 128:
+            assignment[tr, :] = ((tr - 64) // 8) % 2
+        else:
+            assignment[tr, :] = ((tr - 128) // 16) % 2
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    b_shard_spec = ttnn.ShardSpec(core_grid, [K, n_per_core], ttnn.ShardOrientation.ROW_MAJOR)
+    b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec)
+
+    from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+
+    ct = CompressedTensor(torch_b, assignment, device=device, memory_config=b_mem_config)
+
+    logger.info(f"Hybrid compressed B: {ct}")
+    logger.info(f"Tile counts: {ct.tile_counts}")
+    flat = assignment.ravel()
+    runs = []
+    i = 0
+    while i < len(flat):
+        fmt = flat[i]
+        count = 1
+        while i + count < len(flat) and flat[i + count] == fmt:
+            count += 1
+        runs.append((int(fmt), count))
+        i += count
+    logger.info(f"Assignment: {len(flat)} tiles, {len(runs)} runs, first 20: {runs[:20]}")
+
+    torch_expected = (torch_a.float() @ ct.to_torch().float()).bfloat16()
+
+    a_tile = ttnn.Tile([M, 32])
+    a_shard_spec = ttnn.ShardSpec(core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
+    a_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec)
+    ttnn_a = ttnn.from_torch(
+        torch_a,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=a_mem_config,
+        tile=a_tile,
+    )
+
+    out_tile = ttnn.Tile([M, 32])
+    out_shard_spec = ttnn.ShardSpec(core_grid, [M, n_per_core], ttnn.ShardOrientation.ROW_MAJOR)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, N), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=out_mem_config,
+        tile=out_tile,
+    )
+
+    from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
+
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, use_constexpr_unroll=True)
+
+    output_torch = ttnn.to_torch(ttnn_result)
+    passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
+    logger.info(pcc_message)
+    assert passing, pcc_message
