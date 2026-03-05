@@ -68,8 +68,6 @@ void blocked_matmul_and_pack(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset) {
-    mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
-
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -106,7 +104,8 @@ void reduce_c_row_group(
     const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * cols;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
 
-    cb_wait_front(scale_cb, 1);
+    // scale_cb assumed ready (waited once at kernel init)
+    // cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, cumulative_input_tiles);
 
     tile_regs_acquire();
@@ -166,13 +165,13 @@ void sub_exp_block_bcast_cols(
         PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     }
 
-    // Cumulative wait on full CB up through this q_subblock's row
-    cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
+    // inout_cb assumed ready (max_cb was already computed from it)
+    // cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
     cb_wait_front(max_cb, (q_subblock + 1) * tiles_per_row);
 
+    tile_regs_acquire();
     {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "SUB");
-        tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
@@ -181,12 +180,12 @@ void sub_exp_block_bcast_cols(
                 sub_tiles_bcast_cols(inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index++);
             }
         }
-        tile_regs_commit();
     }
+    tile_regs_commit();
 
+    tile_regs_wait();
     {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "EXP");
-        tile_regs_wait();
         uint32_t dst_index = 0;
         constexpr int iterations = (vector_mode == (int)VectorMode::RC) ? 32 : 8;
         constexpr int vector_mode_exp = (vector_mode == (int)VectorMode::RC) ? (int)VectorMode::None : vector_mode;
@@ -229,9 +228,10 @@ void sub_exp_block_bcast_cols(
         }
     }
 
-    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-
     tile_regs_release();
+
+    // Restore packer ReLU config after all exp operations complete
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
     if constexpr (do_reduce) {
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
@@ -248,7 +248,6 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_packthread_tile_init<EXP_APPROX_MODE, false>();
 
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
@@ -642,6 +641,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
+                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
                 blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                     cb_q_in,
                     cb_kt_in,
@@ -747,12 +747,13 @@ static void sdpa_inner_loop_step(
 
                     // Matmul — FPU overlaps with SFPU EXP
                     {
+                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
                         if constexpr (!uniform_unpack_format) {
                             reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
                         }
+                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
@@ -782,12 +783,13 @@ static void sdpa_inner_loop_step(
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
+                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
                     if constexpr (!uniform_unpack_format) {
                         reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
                     }
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
@@ -835,6 +837,7 @@ static void sdpa_inner_loop_step(
         };
 
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
+        exp_packthread_tile_init<EXP_APPROX_MODE, false>();
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
@@ -852,12 +855,13 @@ static void sdpa_inner_loop_step(
 
             // Full matmul for current row
             {
+                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
                 }
+                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
