@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out = tt::CBIndex::c_2;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_3;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -39,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
     constexpr uint32_t num_n_tiles_per_iter = matmul_wo_ring::N_TILES_PER_ITER;
     constexpr uint32_t max_num_tiles_h = matmul_wo_ring::MAX_K_TILES_PER_CORE;
+    constexpr uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
     const uint32_t num_tiles_h = matmul_wo_ring::K_TILES_PER_CORE_A[dram_bank_id];
 
     //-------------------------------------------------------------------------
@@ -47,11 +48,8 @@ void kernel_main() {
     constexpr uint32_t num_collectors = matmul_wo_ring::N_TILES_PER_ITER;
     constexpr uint8_t collector_core_coords[num_collectors][2] = COLLECTOR_CORE_COORDS;
 
-    // Get src address
-    constexpr uint32_t collector_src_stride = out_tile_size;
-
     // Get dst address
-    const uint32_t local_collector_base_addr = get_write_ptr(cb_s2c_in);
+    const uint32_t local_collector_base_addr = get_write_ptr(cb_s2c_in2);
     uint64_t collector_dst_base_addr[num_collectors];
     for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
         collector_dst_base_addr[collector_idx] = get_noc_addr(
@@ -70,7 +68,6 @@ void kernel_main() {
     constexpr uint32_t w_txns_per_block = matmul_wo_ring::W_TXNS_PER_BLOCK;
     constexpr uint32_t w_tiles_per_txn = matmul_wo_ring::W_TILES_PER_TXN;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    const uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
     const uint32_t num_blocks_per_iter =
         (num_tiles_h * num_n_tiles_per_iter + w_tiles_per_block - 1) / w_tiles_per_block;
     const uint32_t w_total_blocks = num_blocks_per_iter * num_iters;
@@ -101,7 +98,10 @@ void kernel_main() {
             noc_semaphore_inc</*posted=*/true>(
                 partial_semaphore_noc_addr[collector_idx], /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
-            local_collector_src_addr += collector_src_stride;
+            // // Ensure write and semaphore have left the core before continuing
+            // noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
+
+            local_collector_src_addr += out_tile_size;
         }
 
         cb_pop_front(cb_c2w_out, num_n_tiles_per_iter);

@@ -59,7 +59,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     const auto dram_cores_set = std::set<CoreCoord>(dram_bank2core_coords.begin(), dram_bank2core_coords.end());
 
     const auto collector_core_coords = find_collector_core_coords(full_grid_size, dram_cores_set, 7);
-    const auto collector_cores_set = CoreRangeSet(collector_core_coords);
+    const auto collector_cores = CoreRangeSet(collector_core_coords);
 
     // Convert the collector core coordinates to physical coordinates
     std::vector<uint32_t> collector_core_physical_coords;
@@ -73,36 +73,37 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     const std::map<std::string, std::string> kernel_defines = {
         {"COLLECTOR_CORE_COORDS", ttnn::operations::ccl::common::stringify(collector_core_physical_coords)}};
 
-    auto all_cores = dram_cores.merge(collector_cores_set);
+    auto all_cores = dram_cores.merge(collector_cores);
 
     // CBs used in the Matmul WO operation
     /*
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_0  | Bfp8_b     | true  |    7*3*2 |      45696      |
+        | cb_r2c_w       | CBIndex::c_0  | Bfp8_b     | true  |    7*3*2 |      45696      |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    512   |      1048576    |
         | cb_c2w_out     | CBIndex::c_2  | Float16_b  | true  |    28    |      57344      |
-        | cb_s2c_out     | CBIndex::c_3  | Float16_b  | true  |    4     |      8192       |
+        | cb_s2c_in2     | CBIndex::c_3  | Float16_b  | true  |    48    |      98304      |
+        | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    4     |      8192       |
         ------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    // Note: cb_s2c_in is handled separately as it is sharded CB
-    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2},
-        {"cb_c2w_out", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 28},
+    const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t, CoreRangeSet>> cb_specs0 = {
+        {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2, dram_cores},
+        {"cb_c2w_out", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 28, dram_cores},
+        {"cb_s2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 48, all_cores},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
 
     // Create CBs
-    for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : cb_specs0) {
+    for (const auto& [name, index, data_format, is_tile, tiles_per_cb, core_range_set] : cb_specs0) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
-        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_config);
     }
 
     // Create sharded CBs
@@ -116,14 +117,14 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
              true,
              512,
              tensor_args.input_tensor.buffer(),
-             all_cores},
+             dram_cores},
             {"cb_s2c_out",
-             tt::CBIndex::c_3,
+             tt::CBIndex::c_4,
              tt::DataFormat::Float16_b,
              true,
              4,
              tensor_args.output_tensor.buffer(),
-             collector_cores_set}};
+             collector_cores}};
 
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb, p_buffer, core_range_set] : sharded_cb_specs) {
         const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
@@ -143,7 +144,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     }
 
     // Create semaphores for reducing the partials at the end
-    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, collector_cores_set, 0);
+    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, collector_cores, 0);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
@@ -194,7 +195,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     auto dm1_collector_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1_collector.cpp",
-        collector_cores_set,
+        collector_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
@@ -205,7 +206,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     auto compute_collector_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp",
-        collector_cores_set,
+        collector_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,

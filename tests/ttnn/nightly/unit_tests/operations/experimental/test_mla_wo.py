@@ -85,24 +85,36 @@ def prepare_w_tensor(torch_w, L, K, N, num_dram_banks):
         torch_w: Tensor of shape (L, K, N)
     """
     Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
-    w_tile_view = torch_w.view(L, Kt, -1)
+
+    # Reshape to expose tiles: (L, K, N) -> (L, Kt, -1, Nt, ttnn.TILE_SIZE)
+    w_tile_view = torch_w.view(L, Kt, ttnn.TILE_SIZE, Nt, ttnn.TILE_SIZE)
 
     each_shard = []
 
     current_K_tile = 0
 
     for dram_bank_id in range(num_dram_banks):
-        num_tiles = BANK2K_TILES[dram_bank_id]
-        padding_tiles = MAX_K_TILES_PER_BANK - num_tiles
-        this_bank_weights = w_tile_view[:, current_K_tile : current_K_tile + num_tiles, :]
-        this_bank_padding = torch.zeros(L, padding_tiles, this_bank_weights.shape[-1], dtype=torch_w.dtype)
+        num_K_tiles = BANK2K_TILES[dram_bank_id]
+        padding_tiles = MAX_K_TILES_PER_BANK - num_K_tiles
 
-        this_bank_data = torch.cat([this_bank_weights, this_bank_padding], dim=1)
+        this_bank_tiles = w_tile_view[:, current_K_tile : current_K_tile + num_K_tiles, :, :, :]
+        this_bank_blocks = this_bank_tiles.view(L, num_K_tiles, ttnn.TILE_SIZE, Nt // 7, 7 * ttnn.TILE_SIZE)
+
+        # this_bank_blocks -> (L, Nt // 7, num_K_tiles, ttnn.TILE_SIZE, 7 * ttnn.TILE_SIZE)
+        this_bank_blocks = this_bank_blocks.permute(0, 3, 1, 2, 4)
+
+        this_bank_blocks = this_bank_blocks.reshape(L, Nt * num_K_tiles // 7, ttnn.TILE_SIZE, 7 * ttnn.TILE_SIZE)
+
+        this_bank_padding = torch.zeros(
+            L, Nt * padding_tiles // 7, ttnn.TILE_SIZE, 7 * ttnn.TILE_SIZE, dtype=torch_w.dtype
+        )
+
+        this_bank_data = torch.cat([this_bank_blocks, this_bank_padding], dim=1)
         each_shard.append(this_bank_data)
-        current_K_tile += num_tiles
+        current_K_tile += num_K_tiles
 
     torch_w_all_banks = torch.stack(each_shard, dim=1)
-    return torch_w_all_banks.view(L, num_dram_banks, -1, N)
+    return torch_w_all_banks.view(L, num_dram_banks, -1, 7 * ttnn.TILE_SIZE)
 
 
 def prepare_output_tensor(tt_output):
@@ -207,8 +219,8 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
     # Create DRAM shard spec for w
     # Tensor shape: (L, K, N) -> sharded over K dimension (with padding)
     # ------------------------------------------------------------------------
-    w_shard_height = L * MAX_K_TILES_PER_BANK * ttnn.TILE_SIZE
-    w_shard_width = N
+    w_shard_height = L * MAX_K_TILES_PER_BANK * N // 7
+    w_shard_width = 7 * ttnn.TILE_SIZE
 
     w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
 

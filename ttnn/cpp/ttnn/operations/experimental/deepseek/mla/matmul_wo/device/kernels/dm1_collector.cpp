@@ -17,15 +17,14 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
     // CBs
-    constexpr auto cb_r2c_w = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
 
-    // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
+    // Constants for the kernel
+    constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
+    constexpr uint32_t num_n_tiles_per_iter = matmul_wo_ring::N_TILES_PER_ITER;
+    constexpr uint32_t max_num_tiles_h = matmul_wo_ring::MAX_K_TILES_PER_CORE;
+    constexpr uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
 
     //-------------------------------------------------------------------------
     // Collector core
@@ -34,10 +33,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
     uint32_t semaphore_value = num_cores;
 
-    for (uint32_t iter_id = 0; iter_id < 4; ++iter_id) {
-        cb_reserve_back(cb_r2c_w, 1);
+    for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
+        cb_reserve_back(cb_s2c_in2, num_cores);
         noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
-        cb_push_back(cb_r2c_w, 1);
+        cb_push_back(cb_s2c_in2, num_cores);
         semaphore_value += num_cores;
     }
 }

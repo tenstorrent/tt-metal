@@ -25,12 +25,12 @@ void kernel_main() {
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out = tt::CBIndex::c_2;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_3;
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
     constexpr uint32_t num_n_tiles_per_iter = matmul_wo_ring::N_TILES_PER_ITER;
     constexpr uint32_t max_num_tiles_h = matmul_wo_ring::MAX_K_TILES_PER_CORE;
+    constexpr uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
     const uint32_t num_tiles_h = matmul_wo_ring::K_TILES_PER_CORE_A[dram_bank_id];
 
     //-------------------------------------------------------------------------
@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t w_txns_per_block = matmul_wo_ring::W_TXNS_PER_BLOCK;
     constexpr uint32_t w_tiles_per_txn = matmul_wo_ring::W_TILES_PER_TXN;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    const uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
     const uint32_t num_blocks_per_iter =
         (num_tiles_h * num_n_tiles_per_iter + w_tiles_per_block - 1) / w_tiles_per_block;
     const uint32_t w_total_blocks = num_blocks_per_iter * num_iters;
