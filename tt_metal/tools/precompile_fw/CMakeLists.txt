@@ -23,3 +23,27 @@ set_target_properties(
 )
 
 target_precompile_headers(precompile_fw REUSE_FROM TT::CommonPCH)
+
+add_custom_command(
+    OUTPUT
+        ${PROJECT_SOURCE_DIR}/pre-compiled/.stamp
+    COMMAND
+        $<TARGET_FILE:precompile_fw>
+    COMMAND
+        ${CMAKE_COMMAND} -E touch ${PROJECT_SOURCE_DIR}/pre-compiled/.stamp
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    DEPENDS
+        precompile_fw
+    COMMENT "Pre-compiling firmware binaries"
+)
+
+add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_SOURCE_DIR}/pre-compiled/.stamp)
+
+if(TT_INSTALL AND IS_DIRECTORY "${PROJECT_SOURCE_DIR}/pre-compiled")
+    install(
+        DIRECTORY
+            ${PROJECT_SOURCE_DIR}/pre-compiled/
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/pre-compiled
+        COMPONENT metalium-runtime
+    )
+endif()
