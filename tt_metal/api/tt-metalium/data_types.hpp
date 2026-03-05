@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+// UMD: re-exports tt::ARCH (used in inline preferred_noc_for_dram_read/write bodies).
 #include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
