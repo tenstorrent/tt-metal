@@ -59,6 +59,16 @@
   skus:
     bh_llmbox:
       timeout: 10
+    bh_llmbox_qbgh02:
+      timeout: 10
+    bh_llmbox_qbgh03:
+      timeout: 10
+    bh_llmbox_qbgh04:
+      timeout: 10
+    bh_quietbox_2_qbge01:
+      timeout: 10
+    bh_quietbox_2_qbge03:
+      timeout: 10
     bh_deskbox:
       timeout: 10
     bh_loudbox:
@@ -75,6 +85,16 @@
   cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-1" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
   skus:
     bh_llmbox:
+      timeout: 10
+    bh_llmbox_qbgh02:
+      timeout: 10
+    bh_llmbox_qbgh03:
+      timeout: 10
+    bh_llmbox_qbgh04:
+      timeout: 10
+    bh_quietbox_2_qbge01:
+      timeout: 10
+    bh_quietbox_2_qbge03:
       timeout: 10
     bh_deskbox:
       timeout: 10
@@ -104,9 +124,17 @@
   skus:
     bh_llmbox:
       timeout: 10
-    bh_loudbox:
-      timeout: 10
     bh_quietbox_2:
+      timeout: 10
+    bh_llmbox_qbgh02:
+      timeout: 10
+    bh_llmbox_qbgh03:
+      timeout: 10
+    bh_llmbox_qbgh04:
+      timeout: 10
+    bh_quietbox_2_qbge01:
+      timeout: 10
+    bh_quietbox_2_qbge03:
       timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
@@ -139,6 +167,16 @@
       timeout: 40
     bh_quietbox_2:
       timeout: 40
+    bh_llmbox_qbgh02:
+      timeout: 10
+    bh_llmbox_qbgh03:
+      timeout: 10
+    bh_llmbox_qbgh04:
+      timeout: 10
+    bh_quietbox_2_qbge01:
+      timeout: 10
+    bh_quietbox_2_qbge03:
+      timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: llama3.1-8b
@@ -165,6 +203,16 @@
       timeout: 10
     bh_quietbox_2:
       timeout: 10
+    bh_llmbox_qbgh02:
+      timeout: 10
+    bh_llmbox_qbgh03:
+      timeout: 10
+    bh_llmbox_qbgh04:
+      timeout: 10
+    bh_quietbox_2_qbge01:
+      timeout: 10
+    bh_quietbox_2_qbge03:
+      timeout: 10
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
   model-name: llama3.1-8b
@@ -181,6 +229,16 @@
     bh_p300:
       timeout: 10
     bh_quietbox_2:
+      timeout: 10
+    bh_llmbox_qbgh02:
+      timeout: 10
+    bh_llmbox_qbgh03:
+      timeout: 10
+    bh_llmbox_qbgh04:
+      timeout: 10
+    bh_quietbox_2_qbge01:
+      timeout: 10
+    bh_quietbox_2_qbge03:
       timeout: 10
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
