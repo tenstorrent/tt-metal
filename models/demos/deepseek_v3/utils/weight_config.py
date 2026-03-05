@@ -6,7 +6,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -134,20 +133,6 @@ def _get_world_rank() -> tuple[str | None, int]:
     return None, 0
 
 
-def _wait_for_cached_config(
-    config_path: Path,
-    weight_cache_path: Path,
-    force_recalculate: bool,
-    poll_s: float,
-) -> WeightConfig:
-    while True:
-        cached_config = _try_load_cached_config_quiet(config_path, weight_cache_path, force_recalculate)
-        if cached_config is not None:
-            logger.info(f"Using weights cached at {weight_cache_path}")
-            return cached_config
-        time.sleep(poll_s)
-
-
 def get_weight_config(
     ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
@@ -194,59 +179,41 @@ def get_weight_config(
         return cached_config
 
     rank_key, rank = _get_world_rank()
-    if rank_key is not None and rank != 0:
-        poll_s = 60.0
-        logger.info(
-            f"Rank {rank} ({rank_key}) detected cache miss; waiting for rank 0 to build weights at {weight_cache_path}"
+
+    logger.info(f"Caching weights at {weight_cache_path}")
+    if state_dicts is None:
+        logger.info("State dict was not provided, preparing from random weights or model path")
+        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+        model_state = prepare_model_state_dict(
+            hf_config=hf_config,
+            random_weights=random_weights,
+            model_path=model_path,
+            single_layer=single_layer,
         )
-        cached_config = _wait_for_cached_config(
-            config_path=config_path,
-            weight_cache_path=weight_cache_path,
-            force_recalculate=force_recalculate,
-            poll_s=poll_s,
-        )
-        return cached_config
+        state_dicts = (model_state,)
 
-    # Cache miss - need to convert weights.
-    # Guard conversion with a lock so only one rank converts at a time on shared caches.
-    lock_path = weight_cache_path / ".weight_config.lock"
-    logger.info(f"Cache miss; acquiring weight config lock at {lock_path}")
-    with locked_file(lock_path, "w", exclusive=True):
-        # Another rank may have finished conversion while we waited; re-check cache.
-        cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
-        if cached_config is not None:
-            return cached_config
+    # Convert weights to TT tensors-on-disk and build weight_config.
+    # All ranks participate so collective ops inside TTNN do not hang.
+    logger.info("Converting weights to TTNN SavedWeight format...")
+    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
 
-        logger.info(f"Caching weights at {weight_cache_path}")
-        if state_dicts is None:
-            logger.info("State dict was not provided, preparing from random weights or model path")
-            from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+    # Validate the converted weight config
+    validate_weight_config_paths(weight_cache_path, weight_config)
 
-            model_state = prepare_model_state_dict(
-                hf_config=hf_config,
-                random_weights=random_weights,
-                model_path=model_path,
-                single_layer=single_layer,
-            )
-            state_dicts = (model_state,)
-
-        # Convert weights to TT tensors-on-disk and build weight_config
-        logger.info("Converting weights to TTNN SavedWeight format...")
-
-        weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-
-        # Validate the converted weight config
-        validate_weight_config_paths(weight_cache_path, weight_config)
-
-        # Save config with relative paths for portability
-        # Use exclusive lock to prevent concurrent writes and corruption
-        with locked_file(config_path, "w", exclusive=True) as f:
+    # Only rank 0 writes the JSON config file to avoid NFS contention.
+    if rank_key is None or rank == 0:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_path.open("w") as f:
             json.dump(weight_config, f, cls=WeightConfigEncoder)
 
-        # Return normalized config with absolute paths for runtime use
-        normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
-        logger.info("Done converting weights to TTNN SavedWeight format")
-        return normalized_config
+    if ttnn.distributed_context_is_initialized():
+        ttnn.distributed_context_barrier()
+
+    # Return normalized config with absolute paths for runtime use
+    normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
+    logger.info("Done converting weights to TTNN SavedWeight format")
+    return normalized_config
 
 
 def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, path_prefix: str = "") -> None:
