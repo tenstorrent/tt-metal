@@ -261,7 +261,7 @@ SystemMesh::SystemMesh(const tt::tt_fabric::ControlPlane& control_plane) :
 
 SystemMesh::~SystemMesh() = default;
 
-SystemMesh& SystemMesh::instance() { return MetalContext::instance().get_system_mesh(); }
+SystemMesh& SystemMesh::instance(int context_id) { return MetalContext::instance(context_id).get_system_mesh(); }
 
 const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translator().global_shape(); }
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }

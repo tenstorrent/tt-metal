@@ -39,7 +39,7 @@ public:
     ~SystemMesh();
     // Convenience accessor — delegates to MetalContext::instance().get_system_mesh().
     // Retained because MetalContext is not part of the public API.
-    static SystemMesh& instance();
+    static SystemMesh& instance(int context_id = 0);
     SystemMesh(const SystemMesh&) = delete;
     SystemMesh& operator=(const SystemMesh&) = delete;
     SystemMesh(SystemMesh&&) = delete;

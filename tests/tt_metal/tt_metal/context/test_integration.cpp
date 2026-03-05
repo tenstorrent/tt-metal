@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -37,6 +38,35 @@ TEST(MetalContextIntegrationTest, HelloWorld) {
     // It was found that during ~MeshDevice, some calls to MetalContext::instance() were made which caused
     // MetalContext to implicitly reinitialize thus undoing the effects of DestroyAllContexts().
     // Subsequent tests will hang if that happens.
+}
+
+TEST(MetalContextIntegrationTest, HelloWorldExplicit) {
+    auto env = std::make_shared<MetaliumEnv>();
+    int context_id = tt::tt_metal::experimental::CreateContext(env);
+
+    auto mesh_shape = tt_metal::distributed::SystemMesh::instance(context_id).shape();
+    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
+    auto mesh_device = distributed::MeshDevice::create(context_id, mesh_device_config);
+
+    mesh_device->close();
+    tt::tt_metal::experimental::DestroyAllContexts();
+}
+
+TEST(MetalContextIntegrationTest, HelloWorldQueryThenCreate) {
+    auto env = std::make_shared<MetaliumEnv>();
+    int context_id = tt::tt_metal::experimental::CreateContext(env);
+
+    size_t l1_size = tt::tt_metal::experimental::hal::get_l1_size(*env);
+    size_t trace_region_size = l1_size * 0.3;
+    size_t l1_small_region_size = l1_size * 0.05;
+
+    auto mesh_shape = tt_metal::distributed::SystemMesh::instance(context_id).shape();
+    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
+    auto mesh_device =
+        distributed::MeshDevice::create(context_id, mesh_device_config, trace_region_size, l1_small_region_size);
+
+    mesh_device->close();
+    tt::tt_metal::experimental::DestroyAllContexts();
 }
 
 TEST(MetalContextIntegrationTest, HalFunctions) {
