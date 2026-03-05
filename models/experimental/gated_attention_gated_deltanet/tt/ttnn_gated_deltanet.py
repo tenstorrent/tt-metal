@@ -98,8 +98,14 @@ def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
     x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-    # Causal left-padding: prepend (K-1) zeros along the time dim
-    pad_zeros = ttnn.zeros([B, kernel_size - 1, D], device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Causal left-padding: prepend (K-1) zeros along the time dim (L1 for concat)
+    pad_zeros = ttnn.zeros(
+        [B, kernel_size - 1, D],
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     x_padded = ttnn.concat([pad_zeros, x_rm], dim=1)  # [B, T+K-1, D]
 
     conv_config = ttnn.Conv1dConfig(
