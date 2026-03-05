@@ -486,7 +486,7 @@ void memcpy(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, src.device_storage().get_mesh_buffer_leak_ownership(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
 }
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
@@ -505,7 +505,7 @@ void memcpy(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<void*>(src))
             .region(region)};
-    queue.enqueue_write_shards(dst.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
+    queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
 }
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
