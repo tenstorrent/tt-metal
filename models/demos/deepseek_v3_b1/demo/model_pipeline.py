@@ -124,7 +124,7 @@ class ModelPipeline:
             next_token_id = self.decode_forward(next_token_id)
             logger.debug("Decoded token {} at decode step {}", next_token_id, i)
             on_token(next_token_id)
-        logger.debug("Generation complete ({} tokens generated)", max_new_tokens)
+        logger.debug("Generation complete ({} tokens generated)", i + 1)
 
     def barrier(self) -> None:
         self.pipeline.barrier()
