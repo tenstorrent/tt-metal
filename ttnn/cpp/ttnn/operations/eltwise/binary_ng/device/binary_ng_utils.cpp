@@ -680,17 +680,48 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
         return false;
     }
 
+    // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {
         return !is_uneven(a);
     }
 
+    if (!b.has_value()) {
+        return false;
+    }
     if (b.has_value() && b->logical_shape().volume() == 1 &&
         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && !is_uneven(a)) {
         return true;
     }
 
-    // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
+    // enable a few more conditions for faster performance
+    // in order to achieve performance parity with legacy binary
+    auto output_shape = compute_broadcasted_output(a.logical_shape(), b->logical_shape());
+    bool a_is_sharded = a.memory_config().is_sharded();
+    bool b_is_sharded = b->memory_config().is_sharded();
+    bool a_not_broadcast = (output_shape == a.logical_shape());
+    bool a_sharded_ok = a_is_sharded && a_not_broadcast && !is_uneven(a);
+
+    // avoid complex case when a and b are both sharded
+    if (a_sharded_ok && !b_is_sharded) {
+        auto subtile_bcast = get_subtile_broadcast_type(
+            a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
+        [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+
+        switch (subtile_bcast) {
+            case SubtileBroadcastType::COL_A:
+            case SubtileBroadcastType::COL_B:
+            case SubtileBroadcastType::SCALAR_A:
+            case SubtileBroadcastType::SCALAR_B: return is_height;
+            case SubtileBroadcastType::ROW_A:
+            case SubtileBroadcastType::ROW_B:
+            case SubtileBroadcastType::ROW_A_COL_B:
+            case SubtileBroadcastType::ROW_B_COL_A:
+            case SubtileBroadcastType::NONE: break;
+        }
+    }
+
+    // Both tensors have identical shape and memory config (no broadcast on any dimension)
+    if ((a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
         if (is_uneven(a) || is_uneven(*b)) {
             return false;
         }
