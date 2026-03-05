@@ -5,6 +5,7 @@
 #include "common/filesystem_utils.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <random>
 #include <system_error>
@@ -38,8 +39,12 @@ void sync_filesystem(const std::filesystem::path& path) {
     // Open directory to get file descriptor for syncfs
     int fd = ::open(sync_target.c_str(), O_RDONLY | O_DIRECTORY);
     if (fd != -1) {
-        ::syncfs(fd);
-        ::close(fd);
+        if (::syncfs(fd) != 0) {
+            log_debug(tt::LogMetal, "syncfs failed for {}: {}", sync_target.string(), strerror(errno));
+        }
+        if (::close(fd) != 0) {
+            log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", sync_target.string(), strerror(errno));
+        }
         return;
     }
 #endif

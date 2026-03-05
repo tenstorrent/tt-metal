@@ -100,12 +100,15 @@ void write_dependency_hashes(
         uint64_t hash = 0;
         bool success = false;
         for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+            errno = 0;  // Clear errno before operation for reliable ESTALE detection
             std::ifstream dep_file(dep_path, std::ios::binary);
             hash = hash_file_content(dep_file);
             if (!dep_file.fail() || dep_file.eof()) {
                 success = true;
                 break;
             }
+            // On POSIX systems, ifstream sets errno on underlying syscall failures.
+            // Retry only on ESTALE (stale NFS file handle).
             if (errno != ESTALE || attempt == tt::filesystem::kMaxFsRetries - 1) {
                 break;
             }
@@ -131,10 +134,12 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
 
     std::ofstream hash_file;
     for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+        errno = 0;  // Clear errno before operation for reliable ESTALE detection
         hash_file.open(hash_path);
         if (hash_file.is_open()) {
             break;
         }
+        // On POSIX systems, ofstream sets errno on underlying syscall failures.
         if (errno != ESTALE || attempt == tt::filesystem::kMaxFsRetries - 1) {
             log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
             return;
@@ -144,10 +149,12 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
 
     std::ifstream dep_file;
     for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+        errno = 0;  // Clear errno before operation for reliable ESTALE detection
         dep_file.open(dep_path);
         if (dep_file.is_open()) {
             break;
         }
+        // On POSIX systems, ifstream sets errno on underlying syscall failures.
         if (errno != ESTALE || attempt == tt::filesystem::kMaxFsRetries - 1) {
             log_warning(
                 tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path.string());
@@ -182,10 +189,12 @@ bool dependencies_up_to_date(std::istream& hash_file) {
 
         std::ifstream dep_file;
         for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+            errno = 0;  // Clear errno before operation for reliable ESTALE detection
             dep_file.open(dep, std::ios::binary);
             if (dep_file.is_open()) {
                 break;
             }
+            // On POSIX systems, ifstream sets errno on underlying syscall failures.
             if (errno != ESTALE || attempt == tt::filesystem::kMaxFsRetries - 1) {
                 break;
             }
@@ -220,10 +229,12 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
 
     std::ifstream hash_file;
     for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
+        errno = 0;  // Clear errno before operation for reliable ESTALE detection
         hash_file.open(hash_path);
         if (hash_file.is_open()) {
             break;
         }
+        // On POSIX systems, ifstream sets errno on underlying syscall failures.
         if (errno != ESTALE || attempt == tt::filesystem::kMaxFsRetries - 1) {
             break;
         }

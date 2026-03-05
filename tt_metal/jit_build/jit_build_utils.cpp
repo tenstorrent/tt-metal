@@ -79,12 +79,11 @@ FileRenamer::~FileRenamer() {
         return;
     }
 
-    // Retry rename operation with sleep for NFS ESTALE (stale file handle) errors
-    constexpr int kMaxRetries = 5;
-    constexpr int kRetryDelayMs = 500;
+    // Retry rename operation with sleep for NFS ESTALE (stale file handle) errors.
+    // Uses constants from filesystem_utils.hpp for consistency across the codebase.
     std::error_code ec;
 
-    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+    for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
         std::filesystem::rename(temp_path_, target_path_, ec);
         if (!ec) {
             // Success - sync to ensure data is flushed to NFS
@@ -92,12 +91,12 @@ FileRenamer::~FileRenamer() {
             return;
         }
         // Only retry on ESTALE (stale file handle) errors
-        if (ec.value() != ESTALE) {
+        if (!tt::filesystem::is_estale_error(ec)) {
             break;
         }
         // If this is not the last attempt, sleep and retry
-        if (attempt < kMaxRetries - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs * (attempt + 1)));
+        if (attempt < tt::filesystem::kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
         }
     }
 

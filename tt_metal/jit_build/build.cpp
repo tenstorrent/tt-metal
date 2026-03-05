@@ -516,28 +516,26 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
     std::string hash_path = out_dir + string(BUILD_STATE_HASH_FILE);
 
     for (int attempt = 0; attempt < tt::filesystem::kMaxFsRetries; ++attempt) {
-        std::error_code ec;
-
-        // First check if file exists using filesystem API which properly sets error codes
-        bool exists = std::filesystem::exists(hash_path, ec);
-        if (ec) {
-            if (tt::filesystem::is_estale_error(ec) && attempt < tt::filesystem::kMaxFsRetries - 1) {
+        // Open the file directly - this avoids TOCTOU race between exists() and open().
+        // If the file doesn't exist, is_open() returns false without ESTALE.
+        std::ifstream file(hash_path);
+        if (!file.is_open()) {
+            // Check errno to distinguish "file not found" from "stale file handle"
+            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
                 continue;
             }
-            return false;
-        }
-        if (!exists) {
-            return false;
-        }
-
-        std::ifstream file(hash_path);
-        if (!file.is_open()) {
+            // File doesn't exist or other non-retryable error
             return false;
         }
         uint64_t stored_hash{};
         file >> stored_hash;
         if (file.fail()) {
+            // Check if read failure is due to ESTALE and retry
+            if (errno == ESTALE && attempt < tt::filesystem::kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(tt::filesystem::kFsRetryDelayMs * (attempt + 1)));
+                continue;
+            }
             return false;
         }
         if (stored_hash != build_state_hash_) {
