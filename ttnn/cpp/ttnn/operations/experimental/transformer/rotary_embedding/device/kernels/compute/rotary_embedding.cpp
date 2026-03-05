@@ -57,11 +57,12 @@ template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
 ALWI void TILIZE_ROWS(uint32_t sync_cb) {
     cb_wait_front(sync_cb, num_tiles);
     compute_kernel_lib::tilize<
+        num_tiles,
         in0_cb,
         out_cb,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(num_tiles, 1);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
     cb_pop_front(sync_cb, num_tiles);
 }
 

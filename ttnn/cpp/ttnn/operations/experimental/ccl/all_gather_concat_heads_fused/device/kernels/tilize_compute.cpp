@@ -16,10 +16,10 @@ void kernel_main() {
     constexpr uint32_t cb_out_idx = get_compile_time_arg_val(3);
     compute_kernel_hw_startup(cb_in_idx, cb_out_idx);
     compute_kernel_lib::tilize<
+        per_core_block_tile_cnt,
         cb_in_idx,
         cb_out_idx,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-        per_core_block_tile_cnt, per_core_block_cnt);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_block_cnt);
 }
