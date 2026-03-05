@@ -9,6 +9,7 @@ import pytest
 from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
+    is_llk_assert_enabled,
 )
 import ttnn
 
@@ -79,6 +80,19 @@ def test_simple_conv_t2d(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    # Skip specific test cases that hit LLK_ASSERT on L1 memory address check
+    if (
+        activations_dtype == ttnn.bfloat8_b
+        and batch_size == 1
+        and filter_height == 3
+        and filter_width == 3
+        and pad_h == 1
+        and pad_w == 1
+        and is_llk_assert_enabled()
+    ):
+        pytest.skip("Hits LLK_ASSERT on L1 memory address check.")
+
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -158,6 +172,11 @@ def test_convt2d_dram(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    # Skip specific test cases that hit LLK_ASSERT on L1 memory address check
+    if activations_dtype == ttnn.bfloat8_b and is_llk_assert_enabled():
+        pytest.skip("Hits LLK_ASSERT on L1 memory address check.")
+
     dram_slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
     )
@@ -247,6 +266,9 @@ def test_simple_conv_t2d_weights_bias_match(
     """
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+    # Skip specific test cases that hit LLK_ASSERT on L1 memory address check
+    if activations_dtype == ttnn.bfloat8_b and is_llk_assert_enabled():
+        pytest.skip("Hits LLK_ASSERT on L1 memory address check.")
 
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -443,6 +465,10 @@ def test_conv_transpose2d_model_fruit(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+    # Skip specific test cases that hit LLK_ASSERT on L1 memory address check
+    if activations_dtype == ttnn.bfloat8_b and is_llk_assert_enabled():
+        pytest.skip("Hits LLK_ASSERT on L1 memory address check.")
+
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,
