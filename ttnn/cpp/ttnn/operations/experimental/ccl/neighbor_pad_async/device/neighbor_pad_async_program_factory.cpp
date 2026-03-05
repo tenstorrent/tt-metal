@@ -37,6 +37,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
+    // Synchronize all devices before dispatching neighbor_pad programs.
+    // This ensures all previous fabric-initiated writes (from prior ops) have completed.
+    auto* mesh_device = tensor_args.input_tensor.device();
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+
     // Create programs for each coordinate in tensor_coords
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
