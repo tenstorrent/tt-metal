@@ -659,6 +659,8 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::WORKER;
     } else if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::ACTIVE_ETH;
+    } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::DRAM;
     } else {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::IDLE_ETH;
     }
@@ -982,6 +984,52 @@ void RiscFirmwareInitializer::initialize_firmware(
 
             break;
         }
+        case HalProgrammableCoreType::DRAM: {
+            constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            if (not rtoptions_.get_skip_loading_fw()) {
+                for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                    auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
+                    for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
+                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                            device_id, core_type_idx, processor_class, drisc_id);
+                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        llrt::test_load_write_read_risc_binary(
+                            binary_mem, device_id, virtual_core, core_type_idx, processor_class, drisc_id);
+                    }
+                }
+            }
+            launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
+            prepare_initial_launch_msg();
+
+            // Write launch/go messages to DRAM core L1 (with NOC offset)
+            uint64_t launch_addr =
+                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH) + dram_l1_noc_offset;
+            uint64_t go_addr =
+                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG) + dram_l1_noc_offset;
+            uint64_t launch_msg_rd_ptr_addr =
+                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR) +
+                dram_l1_noc_offset;
+            uint64_t go_message_index_addr =
+                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX) + dram_l1_noc_offset;
+            cluster_.write_core(
+                init_launch_msg_data.data(), init_launch_msg_data.size(), tt_cxy_pair(device_id, virtual_core),
+                launch_addr);
+            cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+            uint32_t zero = 0;
+            cluster_.write_core(
+                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
+            cluster_.write_core(
+                &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+
+            // Write reset PC (register address, no L1 NOC offset needed)
+            cluster_.write_core(
+                &jit_build_config.fw_launch_addr_value,
+                sizeof(uint32_t),
+                tt_cxy_pair(device_id, virtual_core),
+                jit_build_config.fw_launch_addr);
+            break;
+        }
         default:
             TT_THROW(
                 "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
@@ -1085,6 +1133,35 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         not_done_cores.insert(virtual_core);
     }
 
+    log_debug(tt::LogMetal, "Initializing DRAM cores");
+    constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
+    auto dram_dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
+    auto dram_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DRAM);
+    auto dram_launch_msg = dram_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+    auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
+    dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+    std::unordered_set<CoreCoord> dram_not_done_cores;
+    const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
+    for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::VIRTUAL)) {
+        CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
+        dram_core_info.view().absolute_logical_x() = dram_noc.x;
+        dram_core_info.view().absolute_logical_y() = dram_noc.y;
+        uint64_t core_info_addr =
+            hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO) + dram_l1_noc_offset;
+        cluster_.write_core(
+            dram_core_info.data(),
+            dram_core_info.size(),
+            {static_cast<size_t>(device_id), virtual_dram_core},
+            core_info_addr);
+        initialize_firmware(
+            device_id,
+            HalProgrammableCoreType::DRAM,
+            virtual_dram_core,
+            dram_launch_msg.view(),
+            dram_go_msg.view());
+        dram_not_done_cores.insert(virtual_dram_core);
+    }
+
     cluster_.l1_barrier(device_id);
 
     for (const auto& worker_core : not_done_cores) {
@@ -1103,6 +1180,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
+    for (const auto& dram_core : dram_not_done_cores) {
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+    }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = 10000;
@@ -1112,6 +1192,17 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
+
+    if (!dram_not_done_cores.empty()) {
+        log_debug(LogDevice, "Waiting for DRAM firmware init complete");
+        try {
+            llrt::internal_::wait_until_cores_done(
+                device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
+        } catch (std::runtime_error&) {
+            TT_THROW("Device {} init: failed to initialize DRAM FW!", device_id);
+        }
+        log_debug(LogDevice, "DRAM firmware init complete");
+    }
 }
 
 }  // namespace tt::tt_metal

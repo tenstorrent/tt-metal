@@ -106,6 +106,9 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
     if (is_inactive_eth_core) {
         return tt_metal::HalProgrammableCoreType::IDLE_ETH;
     }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_dram_core(virtual_core, chip_id)) {
+        return tt_metal::HalProgrammableCoreType::DRAM;
+    }
     return tt_metal::HalProgrammableCoreType::TENSIX;
 }
 
@@ -168,12 +171,14 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_type_idx) {
     TT_ASSERT(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
-        tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id));
+        tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id) or
+        static_cast<tt_metal::HalProgrammableCoreType>(core_type_idx) == tt_metal::HalProgrammableCoreType::DRAM);
 
-    uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
-                                   .hal()
-                                   .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
-                                   .local_init_addr;
+    const auto& jit_build_config = tt::tt_metal::MetalContext::instance()
+                                       .hal()
+                                       .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx);
+    uint64_t local_init_addr = jit_build_config.local_init_addr;
+    uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
 
     auto core_type = get_core_type(chip_id, core);
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
@@ -184,6 +189,7 @@ bool test_load_write_read_risc_binary(
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr =
             tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
+        relo_addr += l1_noc_offset;
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
@@ -253,7 +259,8 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
     const auto& hal = tt_metal::MetalContext::instance().hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
-    uint64_t go_msg_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_msg_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG) +
+                           hal.get_l1_noc_offset(dispatch_core_type);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();

@@ -14,6 +14,7 @@ set(PROCS
     aerisc
     main_aerisc
     subordinate_aerisc
+    drisc
 )
 set(TYPES
     firmware
