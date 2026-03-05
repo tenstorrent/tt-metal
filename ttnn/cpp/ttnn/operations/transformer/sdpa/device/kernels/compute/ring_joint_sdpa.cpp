@@ -48,14 +48,12 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(31);
 
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(32);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(33) == 1;
-    constexpr uint32_t is_balanced = get_compile_time_arg_val(34) == 1;
-
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(30);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(31) == 1;
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(32);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(33);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(34) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(34);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(35);
+    constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
+    constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
+    constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
