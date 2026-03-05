@@ -728,7 +728,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, bool force) { self.deallocate(force); },
             nb::arg("force") = false,
             R"doc(
-                Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
+                Deallocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
             )doc")
         .def(
             "to",

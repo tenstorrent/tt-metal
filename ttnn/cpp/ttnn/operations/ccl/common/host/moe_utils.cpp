@@ -157,7 +157,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                     auto planes_in_direction =
                         tt::tt_fabric::get_num_available_routing_planes_in_direction(fabric_node_id, direction);
                     // if the device is not mmio capable then one link on some axis will be unavailable
-                    // ideally we only subtract if we're targetting that cluster axis, but we don't have access to that
+                    // ideally we only subtract if we're targeting that cluster axis, but we don't have access to that
                     // information here to be safe, we subtract 1 regardless of the axis when the axis is not available
                     log_debug(
                         tt::LogOp,
