@@ -47,10 +47,25 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tensor_descriptor_args_offset = arg_idx;
-    constexpr uint32_t num_properties_per_input_tensor = 7;
-    // now follows num_inputs * num_properties_per_input_tensor properties
-    arg_idx += num_inputs * num_properties_per_input_tensor;
+
+    std::array<uint32_t, num_inputs> input_tensor_Wt;
+    std::array<uint32_t, num_inputs> input_tensor_Ht;
+    std::array<uint32_t, num_inputs> output_tensor_Wt;
+    std::array<uint32_t, num_inputs> output_tensor_Ht;
+    std::array<uint32_t, num_inputs> input_batch_head_count;
+    std::array<uint32_t, num_inputs> input_tile_id_start;
+    std::array<uint32_t, num_inputs> input_tile_id_end;
+
+    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        input_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
@@ -97,39 +112,19 @@ void kernel_main() {
          * to remove startup latency from the fused op.
          */
 
-        // Tensor descriptor property indices
-        constexpr uint32_t INPUT_TENSOR_WT_IDX = 0;
-        constexpr uint32_t INPUT_TENSOR_HT_IDX = 1;
-        constexpr uint32_t OUTPUT_TENSOR_WT_IDX = 2;
-        constexpr uint32_t OUTPUT_TENSOR_HT_IDX = 3;
-        constexpr uint32_t BATCH_HEAD_SIZE_IDX = 4;
-        constexpr uint32_t INPUT_TILE_ID_START_IDX = 5;
-        constexpr uint32_t INPUT_TILE_ID_END_IDX = 6;
-
-        // Calculate base offset for this input's properties
-        const uint32_t base_offset = tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor;
-
-        // Read tensor properties
-        uint32_t input_tensor_Wt = get_arg_val<uint32_t>(base_offset + INPUT_TENSOR_WT_IDX);
-        uint32_t input_tensor_Ht = get_arg_val<uint32_t>(base_offset + INPUT_TENSOR_HT_IDX);
-        uint32_t output_tensor_Wt = get_arg_val<uint32_t>(base_offset + OUTPUT_TENSOR_WT_IDX);
-        uint32_t output_tensor_Ht = get_arg_val<uint32_t>(base_offset + OUTPUT_TENSOR_HT_IDX);
-        uint32_t input_batch_head_count = get_arg_val<uint32_t>(base_offset + BATCH_HEAD_SIZE_IDX);
-        uint32_t input_tile_id_start = get_arg_val<uint32_t>(base_offset + INPUT_TILE_ID_START_IDX);
-        uint32_t input_tile_id_end = get_arg_val<uint32_t>(base_offset + INPUT_TILE_ID_END_IDX);
-
-        uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
-        uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-        uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
-        uint32_t tiles_read = input_tile_id_start;
-        uint32_t tiles_to_read = input_tile_id_end;
+        uint32_t tile_id_start = my_chip_id * input_tensor_Wt[input_idx];
+        uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+        uint32_t row_offset =
+            (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+        uint32_t tiles_read = input_tile_id_start[input_idx];
+        uint32_t tiles_to_read = input_tile_id_end[input_idx];
         if (gather_dim == 3) {
-            tile_id_start = my_chip_id * input_tensor_Wt;
+            tile_id_start = my_chip_id * input_tensor_Wt[input_idx];
         } else {
-            tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
+            tile_id_start = my_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
         }
 
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                 cb_wait_front(cb_output_id, packet_size_in_pages);
@@ -140,8 +135,8 @@ void kernel_main() {
                 uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
 
                 pages_read_in_row++;
-                if (pages_read_in_row >= input_tensor_Wt) {
-                    row_offset += output_tensor_Wt;
+                if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
+                    row_offset += output_tensor_Wt[input_idx];
                     pages_read_in_row = 0;
                 }
 
@@ -160,8 +155,8 @@ void kernel_main() {
                     }
 
                     pages_read_in_row++;
-                    if (pages_read_in_row >= input_tensor_Wt) {
-                        row_offset += output_tensor_Wt;
+                    if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
+                        row_offset += output_tensor_Wt[input_idx];
                         pages_read_in_row = 0;
                     }
                 } else {
@@ -182,11 +177,11 @@ void kernel_main() {
                 tiles_read += num_pages_to_read;
                 cb_pop_front(cb_output_id, packet_size_in_pages);
             }
-            tile_id_start += output_tensor_Wt * output_tensor_Ht;
-            tiles_read = input_tile_id_start;
-            tiles_to_read = input_tile_id_end;
-            pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-            row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
+            tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+            tiles_read = input_tile_id_start[input_idx];
+            tiles_to_read = input_tile_id_end[input_idx];
+            pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+            row_offset = (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
         }
     }
 
@@ -254,41 +249,21 @@ void kernel_main() {
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            // Tensor descriptor property indices
-            constexpr uint32_t INPUT_TENSOR_WT_IDX = 0;
-            constexpr uint32_t INPUT_TENSOR_HT_IDX = 1;
-            constexpr uint32_t OUTPUT_TENSOR_WT_IDX = 2;
-            constexpr uint32_t OUTPUT_TENSOR_HT_IDX = 3;
-            constexpr uint32_t BATCH_HEAD_SIZE_IDX = 4;
-            constexpr uint32_t INPUT_TILE_ID_START_IDX = 5;
-            constexpr uint32_t INPUT_TILE_ID_END_IDX = 6;
-
-            // Calculate base offset for this input's properties
-            const uint32_t base_offset = tensor_descriptor_args_offset + input_idx * num_properties_per_input_tensor;
-
-            // Read tensor properties
-            uint32_t input_tensor_Wt = get_arg_val<uint32_t>(base_offset + INPUT_TENSOR_WT_IDX);
-            uint32_t input_tensor_Ht = get_arg_val<uint32_t>(base_offset + INPUT_TENSOR_HT_IDX);
-            uint32_t output_tensor_Wt = get_arg_val<uint32_t>(base_offset + OUTPUT_TENSOR_WT_IDX);
-            uint32_t output_tensor_Ht = get_arg_val<uint32_t>(base_offset + OUTPUT_TENSOR_HT_IDX);
-            uint32_t input_batch_head_count = get_arg_val<uint32_t>(base_offset + BATCH_HEAD_SIZE_IDX);
-            uint32_t input_tile_id_start = get_arg_val<uint32_t>(base_offset + INPUT_TILE_ID_START_IDX);
-            uint32_t input_tile_id_end = get_arg_val<uint32_t>(base_offset + INPUT_TILE_ID_END_IDX);
-
-            uint32_t tiles_read = input_tile_id_start;
-            uint32_t tiles_to_read = input_tile_id_end;
-            uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt;
-            uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
-            uint32_t pages_read_in_row = (input_tile_id_start % input_tensor_Wt);
-            uint32_t slice_Wt = input_tensor_Wt;
-            uint32_t stride_Wt = output_tensor_Wt;
+            uint32_t tiles_read = input_tile_id_start[input_idx];
+            uint32_t tiles_to_read = input_tile_id_end[input_idx];
+            uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt[input_idx];
+            uint32_t row_offset =
+                (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+            uint32_t pages_read_in_row = (input_tile_id_start[input_idx] % input_tensor_Wt[input_idx]);
+            uint32_t slice_Wt = input_tensor_Wt[input_idx];
+            uint32_t stride_Wt = output_tensor_Wt[input_idx];
 
             if (gather_dim == 3) {
-                tile_id_start = actual_slice_chip_id * input_tensor_Wt;
+                tile_id_start = actual_slice_chip_id * input_tensor_Wt[input_idx];
             } else {
-                tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
+                tile_id_start = actual_slice_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                     cb_wait_front(cb_output_id, packet_size_in_pages);
@@ -330,11 +305,12 @@ void kernel_main() {
                     tiles_read += num_pages_to_read;
                     cb_pop_front(cb_output_id, packet_size_in_pages);
                 }
-                tile_id_start += output_tensor_Wt * output_tensor_Ht;
-                tiles_read = input_tile_id_start;
-                tiles_to_read = input_tile_id_end;
-                row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
-                pages_read_in_row = (input_tile_id_start % input_tensor_Wt);
+                tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                tiles_read = input_tile_id_start[input_idx];
+                tiles_to_read = input_tile_id_end[input_idx];
+                row_offset =
+                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+                pages_read_in_row = (input_tile_id_start[input_idx] % input_tensor_Wt[input_idx]);
             }
         }
 
