@@ -76,4 +76,29 @@ std::optional<std::string> get_mock_cluster_desc() {
     return name;
 }
 
+// ---------------------------------------------------------------------------
+// Emulated mode — like mock but with real memory I/O and JIT kernel execution
+// ---------------------------------------------------------------------------
+
+static std::optional<MockDeviceConfig> g_registered_emulated_config = std::nullopt;
+
+void configure_emulated_mode(tt::ARCH arch, uint32_t num_chips) {
+    // Emulated mode uses the same cluster descriptors as mock mode
+    g_registered_emulated_config = MockDeviceConfig{arch, num_chips};
+    // Also register as mock so get_mock_cluster_desc() returns the right YAML
+    g_registered_mock_config = MockDeviceConfig{arch, num_chips};
+    log_info(tt::LogMetal, "Emulated mode configured: arch={}, num_chips={}", static_cast<int>(arch), num_chips);
+}
+
+void disable_emulated_mode() {
+    if (!g_registered_emulated_config.has_value()) {
+        return;
+    }
+    g_registered_emulated_config = std::nullopt;
+    disable_mock_mode();
+    log_info(tt::LogMetal, "Emulated mode disabled");
+}
+
+bool is_emulated_mode() { return g_registered_emulated_config.has_value(); }
+
 }  // namespace tt::tt_metal::experimental

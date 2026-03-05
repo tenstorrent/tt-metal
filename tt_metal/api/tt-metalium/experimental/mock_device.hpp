@@ -41,4 +41,14 @@ bool is_mock_mode_registered();
 // Returns just the filename (e.g., "blackhole_P150.yaml"), caller prepends base path
 std::optional<std::string> get_mock_cluster_desc();
 
+// Configure emulated mode — like mock mode, but with real memory-backed I/O
+// and JIT kernel execution. Requires TT_METAL_EMULATION=ON at build time.
+void configure_emulated_mode(tt::ARCH arch, uint32_t num_chips = 1);
+
+// Disable emulated mode
+void disable_emulated_mode();
+
+// Check if emulated mode is active
+bool is_emulated_mode();
+
 }  // namespace tt::tt_metal::experimental

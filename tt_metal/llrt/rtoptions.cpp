@@ -53,6 +53,7 @@ enum class EnvVarID {
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
@@ -433,6 +434,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (this->simulator_path.empty()) {
                 this->runtime_target_device_ = tt::TargetDevice::Mock;
             }
+            break;
+
+        // TT_METAL_EMULE_MODE
+        // Enable emulated mode: creates SWEmuleChip (with real memory-backed I/O)
+        // instead of MockChip.  Requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set.
+        // Automatically forces slow dispatch mode.
+        // Default: Disabled
+        // Usage: export TT_METAL_EMULE_MODE=1
+        case EnvVarID::TT_METAL_EMULE_MODE:
+            this->runtime_target_device_ = tt::TargetDevice::Emulated;
+            // Emulated mode requires slow dispatch (no HWCommandQueue)
+            this->using_slow_dispatch = true;
+            this->fast_dispatch = false;
             break;
 
         // TT_METAL_VISIBLE_DEVICES

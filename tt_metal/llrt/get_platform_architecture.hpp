@@ -77,7 +77,8 @@ inline tt::ARCH get_physical_architecture() {
 inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
     // If running in mock mode, derive architecture from provided cluster descriptor
-    if (rtoptions.get_target_device() == tt::TargetDevice::Mock) {
+    if (rtoptions.get_target_device() == tt::TargetDevice::Mock ||
+        rtoptions.get_target_device() == tt::TargetDevice::Emulated) {
         auto cluster_desc = umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
         if (cluster_desc && cluster_desc->get_number_of_chips() > 0) {
             auto chips = cluster_desc->get_all_chips();

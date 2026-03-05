@@ -77,12 +77,15 @@ bool SDMeshCommandQueue::write_shard_to_device(
     if (!mesh_device_->impl().is_local(device_coord)) {
         return false;
     }
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
-        return false;  // Skip hardware write for mock devices
+    auto target = this->get_target_device_type();
+    if (target == tt::TargetDevice::Mock) {
+        return false;
     }
     // Wait for idle here to ensure that a previous program potentially using this address space
     // is complete.
-    wait_for_cores_idle();
+    if (target != tt::TargetDevice::Emulated) {
+        wait_for_cores_idle();
+    }
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
@@ -110,11 +113,14 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
-        return;  // Skip hardware read for mock devices
+    auto target = this->get_target_device_type();
+    if (target == tt::TargetDevice::Mock) {
+        return;
     }
     // Wait for idle here to ensure that programs emitting this data are complete.
-    wait_for_cores_idle();
+    if (target != tt::TargetDevice::Emulated) {
+        wait_for_cores_idle();
+    }
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
@@ -133,6 +139,10 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emulated) {
+        logical_cores_for_previous_workload_.clear();
+        return;
+    }
     if (!logical_cores_for_previous_workload_.empty()) {
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
             tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
@@ -225,14 +235,30 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
-        return;  // Skip workload execution for mock devices
+    auto target = this->get_target_device_type();
+    if (target == tt::TargetDevice::Mock) {
+        return;
     }
+    bool is_emulated = (target == tt::TargetDevice::Emulated);
 
     auto lock = lock_api_function_();
 
-    if (!asynchronous_slow_dispatch_enabled_) {
+    if (!is_emulated && !asynchronous_slow_dispatch_enabled_) {
         wait_for_cores_idle();
+    }
+
+    if (is_emulated) {
+        // Emulated mode: synchronous execution via LaunchProgram (no thread pool, no HW dispatch)
+        for (auto& [coord_range, program] : mesh_workload.get_programs()) {
+            for (const auto& coord : coord_range) {
+                if (!mesh_device_->impl().is_local(coord)) {
+                    continue;
+                }
+                auto* device = mesh_device_->impl().get_device(coord);
+                tt_metal::detail::LaunchProgram(device, program, false);
+            }
+        }
+        return;
     }
 
     auto& range_program_map = mesh_workload.get_programs();
@@ -289,18 +315,21 @@ void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
 }
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    auto target = this->get_target_device_type();
+    if (target == tt::TargetDevice::Mock) {
         return;
     }
     auto lock = lock_api_function_();
-    wait_for_cores_idle();
-    for (const auto& device : mesh_device_->get_devices()) {
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .dram_barrier(device->id());
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .l1_barrier(device->id());
+    if (target != tt::TargetDevice::Emulated) {
+        wait_for_cores_idle();
+        for (const auto& device : mesh_device_->get_devices()) {
+            tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+                .get_cluster()
+                .dram_barrier(device->id());
+            tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+                .get_cluster()
+                .l1_barrier(device->id());
+        }
     }
 
     // Barrier across all active hosts of the mesh

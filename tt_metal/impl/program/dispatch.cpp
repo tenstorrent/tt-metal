@@ -359,9 +359,7 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
-    // Mock devices don't have real binaries, skip finalization
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;

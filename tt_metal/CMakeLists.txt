@@ -127,6 +127,12 @@ target_include_directories(
         api/tt-metalium # FIXME: Re-home the tests and remove this
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
+
+if(TT_METAL_EMULATION)
+    target_compile_definitions(tt_metal PRIVATE TT_METAL_EMULATION=1)
+    target_link_options(tt_metal PUBLIC -rdynamic)
+endif()
+
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(

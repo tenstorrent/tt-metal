@@ -21,6 +21,13 @@ option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
+option(TT_METAL_USE_TT_EMULE "Build tt-emule backed emulation tests (no Tenstorrent hardware required)" OFF)
+option(TT_METAL_EMULATION "Enable emulated device support (memory-backed I/O + JIT kernel execution)" OFF)
+set(TT_EMULE_PATH
+    "${CMAKE_CURRENT_SOURCE_DIR}/../tt-emule"
+    CACHE PATH
+    "Path to tt-emule source directory (used when TT_METAL_USE_TT_EMULE=ON or TT_METAL_EMULATION=ON)"
+)
 
 ###########################################################################################
 
