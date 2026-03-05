@@ -377,5 +377,5 @@ def test_topk_sfpu(
 
     # Validate topk values
     assert passed_test(
-        golden_values, res_values, formats.output_format, print_erros=True
+        golden_values, res_values, formats.output_format, print_errors=True
     )

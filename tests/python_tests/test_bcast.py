@@ -44,6 +44,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tile_constants import get_tile_params
+from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 supported_formats = [
@@ -206,11 +207,12 @@ def test_unpack_bcast(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     # Pretty red/green diff output via passed_test (tolerance-based)
+    tile_shape = construct_tile_shape(tile_dimensions)
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        tile_dimensions=tile_dimensions,
+        tile_shape=tile_shape,
     )
 
     # Datacopy/bcast should be bit-exact for float formats (no compute loss)

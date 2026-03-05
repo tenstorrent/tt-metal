@@ -648,7 +648,7 @@ def test_eltwise_binary_int8_format(
 
     # Compare in tilized format
     test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_erros=False
+        golden_tensor, res_tensor, formats.output_format, print_errors=False
     )
 
     assert test_passed, "Assert against golden failed"
