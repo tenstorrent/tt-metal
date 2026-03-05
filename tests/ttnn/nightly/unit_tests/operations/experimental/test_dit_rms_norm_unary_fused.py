@@ -182,7 +182,7 @@ def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation, 
         ((1, 512), "medium"),
         ((128, 4096), "large"),
     ],
-    ids=["small", "medium", "dit_norm_shape"],
+    ids=["small", "medium", "large"],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 def test_dit_rms_norm_unary_fused_basic_shapes(device, shape, name, layout):
