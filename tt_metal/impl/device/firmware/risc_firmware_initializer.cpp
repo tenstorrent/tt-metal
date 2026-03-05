@@ -1142,7 +1142,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
     std::unordered_set<CoreCoord> dram_not_done_cores;
     const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
-    for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::VIRTUAL)) {
+    for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
         CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
         dram_core_info.view().absolute_logical_x() = dram_noc.x;
         dram_core_info.view().absolute_logical_y() = dram_noc.y;
