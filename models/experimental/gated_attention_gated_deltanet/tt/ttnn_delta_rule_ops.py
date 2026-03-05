@@ -272,7 +272,7 @@ def recurrent_delta_rule_step_ttnn(
     V = v_t.shape[2]
 
     decay = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-    decay = ttnn.reshape(decay, [B, H, 1, 1])
+    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -372,7 +372,7 @@ def recurrent_gated_delta_rule_ttnn(
         o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h)
         outputs.append(o_t)
 
-    outputs_4d = [ttnn.reshape(o, [B, H, 1, V]) for o in outputs]
+    outputs_4d = [ttnn.reshape(o, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG) for o in outputs]
     o = ttnn.concat(outputs_4d, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
