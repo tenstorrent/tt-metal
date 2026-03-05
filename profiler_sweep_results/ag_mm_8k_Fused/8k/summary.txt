@@ -1,0 +1,40 @@
+Prefill filter: Kept last RingDistributedSdpa iteration (98 ops), removed 1 earlier iterations
+Wrote 98 rows to profiler_sweep_results/ag_mm_8k_Fused/8k/prefill.csv
+Wrote 98 rows to profiler_sweep_results/ag_mm_8k_Fused/8k/prefill.xlsx
+
+================================================================================
+=== Prefill Summary ===
+================================================================================
+Total time: 14360.92 us (14.36 ms)
+================================================================================
+OP_NAME                                    TOTAL_TIME_us   COUNT   PERCENT   MIN_CORES   MAX_CORES
+--------------------------------------------------------------------------------------------------
+MatmulDeviceOperation                            2749.74       5    19.15%          47          63
+ReduceScatterMinimalAsyncDeviceOperation         2599.55       5    18.10%          40          40
+AllGatherMinimalMatmulAsyncOp                    2103.54       1    14.65%          58          58
+SDPA                                             1809.83       1    12.60%          70          70
+AllGatherAsyncDeviceOperation                    1243.04      11     8.66%           6          40
+LayerNormPostAllGatherDeviceOperation             684.75       3     4.77%          70          70
+BinaryNgDeviceOperation                           673.27       4     4.69%          50          70
+TypecastDeviceOperation                           541.37       8     3.77%           8          70
+LayerNormPreAllGatherDeviceOperation              416.57       3     2.90%          70          70
+RotaryEmbeddingLlamaDeviceOperation               348.78       2     2.43%          70          70
+UntilizeDeviceOperation                           321.15       2     2.24%           8          64
+UntilizeWithUnpaddingDeviceOperation              230.53      32     1.61%          64          64
+TopKDeviceOperation                               177.83       1     1.24%          17          17
+ConcatDeviceOperation                             131.05       2     0.91%          32          70
+NlpCreateHeadsDeviceOperation                     116.35       1     0.81%          70          70
+SamplingDeviceOperation                            68.44       1     0.48%          32          32
+TilizeWithValPaddingDeviceOperation                27.69       2     0.19%          64          64
+PagedFillCacheDeviceOperation                      26.06       2     0.18%          70          70
+SliceDeviceOperation                               24.84       3     0.17%           1          70
+NLPConcatHeadsDeviceOperation                      22.27       1     0.16%          64          64
+ManualSeedDeviceOperation                          19.09       1     0.13%          50          50
+FastReduceNCDeviceOperation                        13.41       1     0.09%          70          70
+CopyDeviceOperation                                 7.17       1     0.05%          70          70
+ShardedToInterleavedDeviceOperation                 2.42       2     0.02%           8           8
+InterleavedToShardedDeviceOperation                 2.17       2     0.02%           8           8
+EmbeddingsDeviceOperation                           0.00       1     0.00%          70          70
+
+=== Decode Phase ===
+No data for this phase

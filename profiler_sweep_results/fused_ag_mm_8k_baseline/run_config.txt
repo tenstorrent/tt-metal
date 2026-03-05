@@ -1,0 +1,4 @@
+Run Name: fused_ag_mm_8k_baseline
+Date: Thu Mar  5 05:08:01 UTC 2026
+Prompt Lengths: 8k
+Parse Only: false

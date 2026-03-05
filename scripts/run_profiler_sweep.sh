@@ -287,6 +287,8 @@ run_profiler() {
     # Set environment and run profiler
     export TT_METAL_HOME=$(pwd)
     export PYTHONPATH=$(pwd)
+    # Only run prefill for the requested length (no full warmup sweep) so profiler run stays fast and single-length
+    export SKIP_PREFILL_WARMUP=1
 
     # Activate virtual environment and run
     source python_env/bin/activate

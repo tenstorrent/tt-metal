@@ -1,0 +1,50 @@
+Collecting results from: profiler_sweep_results/ag_mm_8k_baseline_1_num_links
+Output directory: profiler_sweep_results/ag_mm_8k_baseline_1_num_links
+Wrote Prefill comparison to profiler_sweep_results/ag_mm_8k_baseline_1_num_links/prefill_comparison.csv
+No data for Decode comparison
+
+====================================================================================================
+=== Prefill Comparison Summary ===
+====================================================================================================
+
+Total Time by Prompt Length:
+--------------------------------------------------------------------------------
+Prompt Length            8k
+--------------------------------------------------------------------------------
+Time (us)          15414.83
+Time (ms)             15.41
+
+
+Top 15 Operations by Time (us):
+----------------------------------------------------------------------------------------------------
+Operation                                           8k  Scaling
+----------------------------------------------------------------------------------------------------
+MatmulDeviceOperation                          4061.92  -
+AllGatherAsyncDeviceOperation                  3007.14  -
+ReduceScatterMinimalAsyncDeviceOperation       2659.78  -
+SDPA                                           1809.87  -
+LayerNormPostAllGatherDeviceOperation           683.72  -
+BinaryNgDeviceOperation                         671.14  -
+TypecastDeviceOperation                         543.87  -
+LayerNormPreAllGatherDeviceOperation            416.51  -
+RotaryEmbeddingLlamaDeviceOperation             361.40  -
+UntilizeDeviceOperation                         324.34  -
+UntilizeWithUnpaddingDeviceOperation            240.16  -
+TopKDeviceOperation                             177.87  -
+ConcatDeviceOperation                           130.65  -
+NlpCreateHeadsDeviceOperation                   113.07  -
+SamplingDeviceOperation                          68.33  -
+
+
+Percentage Breakdown by Prompt Length:
+----------------------------------------------------------------------------------------------------
+
+8k:
+  MatmulDeviceOperation: 4061.92 us (26.4%)
+  AllGatherAsyncDeviceOperation: 3007.14 us (19.5%)
+  ReduceScatterMinimalAsyncDeviceOperation: 2659.78 us (17.3%)
+  SDPA: 1809.87 us (11.7%)
+  LayerNormPostAllGatherDeviceOperation: 683.72 us (4.4%)
+
+=== Decode Comparison ===
+No data available

@@ -106,9 +106,11 @@ Record **single-device avg** from profiler: `Device kernel duration perf summary
 |---|--------------|------|-------|--------|---------------|------------|-----|---------------------------|
 | 1 | 8192×4096×2048 | 8×8 | 4 | Done | 2742 | 1955 | ✅ PCC 0.9998 | `8x8_4links and llama_8k_ff2_K4096` |
 | 2 | 8192×4096×2048 | 8×8 | 2 | Done | 3442 | 2668 | ✅ PCC 0.9998 | `8x8_2links and llama_8k_ff2_K4096` |
+| 5 | 8192×4096×2048 | 7×8 | 1 | — | — | — | — | `7x8_1link and llama_8k_ff2_K4096` |
 |  |  |  |  |  |  |  |  |  |
 | 3 | 131072×4096×2048 | 8×8 | 4 | Done | 42150 | 29475 | ✅ PCC 1.0 | `8x8_4links and llama_128k_ff2_K4096` |
 | 4 | 131072×4096×2048 | 8×8 | 2 | Done | 52900 | 39015 | ✅ | `8x8_2links and llama_128k_ff2_K4096` |
+| 6 | 131072×4096×2048 | 7×8 | 1 | — | — | — | — | `7x8_1link and llama_128k_ff2_K4096` |
 
 
 ## Tried shapes (K padded to 4096 – PCC hypothesis)
@@ -137,6 +139,8 @@ So the **grid x dimension** (e.g. 8 or 7) must be divisible by `num_links`. Exam
 **How we set them in the test:**
 - `num_workers_per_link = max(1, min(8 // num_links, grid.x // num_links))` so total workers ≤ grid.x (in0 axis). This avoids sync hang when grid is narrow (e.g. 6×8 + 2 links: 4 workers/link ⇒ 8 workers but only 6 cores ⇒ link 1 has 2 cores, barrier never completes).
 - `num_links` comes from the parametrized grid. If `grid_x % num_links != 0`, we reduce `num_links` to a divisor of grid_x (e.g. 7×8 → num_links=1).
+
+**7×8 with force_transpose=False (skipped):** With `force_transpose=False`, the op uses `grid_y % num_links`, so 7×8 could use num_links=2. A test was added (4k4k4k only) but the **fused** path **segfaults** on this config; test is skipped until the op is fixed. Non-fused path was not verified.
 
 ---
 
@@ -173,6 +177,32 @@ python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/c
 - Possible driver or tiling edge cases when the inner dimension has a factor of 7.
 
 N=2048 is a power of 2 and is unlikely to be the primary cause. Worth checking in the fused op (and ConcatMesh2dToTensor) whether any logic assumes K or K_per_device to be a power of 2 or a multiple of a specific block.
+
+---
+
+## Llama 70B model prefill 8k – FF2 step (single device)
+
+Per-device kernel time for the FF2 (w2) step from profiler prefill CSVs. Config: 7×8 grid, subblock 2×2 (aligned with unit test). **Default** = current model implementation (non-fused, 4-link ring AG + MM).
+
+| Run | AG + MM (µs) | AG (µs) | MM (µs) | num_links | Notes |
+|-----|--------------|---------|---------|-----------|-------|
+| Fused | 2093.64 | — | — | 1 | USE_FUSED_AG_MM=1; 7×8; single fused op. Source: `ag_mm_8k_new/8k/prefill.csv` |
+| Non-fused | 1851.18 | 530.09 | 1321.09 | 4 | Default (current model): ring AG + MM. Source: `fused_ag_mm_8k_baseline/8k/prefill.csv` |
+| Non-fused | 3118.54 | 1797.12 | 1321.42 | 1 | FF2_AG_1_LINK=1; same 1-link as fused. Source: `ag_mm_8k_baseline_1_num_links/8k/prefill.csv` |
+
+**Conclusion:** Default (4-link non-fused) is faster than fused here because fused is limited to 1 link on 7×8 (limited all-gather bandwidth). With 1 link matched, fused (~2094 µs) is ~33% faster than non-fused (~3119 µs).
+
+**Commands to re-run (from repo root):**
+```bash
+# Baseline (default: non-fused, 4-link)
+SKIP_PREFILL_WARMUP=1 USE_FUSED_AG_MM=0 ./scripts/run_profiler_sweep.sh --prompt-lengths 8k --run-name <name>
+
+# Fused
+SKIP_PREFILL_WARMUP=1 USE_FUSED_AG_MM=1 ./scripts/run_profiler_sweep.sh --prompt-lengths 8k --run-name <name>
+
+# Non-fused, 1 link (apples-to-apples with fused)
+FF2_AG_1_LINK=1 SKIP_PREFILL_WARMUP=1 USE_FUSED_AG_MM=0 ./scripts/run_profiler_sweep.sh --prompt-lengths 8k --run-name ag_mm_8k_baseline_1_num_links
+```
 
 ---
 
