@@ -405,18 +405,32 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
         }
     }
 
+    log_info(tt::LogFabric, "DIAG build_flat_adjacency_map_from_psd: all_asics count={}, hostnames={}", all_asics.size(), physical_system_descriptor.get_all_hostnames().size());
+    for (const auto& h : physical_system_descriptor.get_all_hostnames()) {
+        log_info(tt::LogFabric, "DIAG   hostname: '{}'", h);
+    }
+
+    size_t src_filtered = 0, dst_filtered = 0, cross_host_included = 0, local_included = 0;
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
             // Skip ASICs not in any mesh assignment
             if (!all_asics.contains(src_asic_id)) {
+                src_filtered++;
                 continue;
             }
 
             for (const auto& asic_connection : asic_connections) {
                 auto dst_asic_id = asic_connection.first;
+                const auto& eth_connections = asic_connection.second;
+                bool is_cross_host = !eth_connections.empty() && !eth_connections[0].is_local;
+
                 // Skip ASICs not in any mesh assignment
                 if (!all_asics.contains(dst_asic_id)) {
+                    dst_filtered++;
+                    if (is_cross_host) {
+                        log_info(tt::LogFabric, "DIAG   FILTERED cross-host edge (dst not in all_asics): host='{}' src={} -> dst={}", host_name, *src_asic_id, *dst_asic_id);
+                    }
                     continue;
                 }
 
@@ -425,7 +439,13 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
                     continue;
                 }
 
-                const auto& eth_connections = asic_connection.second;
+                if (is_cross_host) {
+                    cross_host_included++;
+                    log_info(tt::LogFabric, "DIAG   INCLUDED cross-host edge: host='{}' src={} -> dst={} (channels={})", host_name, *src_asic_id, *dst_asic_id, eth_connections.size());
+                } else {
+                    local_included++;
+                }
+
                 // Add each neighbor multiple times based on number of ethernet connections (channels)
                 for ([[maybe_unused]] const auto& eth_conn : eth_connections) {
                     flat_adj[src_asic_id].push_back(dst_asic_id);
@@ -433,6 +453,8 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
             }
         }
     }
+
+    log_info(tt::LogFabric, "DIAG build_flat_adjacency_map_from_psd RESULT: flat_adj nodes={}, local_edges={}, cross_host_edges={}, src_filtered={}, dst_filtered={}", flat_adj.size(), local_included, cross_host_included, src_filtered, dst_filtered);
 
     return flat_adj;
 }
@@ -461,6 +483,8 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
         }
     }
 
+    log_info(tt::LogFabric, "DIAG build_hierarchical_from_flat_graph: flat_graph nodes={}, asic_id_to_mesh_id entries={}, meshes={}", flat_adjacency_graph.get_nodes().size(), asic_id_to_mesh_id.size(), asic_id_to_mesh_rank.size());
+
     // Build per-mesh adjacency maps (only intra-mesh connections)
     std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap> mesh_adjacency_maps;
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>::AdjacencyMap> exit_node_adjacency_maps;
@@ -477,10 +501,11 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     }
 
     // Process each ASIC in the flat adjacency graph
+    size_t src_not_in_mesh = 0, dst_not_in_mesh = 0, intra_mesh_edges = 0, inter_mesh_edges = 0;
     for (const auto& src_asic_id : flat_adjacency_graph.get_nodes()) {
         auto src_mesh_id_it = asic_id_to_mesh_id.find(src_asic_id);
         if (src_mesh_id_it == asic_id_to_mesh_id.end()) {
-            // ASIC not in any mesh assignment, skip it
+            src_not_in_mesh++;
             continue;
         }
         MeshId src_mesh_id = src_mesh_id_it->second;
@@ -490,15 +515,18 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
         for (const auto& dst_asic_id : neighbors) {
             auto dst_mesh_id_it = asic_id_to_mesh_id.find(dst_asic_id);
             if (dst_mesh_id_it == asic_id_to_mesh_id.end()) {
-                // Neighbor not in any mesh assignment, skip it
+                dst_not_in_mesh++;
                 continue;
             }
             MeshId dst_mesh_id = dst_mesh_id_it->second;
 
             if (src_mesh_id == dst_mesh_id) {
+                intra_mesh_edges++;
                 // Intra-mesh connection: add to mesh adjacency map
                 mesh_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
             } else {
+                inter_mesh_edges++;
+                log_info(tt::LogFabric, "DIAG   INTER-MESH edge: src={} (mesh {}) -> dst={} (mesh {})", *src_asic_id, src_mesh_id.get(), *dst_asic_id, dst_mesh_id.get());
                 // Intermesh connection: add to exit node graph and mesh-level graph
                 // Create PhysicalExitNode objects with mesh_id populated
                 PhysicalExitNode src_exit_node{src_mesh_id, src_asic_id};
@@ -508,6 +536,7 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
             }
         }
     }
+    log_info(tt::LogFabric, "DIAG build_hierarchical: intra_mesh_edges={}, inter_mesh_edges={}, src_not_in_mesh={}, dst_not_in_mesh={}", intra_mesh_edges, inter_mesh_edges, src_not_in_mesh, dst_not_in_mesh);
 
     // Build PhysicalMultiMeshGraph
     PhysicalMultiMeshGraph physical_multi_mesh_graph;
@@ -533,12 +562,21 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     // Ensure all meshes are represented in mesh-level graph, even if they have no connections
     for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
         if (!mesh_level_adjacency_map.contains(mesh_id)) {
+            log_info(tt::LogFabric, "DIAG   mesh {} has NO inter-mesh connections in mesh_level_adjacency_map", mesh_id.get());
             mesh_level_adjacency_map[mesh_id] = std::vector<MeshId>();
         }
     }
 
     // Build mesh-level graph from adjacency map
     physical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
+
+    log_info(tt::LogFabric, "DIAG build_hierarchical FINAL mesh-level graph:");
+    for (const auto& [mesh_id, neighbors] : mesh_level_adjacency_map) {
+        log_info(tt::LogFabric, "DIAG   mesh {} -> {} neighbor entries", mesh_id.get(), neighbors.size());
+    }
+    for (const auto& [mesh_id, exit_map] : exit_node_adjacency_maps) {
+        log_info(tt::LogFabric, "DIAG   mesh {} exit_node_adjacency: {} exit nodes", mesh_id.get(), exit_map.size());
+    }
 
     return physical_multi_mesh_graph;
 }

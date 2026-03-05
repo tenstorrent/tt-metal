@@ -11,6 +11,7 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
@@ -257,6 +258,17 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
 
     auto my_rank = *(distributed_context_->rank());
     auto hostname = this->my_host_name();
+
+    log_info(tt::LogFabric, "DIAG run_local_discovery: rank={}, hostname='{}', raw_hostname='{}', run_live_discovery={}", my_rank, hostname, get_host_name(), run_live_discovery);
+    log_info(tt::LogFabric, "DIAG run_local_discovery: chip_unique_ids count={}, eth_connections count={}, cross_host_eth_connections count={}", chip_unique_ids.size(), eth_connections.size(), cross_host_eth_connections.size());
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        log_info(tt::LogFabric, "DIAG   local chip: chip_id={} unique_id={}", chip_id, unique_id);
+    }
+    for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
+        for (const auto& [eth_chan, remote_info] : eth_link_info) {
+            log_info(tt::LogFabric, "DIAG   UMD cross-host: local_chip={} chan={} -> remote_unique_id={} remote_chan={}", local_chip_id, static_cast<int>(eth_chan), std::get<0>(remote_info), static_cast<int>(std::get<1>(remote_info)));
+        }
+    }
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
@@ -334,22 +346,97 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     system_graph_.host_connectivity_graph[hostname] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
     ethernet_firmware_version_ = cluster_->get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
+
+    log_info(tt::LogFabric, "DIAG run_local_discovery DONE: asic_descriptors count={}, exit_nodes count={}", asic_descriptors_.size(), exit_nodes.size());
+    for (const auto& en : exit_nodes) {
+        log_info(tt::LogFabric, "DIAG   exit_node: src={} dst={} src_chan={} dst_chan={}", *en.src_exit_node, *en.dst_exit_node, static_cast<int>(en.eth_conn.src_chan), static_cast<int>(en.eth_conn.dst_chan));
+    }
+    size_t cross_host_edge_count = 0;
+    for (const auto& [src_asic, edges] : asic_graph) {
+        for (const auto& [dst_asic, eth_conns] : edges) {
+            if (!eth_conns.empty() && !eth_conns[0].is_local) {
+                log_info(tt::LogFabric, "DIAG   cross-host edge in asic_graph: {} -> {} (channels={})", *src_asic, *dst_asic, eth_conns.size());
+                cross_host_edge_count++;
+            }
+        }
+    }
+    log_info(tt::LogFabric, "DIAG   total cross-host edges in local asic_graph: {}", cross_host_edge_count);
+    log_info(tt::LogFabric, "DIAG   asic_descriptors IDs:");
+    for (const auto& [aid, desc] : asic_descriptors_) {
+        log_info(tt::LogFabric, "DIAG     asic_id={} host='{}' tray={} loc={}", *aid, desc.host_name, *desc.tray_id, *desc.asic_location);
+    }
 }
 
 void PhysicalSystemDescriptor::run_global_discovery() {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context_->rank());
+    log_info(tt::LogFabric, "DIAG run_global_discovery: rank={}, starting exchange_metadata(gather)", my_rank);
     this->exchange_metadata(true);
     if (my_rank == controller_rank) {
+        log_info(tt::LogFabric, "DIAG run_global_discovery: POST-MERGE state on controller:");
+        log_info(tt::LogFabric, "DIAG   hostnames in asic_connectivity_graph:");
+        for (const auto& [host, topo] : system_graph_.asic_connectivity_graph) {
+            size_t local_edges = 0, cross_host_edges = 0;
+            for (const auto& [src, connections] : topo) {
+                for (const auto& [dst, eth_conns] : connections) {
+                    if (!eth_conns.empty() && eth_conns[0].is_local) local_edges++;
+                    else cross_host_edges++;
+                }
+            }
+            log_info(tt::LogFabric, "DIAG     host='{}': {} ASICs, {} local edges, {} cross-host edges", host, topo.size(), local_edges, cross_host_edges);
+        }
+        log_info(tt::LogFabric, "DIAG   total asic_descriptors: {}", asic_descriptors_.size());
+        log_info(tt::LogFabric, "DIAG   exit_node_connection_table:");
+        for (const auto& [host, nodes] : exit_node_connection_table_) {
+            log_info(tt::LogFabric, "DIAG     host='{}': {} exit nodes", host, nodes.size());
+            for (const auto& en : nodes) {
+                log_info(tt::LogFabric, "DIAG       src={} dst={} src_chan={} dst_chan={}", *en.src_exit_node, *en.dst_exit_node, static_cast<int>(en.eth_conn.src_chan), static_cast<int>(en.eth_conn.dst_chan));
+            }
+        }
+
         this->remove_unresolved_nodes();
         this->generate_cross_host_connections();
+
+        log_info(tt::LogFabric, "DIAG run_global_discovery: POST generate_cross_host_connections:");
+        for (const auto& [host, neighbors] : system_graph_.host_connectivity_graph) {
+            log_info(tt::LogFabric, "DIAG   host_connectivity: '{}' -> {} neighbor(s)", host, neighbors.size());
+            for (const auto& [neighbor_host, exit_conns] : neighbors) {
+                log_info(tt::LogFabric, "DIAG     -> '{}' via {} exit node links", neighbor_host, exit_conns.size());
+            }
+        }
+        size_t post_cross_host = 0;
+        for (const auto& [host, topo] : system_graph_.asic_connectivity_graph) {
+            for (const auto& [src, connections] : topo) {
+                for (const auto& [dst, eth_conns] : connections) {
+                    if (!eth_conns.empty() && !eth_conns[0].is_local) post_cross_host++;
+                }
+            }
+        }
+        log_info(tt::LogFabric, "DIAG   cross-host edges surviving after remove_unresolved_nodes: {}", post_cross_host);
+
         this->validate_graphs();
     }
+    log_info(tt::LogFabric, "DIAG run_global_discovery: rank={}, starting exchange_metadata(broadcast)", my_rank);
     this->exchange_metadata(false);
+    log_info(tt::LogFabric, "DIAG run_global_discovery DONE: rank={}, final asic_descriptors={}, hostnames={}", my_rank, asic_descriptors_.size(), system_graph_.asic_connectivity_graph.size());
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
+    log_info(tt::LogFabric, "DIAG merge: merging peer PSD");
+    log_info(tt::LogFabric, "DIAG   BEFORE merge: local asic_descriptors={}, local hostnames={}", asic_descriptors_.size(), system_graph_.asic_connectivity_graph.size());
+    log_info(tt::LogFabric, "DIAG   peer asic_descriptors={}, peer hostnames={}", other.get_asic_descriptors().size(), other.system_graph_.asic_connectivity_graph.size());
+
+    for (const auto& [host_name, asic_graph] : other.system_graph_.asic_connectivity_graph) {
+        log_info(tt::LogFabric, "DIAG   merging peer host='{}' with {} ASICs", host_name, asic_graph.size());
+    }
+    for (const auto& [asic_id, desc] : other.get_asic_descriptors()) {
+        bool already_exists = asic_descriptors_.contains(asic_id);
+        if (already_exists) {
+            log_info(tt::LogFabric, "DIAG   peer asic_id={} OVERWRITES existing (peer_host='{}', existing_host='{}')", *asic_id, desc.host_name, asic_descriptors_.at(asic_id).host_name);
+        }
+    }
+
     for (auto& [host_name, asic_graph] : other.system_graph_.asic_connectivity_graph) {
         system_graph_.asic_connectivity_graph[host_name] = std::move(asic_graph);
     }
@@ -366,6 +453,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         host_to_rank_[host_name] = rank;
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
+        log_info(tt::LogFabric, "DIAG   merging peer exit_nodes for host='{}': {} nodes", host_name, exit_connections.size());
         exit_node_connection_table_[host_name] = std::move(exit_connections);
     }
     for (auto& [host_name, tray_map] : other.get_pcie_devices_per_tray()) {
@@ -375,6 +463,8 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         pcie_id_to_asic_location_[host_name] = std::move(pcie_map);
     }
 
+    log_info(tt::LogFabric, "DIAG   AFTER merge: asic_descriptors={}, hostnames={}", asic_descriptors_.size(), system_graph_.asic_connectivity_graph.size());
+
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
     TT_FATAL(
         target_device_type_ == other.target_device_type_,
@@ -382,18 +472,43 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
 }
 
 void PhysicalSystemDescriptor::remove_unresolved_nodes() {
+    log_info(tt::LogFabric, "DIAG remove_unresolved_nodes: asic_descriptors count={}", asic_descriptors_.size());
+
+    size_t edges_removed = 0;
+    size_t edges_total = 0;
     for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
+            for (const auto& [dst_asic, eth_conns] : edges) {
+                edges_total++;
+                if (!asic_descriptors_.contains(dst_asic)) {
+                    bool is_cross_host = !eth_conns.empty() && !eth_conns[0].is_local;
+                    log_info(tt::LogFabric, "DIAG   PRUNING edge: host='{}' src={} -> dst={} (cross_host={}, dst NOT in asic_descriptors)", host, *src_asic, *dst_asic, is_cross_host);
+                    edges_removed++;
+                }
+            }
             std::erase_if(edges, [&](const auto& pair) { return not asic_descriptors_.contains(pair.first); });
         }
     }
+    log_info(tt::LogFabric, "DIAG remove_unresolved_nodes: pruned {}/{} edges from asic_connectivity_graph", edges_removed, edges_total);
 
+    size_t exit_nodes_removed = 0;
+    size_t exit_nodes_total = 0;
     for (auto& [host, exit_nodes] : exit_node_connection_table_) {
+        for (const auto& exit_node : exit_nodes) {
+            exit_nodes_total++;
+            bool src_missing = asic_descriptors_.find(exit_node.src_exit_node) == asic_descriptors_.end();
+            bool dst_missing = asic_descriptors_.find(exit_node.dst_exit_node) == asic_descriptors_.end();
+            if (src_missing || dst_missing) {
+                log_info(tt::LogFabric, "DIAG   PRUNING exit_node: host='{}' src={} dst={} src_chan={} dst_chan={} (src_missing={}, dst_missing={})", host, *exit_node.src_exit_node, *exit_node.dst_exit_node, static_cast<int>(exit_node.eth_conn.src_chan), static_cast<int>(exit_node.eth_conn.dst_chan), src_missing, dst_missing);
+                exit_nodes_removed++;
+            }
+        }
         std::erase_if(exit_nodes, [&](const auto& exit_node) {
             return asic_descriptors_.find(exit_node.src_exit_node) == asic_descriptors_.end() ||
                    asic_descriptors_.find(exit_node.dst_exit_node) == asic_descriptors_.end();
         });
     }
+    log_info(tt::LogFabric, "DIAG remove_unresolved_nodes: pruned {}/{} exit nodes", exit_nodes_removed, exit_nodes_total);
 }
 
 void PhysicalSystemDescriptor::validate_eth_fw_versions(
@@ -477,18 +592,26 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
 }
 
 void PhysicalSystemDescriptor::generate_cross_host_connections() {
+    log_info(tt::LogFabric, "DIAG generate_cross_host_connections: {} hosts in exit_node_connection_table", exit_node_connection_table_.size());
+    size_t total_matches = 0;
     for (const auto& [host, exit_nodes] : exit_node_connection_table_) {
+        log_info(tt::LogFabric, "DIAG   processing host='{}' with {} exit nodes", host, exit_nodes.size());
         std::unordered_map<std::string, size_t> visited_hosts;
         for (const auto& [candidate_host, candidate_exit_nodes] : exit_node_connection_table_) {
             if (host == candidate_host) {
                 continue;  // Skip self connections
             }
+            log_info(tt::LogFabric, "DIAG   comparing host='{}' vs candidate_host='{}' ({} candidate exit nodes)", host, candidate_host, candidate_exit_nodes.size());
             for (const auto& exit_node : exit_nodes) {
+                bool matched = false;
                 for (const auto& candidate_node : candidate_exit_nodes) {
-                    if (exit_node.src_exit_node == candidate_node.dst_exit_node &&
-                        candidate_node.src_exit_node == exit_node.dst_exit_node &&
-                        exit_node.eth_conn.src_chan == candidate_node.eth_conn.dst_chan &&
-                        exit_node.eth_conn.dst_chan == candidate_node.eth_conn.src_chan) {
+                    bool src_match = exit_node.src_exit_node == candidate_node.dst_exit_node;
+                    bool dst_match = candidate_node.src_exit_node == exit_node.dst_exit_node;
+                    bool chan_match = exit_node.eth_conn.src_chan == candidate_node.eth_conn.dst_chan &&
+                                     exit_node.eth_conn.dst_chan == candidate_node.eth_conn.src_chan;
+                    if (src_match && dst_match && chan_match) {
+                        total_matches++;
+                        matched = true;
                         if (!visited_hosts.contains(candidate_host)) {
                             system_graph_.host_connectivity_graph[host].push_back({candidate_host, {exit_node}});
                             visited_hosts[candidate_host] = system_graph_.host_connectivity_graph[host].size() - 1;
@@ -498,10 +621,17 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
                         }
                         break;
                     }
+                    if (!src_match || !dst_match) {
+                        log_info(tt::LogFabric, "DIAG     no-match: exit(src={},dst={}) vs candidate(src={},dst={}) src_eq={} dst_eq={}", *exit_node.src_exit_node, *exit_node.dst_exit_node, *candidate_node.src_exit_node, *candidate_node.dst_exit_node, src_match, dst_match);
+                    }
+                }
+                if (!matched && !candidate_exit_nodes.empty()) {
+                    log_info(tt::LogFabric, "DIAG     UNMATCHED exit_node: src={} dst={} src_chan={} dst_chan={}", *exit_node.src_exit_node, *exit_node.dst_exit_node, static_cast<int>(exit_node.eth_conn.src_chan), static_cast<int>(exit_node.eth_conn.dst_chan));
                 }
             }
         }
     }
+    log_info(tt::LogFabric, "DIAG generate_cross_host_connections: total matched exit node pairs={}", total_matches);
 }
 
 YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {

@@ -427,11 +427,15 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
     auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
+    log_info(tt::LogFabric, "DIAG build_mapping: generate_mapping_locally_={}, mesh_graph meshes={}", generate_mapping_locally_, mesh_graph_.get_all_mesh_ids().size());
+
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     using namespace tt::tt_metal::distributed::multihost;
     const std::size_t world_size = *this->distributed_context_.get().size();
     constexpr std::size_t control_host_rank = 0;
     auto my_rank = *this->distributed_context_.get().rank();
+
+    log_info(tt::LogFabric, "DIAG build_mapping: world_size={}, my_rank={}", world_size, my_rank);
 
     if (!generate_mapping_locally_) {
         broadcast_chip_info_to_hosts({static_cast<std::size_t>(my_rank)}, control_host_rank);
@@ -585,6 +589,8 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     const auto& global_context = this->distributed_context_.get();
     const std::size_t world_size = *global_context.size();
 
+    log_info(tt::LogFabric, "DIAG build_asic_id_to_mesh_rank_mapping: world_size={}, generate_mapping_locally_={}", world_size, generate_mapping_locally_);
+
     if (generate_mapping_locally_ || world_size <= 1) {
         auto host_rank = local_mesh_binding_.host_rank;
         auto mpi_rank = static_cast<int>(*host_rank);
@@ -592,6 +598,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
         // Get asics on current host
         auto asics =
             physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        log_info(tt::LogFabric, "DIAG   LOCAL-ONLY path: host='{}', host_rank={}, asic_count={}", physical_system_descriptor_.my_host_name(), *host_rank, asics.size());
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
             for (const auto& asic : asics) {
                 mapping[mesh_id][asic] = host_rank;
@@ -667,8 +674,14 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
         const auto& host_name = host_it->second;
         auto asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
 
+        log_info(tt::LogFabric, "DIAG   Step4: mpi_rank={} host='{}' asic_count={}", gathered_mpi_rank, host_name, asics.size());
+        for (const auto& asic : asics) {
+            log_info(tt::LogFabric, "DIAG     asic={}", *asic);
+        }
+
         // For each mesh_id this MPI rank participates in, use the host_rank from gathered data
         for (const auto& [mesh_id, host_rank] : mesh_bindings) {
+            log_info(tt::LogFabric, "DIAG     mesh_id={} host_rank={}", mesh_id.get(), *host_rank);
             // Use the host_rank directly from the gathered data (which comes from local_mesh_binding_.host_rank)
             // This is the mesh host rank set via TT_MESH_HOST_RANK environment variable
             for (const auto& asic : asics) {
@@ -676,6 +689,17 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
             }
         }
     }
+
+    log_info(tt::LogFabric, "DIAG build_asic_id_to_mesh_rank_mapping RESULT:");
+    std::unordered_set<tt::tt_metal::AsicID> all_mapped_asics;
+    for (const auto& [mesh_id, asic_map] : mapping) {
+        log_info(tt::LogFabric, "DIAG   mesh_id={}: {} ASICs", mesh_id.get(), asic_map.size());
+        for (const auto& [asic_id, hr] : asic_map) {
+            log_info(tt::LogFabric, "DIAG     asic={} host_rank={}", *asic_id, *hr);
+            all_mapped_asics.insert(asic_id);
+        }
+    }
+    log_info(tt::LogFabric, "DIAG   total unique ASICs across all meshes: {}", all_mapped_asics.size());
 
     return mapping;
 }
