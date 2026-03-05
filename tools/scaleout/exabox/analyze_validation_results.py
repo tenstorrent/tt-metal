@@ -85,6 +85,11 @@ CATEGORIES = {
         "BLUE",
         "Missing channel connections",
     ),
+    "recovered_connections": (
+        r"Ethernet Links were Retrained",
+        "BLUE",
+        "Recovered connections",
+    ),
     "extra_connections": (
         r"extra port/cable connections|extra channel connections",
         "YELLOW",
@@ -513,6 +518,7 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         "unhealthy",
         "missing_ports",
         "missing_channels",
+        "recovered_connections",
         "extra_connections",
         "workload_timeout",
         "dram_failure",
