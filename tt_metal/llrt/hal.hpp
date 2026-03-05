@@ -74,6 +74,9 @@ struct HalJitBuildConfig {
     DeviceAddr fw_launch_addr;
     uint32_t fw_launch_addr_value;
     ll_api::memory::Loading memory_load;
+    // Offset added to all L1 addresses when writing from host (via write_core).
+    // Non-zero for cores where L1 NOC address != private address (e.g. DRAM cores: 0x2000000000).
+    DeviceAddr l1_noc_offset = 0;
 };
 
 // Ethernet Firmware mailbox messages
@@ -541,6 +544,8 @@ public:
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
+
+    DeviceAddr get_l1_noc_offset(HalProgrammableCoreType programmable_core_type) const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -595,6 +600,20 @@ inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
     return this->dram_bases_[index];
+}
+
+// Returns the NOC offset to apply to L1 addresses when writing from the host.
+// Non-zero only for cores where L1 private address != L1 NOC address (e.g. DRAM cores: 0x2000000000).
+inline DeviceAddr Hal::get_l1_noc_offset(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    if (this->core_info_[index].get_processor_classes_count() == 0) {
+        return 0;
+    }
+    if (this->core_info_[index].get_processor_types_count(0) == 0) {
+        return 0;
+    }
+    return this->core_info_[index].get_jit_build_config(0, 0).l1_noc_offset;
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
