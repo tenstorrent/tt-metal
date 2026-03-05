@@ -39,7 +39,7 @@ add_custom_command(
 
 add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_SOURCE_DIR}/pre-compiled/.stamp)
 
-if(TT_INSTALL AND IS_DIRECTORY "${PROJECT_SOURCE_DIR}/pre-compiled")
+if(TT_INSTALL)
     install(
         DIRECTORY
             ${PROJECT_SOURCE_DIR}/pre-compiled/
