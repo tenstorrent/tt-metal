@@ -327,6 +327,8 @@ void kernel_main() {
     constexpr uint32_t partial_metadata_ready_semaphore_id =
         get_named_compile_time_arg_val("partial_metadata_ready_semaphore_id");
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t metadata_count_semaphore_base_id =
+        get_named_compile_time_arg_val("metadata_count_semaphore_base_id");
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
 
@@ -822,31 +824,43 @@ void kernel_main() {
          * cores aren't expecting it.
          */
 
-        // == 1 ==
+        // == 1 == Write per-expert token counts to individual semaphores
 
-        // Determine encoded value
-        // NOTE: can handle up to 4 experts:
-        // - 1 valid bit
-        // - 7 bits per expert, valid num_tokens is [0, 127]
-        // - 32 bits available in semaphore (4 Bytes), 0 value reserved as init value
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
-        constexpr uint32_t bits_per_expert = 7;
-        constexpr uint32_t expert_mask = 0x7Fu;
-        uint32_t encoded_value = 1u;  // flag bit
+        // Write each expert's token count to its dedicated semaphore
         for (uint32_t e = 0; e < experts_per_device; ++e) {
-            encoded_value |= (num_tokens_per_expert[e] & expert_mask) << (1 + bits_per_expert * e);
+            volatile tt_l1_ptr uint32_t* count_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+            *count_sem_ptr = num_tokens_per_expert[e];
         }
 
-        // set local semaphore value
+        // == 2 == Multicast per-expert count semaphores to matmul cores
+
+        uint64_t matmul_mcast_dest = get_safe_multicast_noc_addr(
+            matmul_mcast_start_x,
+            matmul_mcast_start_y,
+            matmul_mcast_end_x,
+            matmul_mcast_end_y,
+            get_semaphore(metadata_count_semaphore_base_id));
+
+        // Multicast all per-expert count semaphores as a contiguous block
+        // Semaphores are allocated consecutively in L1 (each 16 bytes apart on Wormhole)
+        uint32_t count_sems_start_addr = get_semaphore(metadata_count_semaphore_base_id);
+        uint32_t count_sems_end_addr = get_semaphore(metadata_count_semaphore_base_id + experts_per_device - 1);
+        uint32_t count_sems_total_bytes = count_sems_end_addr - count_sems_start_addr + 16;  // include last semaphore
+
+        noc_async_write_multicast(
+            count_sems_start_addr, matmul_mcast_dest, count_sems_total_bytes, matmul_bounding_box_num_cores);
+        noc_async_write_barrier();
+
+        // == 3 == Signal ready semaphore (value=1, no encoded data)
+
         volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
-        *metadata_ready_semaphore_ptr = encoded_value;
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
+        *metadata_ready_semaphore_ptr = 1;
 
-        // == 2 ==
-
-        // get mcast address
         uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
             matmul_mcast_start_x,
             matmul_mcast_start_y,
@@ -854,7 +868,6 @@ void kernel_main() {
             matmul_mcast_end_y,
             metadata_ready_semaphore_addr);
 
-        // multicast semaphore
         noc_semaphore_set_multicast(
             metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
 #endif  // !TILIZE_TO_DRAM

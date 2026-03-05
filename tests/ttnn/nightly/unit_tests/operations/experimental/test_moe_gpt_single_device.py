@@ -530,8 +530,9 @@ def test_moe_gpt_tilize_matmul_multi_chunk(
     [
         (4, 8),  # 2 devices -> 64 total tokens, all to all 4 local -> 64/expert (2 chunks)
         (4, 12),  # 3 devices -> 96 total tokens, all to all 4 local -> 96/expert (3 chunks)
+        (4, 16),  # 4 devices -> 128 total tokens, all to all 4 local -> 128/expert (4 chunks)
     ],
-    ids=["64tok_all_local", "96tok_all_local"],
+    ids=["64tok_all_local", "96tok_all_local", "128tok_all_local"],
 )
 def test_moe_gpt_tilize_matmul_all_local(
     device,

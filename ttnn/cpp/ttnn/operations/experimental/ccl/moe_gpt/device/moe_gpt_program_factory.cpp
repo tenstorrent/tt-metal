@@ -264,7 +264,14 @@ MoEGPTMeshWorkloadFactory::create_at(
         auto fused_chunk_available_sem = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
         auto fused_chunk_ready_sem = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
 
+        // Per-expert token count semaphores (full 32-bit counts, no bit-packing limit)
+        auto metadata_count_sem_base = tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
+        for (uint32_t e = 1; e < num_experts; e++) {
+            tt::tt_metal::CreateSemaphore(program, early_merged, INVALID_SEM);
+        }
+
         named_compile_time_args["metadata_ready_semaphore_id"] = fused_metadata_ready_sem;
+        named_compile_time_args["metadata_count_semaphore_base_id"] = metadata_count_sem_base;
         named_compile_time_args["matmul_chunk_ready_semaphore_id"] = fused_chunk_ready_sem;
         named_compile_time_args["matmul_chunk_available_semaphore_id"] = fused_chunk_available_sem;
         named_compile_time_args["tokens_per_chunk"] = 32u;
@@ -807,6 +814,7 @@ MoEGPTMeshWorkloadFactory::create_at(
 
             {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
             {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
+            {"metadata_count_semaphore_base_id", named_compile_time_args.at("metadata_count_semaphore_base_id")},
             {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
             {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
             {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},

@@ -141,25 +141,20 @@ void kernel_main() {
     // FUSED MODE: Per-chunk matmul from shared c_16 CB
     //-------------------------------------------------------------------------
 
-    // Receive metadata semaphore addresses from dm1 via cb_w2c_md
+    // Receive per-expert token counts + chunk_ready semaphore from dm1 via cb_w2c_md
+    //   [0..num_experts-1] = raw token counts per expert
+    //   [num_experts]      = matmul_chunk_ready_semaphore address
     cb_wait_front(cb_w2c_md, 2);
     cb_pop_front(cb_w2c_md, 2);
     volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
-    uint32_t metadata_sem_addr = cb_w2c_md_read_ptr[0];
-    uint32_t chunk_ready_sem_addr = cb_w2c_md_read_ptr[1];
 
-    // Decode per-expert token counts from metadata_ready_semaphore
-    volatile tt_l1_ptr uint32_t* metadata_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_sem_addr);
-    uint32_t encoded_metadata_value = *metadata_sem_ptr;
-
-    constexpr uint32_t BITS_PER_EXPERT = 7;
-    constexpr uint32_t EXPERT_MASK = 0x7Fu;
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * e)) & EXPERT_MASK;
+        uint32_t num_tokens = cb_w2c_md_read_ptr[e];
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
+    uint32_t chunk_ready_sem_addr = cb_w2c_md_read_ptr[num_experts];
 
     // Unified chunk loop: SwiGLU → A2A (via dm1) → W2 matmul → untilize
     // Full pipeline completes per chunk, matching the deepseek moe_compute pattern.

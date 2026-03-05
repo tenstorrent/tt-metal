@@ -14,6 +14,8 @@ void kernel_main() {
 
 #ifdef TILIZE_FUSED
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t metadata_count_semaphore_base_id =
+        get_named_compile_time_arg_val("metadata_count_semaphore_base_id");
     constexpr uint32_t matmul_chunk_ready_semaphore_id =
         get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
     constexpr uint32_t matmul_chunk_available_semaphore_id =
@@ -108,30 +110,28 @@ void kernel_main() {
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
-    // Transfer semaphore addresses to compute via cb_w2c_md:
-    //   [0] = metadata_ready_semaphore address (for compute to decode token counts)
-    //   [1] = matmul_chunk_ready_semaphore address (for compute to wait on tilized chunks)
-    volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
-    cb_w2c_md_write_ptr[0] = metadata_ready_semaphore_addr;
-    cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
-    cb_reserve_back(cb_w2c_md, 2);
-    cb_push_back(cb_w2c_md, 2);
-
-    //-------------------------------------------------------------------------
-    // Decode metadata: per-expert token counts and chunk counts
-    //-------------------------------------------------------------------------
-    volatile tt_l1_ptr uint32_t* metadata_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr);
-    uint32_t encoded_metadata_value = *metadata_sem_ptr;
-
-    constexpr uint32_t BITS_PER_EXPERT = 7;
-    constexpr uint32_t EXPERT_MASK = 0x7Fu;
+    // Read per-expert token counts from dedicated semaphores
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * e)) & EXPERT_MASK;
+        volatile tt_l1_ptr uint32_t* count_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+        uint32_t num_tokens = *count_sem_ptr;
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
+
+    // Transfer per-expert token counts + chunk_ready semaphore address to compute via cb_w2c_md:
+    //   [0..num_experts-1] = raw token counts per expert
+    //   [num_experts]      = matmul_chunk_ready_semaphore address
+    volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
+    for (uint32_t e = 0; e < num_experts; ++e) {
+        volatile tt_l1_ptr uint32_t* count_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+        cb_w2c_md_write_ptr[e] = *count_sem_ptr;
+    }
+    cb_w2c_md_write_ptr[num_experts] = get_semaphore(matmul_chunk_ready_semaphore_id);
+    cb_reserve_back(cb_w2c_md, 2);
+    cb_push_back(cb_w2c_md, 2);
 
     // NOC address to signal tilize drain that matmul has consumed a chunk
     uint32_t local_chunk_available_sem_addr = get_semaphore(matmul_chunk_available_semaphore_id);
