@@ -38,7 +38,7 @@ using namespace ckernel::unpacker;
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false /* unused */>
 inline void llk_unpack_AB_reduce_block_max_row_init() {
     _llk_unpack_AB_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
 }
@@ -57,7 +57,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init() {
  * This function should NOT be used as a substitute for native llk_unpack_AB LLK.
  * Use the standard llk_unpack_AB<BroadcastType::NONE> in a loop for general-purpose operations.
  */
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool respect_trigger = false /* unused */>
 inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
     std::uint32_t operandA_id = get_operand_id(operandA);
@@ -85,6 +85,7 @@ inline void llk_unpack_AB_reduce_block_max_row(
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use standard LLK cleanup procedures for general-purpose operations.
  */
+template <bool respect_trigger = false /* unused */>
 inline void llk_unpack_AB_reduce_block_max_row_uninit() {
     _llk_unpack_AB_reduce_block_max_row_uninit_(FACE_R_DIM, FACE_R_DIM);
 }
