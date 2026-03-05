@@ -45,18 +45,23 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reducer_core_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reducer_core_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
-    const uint64_t reducer_semaphore_noc_addr = get_noc_addr(reducer_core_x, reducer_core_y, semaphore_addr);
     volatile tt_l1_ptr uint32_t* local_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
 
-    // Get worker core coordinates
-    tt_l1_ptr uint32_t* worker_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
-    argidx += num_workers;
-    tt_l1_ptr uint32_t* worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+    // Reducer coordinates and worker core coordinates are only present when num_workers > 0
+    uint64_t reducer_semaphore_noc_addr = 0;
+    tt_l1_ptr uint32_t* worker_core_xs = nullptr;
+    tt_l1_ptr uint32_t* worker_core_ys = nullptr;
+    if (num_workers > 0) {
+        const uint32_t reducer_core_x = get_arg_val<uint32_t>(argidx++);
+        const uint32_t reducer_core_y = get_arg_val<uint32_t>(argidx++);
+        reducer_semaphore_noc_addr = get_noc_addr(reducer_core_x, reducer_core_y, semaphore_addr);
+        worker_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+        argidx += num_workers;
+        worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+    }
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr auto out_args = TensorAccessorArgs<22>();

@@ -46,8 +46,8 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 3072, 4096, 8192, 16384, 32768),
-    ids=["128", "3k", "4k", "8k", "16k", "32k"],
+    (128, 256, 3072, 4096, 8192, 16384, 32768),
+    ids=["128", "256", "3k", "4k", "8k", "16k", "32k"],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
@@ -85,6 +85,7 @@ def test_model_inference(
     use_prefetcher,
 ):
     test_id = request.node.callspec.id
+    use_hf_rope = request.config.getoption("--use_hf_rope")
     if is_ci_env:
         if "accuracy" in test_id:
             pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
@@ -92,7 +93,11 @@ def test_model_inference(
         # TODO: Save ref outputs to avoid running reference model for large seq_len
         if seq_len > 8192:
             pytest.skip("CI test only runs up to 8192 seq_len to avoid out of ram issues for ref model")
-        if num_layers != 1 and seq_len != 4096:
+        if use_hf_rope:
+            if num_layers != 1 and seq_len != 256:
+                pytest.skip("When HF rope is used CI only runs full model for 256 seq len to reduce CI pipeline load")
+
+        elif num_layers != 1 and seq_len != 4096:
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
         hf_model_env = os.getenv("HF_MODEL", "")
@@ -127,6 +132,7 @@ def test_model_inference(
         dtype=dtype,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     if (
@@ -195,26 +201,7 @@ def test_model_inference(
     if run_ref_pt:
         logger.info("Loading reference model...")
         state_dict_prefix = model_args.get_state_dict_prefix("", None)
-        reference_state_dict = {
-            k[len(state_dict_prefix) :]: v
-            for k, v in state_dict.items()
-            if (
-                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-                or any(
-                    [
-                        f"{state_dict_prefix}{name}" in k
-                        for name in [
-                            "tok_embeddings.weight",
-                            "learnable_embedding.weight",
-                            "norm.weight",
-                            "output.weight",
-                        ]
-                    ]
-                )
-            )
-        }
-        reference_model = model_args.reference_transformer()
-        reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer(load_checkpoint=True)
         # Embedding on host
         embd = model_args.reference_embedding()
         if model_args.is_llama_vision():
