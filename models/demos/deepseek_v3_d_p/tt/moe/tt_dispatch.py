@@ -115,6 +115,8 @@ class TtDispatchModule(LightweightModule):
         # TEMPORARY HOST FALLBACK
         ###
         # prep data for efficient dispatch: count tokens per expert per chip to compute offsets for where to write in the dispatched buffer
+        self.chip_to_n_routed_expert_counter.zero_()
+
         mesh_composer = ttnn.create_mesh_composer(
             self.mesh_device,
             ttnn.MeshComposerConfig(

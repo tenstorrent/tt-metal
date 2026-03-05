@@ -296,7 +296,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
         l1_alignment,
-        num_links,
+        std::min(num_links, 1u),
         static_cast<uint32_t>(topology),
     };
 
@@ -374,15 +374,13 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
                 neighbor_coordinate[1],
                 worker_core);
 
-            for (uint32_t link = 0; link < num_links; link++) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    src_fabric_node_id,
-                    mesh_device->get_fabric_node_id(neighbor_coordinate),
-                    link,
-                    program,
-                    worker_core,
-                    writer_runtime_args);
-            }
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fabric_node_id,
+                mesh_device->get_fabric_node_id(neighbor_coordinate),
+                0,
+                program,
+                worker_core,
+                writer_runtime_args);
         }
     }
 
@@ -404,27 +402,27 @@ void PrefillCombineDeviceOperation::PrefillCombineProgramFactory::override_runti
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-
-    // Update buffer addresses in runtime args when tensors are reallocated
+    // Update buffer addresses in runtime args when tensors are reallocated (in-place to preserve fabric args)
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        std::vector<uint32_t> reader_runtime_args = {
-            tensor_args.dispatched_buffer.buffer()->address(),
-            tensor_args.dispatched_metadata.buffer()->address(),
-            tensor_args.experts_tok_counter.buffer()->address(),
-            tensor_return_value.buffer()->address(),
-        };
+        auto& reader_runtime_args =
+            tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel_id, shared_variables.worker_core);
+        auto& writer_runtime_args =
+            tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel_id, shared_variables.worker_core);
 
-        std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
-        writer_runtime_args.push_back((uint32_t)shared_variables.cross_device_semaphore.address());
-        writer_runtime_args.push_back((uint32_t)shared_variables.init_semaphore.address());
-        // Note: Fabric connection args are not updated here as they don't change
+        reader_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
+        reader_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
+        reader_runtime_args.at(2) = tensor_args.experts_tok_counter.buffer()->address();
+        reader_runtime_args.at(3) = tensor_return_value.buffer()->address();
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared_variables.reader_kernel_id, shared_variables.worker_core, reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared_variables.writer_kernel_id, shared_variables.worker_core, writer_runtime_args);
+        writer_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
+        writer_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
+        writer_runtime_args.at(2) = tensor_args.experts_tok_counter.buffer()->address();
+        writer_runtime_args.at(3) = tensor_return_value.buffer()->address();
+        writer_runtime_args.at(4) = (uint32_t)shared_variables.cross_device_semaphore.address();
+        writer_runtime_args.at(5) = (uint32_t)shared_variables.init_semaphore.address();
+        // Fabric connection args (index 6+) remain unchanged
     }
 }
 

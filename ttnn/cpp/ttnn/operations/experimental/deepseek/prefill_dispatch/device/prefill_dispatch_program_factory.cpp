@@ -217,8 +217,10 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    // When num_links=0 (fabric disabled), we use 1 core for local dispatch
-    uint32_t effective_num_links = std::max(num_links, 1u);
+    // Multi-core dispatch requires per-core offset partitioning to avoid
+    // race conditions on shared expert offset counters. Until that is
+    // implemented, limit to 1 core regardless of num_links.
+    uint32_t effective_num_links = 1u;
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} to send all links {}",
@@ -403,7 +405,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
         l1_alignment,
-        operation_attributes.num_links,
+        (uint32_t)std::min(operation_attributes.num_links, 1u),
         static_cast<uint32_t>(topology),
     };
 
@@ -476,9 +478,9 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
         0,  // token_end_idx (set per core)
     };
 
-    // Distribute work across cores
-    // uint32_t link_id = 0;  // Unused when fabric connection setup is disabled
+    // Distribute work across cores — each core is assigned a dedicated fabric link
     uint32_t tokens_per_core_start = 0;
+    uint32_t core_idx = 0;
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = reader_runtime_args;  // Copy base args
 
@@ -493,6 +495,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
         // Append fabric connection args for each neighbor (only if fabric is enabled)
         if (operation_attributes.num_links > 0) {
+            uint32_t core_link = core_idx % num_links;
             for (const auto& neighbor_coordinate : neighbors) {
                 // Skip self-connections (same chip)
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
@@ -507,30 +510,29 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
                 log_debug(
                     tt::LogOp,
-                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} and handles "
+                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {} and handles "
                     "token indices from {} to {}",
                     mesh_coordinate[0],
                     mesh_coordinate[1],
                     neighbor_coordinate[0],
                     neighbor_coordinate[1],
                     sender_core,
+                    core_link,
                     reader_runtime_args[9],
                     reader_runtime_args[10]);
-                for (uint32_t link = 0; link < num_links; link++) {
-                    tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id,
-                        mesh_device->get_fabric_node_id(neighbor_coordinate),
-                        link,
-                        program,
-                        sender_core,
-                        writer_runtime_args);
-                }
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    mesh_device->get_fabric_node_id(neighbor_coordinate),
+                    core_link,
+                    program,
+                    sender_core,
+                    writer_runtime_args);
             }
         }
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, sender_core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, sender_core, writer_runtime_args);
-        // link_id++;  // Unused when fabric connection setup is disabled
+        core_idx++;
     }
 
     return {
