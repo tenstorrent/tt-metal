@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "layernorm_dataflow_utils.h"
 
@@ -131,7 +130,9 @@ void kernel_main() {
             *reduce_sender_semaphore_addr_ptr = VALID;
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
             noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
+            noc_async_write_barrier();
         }
 
         // ============================================================================
@@ -227,19 +228,10 @@ void kernel_main() {
             uint64_t noc_addr_ex = remote_noc_addrs[block] | l1_read_addr_ex;
             uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes
                                                                                        : num_tiles_per_worker_bytes;
-            if constexpr (num_tiles_per_worker_bytes <= NOC_MAX_BURST_SIZE) {
-                noc_async_read_one_packet(noc_addr_ex, l1_write_addr_ex_global, num_tiles_scaler * num_tiles_bytes);
-            } else {
-                noc_async_read(noc_addr_ex, l1_write_addr_ex_global, num_tiles_scaler * num_tiles_bytes);
-            }
+            noc_async_read(noc_addr_ex, l1_write_addr_ex_global, num_tiles_scaler * num_tiles_bytes);
             l1_write_addr_ex_global += num_tiles_scaler * num_tiles_bytes;
         }
         noc_async_read_barrier();
-
-        // DEBUG #37171: capture counters right after last read barrier
-        uint32_t dbg_rd_resp_pre = NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED);
-        uint32_t dbg_sw_pre = noc_reads_num_issued[noc_index];
-        DPRINT << "[37171] post-read-barrier: HW_RD_RESP=" << dbg_rd_resp_pre << " SW_ISSUED=" << dbg_sw_pre << ENDL();
 
         // Multicast
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
@@ -258,21 +250,14 @@ void kernel_main() {
                     num_tiles_scaler * num_tiles_bytes,
                     num_blocks - 1,
                     true);
+                noc_async_write_barrier();
+
                 noc_semaphore_set_multicast(
                     reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
+                noc_async_write_barrier();
 
                 l1_read_addr_ex_global += num_tiles_scaler * num_tiles_bytes;
-                noc_async_write_barrier();
             }
-        }
-
-        // DEBUG #37171: capture counters after multicast writes complete
-        uint32_t dbg_rd_resp_post = NOC_STATUS_READ_REG(noc_index, NIU_MST_RD_RESP_RECEIVED);
-        uint32_t dbg_sw_post = noc_reads_num_issued[noc_index];
-        DPRINT << "[37171] post-mcast-writes: HW_RD_RESP=" << dbg_rd_resp_post << " SW_ISSUED=" << dbg_sw_post
-               << ENDL();
-        if (dbg_rd_resp_post != dbg_sw_post) {
-            DPRINT << "[37171] MISMATCH! delta=" << (int)(dbg_rd_resp_post - dbg_sw_post) << ENDL();
         }
     };
 
