@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/api.hpp"
 
@@ -76,12 +75,11 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     }
     if (is_device_tensor(tensor) && tensor.is_allocated()) {
         const auto& device_storage = tensor.device_storage();
-        auto mesh_buffer = device_storage.get_mesh_buffer_leak_ownership();
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.coords.size());
         for (const auto& coord : device_storage.coords) {
-            DeviceStorage shard_storage(mesh_buffer, {coord});
-            tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
+            tensors.push_back(Tensor(
+                device_storage.reduce_to_single_device_storage(coord), tensor.tensor_spec(), tensor.tensor_topology()));
         }
         return tensors;
     }
@@ -91,15 +89,9 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
 Tensor get_single_device_tensor_at_coord(
     const Tensor& tensor, const MeshCoordinate& coord, tt::tt_metal::TensorTopology tensor_topology) {
     TT_FATAL(is_device_tensor(tensor), "Expected device tensor, got {}", tensor.storage_type());
-
     const auto& device_storage = tensor.device_storage();
-    TT_FATAL(
-        std::ranges::find(device_storage.coords, coord) == device_storage.coords.end(),
-        "Tensor is not allocated at coordinate {}",
-        coord);
-
-    DeviceStorage shard_storage(device_storage.get_mesh_buffer_leak_ownership(), {coord});
-    return Tensor(std::move(shard_storage), tensor.tensor_spec(), std::move(tensor_topology));
+    return Tensor(
+        device_storage.reduce_to_single_device_storage(coord), tensor.tensor_spec(), std::move(tensor_topology));
 }
 
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {
@@ -133,30 +125,16 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
             shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
     }
 
-    auto mesh_buffer = reference_shard.device_storage().get_mesh_buffer_leak_ownership();
-    TT_FATAL(
-        mesh_buffer != nullptr,
-        "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
-    std::vector<MeshCoordinate> coords;
+    std::vector<std::reference_wrapper<const DeviceStorage>> storages;
+    storages.reserve(tensor_shards.size());
     for (const auto& shard : tensor_shards) {
-        const auto& shard_storage = shard.device_storage();
-        TT_FATAL(
-            std::addressof(shard_storage.get_mesh_buffer()) == std::addressof(reference_shard.mesh_buffer()),
-            "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
-            "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
-        for (const auto& coord : shard_storage.coords) {
-            coords.push_back(coord);
-        }
+        storages.push_back(shard.device_storage());
     }
-    std::sort(coords.begin(), coords.end());
-    auto duplicate =
-        std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
-    TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
+    auto combined_storage = DeviceStorage::combine_to_multi_device_storage(storages);
 
     TensorTopology topology =
         TensorTopology::create_sharded_tensor_topology(MeshShape(tensor_shards.size()), shard_dim);
-    return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), std::move(topology));
+    return Tensor(std::move(combined_storage), reference_shard.tensor_spec(), std::move(topology));
 }
 
 }  // namespace ttnn::distributed
