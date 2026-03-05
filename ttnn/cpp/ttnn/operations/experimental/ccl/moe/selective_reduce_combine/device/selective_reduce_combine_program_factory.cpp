@@ -156,11 +156,66 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     tensor_return_value_t& tensor_return_value,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
+    tt::tt_metal::Program program{};
+    const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
+    const uint32_t metadata_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
+    const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
+    auto artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
+        program,
+        operation_attributes,
+        mesh_coordinate,
+        all_mesh_coordinates,
+        tensor_args,
+        tensor_return_value,
+        init_semaphore,
+        cross_device_semaphore,
+        metadata_sync_semaphore_id,
+        compute_sync_semaphore_id);
+    return {std::move(program), std::move(artifacts)};
+}
+
+void UnifiedSelectReduce::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& coord = range.start_coord();
+        TT_FATAL(
+            coord == range.end_coord(),
+            "Expected single coordinate per program but got range of {} to {}",
+            coord,
+            range.end_coord());
+
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        ttnn::selective_reduce_combine_helper_override_runtime_arguments(
+            program,
+            shared_variables.reader_kernel_id,
+            shared_variables.writer_kernel_id,
+            shared_variables.data_cb_handle,
+            shared_variables.cores,
+            tensor_args,
+            tensor_return_value,
+            shared_variables.init_semaphore,
+            shared_variables.cross_device_semaphore,
+            operation_attributes.optional_cross_device_semaphore);
+    }
+}
+
+SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(
+    tt::tt_metal::Program& program,
+    const experimental::prim::SelectiveReduceCombineParams& operation_attributes,
+    const MeshCoordinate& mesh_coordinate,
+    const std::vector<MeshCoordinate>& all_mesh_coordinates,
+    const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
+    Tensor& tensor_return_value,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore,
+    const uint32_t metadata_sync_semaphore_id,
+    const uint32_t compute_sync_semaphore_id) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
-
-    Program program{};
 
     const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
@@ -302,6 +357,11 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
+    const auto start_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
+    const auto end_coord =
+        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
+
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
@@ -316,7 +376,13 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"global_num_tokens", total_tokens},
-        {"select_experts_k", select_experts_k}};
+        {"select_experts_k", select_experts_k},
+        {"sync_semaphore_id", metadata_sync_semaphore_id},
+        {"noc_x_start", start_coord.x},
+        {"noc_y_start", start_coord.y},
+        {"noc_x_end", end_coord.x},
+        {"noc_y_end", end_coord.y},
+    };
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(dense_token_maps_tensor.buffer()).append_to(reader_compile_time_args);
@@ -337,14 +403,12 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
 
     // launch writer kernel
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
-
-    const auto start_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
-    const auto end_coord =
-        mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
-
     const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
                                     !operation_attributes.optional_cross_device_semaphore.has_value();
+
+    // Writer compute sync: when used from MoE, use matmul's data-ready semaphore; else create local (standalone).
+    const uint32_t writer_compute_sync_semaphore_id = compute_sync_semaphore_id;
+
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -374,7 +438,8 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"fabric_max_packet_size_bytes", max_packet_size_bytes},
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
-        {"num_mux_workers_per_link", neighbors.size()}};
+        {"num_mux_workers_per_link", neighbors.size()},
+        {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -488,43 +553,36 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
          .cross_device_semaphore = cross_device_semaphore}};
 }
 
-void UnifiedSelectReduce::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& coord = range.start_coord();
-        TT_FATAL(
-            coord == range.end_coord(),
-            "Expected single coordinate per program but got range of {} to {}",
-            coord,
-            range.end_coord());
+void selective_reduce_combine_helper_override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    tt::tt_metal::CBHandle data_cb_handle,
+    const std::vector<CoreCoord>& cores,
+    const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
+    Tensor& tensor_return_value,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore,
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
 
-        const auto& shared_variables = cached_workload.shared_variables.at(range);
-        const auto& reader_kernel_id = shared_variables.reader_kernel_id;
-        const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-        const auto& data_cb_handle = shared_variables.data_cb_handle;
-        const auto& cores = shared_variables.cores;
 
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
-        for (const auto& core : cores) {
-            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+    for (const auto& core : cores) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
-            reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.dense_activations_tensor.buffer()->address();
+        reader_runtime_args.at(0) = tensor_args.dense_token_maps_tensor.buffer()->address();
+        reader_runtime_args.at(1) = tensor_args.dense_token_counts_tensor.buffer()->address();
+        reader_runtime_args.at(2) = tensor_args.dense_activations_tensor.buffer()->address();
 
-            writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
-            writer_runtime_args.at(3) = (uint32_t)shared_variables.init_semaphore.address();
+        writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
+        writer_runtime_args.at(3) = (uint32_t)init_semaphore.address();
 
-            writer_runtime_args.at(4) = (operation_attributes.optional_cross_device_semaphore.has_value())
-                                            ? operation_attributes.optional_cross_device_semaphore->address()
-                                            : shared_variables.cross_device_semaphore.address();
-        }
+        writer_runtime_args.at(4) = (optional_cross_device_semaphore.has_value())
+                                        ? optional_cross_device_semaphore->address()
+                                        : cross_device_semaphore.address();
     }
 }
 
