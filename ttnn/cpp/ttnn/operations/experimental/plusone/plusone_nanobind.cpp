@@ -34,7 +34,7 @@ void bind_experimental_plusone_operation(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"plus_one", "ttnn.experimental.">(
+    ttnn::bind_function<"plus_one">(
         mod,
         doc,
         &ttnn::operations::experimental::plus_one,

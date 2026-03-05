@@ -134,6 +134,7 @@ ttnn::Tensor all_gather_async_reversed(
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     bool use_optimal_ccl_for_llama = false,
+    bool use_all_gather_async_via_broadcast = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
