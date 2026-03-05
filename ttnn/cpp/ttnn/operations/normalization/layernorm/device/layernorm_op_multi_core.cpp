@@ -291,7 +291,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         a.device()->l1_size_per_core());
     if (!use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
-            // In the case that the required space is larger than what can be handeled by the single pass
+            // In the case that the required space is larger than what can be handled by the single pass
             large_tensor_needed = true;
             Wt_next_block_up = with_weights_max_size;
         } else if (!cb_fits_in_L1) {

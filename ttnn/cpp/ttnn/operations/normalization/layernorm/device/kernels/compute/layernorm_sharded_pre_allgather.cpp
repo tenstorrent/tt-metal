@@ -202,6 +202,7 @@ void kernel_main() {
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        pack_reconfig_data_format(cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height

@@ -10,7 +10,7 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
-// TODO: Implement using bitwise comparision
+// TODO: Implement using bitwise comparison
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_signbit() {
     for (int d = 0; d < ITERATIONS; d++) {
