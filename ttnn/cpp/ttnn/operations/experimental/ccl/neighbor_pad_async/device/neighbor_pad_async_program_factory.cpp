@@ -779,7 +779,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         uint32_t w_ring_size =
             (operation_attributes.pad2_cluster_axis.value() == 0) ? mesh_view_w.num_rows() : mesh_view_w.num_cols();
         uint32_t w_device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-            tensor_args.input_tensor, mesh_coordinate, operation_attributes.pad2_cluster_axis.value());
+            tensor_args.input_tensor, mesh_coordinate, operation_attributes.pad2_cluster_axis);
         auto [w_num_targets_forward, w_num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
             w_ring_size, w_device_index, operation_attributes.topology, false);
         auto [w_mcast_forward_args, w_mcast_backward_args] = ::ttnn::ccl::get_forward_backward_line_mcast_configuration(
