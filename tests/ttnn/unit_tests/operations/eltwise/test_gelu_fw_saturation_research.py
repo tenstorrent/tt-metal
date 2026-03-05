@@ -35,10 +35,24 @@ except ImportError:
 # =============================================================================
 
 
-def float_to_bf16_bits(f: float) -> int:
-    """Convert float to BF16 bit representation (truncation)."""
+def float_to_bf16_bits_truncate(f: float) -> int:
+    """Convert float to BF16 bit representation (truncation, for enumeration only)."""
     f32_bytes = struct.pack(">f", f)
     return struct.unpack(">H", f32_bytes[:2])[0]
+
+
+def float_to_bf16_bits(f: float) -> int:
+    """Convert float to BF16 bit representation (round-to-nearest-even).
+
+    Matches hardware pack behavior per tech_reports/data_formats/data_formats.md
+    and bfloat16::from_float() in tt_metal/impl/data_format/bfloat16.cpp.
+    """
+    if math.isnan(f):
+        return 0x7FC0
+    f32_bytes = struct.pack("<f", f)  # little-endian for uint32 arithmetic
+    u32 = struct.unpack("<I", f32_bytes)[0]
+    rounding_bias = ((u32 >> 16) & 1) + 0x7FFF
+    return ((u32 + rounding_bias) >> 16) & 0xFFFF
 
 
 def bf16_bits_to_float(bits: int) -> float:
@@ -71,7 +85,7 @@ def apply_ftz(f: float) -> float:
 
 
 def round_to_bf16(f: float) -> float:
-    """Round float to nearest BF16 value (truncation, matching hardware)."""
+    """Round float to nearest BF16 value (RNE, matching hardware)."""
     bits = float_to_bf16_bits(f)
     return bf16_bits_to_float(bits)
 

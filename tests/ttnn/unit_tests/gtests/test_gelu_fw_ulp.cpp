@@ -64,9 +64,15 @@ constexpr uint16_t BF16_POS_INF = 0x7F80;
 constexpr uint16_t BF16_NEG_INF = 0xFF80;
 
 inline uint16_t float_to_bf16_bits(float f) {
-    uint32_t f32_bits;
-    std::memcpy(&f32_bits, &f, sizeof(float));
-    return static_cast<uint16_t>(f32_bits >> 16);
+    // Round-to-nearest-even (RNE), matching hardware pack behavior.
+    // See tech_reports/data_formats/data_formats.md and bfloat16::from_float().
+    if (std::isnan(f)) {
+        return UINT16_C(0x7FC0);
+    }
+    uint32_t u32;
+    std::memcpy(&u32, &f, sizeof(float));
+    uint32_t rounding_bias = ((u32 >> 16) & 1) + UINT32_C(0x7FFF);
+    return static_cast<uint16_t>((u32 + rounding_bias) >> 16);
 }
 
 inline float bf16_bits_to_float(uint16_t bits) {
@@ -119,8 +125,11 @@ inline int32_t bf16_value_order_index_daz(uint16_t bits) {
     }
 
     if (bits & BF16_SIGN_MASK) {
+        // Negative normals: magnitude 0x0080 (smallest) maps to 32639 (zero-1),
+        // magnitude 0x7F7F (largest) maps to 128. The 0x7F offset skips denormals
+        // which are DAZ-collapsed to zero, matching the positive formula symmetry.
         uint16_t magnitude = bits & 0x7FFF;
-        return 0x7F7F - magnitude;
+        return 32640 + BF16_MANTISSA_MASK - magnitude;
     }
     return 32640 + bits - BF16_MANTISSA_MASK;
 }
@@ -294,8 +303,8 @@ TEST_F(GeluFwUlpTest, NearZeroRegion) {
 //   (-13.1875, -5]: exp-based asymptotic
 //   [-5, -3): left CDF polynomial
 //   [-3, 3): core CDF polynomial
-//   [3, 5.375): right CDF polynomial
-//   x >= 5.375: identity (return x)
+//   x >= 3.0: identity (return x)
+//   With RNE rounding, GELU(x) rounds to x for all BF16 x >= ~2.78
 TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     std::vector<float> input_values;
     input_values.reserve(70000);
@@ -362,8 +371,7 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
         {"Exp-based (-13.1875, -5]"},
         {"Left CDF poly [-5, -3)"},
         {"Core CDF poly [-3, 3)"},
-        {"Right CDF poly [3, 5.375)"},
-        {"Identity (x >= 5.375)"},
+        {"Identity (x >= 3)"},
     };
 
     int overall_max_ulp = 0;
@@ -390,10 +398,8 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
             region_idx = 2;
         } else if (x < 3.0f) {
             region_idx = 3;
-        } else if (x < 5.375f) {
-            region_idx = 4;
         } else {
-            region_idx = 5;
+            region_idx = 4;  // Identity (x >= 3.0)
         }
 
         regions[region_idx].count++;
@@ -433,14 +439,13 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     std::cout << "============================================================\n";
 
     // Per-region regression guards
-    // Thresholds based on coefficient generation results: overall Max ULP = 2
+    // With RNE rounding model matching hardware:
     std::vector<int> region_max_ulp_thresholds = {
         0,  // Saturation to 0: exact
-        2,  // Exp-based: Max ULP = 1 in generation, allow 2 for hardware
-        2,  // Left CDF poly: Max ULP = 2 in generation
-        2,  // Core CDF poly: Max ULP = 1 in generation, allow 2
-        2,  // Right CDF poly: Max ULP = 0 in generation, allow 2
-        0,  // Identity: exact
+        2,  // Exp-based: allow 2 for hardware precision
+        2,  // Left CDF poly: allow 2
+        2,  // Core CDF poly: allow 2
+        0,  // Identity (x >= 3.0): exact (GELU rounds to x with RNE)
     };
 
     for (size_t r = 0; r < regions.size(); ++r) {
