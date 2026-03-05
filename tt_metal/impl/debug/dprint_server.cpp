@@ -594,29 +594,8 @@ void DevicePrintImpl::enable_print_buffers_for_core(
 }
 
 bool DevicePrintImpl::core_has_outstanding_prints(
-    ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    // TODO: What does this function represent?!? Do we need this function in new implementation?
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
-    bool any_risc_enabled = false;
-    for (int risc_id = 0; risc_id < num_processors; risc_id++) {
-        if (RiscEnabled(core_type, risc_id)) {
-            any_risc_enabled = true;
-            break;
-        }
-    }
-    if (!any_risc_enabled) {
-        return false;
-    }
-    uint64_t base_addr = GetDevicePrintBufAddr(device_id, virtual_core);
-    if (CheckInitMagicCleared(device_id, virtual_core, base_addr)) {
-        constexpr int eightbytes = 8;
-        auto from_dev =
-            MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, eightbytes);
-        uint32_t wpos = from_dev[0], rpos = from_dev[1];
-        if (rpos < wpos) {
-            return true;
-        }
-    }
+    ChipId /*device_id*/, const CoreCoord& /*virtual_core*/, HalProgrammableCoreType /*core_type*/) {
+    // New implmementation doesn't have outstanding prints.
     return false;
 }
 
