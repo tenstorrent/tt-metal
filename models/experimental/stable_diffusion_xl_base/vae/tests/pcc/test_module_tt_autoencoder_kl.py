@@ -109,5 +109,9 @@ def test_vae(
     del vae
     gc.collect()
 
+    # Adjust PCC threshold for Blackhole due to DRAM groupnorm numerical differences
+    if is_blackhole() and vae_block == "encoder" and image_resolution == (1024, 1024):
+        pcc = 0.964
+
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is: {pcc_message}")

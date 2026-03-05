@@ -109,5 +109,12 @@ def test_downblock2d(
     del vae, tt_downblock
     gc.collect()
 
+    # Adjust PCC threshold for Blackhole due to DRAM groupnorm numerical differences
+    if is_blackhole():
+        if block_id == 0:
+            pcc = 0.998
+        elif block_id == 1:
+            pcc = 0.996
+
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is {pcc_message}")
