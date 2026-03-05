@@ -715,6 +715,13 @@ class Generator(WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
+        # Transfer bitmask to device for structured outputs
+        # TODO this means we transfer even if this dp rank doesnt have a structured output request
+        if bitmask is not None:
+            bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
+            for i in range(self.data_parallel):
+                self.model[i].bitmask_to_device(bitmasks[i])
+
         sampling_params_list = None
         if sampling_params is not None:
             # sampling_dp may differ from data_parallel for models that internally
@@ -777,9 +784,7 @@ class Generator(WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(
-                **decode_kwargs, reset_batch=mode_switched, bitmask=bitmask
-            )
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -921,14 +926,7 @@ class Generator(WarmupForwardMixin):
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        sampling_on_device=False,
-        reset_batch=False,
-        bitmask=None,
+        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
     ):
         """
         Run decode forward text with tracing
@@ -968,17 +966,11 @@ class Generator(WarmupForwardMixin):
         # Apply bitmask to logits AFTER trace execution but BEFORE sampling
         # This avoids baking the bitmask conditional into the trace
         if sampling_on_device:
-            # Transfer bitmask to device for structured outputs
-            # TODO this means we transfer even if this dp rank doesnt have a structured output request
-            if bitmask is not None:
-                bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
-                for i in range(self.data_parallel):
-                    self.model[i].bitmask_to_device(bitmasks[i])
-                # Apply bitmask to logits before sampling
-                for i in range(self.data_parallel):
-                    outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
-                    ttnn.synchronize_device(self.model_args[i].mesh_device)
-                    print(f"Synchronized device after applying bitmask to logits for model {i}")
+            # Apply bitmask to logits before sampling
+            for i in range(self.data_parallel):
+                outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
+                ttnn.synchronize_device(self.model_args[i].mesh_device)
+                print(f"Synchronized device after applying bitmask to logits for model {i}")
 
             new_outputs = []
             for i in range(self.data_parallel):
