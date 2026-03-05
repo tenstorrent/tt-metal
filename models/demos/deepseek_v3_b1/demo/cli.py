@@ -142,30 +142,22 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
         )
 
-        # Run prefill + decode loop
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
-            # Prefill + decode pattern per model.py: prefill(prompt) -> sample y0; decode_step(y_t) -> sample y_{t+1}.
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
             logger.debug(f"Encoded prompt: {prompt_ids}")
             if not prompt_ids:
                 prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
 
-            # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
-            next_token_id = model_pipeline.prefill_forward(prompt_ids)
-            generated = [next_token_id]
-            logger.info(
-                "Prefill done ({} prompt tokens); sampled y0: {}",
-                len(prompt_ids),
-                next_token_id,
+            generated = model_pipeline.run_inference(
+                prompt_token_ids=prompt_ids,
+                max_new_tokens=iterations,
+                on_token=lambda tid: logger.info("Generated token: {}", tid),
+                eos_token_id=tokenizer.eos_token_id,
             )
-            # Generation loop: feed y[t], get output, sample y[t+1].
-            for step in range(iterations - 1):
-                next_token_id = model_pipeline.decode_forward(next_token_id)
-                generated.append(next_token_id)
-                logger.info("Decode step {} output token: {}", step + 1, next_token_id)
             logger.info("Generated {} tokens total", len(generated))
+            logger.info("Output: {}", tokenizer.decode(generated, skip_special_tokens=True))
 
         model_pipeline.barrier()
     logger.info("Pod pipeline complete")
