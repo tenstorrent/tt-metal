@@ -179,6 +179,7 @@ CoreType Kernel::get_kernel_core_type() const {
         case HalProgrammableCoreType::TENSIX: return CoreType::WORKER;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: return CoreType::ETH;
+        case HalProgrammableCoreType::DRAM: return CoreType::DRAM;
         case HalProgrammableCoreType::COUNT: TT_THROW("Bad programmable core type!");
     }
     TT_THROW("Unreachable");
