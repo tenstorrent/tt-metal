@@ -35,6 +35,7 @@ def recurrent_delta_rule_step_ttnn(
     beta_t,
     g_t,
     h,
+    seq_len=None,
 ):
     """
     Single recurrent step of the gated delta rule using TTNN ops.
@@ -49,6 +50,7 @@ def recurrent_delta_rule_step_ttnn(
         beta_t: [B, H] write strength
         g_t: [B, H] log-space decay
         h: [B, H, K, V] recurrent state
+        seq_len: optional T; when <= 64, o_t reshape uses L1 to reduce DRAM; otherwise DRAM
 
     Returns:
         o_t: [B, H, V] output
@@ -84,7 +86,9 @@ def recurrent_delta_rule_step_ttnn(
     q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
 
     o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
-    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, V]
+    # Use L1 for o_t reshape when seq_len <= 64 to reduce DRAM; skip for longer sequences to avoid L1 pressure
+    use_l1 = seq_len is not None and seq_len <= 64
+    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)  # [B, H, V]
 
     return o_t, h
 
@@ -166,7 +170,7 @@ def recurrent_gated_delta_rule_ttnn(
         beta_t = beta[:, :, i]  # [B, H]
         g_t = g[:, :, i]  # [B, H]
 
-        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h)
+        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h, seq_len=T)
         outputs.append(o_t)
 
     # Concat outputs: reshape each [B, H, V] -> [B, H, 1, V] then concat
