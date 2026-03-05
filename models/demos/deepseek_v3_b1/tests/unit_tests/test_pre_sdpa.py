@@ -269,12 +269,14 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
+    # TODO: Reduce to 3 slots
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
-    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
+    # Matches flash_mla's cb_out_im sizing: 68 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 68 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_shard_height = 40  # 5 tile-rows of [8, 32]
-    sdpa_out_interm_shard_width = 544  # 17 tile-cols of [8, 32]
+    sdpa_out_interm_num_slots = 4
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
+    sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
 
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
