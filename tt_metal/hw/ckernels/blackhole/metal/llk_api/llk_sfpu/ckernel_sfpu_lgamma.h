@@ -10,8 +10,7 @@
 
 #include "sfpi.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling() {
@@ -32,12 +31,9 @@ inline void calculate_lgamma_stirling() {
         // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
         sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
 
-        // 3. High-Accuracy Correction (The "Bernoulli" series)
-        // We use a minimax rational fit for 1/z.
-        sfpi::vFloat inv_z2 = _sfpu_reciprocal_<2>(z * z);
-
-        // correction = (1/z) * (r0 + r1/z^2)
-        sfpi::vFloat correction = _sfpu_reciprocal_<2>(z) * (r0 + inv_z2 * r1);
+        // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
+        sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
+        sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * r1);
         res = res + correction;
 
         // TODO: use a polynomial bridge here instead
@@ -92,5 +88,4 @@ void lgamma_stirling_init() {
     _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu

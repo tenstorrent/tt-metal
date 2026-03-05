@@ -16,8 +16,9 @@ namespace ckernel {
  * Performs elementwise natural logarithm of the gamma function: out = lgamma(x). lgamma is computed using Stirling approximation.
  * For x < 0.5, the reflection formula (1 - x) is used before Stirling approximation.
  * The final reflection formula correction for (inputs < 0.5) is not part of this kernel.
+ * Note: This API will be deprecated soon in favor of a single fused kernel
  *
- *  lgamma_stirling_tile(idst); // computes lgamma(x) for x >= 0.5 and lgamma(1-x) for x < 0.5 using Stirling approximation.
+ * lgamma_stirling_tile(idst); // computes lgamma(x) for x >= 0.5 and lgamma(1-x) for x < 0.5 using Stirling approximation.
  *
  * | Argument | Description                                                | Type     | Valid Range                                           | Required |
  * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|
@@ -39,6 +40,7 @@ ALWI void lgamma_stirling_tile_init() {
 /**
  * Combines the Stirling-based lgamma approximation with the reflection formula correction for inputs x < 0.5.
  * Uses (1 - x) via the reflection formula and writes the adjusted lgamma result to the output tile.
+ * Note: This API will be deprecated soon in favor of a single fused kernel
  *
  * lgamma_adjusted_tile(idst0, idst1, idst2, idst3);  // returns final result of lgamma(x) for -inf < x < inf
  *
