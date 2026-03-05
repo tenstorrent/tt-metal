@@ -89,8 +89,9 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(19);
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(20);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(21);
+    constexpr bool use_single_chunk_deferred_norm = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -143,57 +144,15 @@ void kernel_main() {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>();
     }
 
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
-        const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
-
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
-        if (!ring_iter_does_work) {
-            continue;
+    if constexpr (use_single_chunk_deferred_norm) {
+        // Deferred normalization: step through ring sync protocol but skip per-iter I/O.
+        // Compute kernel handles the entire ring loop and pushes final output once to cb_out.
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            fused_op_receiver.get_next_ring_id_and_sync();
         }
 
-        /**
-        We have 3 possible masks
-        - global N mask
-        - local N mask
-        - joint L mask
-
-        Global N mask:
-            - If the logical_n falls within this ring iter's KV range
-            - And logical_n length (within local_padded_N) does not divide by K chunk size
-
-        Local N mask
-            - If local_padded_N does not divide by K chunk size, the last chunk needs a mask
-
-        Joint L mask
-            - If joint length L does not divide by K chunk size, the last chunk needs a mask
-        */
-
-        // GLOBAL N MASK
-        // Find out if logical_n falls within this ring iter's KV range
-        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
-        // Note the > and <=. This means there is real length of logical_n within this ring iter.
-        const bool global_n_is_within_ring_iter =
-            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
-        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-
-        // LOCAL N MASK
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        // If global N is in the ring iter, it supersedes the local N mask.
-        const bool ring_iter_needs_local_n_mask = local_n_needs_masking && !global_n_is_within_ring_iter;
-
-        // JOINT L MASK
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-
+        // Write final output once after all ring iterations
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-            // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
@@ -208,28 +167,118 @@ void kernel_main() {
             } else {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = local_padded_Nt * (ring_id + 1);
+                end_seq_tile = local_padded_Nt;
             }
 
-            // If not on the first iteration, read LSE input and previous output chunk.
-            // No race condition because writer kernel writes previous output before reading it again
+            write_block(is_joint_q ? joint_out_generator : out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+        }
+        noc_async_write_barrier();
+    } else {
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+            const bool do_joint_kv = ring_id == ring_size - 1;
+            const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-            uint32_t lse_seq_start_tile;
-            uint32_t lse_seq_end_tile;
-            if (is_joint_q) {
-                lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
-                lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
-                lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
-            } else {
-                lse_seq_start_tile = q_chunk * Sq_chunk_t;
-                lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
-                lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
-                lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
+            const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+            const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
+            const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
+            const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+            const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+            if (!ring_iter_does_work) {
+                continue;
             }
 
-            if (ring_iter > 0) {
-                read_prev_output_and_lse(
+            /**
+            We have 3 possible masks
+            - global N mask
+            - local N mask
+            - joint L mask
+
+            Global N mask:
+                - If the logical_n falls within this ring iter's KV range
+                - And logical_n length (within local_padded_N) does not divide by K chunk size
+
+            Local N mask
+                - If local_padded_N does not divide by K chunk size, the last chunk needs a mask
+
+            Joint L mask
+                - If joint length L does not divide by K chunk size, the last chunk needs a mask
+            */
+
+            // GLOBAL N MASK
+            // Find out if logical_n falls within this ring iter's KV range
+            const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
+            // Note the > and <=. This means there is real length of logical_n within this ring iter.
+            const bool global_n_is_within_ring_iter =
+                global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
+            const bool global_n_needs_masking =
+                global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+            const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
+
+            // LOCAL N MASK
+            const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
+            // If global N is in the ring iter, it supersedes the local N mask.
+            const bool ring_iter_needs_local_n_mask = local_n_needs_masking && !global_n_is_within_ring_iter;
+
+            // JOINT L MASK
+            const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+            const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
+
+            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+                // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
+                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+
+                const bool is_joint_q = q_chunk >= num_local_q_chunks;
+                Slice out_slice;
+                uint32_t end_seq_tile;
+                if (is_joint_q) {
+                    const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = Lt;
+                } else {
+                    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = local_padded_Nt * (ring_id + 1);
+                }
+
+                // If not on the first iteration, read LSE input and previous output chunk.
+                // No race condition because writer kernel writes previous output before reading it again
+
+                uint32_t lse_seq_start_tile;
+                uint32_t lse_seq_end_tile;
+                if (is_joint_q) {
+                    lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
+                } else {
+                    lse_seq_start_tile = q_chunk * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
+                }
+
+                if (ring_iter > 0) {
+                    read_prev_output_and_lse(
+                        is_joint_q ? joint_out_generator : out_generator,
+                        lse_writer,
+                        lse_tile_logical,
+                        nb,
+                        nq,
+                        Sq_chunk_t,
+                        out_slice,
+                        end_seq_tile,
+                        lse_seq_start_tile,
+                        lse_seq_end_tile,
+                        cb_prev_out,
+                        cb_lse_in,
+                        tile_bytes,
+                        lse_tile_bytes);
+                }
+
+                write_output_and_lse(
                     is_joint_q ? joint_out_generator : out_generator,
                     lse_writer,
                     lse_tile_logical,
@@ -240,28 +289,12 @@ void kernel_main() {
                     end_seq_tile,
                     lse_seq_start_tile,
                     lse_seq_end_tile,
-                    cb_prev_out,
-                    cb_lse_in,
+                    cb_out,
+                    cb_lse_out,
                     tile_bytes,
                     lse_tile_bytes);
             }
-
-            write_output_and_lse(
-                is_joint_q ? joint_out_generator : out_generator,
-                lse_writer,
-                lse_tile_logical,
-                nb,
-                nq,
-                Sq_chunk_t,
-                out_slice,
-                end_seq_tile,
-                lse_seq_start_tile,
-                lse_seq_end_tile,
-                cb_out,
-                cb_lse_out,
-                tile_bytes,
-                lse_tile_bytes);
+            noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
-        noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
 }
