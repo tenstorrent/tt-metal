@@ -1648,6 +1648,18 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
 
+tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_level() const {
+    // User override via TT_METAL_FABRIC_OPT_LEVEL takes priority
+    auto opt_level_override = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_kernel_opt_level();
+    if (opt_level_override.has_value()) {
+        return opt_level_override.value();
+    }
+    // Use Os (optimize for size) when VC1 is active to fit in code space
+    // Use O3 (optimize for performance) otherwise
+    bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
+    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+}
+
 void FabricEriscDatamoverBuilder::teardown_from_host(
     tt::tt_metal::IDevice* d, tt::tt_fabric::TerminationSignal termination_signal) const {
     std::vector<uint32_t> val(1, termination_signal);
