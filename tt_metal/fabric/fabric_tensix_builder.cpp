@@ -179,7 +179,7 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
 }
 
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
-    // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
+    // Initialize channel mappings and configurations, skipping the rest initialization if there are no ethernet found
     if (!initialize_channel_mappings()) {
         return;
     }
