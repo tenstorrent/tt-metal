@@ -118,7 +118,7 @@ void kernel_main() {
 
     // Accumulator state — persists across ring iterations for deferred norm,
     // re-initialized per Q chunk for the standard path.
-    RingAccumulatorState acc_state = {cb_sum_A, cb_sum_B, cb_max_A, cb_max_B, cb_out_im_A, cb_out_im_B, true};
+    RingAccumulatorState acc_state = {{cb_sum_A, cb_max_A, cb_out_im_A}, {cb_sum_B, cb_max_B, cb_out_im_B}, true};
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();

@@ -49,12 +49,15 @@ ALWI void cb_push_back_hold_wr_ptr(uint32_t cb_id, uint32_t num_tiles) {
     }));
 }
 
+// Accumulator half: one side of the ping-pong buffer (sum, max, output CB indices).
+struct AccumulatorHalf {
+    uint32_t sum, max, out;
+};
+
 // Persistent accumulator state for ring SDPA deferred normalization.
 // When each core processes exactly 1 Q chunk, this state carries across ring iterations.
 struct RingAccumulatorState {
-    uint32_t prev_sum, cur_sum;
-    uint32_t prev_max, cur_max;
-    uint32_t prev_out, cur_out;
+    AccumulatorHalf prev, cur;
     bool is_first;
 };
 
@@ -247,7 +250,7 @@ void sub_exp_block_bcast_cols(
 }
 
 /**
- * Column-only exp(prev_max - cur_max) for SALAD corrections.
+ * Column-only exp(prev.max - cur.max) for SALAD corrections.
  * Operates on first-column subset of tiles.
  */
 template <bool PROFILING_ENABLED, uint32_t scale_fp32, uint32_t SBH>
@@ -577,12 +580,8 @@ template <
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0>
 static void sdpa_inner_loop_step(
-    const uint32_t prev_max,
-    const uint32_t cur_max,
-    const uint32_t prev_sum,
-    const uint32_t cur_sum,
-    const uint32_t prev_out,
-    const uint32_t cur_out,
+    AccumulatorHalf& prev,
+    AccumulatorHalf& cur,
     const bool is_last_iter,
     const bool is_first_iter,
     [[maybe_unused]] const bool apply_mask = false,
@@ -625,7 +624,7 @@ static void sdpa_inner_loop_step(
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
 
     cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
-    cb_reserve_back(cur_sum, Sq_chunk_t);
+    cb_reserve_back(cur.sum, Sq_chunk_t);
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
@@ -643,7 +642,7 @@ static void sdpa_inner_loop_step(
                     reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
                 }
                 sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                    cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                    cb_qkt_im, cur.max, cur.sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
             }
 
             {
@@ -694,10 +693,10 @@ static void sdpa_inner_loop_step(
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
-            cb_reserve_back(cur_max, sbh);
+            cb_reserve_back(cur.max, sbh);
             reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh>(
-                cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/);
-            cb_push_back(cur_max, sbh);
+                cb_qkt_im, cur.max, prev.max, q_subblock, !is_first_iter /*do_eltwise_max*/);
+            cb_push_back(cur.max, sbh);
         }
 
         q_index_offset += sbh * in0_block_w;
@@ -733,7 +732,7 @@ static void sdpa_inner_loop_step(
         uint32_t qktv_in0_wait_tiles = qktv_in0_subblock_num_tiles;
 
         cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-        cb_reserve_back(cur_out, qktv_output_num_tiles);
+        cb_reserve_back(cur.out, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -748,7 +747,7 @@ static void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_subblocks; ++kt_sub) {
                     // sub_exp drain in-place on cb_qkt_im
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                        cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
+                        cb_qkt_im, cur.max, cur.sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
 
                     if (kt_sub == 0) {
                         cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
@@ -761,14 +760,14 @@ static void sdpa_inner_loop_step(
                     {
                         uint32_t v_index_offset = 0;
                         if constexpr (!uniform_unpack_format) {
-                            reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                            reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                         }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                             blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, matmul_inner, vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
-                                cur_out,
+                                cur.out,
                                 qktv_in0_index_offset + kt_sub * matmul_inner,
                                 kt_sub * matmul_inner * vDHt + v_index_offset,
                                 0,
@@ -776,7 +775,7 @@ static void sdpa_inner_loop_step(
                             v_index_offset += qktv_subblock_w;
                         }
                         if constexpr (!uniform_unpack_format) {
-                            reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                            reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
                         }
                     }
 
@@ -789,21 +788,21 @@ static void sdpa_inner_loop_step(
                 // Can't split inner dim because matmul_block uses INNER_DIM as in0 row stride
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, sbh, qkt_subblock_w, true>(
-                        cb_qkt_im, cur_max, cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
+                        cb_qkt_im, cur.max, cur.sum, Sk_chunk_t, q_num_subblocks - 1, kt_sub);
                 }
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
                     uint32_t v_index_offset = 0;
                     if constexpr (!uniform_unpack_format) {
-                        reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                        reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                     }
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                         blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
-                            cur_out,
+                            cur.out,
                             qktv_in0_index_offset,
                             v_index_offset,
                             0,
@@ -811,7 +810,7 @@ static void sdpa_inner_loop_step(
                         v_index_offset += qktv_subblock_w;
                     }
                     if constexpr (!uniform_unpack_format) {
-                        reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                        reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
                     }
                 }
             }
@@ -823,10 +822,10 @@ static void sdpa_inner_loop_step(
         [[maybe_unused]] auto normalize_row = [&](uint32_t w_salad, uint32_t& pushed) {
             if constexpr (!ring_mode || ring_deferred_norm) {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
-                cb_push_back(cur_sum, sbh);
-                cb_push_back(cur_out, sbh * vDHt);
+                cb_push_back(cur.sum, sbh);
+                cb_push_back(cur.out, sbh * vDHt);
                 normalize_row_streaming<PROFILING_ENABLED, sbh, vDHt>(
-                    cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
+                    cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
                 pushed++;
             }
         };
@@ -835,11 +834,11 @@ static void sdpa_inner_loop_step(
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
-                mul_bcast_cols_l1_acc<sbh>(prev_sum, cb_exp_max_diff, cur_sum, salad_row, w_salad);
+                mul_bcast_cols_l1_acc<sbh>(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad);
             }
             {
                 MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
-                mul_block_bcast_cols_acc<sbh, vDHt>(prev_out, cb_exp_max_diff, cur_out, salad_row, w_salad);
+                mul_block_bcast_cols_acc<sbh, vDHt>(prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad);
             }
             if (last_iter) {
                 normalize_row(w_salad, pushed);
@@ -858,7 +857,7 @@ static void sdpa_inner_loop_step(
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, sbh);
                 sub_exp_first_col_blocks<PROFILING_ENABLED, scale_fp32, sbh>(
-                    prev_max, cur_max, cb_exp_max_diff, salad_row);
+                    prev.max, cur.max, cb_exp_max_diff, salad_row);
                 cb_push_back(cb_exp_max_diff, sbh);
             }
 
@@ -866,14 +865,14 @@ static void sdpa_inner_loop_step(
             {
                 uint32_t v_index_offset = 0;
                 if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cur_out, cb_v_in, cur_out, cb_qkt_im);
+                    reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                 }
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
                     blocked_matmul_and_pack<false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w, vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
-                        cur_out,
+                        cur.out,
                         qktv_in0_index_offset,
                         v_index_offset,
                         w_q,
@@ -881,7 +880,7 @@ static void sdpa_inner_loop_step(
                     v_index_offset += qktv_subblock_w;
                 }
                 if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_v_in, cur_out, cb_qkt_im, cur_out);
+                    reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
                 }
             }
 
@@ -904,17 +903,17 @@ static void sdpa_inner_loop_step(
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, sbh);
                 sub_exp_first_col_blocks<PROFILING_ENABLED, scale_fp32, sbh>(
-                    prev_max, cur_max, cb_exp_max_diff, salad_row);
+                    prev.max, cur.max, cb_exp_max_diff, salad_row);
                 cb_push_back(cb_exp_max_diff, sbh);
 
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
             } else if constexpr (!ring_mode || ring_deferred_norm) {
                 if (is_last_iter) {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
-                    cb_push_back(cur_sum, sbh);
-                    cb_push_back(cur_out, sbh * vDHt);
+                    cb_push_back(cur.sum, sbh);
+                    cb_push_back(cur.out, sbh * vDHt);
                     normalize_row_streaming<PROFILING_ENABLED, sbh, vDHt>(
-                        cur_sum, cur_out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
+                        cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out);
                     pushed_rows++;
                 }
             }
@@ -923,12 +922,12 @@ static void sdpa_inner_loop_step(
         // Bulk push — skip on last iteration when rows are consumed by normalization.
         if constexpr (!ring_mode || ring_deferred_norm) {
             if (!is_last_iter) {
-                cb_push_back(cur_sum, Sq_chunk_t);
-                cb_push_back(cur_out, qktv_output_num_tiles);
+                cb_push_back(cur.sum, Sq_chunk_t);
+                cb_push_back(cur.out, qktv_output_num_tiles);
             }
         } else {
-            cb_push_back(cur_sum, Sq_chunk_t);
-            cb_push_back(cur_out, qktv_output_num_tiles);
+            cb_push_back(cur.sum, Sq_chunk_t);
+            cb_push_back(cur.out, qktv_output_num_tiles);
         }
 
         cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
@@ -976,13 +975,9 @@ void sdpa_standard_v2(
     }
 
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
-        uint32_t alias_prev_sum = cb_sum_A, alias_cur_sum = cb_sum_B;
-        uint32_t alias_prev_max = cb_max_A, alias_cur_max = cb_max_B;
-        uint32_t alias_prev_out = cb_out_im_A, alias_cur_out = cb_out_im_B;
+        AccumulatorHalf prev = {cb_sum_A, cb_max_A, cb_out_im_A};
+        AccumulatorHalf cur = {cb_sum_B, cb_max_B, cb_out_im_B};
 
-        // Per-iteration profiling via call_step: pass std::true_type{} to enable
-        // MaybeDeviceZoneScopedN in sdpa_inner_loop_step, std::false_type{} to disable.
-        // To profile specific iterations, change the gating condition below.
         auto call_step = [&](auto profiling_tag, bool is_last, bool is_first) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
@@ -1006,30 +1001,19 @@ void sdpa_standard_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
-                alias_prev_max,
-                alias_cur_max,
-                alias_prev_sum,
-                alias_cur_sum,
-                alias_prev_out,
-                alias_cur_out,
-                is_last,
-                is_first);
+                cb_mask_in>(prev, cur, is_last, is_first);
 
-            // Post-iteration cleanup
             if (!is_first) {
                 cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
-                cb_pop_front(alias_prev_max, Sq_chunk_t);
-                cb_pop_front(alias_prev_sum, Sq_chunk_t);
-                cb_pop_front(alias_prev_out, Sq_chunk_t * vDHt);
+                cb_pop_front(prev.max, Sq_chunk_t);
+                cb_pop_front(prev.sum, Sq_chunk_t);
+                cb_pop_front(prev.out, Sq_chunk_t * vDHt);
             }
 
             if (is_last) {
-                cb_pop_front(alias_cur_max, Sq_chunk_t);
+                cb_pop_front(cur.max, Sq_chunk_t);
             } else {
-                std::swap(alias_prev_max, alias_cur_max);
-                std::swap(alias_prev_sum, alias_cur_sum);
-                std::swap(alias_prev_out, alias_cur_out);
+                std::swap(prev, cur);
             }
         };
 
@@ -1119,26 +1103,11 @@ void sdpa_ring_v2(
     }
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
-        // Deferred norm: use persistent accumulator state from caller.
-        // Non-deferred: use local aliases, re-initialized each Q chunk (original behavior).
-        uint32_t alias_prev_sum, alias_cur_sum;
-        uint32_t alias_prev_max, alias_cur_max;
-        uint32_t alias_prev_out, alias_cur_out;
-        if constexpr (deferred_norm) {
-            alias_prev_sum = acc_state.prev_sum;
-            alias_cur_sum = acc_state.cur_sum;
-            alias_prev_max = acc_state.prev_max;
-            alias_cur_max = acc_state.cur_max;
-            alias_prev_out = acc_state.prev_out;
-            alias_cur_out = acc_state.cur_out;
-        } else {
-            alias_prev_sum = acc_state.prev_sum;
-            alias_cur_sum = acc_state.cur_sum;
-            alias_prev_max = acc_state.prev_max;
-            alias_cur_max = acc_state.cur_max;
-            alias_prev_out = acc_state.prev_out;
-            alias_cur_out = acc_state.cur_out;
-        }
+        // Local copy of accumulator state. For deferred norm, carries across ring iterations
+        // via writeback at the end. For non-deferred, re-initialized from acc_state each Q chunk.
+        RingAccumulatorState st = acc_state;
+        AccumulatorHalf& prev = st.prev;
+        AccumulatorHalf& cur = st.cur;
 
         uint32_t KV_chunks_processed = 0;
 
@@ -1156,8 +1125,8 @@ void sdpa_ring_v2(
             // Deferred norm: is_first is global (across ring iters), not per ring_iter
             bool is_first;
             if constexpr (deferred_norm) {
-                is_first = acc_state.is_first;
-                acc_state.is_first = false;
+                is_first = st.is_first;
+                st.is_first = false;
             } else {
                 is_first = (KV_chunks_processed == 1);
             }
@@ -1210,73 +1179,55 @@ void sdpa_ring_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
-                alias_prev_max,
-                alias_cur_max,
-                alias_prev_sum,
-                alias_cur_sum,
-                alias_prev_out,
-                alias_cur_out,
-                is_last,
-                is_first,
-                apply_mask,
-                lw_num_padded,
-                lw_partial_tile_idx);
+                cb_mask_in>(prev, cur, is_last, is_first, apply_mask, lw_num_padded, lw_partial_tile_idx);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
                 cb_pop_front(cb_exp_max_diff, Sq_chunk_t);
-                cb_pop_front(alias_prev_max, Sq_chunk_t);
-                cb_pop_front(alias_prev_sum, Sq_chunk_t);
-                cb_pop_front(alias_prev_out, Sq_chunk_t * vDHt);
+                cb_pop_front(prev.max, Sq_chunk_t);
+                cb_pop_front(prev.sum, Sq_chunk_t);
+                cb_pop_front(prev.out, Sq_chunk_t * vDHt);
             }
 
             if (is_last) {
-                // Normalization consumed cur_sum and cur_out; pop cur_max.
-                cb_pop_front(alias_cur_max, Sq_chunk_t);
+                // Normalization consumed cur.sum and cur.out; pop cur.max.
+                cb_pop_front(cur.max, Sq_chunk_t);
             } else {
-                std::swap(alias_prev_max, alias_cur_max);
-                std::swap(alias_prev_sum, alias_cur_sum);
-                std::swap(alias_prev_out, alias_cur_out);
+                std::swap(prev, cur);
             }
         }
 
         // Pop Q — not popped inside step since ring_mode gates the early Q pop
         cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
 
-        // Write back alias state for deferred norm (persists across ring iterations)
+        // Write back state for deferred norm (persists across ring iterations)
         if constexpr (deferred_norm) {
-            acc_state.prev_sum = alias_prev_sum;
-            acc_state.cur_sum = alias_cur_sum;
-            acc_state.prev_max = alias_prev_max;
-            acc_state.cur_max = alias_cur_max;
-            acc_state.prev_out = alias_prev_out;
-            acc_state.cur_out = alias_cur_out;
+            acc_state = st;
         }
 
         // ========== Ring Finalization ==========
         // Skip when deferred norm handled normalization inside sdpa_inner_loop_step.
         if constexpr (!deferred_norm) {
-            // After all K chunks: alias_prev_sum = final sum, alias_prev_max = final max,
-            // alias_prev_out = final unnormalized output. alias_cur_* are empty.
+            // After all K chunks: prev.sum = final sum, prev.max = final max,
+            // prev.out = final unnormalized output. cur.* are empty.
             {
                 constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
-                log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
-                mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(alias_prev_max);
-                add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
-                recip_block_inplace(alias_prev_sum, Sq_chunk_t);
-                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_prev_out, alias_prev_sum);
+                matmul_reduce<Sq_chunk_t>(cb_col_identity, prev.sum);
+                log_block(prev.sum, cur.max, Sq_chunk_t);
+                mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(prev.max);
+                add_block_inplace(prev.max, cur.max, Sq_chunk_t);
+                recip_block_inplace(prev.sum, Sq_chunk_t);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(prev.out, prev.sum);
 
                 if (ring_iter > 0) {
                     cb_wait_front(cb_lse_in, Sq_chunk_t);
                     cb_wait_front(cb_prev_out, out_chunk_tiles);
 
-                    uint32_t alias_cur_lse = alias_prev_max;
-                    uint32_t alias_sig = alias_cur_max;
-                    uint32_t alias_cur_out_r = alias_prev_out;
-                    uint32_t alias_sub = alias_cur_out;
+                    uint32_t alias_cur_lse = prev.max;
+                    uint32_t alias_sig = cur.max;
+                    uint32_t alias_cur_out_r = prev.out;
+                    uint32_t alias_sub = cur.out;
 
                     sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
 
@@ -1314,11 +1265,11 @@ void sdpa_ring_v2(
                     if constexpr (!uniform_format) {
                         pack_reconfig_data_format(cb_out);
                     }
-                    copy_block(alias_prev_out, cb_out, out_chunk_tiles);
+                    copy_block(prev.out, cb_out, out_chunk_tiles);
                     if constexpr (!uniform_format) {
                         pack_reconfig_data_format(cb_lse_out);
                     }
-                    copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
+                    copy_block(prev.max, cb_lse_out, Sq_chunk_t);
                 }
             }
         }  // if constexpr (!deferred_norm)
