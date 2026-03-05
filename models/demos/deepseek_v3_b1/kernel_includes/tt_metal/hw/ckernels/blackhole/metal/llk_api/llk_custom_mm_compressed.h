@@ -188,36 +188,73 @@ constexpr size_t _pair_run_length_() {
     }
 }
 
+// Threshold: runs shorter than this use noinline call, longer use noinline call too.
+// The distinction is that runs >= MIN_LONG_RUN use the loop-based _run_fmt_ (1 call),
+// while runs < MIN_LONG_RUN get inlined as constexpr pairs (zero call overhead, small code).
+constexpr size_t MIN_LONG_RUN = 4;  // pairs (8 tiles)
+
+// Inline N constexpr pairs starting at PAIR_START (for short runs at format boundaries)
+template <size_t PAIR_START, size_t N, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+FORCE_INLINE void _inline_pairs_(volatile uint* cfg, uint32_t& address_a, uint32_t reg0_base, uint32_t reg2_base) {
+    if constexpr (N > 0) {
+        constexpr uint32_t fmt0 = _get_fmt_<PAIR_START * 2, NUM_PACKED, FMT_PACKED>();
+        constexpr uint32_t fmt1 = _get_fmt_<PAIR_START * 2 + 1, NUM_PACKED, FMT_PACKED>();
+        constexpr uint32_t sz0 = TILE_SIZES[fmt0] >> cb_addr_shift;
+        constexpr uint32_t sz1 = TILE_SIZES[fmt1] >> cb_addr_shift;
+        UNPACK(({
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+            address_a += sz0;
+            semaphore_post(semaphore::UNPACK_SYNC);
+            wait_for_next_context(2);
+            reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
+            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
+            address_a += sz1;
+            semaphore_post(semaphore::UNPACK_SYNC);
+        }));
+        _inline_pairs_<PAIR_START + 1, N - 1, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+    }
+}
+
+// Count consecutive short runs (runs < MIN_LONG_RUN) starting at PAIR_START.
+// Returns total number of pairs covered by these short runs.
+template <size_t PAIR_START, size_t TOTAL_PAIRS, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+constexpr size_t _short_region_pairs_() {
+    if constexpr (PAIR_START >= TOTAL_PAIRS) {
+        return 0;
+    } else {
+        constexpr size_t run = _pair_run_length_<PAIR_START, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
+        if constexpr (run == 0) {
+            // Mixed pair: 1 pair, continue scanning
+            return 1 + _short_region_pairs_<PAIR_START + 1, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
+        } else if constexpr (run < MIN_LONG_RUN) {
+            // Short uniform run: include it, continue scanning
+            return run + _short_region_pairs_<PAIR_START + run, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
+        } else {
+            return 0;  // Hit a long run — stop
+        }
+    }
+}
+
 // Emit calls for all pairs starting at PAIR_START
 template <size_t PAIR_START, size_t TOTAL_PAIRS, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
 FORCE_INLINE void _emit_runs_(volatile uint* cfg, uint32_t& address_a, uint32_t reg0_base, uint32_t reg2_base) {
     if constexpr (PAIR_START < TOTAL_PAIRS) {
         constexpr size_t run = _pair_run_length_<PAIR_START, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
 
-        if constexpr (run > 0) {
-            // Uniform run: all pairs have the same format
+        if constexpr (run >= MIN_LONG_RUN) {
+            // Long uniform run: noinline function with loop (fast, compact)
             constexpr uint32_t fmt = _get_fmt_<PAIR_START * 2, NUM_PACKED, FMT_PACKED>();
             _run_fmt_<fmt>(cfg, address_a, reg0_base, reg2_base, run);
             _emit_runs_<PAIR_START + run, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
         } else {
-            // Mixed pair: inline with constexpr immediates
-            constexpr uint32_t fmt0 = _get_fmt_<PAIR_START * 2, NUM_PACKED, FMT_PACKED>();
-            constexpr uint32_t fmt1 = _get_fmt_<PAIR_START * 2 + 1, NUM_PACKED, FMT_PACKED>();
-            constexpr uint32_t sz0 = TILE_SIZES[fmt0] >> cb_addr_shift;
-            constexpr uint32_t sz1 = TILE_SIZES[fmt1] >> cb_addr_shift;
-            UNPACK(({
-                wait_for_next_context(2);
-                reconfig_custom_mm_srca(cfg, fmt0, reg0_base, reg2_base);
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
-                address_a += sz0;
-                semaphore_post(semaphore::UNPACK_SYNC);
-                wait_for_next_context(2);
-                reconfig_custom_mm_srca(cfg, fmt1, reg0_base, reg2_base);
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a;
-                address_a += sz1;
-                semaphore_post(semaphore::UNPACK_SYNC);
-            }));
-            _emit_runs_<PAIR_START + 1, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+            // Short run or mixed pair: inline all consecutive short runs as constexpr pairs
+            constexpr size_t short_pairs = _short_region_pairs_<PAIR_START, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>();
+            static_assert(short_pairs > 0, "short region must have at least 1 pair");
+            _inline_pairs_<PAIR_START, short_pairs, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
+            _emit_runs_<PAIR_START + short_pairs, TOTAL_PAIRS, NUM_PACKED, FMT_PACKED>(
+                cfg, address_a, reg0_base, reg2_base);
         }
     }
 }
