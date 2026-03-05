@@ -26,6 +26,11 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const auto& input_tensors = tensor_args.input_tensors;
     const bool is_sharded = input_tensors[0].is_sharded();
 
+    if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
+        std::cout << "GOT WHAT EXPECTED \n";
+        return ConcatProgramFactory{};  // discussed
+    }
+
     if (!is_sharded) {
         return ConcatProgramFactory{};
     }

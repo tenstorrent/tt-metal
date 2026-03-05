@@ -34,13 +34,22 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
+    const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec();  // can be nullopt if no nd sharding
+    const bool nd_sharded = first_nd_shard_spec.has_value();
 
     constexpr bool rm_orientation = false;
+    Buffer* const dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), output.buffer()->alignment());
-    if (rm_layout) {
+    const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), dst_buffer->alignment());
+    if (nd_sharded) {
+        num_output_pages = dst_buffer->num_pages();
+        single_page_size = dst_buffer->aligned_page_size();
+        std::cout << "ND Sharding: num_output_pages " << num_output_pages << "  aligned page size " << single_page_size
+                  << "\n";
+    } else if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
@@ -111,9 +120,6 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     const uint32_t num_input_tensors = input_tensors.size();
 
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_pages = 2;
     CircularBufferConfig cb_src0_config =
@@ -154,6 +160,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             num_accum_pages /= TILE_WIDTH;
         }
     }
+    std::cout << "result acum_pages: " << num_accum_pages << "\n";
 
     uint32_t num_output_pages_per_block = 0;
 
@@ -175,10 +182,10 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         }
     } else {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            auto* buffer = input_tensors[i].buffer();
+            auto* const buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
             page_size_per_tensor[i] = buffer->page_size();
-            uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
+            const uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
@@ -245,7 +252,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         uint32_t id_within_block = num_pages_written % num_output_pages_per_block;
         uint32_t curr_tensor = 0;
         uint32_t curr_tensor_id = 0;
-        for (uint32_t j = 0; j < num_input_tensors; j++) {
+        for (uint32_t j = 0; j < num_input_tensors; ++j) {
             page_id_per_tensor[j] = block_id * num_pages_per_block[j];
             if (id_within_block == 0) {
                 continue;
@@ -271,7 +278,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
+                dst_buffer->address(), dst_buffer->page_size(), num_pages_per_core, num_pages_written};
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }
