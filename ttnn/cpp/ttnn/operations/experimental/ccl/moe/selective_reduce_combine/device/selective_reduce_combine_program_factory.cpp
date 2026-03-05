@@ -92,7 +92,7 @@ void UnifiedSelectReduce::override_runtime_arguments(
             program,
             shared_variables.reader_kernel_id,
             shared_variables.writer_kernel_id,
-            shared_variables.sender_cores,
+            shared_variables.cores,
             tensor_args,
             tensor_return_value,
             shared_variables.init_semaphore,
@@ -271,8 +271,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     num_data_parallel_cores = data_parallel_sizes_bytes.size();
     const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
-    const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
-    const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
+    const std::vector<CoreCoord> cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
+    const ttnn::CoreRangeSet needed_worker_core_range_set(cores);
 
     // buffer padding NOT supported because we don't rely on tensor shapes to represent the data layout
     const auto token_segment_buffer_size_bytes =
@@ -379,6 +379,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         needed_worker_core_range_set,
         reader_config);
 
+    // launch writer kernel
+    const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
     const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
                                     !operation_attributes.optional_cross_device_semaphore.has_value();
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
@@ -438,7 +440,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         needed_worker_core_range_set,
         writer_config);
 
-    const auto& termination_master_core = sender_cores[0];
+    const auto& termination_master_core = cores[0];
     const auto termination_master_virtual_core = mesh_device->worker_core_from_logical_core(termination_master_core);
     const auto termination_master_semaphore_id = CreateSemaphore(program, {termination_master_core}, 0);
 
@@ -446,7 +448,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-    for (const auto& sender_core : sender_cores) {
+    for (const auto& core : cores) {
         std::vector<uint32_t> reader_runtime_args = {
             dense_token_maps_tensor.buffer()->address(),    // dense_token_maps_addr
             dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
@@ -462,7 +464,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             cross_device_semaphore.address()    // global_semaphore_addr
         };
 
-        const bool is_termination_master = (sender_core == termination_master_core);
+        const bool is_termination_master = (core == termination_master_core);
         for (const auto& neighbor_coordinate : neighbors) {
             const auto& mux_virtual_core = core_map_iter->at(neighbor_coordinate);
 
@@ -472,7 +474,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core,
                 link_worker_idx,
-                sender_core,
+                core,
                 mux_kernel_config,
                 program,
                 termination_master_virtual_core,
@@ -485,8 +487,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             add_termination_master_rt_args(mux_neigbor_core_maps, writer_runtime_args);
         }
 
-        SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
-        SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
+        SetRuntimeArgs(program, ternary_reader_kernel_id, core, reader_runtime_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
 
         if (data_parallel_size_iter == data_parallel_sizes_bytes.cend()) {
             data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
@@ -505,7 +507,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     return {
         .reader_kernel_id = ternary_reader_kernel_id,
         .writer_kernel_id = unary_writer_kernel_id,
-        .sender_cores = std::move(sender_cores),
+        .cores = std::move(cores),
         .init_semaphore = init_semaphore,
         .cross_device_semaphore = cross_device_semaphore};
 }
@@ -514,13 +516,13 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<CoreCoord>& sender_cores,
+    const std::vector<CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& output_tensor,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-    for (const auto& core : sender_cores) {
+    for (const auto& core : cores) {
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
 

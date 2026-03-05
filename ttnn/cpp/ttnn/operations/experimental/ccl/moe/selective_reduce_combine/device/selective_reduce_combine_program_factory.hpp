@@ -13,7 +13,7 @@ namespace ttnn::experimental::prim {
 struct SelectiveReduceCombineProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    std::vector<tt::tt_metal::CoreCoord> sender_cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
     const GlobalSemaphore init_semaphore;
     const GlobalSemaphore cross_device_semaphore;
 };
