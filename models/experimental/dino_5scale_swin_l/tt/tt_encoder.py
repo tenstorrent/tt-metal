@@ -15,10 +15,10 @@ import torch
 import ttnn
 from loguru import logger
 
-UPLOAD_CHUNK_QUERIES = 64
+UPLOAD_CHUNK_QUERIES = 16
 
 
-def decoder_deformable_attn_compute_optimized(
+def compute_sampling_locations_and_attention_weights(
     sampling_offsets_flat,
     attention_weights_flat,
     reference_points,
@@ -30,55 +30,54 @@ def decoder_deformable_attn_compute_optimized(
     num_points,
     device,
 ):
-    # L1 only for small tensors that fit (~1MB); large so_tt/aw_tt/sampling_locations stay in DRAM.
-    l1_cfg = ttnn.L1_MEMORY_CONFIG
-    dram_cfg = ttnn.DRAM_MEMORY_CONFIG
     so_shape = (bs, num_queries, num_heads, num_levels, num_points, 2)
     aw_shape_flat = (bs, num_queries, num_heads, num_levels * num_points)
     aw_shape_5d = (bs, num_queries, num_heads, num_levels, num_points)
 
-    so_tt = ttnn.reshape(sampling_offsets_flat, so_shape, memory_config=dram_cfg)
-    aw_tt = ttnn.reshape(attention_weights_flat, aw_shape_flat, memory_config=dram_cfg)
+    so_tt = ttnn.reshape(sampling_offsets_flat, so_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    aw_tt = ttnn.reshape(attention_weights_flat, aw_shape_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     aw_tt = ttnn.softmax_in_place(aw_tt)
-    aw_tt = ttnn.reshape(aw_tt, aw_shape_5d, memory_config=dram_cfg)
+    aw_tt = ttnn.reshape(aw_tt, aw_shape_5d, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if isinstance(reference_points, ttnn.Tensor):
         ref_pts = reference_points
     else:
-        ref_pts = ttnn.from_torch(reference_points, device=device, memory_config=l1_cfg)
+        ref_pts = ttnn.from_torch(reference_points, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if ref_pts.shape[-1] == 2:
         spatial_shapes_tt = ttnn.from_torch(
-            spatial_shapes.float(), device=device, dtype=ttnn.bfloat16, memory_config=l1_cfg
+            spatial_shapes.float(), device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
         )
         offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
-        offset_normalizer = ttnn.to_memory_config(offset_normalizer, l1_cfg)
+        offset_normalizer = ttnn.to_memory_config(offset_normalizer, ttnn.L1_MEMORY_CONFIG)
         offset_normalizer = ttnn.reshape(offset_normalizer, (1, 1, 1, num_levels, 1, 2))
-        so_tt = ttnn.divide(so_tt, offset_normalizer, memory_config=dram_cfg)
-        ref_xy = ttnn.reshape(ref_pts, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=l1_cfg)
-        sampling_locations = ttnn.add(ref_xy, so_tt, memory_config=dram_cfg)
+        so_tt = ttnn.divide(so_tt, offset_normalizer, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ref_xy = ttnn.reshape(
+            ref_pts, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        sampling_locations = ttnn.add(ref_xy, so_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     else:
         ref_xy_4d = ref_pts[:, :, :, :2]
-        ref_xy = ttnn.reshape(ref_xy_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=l1_cfg)
+        ref_xy = ttnn.reshape(
+            ref_xy_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         if isinstance(ref_xy, torch.Tensor):
-            ref_xy = ttnn.from_torch(ref_xy, device=device, memory_config=l1_cfg)
+            ref_xy = ttnn.from_torch(ref_xy, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
         ref_wh_4d = ref_pts[:, :, :, 2:]
-        ref_wh = ttnn.reshape(ref_wh_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=l1_cfg)
+        ref_wh = ttnn.reshape(
+            ref_wh_4d, (bs, num_queries, 1, ref_pts.shape[2], 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         if isinstance(ref_wh, torch.Tensor):
-            ref_wh = ttnn.from_torch(ref_wh, device=device, memory_config=l1_cfg)
+            ref_wh = ttnn.from_torch(ref_wh, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        term1 = ttnn.divide(so_tt, num_points, memory_config=dram_cfg)
-        term2 = ttnn.multiply(ref_wh, 0.5, memory_config=l1_cfg)
-        offset_term = ttnn.multiply(term1, term2, memory_config=dram_cfg)
+        term1 = ttnn.divide(so_tt, num_points, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        term2 = ttnn.multiply(ref_wh, 0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
+        offset_term = ttnn.multiply(term1, term2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        sampling_locations = ttnn.add(ref_xy, offset_term, memory_config=dram_cfg)
+        sampling_locations = ttnn.add(ref_xy, offset_term, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     return sampling_locations, aw_tt
-
-
-# Encoder path (Option A): compute 6D/5D on host, upload this many queries at a time to device.
-# Chunk size 1024; only small intermediates (grid ~128KB, attn ~64KB) fit L1, rest in DRAM.
 
 
 def multi_scale_deformable_attn_ttnn(
@@ -99,9 +98,6 @@ def multi_scale_deformable_attn_ttnn(
     num_levels = sampling_locations_tt.shape[3]
     num_points = sampling_locations_tt.shape[4]
 
-    l1_cfg = ttnn.L1_MEMORY_CONFIG
-    dram_cfg = ttnn.DRAM_MEMORY_CONFIG
-
     split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
     value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
 
@@ -113,8 +109,8 @@ def multi_scale_deformable_attn_ttnn(
         val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
         value_l_tts.append(val_l)
 
-    sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=dram_cfg)
-    sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=dram_cfg)
+    sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     chunk_accum = None
 
@@ -122,10 +118,10 @@ def multi_scale_deformable_attn_ttnn(
         grid = sampling_grids[:, :, :, level, :, :]
         grid = ttnn.permute(grid, (0, 2, 3, 1, 4))
         grid = ttnn.reshape(grid, (bs * num_heads, num_points * chunk_Q, 1, 2))
-        grid = ttnn.to_memory_config(grid, l1_cfg)  # ~128KB for chunk_Q=1024, fits L1
+        grid = ttnn.to_memory_config(grid, ttnn.L1_MEMORY_CONFIG)
         grid = ttnn.to_layout(grid, ttnn.ROW_MAJOR_LAYOUT)
 
-        sampled = ttnn.grid_sample(value_l_tts[level], grid, memory_config=dram_cfg)
+        sampled = ttnn.grid_sample(value_l_tts[level], grid, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(grid)
 
         sampled = ttnn.squeeze(sampled, 2)
@@ -136,17 +132,19 @@ def multi_scale_deformable_attn_ttnn(
         attn_tt = attention_weights_tt[:, :, :, level, :]
         attn_tt = ttnn.permute(attn_tt, (0, 2, 1, 3))
         attn_tt = ttnn.reshape(attn_tt, (bs * num_heads, chunk_Q, num_points))
-        attn_tt = ttnn.to_memory_config(attn_tt, l1_cfg)  # ~64KB, fits L1
+        attn_tt = ttnn.to_memory_config(attn_tt, ttnn.L1_MEMORY_CONFIG)
 
         level_out = None
         for p in range(num_points):
-            attn_p = ttnn.slice(attn_tt, [0, 0, p], [bs * num_heads, chunk_Q, p + 1], memory_config=l1_cfg)  # ~16KB
-            weighted_p = ttnn.mul(point_chunks[p], attn_p, memory_config=dram_cfg)
+            attn_p = ttnn.slice(
+                attn_tt, [0, 0, p], [bs * num_heads, chunk_Q, p + 1], memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            weighted_p = ttnn.mul(point_chunks[p], attn_p, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_p)
             if level_out is None:
                 level_out = weighted_p
             else:
-                level_out = ttnn.add(level_out, weighted_p, memory_config=dram_cfg)
+                level_out = ttnn.add(level_out, weighted_p, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(weighted_p)
 
         ttnn.deallocate(attn_tt)
@@ -156,7 +154,7 @@ def multi_scale_deformable_attn_ttnn(
         if chunk_accum is None:
             chunk_accum = level_out
         else:
-            chunk_accum = ttnn.add(chunk_accum, level_out, memory_config=dram_cfg)
+            chunk_accum = ttnn.add(chunk_accum, level_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(level_out)
 
     ttnn.deallocate(sampling_grids)
@@ -181,14 +179,13 @@ def multi_scale_deformable_attn_uniad_style(
 ):
     """
     Optimized UniAD-style multi-scale deformable attention for decoder.
-    L1 only for small tensors that fit (grid ~256KB, attn ~128KB for Q<=2048); rest in DRAM.
     """
-    l1_cfg = ttnn.L1_MEMORY_CONFIG
-    dram_cfg = ttnn.DRAM_MEMORY_CONFIG
     if isinstance(sampling_locations_tt, torch.Tensor):
-        sampling_locations_tt = ttnn.from_torch(sampling_locations_tt, device=device, memory_config=l1_cfg)
+        sampling_locations_tt = ttnn.from_torch(
+            sampling_locations_tt, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
     if isinstance(attention_weights_tt, torch.Tensor):
-        attention_weights_tt = ttnn.from_torch(attention_weights_tt, device=device, memory_config=l1_cfg)
+        attention_weights_tt = ttnn.from_torch(attention_weights_tt, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     bs = sampling_locations_tt.shape[0]
     num_queries = sampling_locations_tt.shape[1]
@@ -197,15 +194,15 @@ def multi_scale_deformable_attn_uniad_style(
     split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
     value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
 
-    sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=dram_cfg)
-    sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=dram_cfg)
+    sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     output = ttnn.zeros(
         [bs, num_queries, num_heads, head_dim],
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=dram_cfg,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     for level, (H_, W_) in enumerate(value_spatial_shapes):
@@ -220,175 +217,33 @@ def multi_scale_deformable_attn_uniad_style(
         grid = sampling_grids[:, :, :, level, :, :]
         grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
         grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
-        # grid = ttnn.to_memory_config(grid, dram_cfg)
+
         grid = ttnn.to_layout(grid, ttnn.ROW_MAJOR_LAYOUT)
 
-        sampled = ttnn.grid_sample(val_l, grid, memory_config=l1_cfg)
+        sampled = ttnn.grid_sample(val_l, grid, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(grid)
         ttnn.deallocate(val_l)
-        # sampled = ttnn.squeeze(sampled, 2)  # [bs*heads, Q*points, dim]
-        # sampled = ttnn.to_layout(sampled, ttnn.TILE_LAYOUT)
+
         sampled = ttnn.reshape(sampled, (bs, num_heads, num_queries, num_points, head_dim))
         sampled = ttnn.permute(sampled, (0, 2, 1, 3, 4))  # [bs, Q, heads, points, dim]
 
         # Attention weights for this level: [bs, Q, heads, points, 1] - small, fits L1
         attn = attention_weights_tt[:, :, :, level, :]
         attn = ttnn.unsqueeze(attn, -1)
-        # attn = ttnn.to_memory_config(attn, l1_cfg)
 
         # Weighted sum over points
-        weighted = ttnn.mul(sampled, attn, memory_config=l1_cfg)
+        weighted = ttnn.mul(sampled, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(sampled)
         ttnn.deallocate(attn)
 
-        level_out = ttnn.sum(weighted, dim=-2, memory_config=l1_cfg)
+        level_out = ttnn.sum(weighted, dim=-2, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(weighted)
 
-        output = ttnn.add(output, level_out, memory_config=l1_cfg)
+        output = ttnn.add(output, level_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(level_out)
 
     output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
     return output
-
-
-'''
-def multi_scale_deformable_attn_ttnn(
-    value_tt,
-    value_spatial_shapes,
-    sampling_locations_torch,
-    attention_weights_torch,
-    device,
-    num_heads,
-    head_dim,
-    chunk_size=16384,
-):
-    """
-    Multi-scale deformable attention with query chunking.
-
-    All 4 sampling points per level are batched into a single grid_sample
-    call, reducing host→device transfers by 4x vs the per-point loop.
-
-    For the encoder (89K queries, 6 chunks, 5 levels): 60 transfers/layer
-    instead of 240, totaling 360 across 6 layers (was 1440).
-
-    Args:
-        value_tt: ttnn [bs, num_keys, num_heads, head_dim] ROW_MAJOR on device
-        value_spatial_shapes: torch.Tensor [num_levels, 2]
-        sampling_locations_torch: torch [bs, Q, heads, levels, points, 2]
-        attention_weights_torch: torch [bs, Q, heads, levels, points]
-        device: ttnn device
-        num_heads, head_dim: attention config
-        chunk_size: queries per chunk (default 16384)
-
-    Returns:
-        ttnn [bs, num_queries, embed_dims] TILE on device
-    """
-    bs = sampling_locations_torch.shape[0]
-    num_queries = sampling_locations_torch.shape[1]
-    num_levels = sampling_locations_torch.shape[3]
-    num_points = sampling_locations_torch.shape[4]
-
-    split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
-    value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
-
-    value_l_tts = []
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
-        H_, W_ = int(H_), int(W_)
-        val_l = value_level_list[level]
-        val_l = ttnn.permute(val_l, (0, 2, 1, 3))
-        val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
-        value_l_tts.append(val_l)
-
-    sampling_grids = sampling_locations_torch * 2.0 - 1.0
-
-    num_chunks = (num_queries + chunk_size - 1) // chunk_size
-    logger.info(
-        f"    deform_attn: {num_chunks} chunks, {num_levels} levels, "
-        f"{num_points} points/level (batched), "
-        f"{num_chunks * num_levels * 2} H→D transfers"
-    )
-
-    output_chunks = []
-
-    for c_idx, q_start in enumerate(range(0, num_queries, chunk_size)):
-        q_end = min(q_start + chunk_size, num_queries)
-        Q = q_end - q_start
-
-        chunk_accum = None
-
-        for level in range(num_levels):
-            # --- Transfer 1: grid with all points (points-slow ordering) ---
-            grid = sampling_grids[:, q_start:q_end, :, level, :, :]
-            grid = grid.permute(0, 2, 3, 1, 4).reshape(bs * num_heads, num_points * Q, 1, 2).contiguous()
-            grid_tt = ttnn.from_torch(
-                grid.to(torch.bfloat16),
-                device=device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-
-            # Single grid_sample for all 4 points
-            sampled = ttnn.grid_sample(value_l_tts[level], grid_tt)
-            ttnn.deallocate(grid_tt)
-
-            sampled = ttnn.squeeze(sampled, 2)
-            # sampled = ttnn.to_layout(sampled, ttnn.TILE_LAYOUT)
-            point_chunks = ttnn.split(sampled, [Q] * num_points, dim=1)
-            ttnn.deallocate(sampled)
-
-            # --- Transfer 2: attention weights for all points ---
-            attn = attention_weights_torch[:, q_start:q_end, :, level, :]
-            attn = attn.permute(0, 2, 1, 3).reshape(bs * num_heads, Q, num_points).contiguous()
-            attn_tt = ttnn.from_torch(
-                attn.to(torch.bfloat16),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-            )
-
-            level_out = None
-            for p in range(num_points):
-                attn_p = ttnn.slice(attn_tt, [0, 0, p], [bs * num_heads, Q, p + 1])
-                weighted_p = ttnn.mul(point_chunks[p], attn_p)
-                ttnn.deallocate(attn_p)
-                if level_out is None:
-                    level_out = weighted_p
-                else:
-                    # old = level_out
-                    level_out = ttnn.add(level_out, weighted_p)
-                    # ttnn.deallocate(old)
-                    ttnn.deallocate(weighted_p)
-
-            ttnn.deallocate(attn_tt)
-            for pc in point_chunks:
-                ttnn.deallocate(pc)
-
-            if chunk_accum is None:
-                chunk_accum = level_out
-            else:
-                # old = chunk_accum
-                chunk_accum = ttnn.add(chunk_accum, level_out)
-                # ttnn.deallocate(old)
-                ttnn.deallocate(level_out)
-
-        output_chunks.append(chunk_accum)
-
-    for vl in value_l_tts:
-        ttnn.deallocate(vl)
-
-    if len(output_chunks) == 1:
-        output = output_chunks[0]
-    else:
-        output = ttnn.concat(output_chunks, dim=1)
-        for c in output_chunks:
-            ttnn.deallocate(c)
-
-    # output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-    output = ttnn.permute(output, (1, 0, 2))
-    output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
-    output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-
-    logger.info("    deform_attn: done.")
-    return output
-'''
 
 
 class TtMSDeformAttn:
@@ -442,10 +297,9 @@ class TtMSDeformAttn:
         bs, num_keys, _ = value.shape
 
         logger.info("  MSDeformAttn: linear projections on device...")
-        # value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
+
         value = ttnn.linear(value, self.params["value_proj"]["weight"], bias=self.params["value_proj"]["bias"])
 
-        # query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         sampling_offsets_flat = ttnn.linear(
             query, self.params["sampling_offsets"]["weight"], bias=self.params["sampling_offsets"]["bias"]
         )
@@ -462,7 +316,7 @@ class TtMSDeformAttn:
             mask = ttnn.reshape(key_padding_mask, (bs, num_keys, 1))
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
         if num_queries <= 2048:
-            sampling_locations, aw_tt = decoder_deformable_attn_compute_optimized(
+            sampling_locations, aw_tt = compute_sampling_locations_and_attention_weights(
                 sampling_offsets_flat,
                 attention_weights_flat,
                 reference_points,
@@ -485,7 +339,6 @@ class TtMSDeformAttn:
                 head_dim=self.head_dim,
             )
         else:
-            # Option A: compute 6D/5D on host, upload few chunks at a time; grid + attention on device.
             logger.info("  MSDeformAttn: computing sampling locations and attention weights on host...")
             so_torch = ttnn.to_torch(sampling_offsets_flat).float()
             aw_torch = ttnn.to_torch(attention_weights_flat).float()
@@ -518,7 +371,6 @@ class TtMSDeformAttn:
             else:
                 raise ValueError(f"reference_points last dim must be 2 or 4, got {ref_pts.shape[-1]}")
 
-            # Upload full sampling_locations and attention_weights to device once; slice per chunk in loop.
             sampling_locations_tt = ttnn.from_torch(
                 sampling_locations_torch.to(torch.bfloat16),
                 device=self.device,
