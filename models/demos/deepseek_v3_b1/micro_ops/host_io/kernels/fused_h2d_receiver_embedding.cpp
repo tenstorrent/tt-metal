@@ -6,6 +6,7 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "pcie_noc_utils.h"
+#include "api/debug/dprint.h"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -28,7 +29,7 @@ constexpr auto embedding_args = TensorAccessorArgs<14>();
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+    while (!socket_wait_for_pages(socket, num_pages)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
             return false;
@@ -159,6 +160,10 @@ void kernel_main() {
     uint32_t read_addr_lo = receiver_socket.h2d.data_addr_lo;
     uint32_t pcie_xy_enc = receiver_socket.h2d.pcie_xy_enc;
 
+    DPRINT << "Start H2D Receiver Embedding Kernel" << ENDL();
+    DPRINT << "H2D Receiver page size: " << token_page_size << ENDL();
+    DPRINT << "use_fabric: " << static_cast<uint32_t>(use_fabric) << ENDL();
+
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
 
@@ -172,6 +177,9 @@ void kernel_main() {
 
         downstream_fabric_connection.open();
         downstream_fabric_connection_2.open();
+
+        DPRINT << "Downstream encoding: " << downstream_enc.d2d.downstream_mesh_id << " "
+               << downstream_enc.d2d.downstream_chip_id << ENDL();
 
         fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
         fabric_set_unicast_route(downstream_data_packet_header_addr_2, downstream_enc);
@@ -195,11 +203,15 @@ void kernel_main() {
             sender_socket.downstream_fifo_addr);
     }
 
+    uint32_t iteration = 0;
     while (true) {
+        invalidate_l1_cache();
+        DPRINT << "H2D wait for pages with termination iteration " << iteration << ENDL();
         // Wait for pages in H2D socket
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "H2D wait for pages with termination done iteration " << iteration << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -234,7 +246,10 @@ void kernel_main() {
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
+            DPRINT << "H2D Reserve pages downstream iteration " << iteration << ENDL();
             socket_reserve_pages(sender_socket, 1);
+            DPRINT << "H2D Reserve pages downstream done iteration " << iteration << ENDL();
+
             send_pages_over_socket(
                 sender_socket,
                 downstream_fabric_connection,
@@ -244,11 +259,14 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
+            DPRINT << "H2D Send pages downstream done iteration " << iteration << ENDL();
         }
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
+        DPRINT << "H2d Notify sender done iteration " << iteration << ENDL();
         invalidate_l1_cache();
+        iteration++;
     }
 
     update_socket_config(receiver_socket);

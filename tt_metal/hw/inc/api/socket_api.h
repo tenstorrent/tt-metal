@@ -289,6 +289,7 @@ bool socket_wait_for_pages(
             return false;
         }
     } while (bytes_recv < num_bytes);
+    DPRINT << "Got num bytes: " << bytes_recv << ENDL();
     return true;
 #endif
     return true;

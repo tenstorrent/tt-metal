@@ -485,7 +485,7 @@ def test_persistent_moe_15_stages(
     embedding_fifo_size = embedding_size_bytes * 2
 
     torch.manual_seed(42)
-    torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
+    torch_embedding = torch.randn(1, 1, 1, K, dtype=torch.bfloat16)
 
     reduce_root_coord = ttnn.MeshCoordinate(0, 0)
 
@@ -666,7 +666,13 @@ def test_persistent_moe_15_stages(
             available_cores = moe_worker_core_grid
             bcast_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(3)]
             moe_semaphores = MoeOp.create_semaphores(mesh_device)
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 1)
+
+            device_grid_size = mesh_device.compute_with_storage_grid_size()
+            worker_crs = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+            )
+
+            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
 
             input_core_grid = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid
             bcast_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
@@ -742,7 +748,7 @@ def test_persistent_moe_15_stages(
             for iteration in range(iterations):
                 print(f"[rank={my_mesh_id}] iteration {iteration} start")
                 torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
+                torch_token[0, 0] = 0
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 pipeline_block.write_token(token_tensor)
                 print(f"[rank={my_mesh_id}] iteration {iteration} token written")

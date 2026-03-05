@@ -933,17 +933,6 @@ void kernel_main() {
     uint32_t iteration = 0;
 
     auto moe_body = [&]() {
-#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
-        {
-            constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
-            uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
-            unified_kernels::reconfig_cb_interfaces(cb_config);
-        }
-#if defined(COMPILE_FOR_NCRISC)
-        setup_all_sharded_buffers();
-#endif
-#endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
-
 #if defined(COMPILE_FOR_BRISC) && defined(ENABLE_BCAST)
         if constexpr (persistent_mode != 0) {
             constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
@@ -954,6 +943,17 @@ void kernel_main() {
             }
         }
 #endif
+
+#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+        {
+            constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
+            uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
+            unified_kernels::reconfig_cb_interfaces(cb_config);
+        }
+#if defined(COMPILE_FOR_NCRISC)
+        setup_all_sharded_buffers();
+#endif
+#endif  // RECONFIG_MOE_CBS && !UCK_CHLKC_MATH
 
 #ifdef ENABLE_BCAST
         // Step -1: CCL Broadcast — receive data from fabric into intermediate tensor
@@ -1356,7 +1356,6 @@ void kernel_main() {
         }
 #endif
 #endif
-
     };
 
     while (true) {
