@@ -73,6 +73,22 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      # Pre-built artifacts (optional - if provided, skips build-artifact job)
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built dev Docker image tag (skips build if provided)"
+      build-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built build artifact name (skips build if provided)"
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built wheel artifact name (skips build if provided)"
   workflow_dispatch:
     inputs:
       with-retries:
@@ -169,6 +185,7 @@ jobs:
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
+    if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -182,7 +199,42 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       ref: ${{ inputs.ref || github.sha }}
 
+  resolve-artifacts:
+    runs-on: ubuntu-latest
+    needs: [build-artifact]
+    if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
+    outputs:
+      dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
+      build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
+    steps:
+      - id: resolve
+        run: |
+          # Validate pre-built artifact inputs - all three must be provided together
+          if [[ -n "${{ inputs.dev-docker-image }}" || -n "${{ inputs.build-artifact-name }}" || -n "${{ inputs.wheel-artifact-name }}" ]]; then
+            if [[ -z "${{ inputs.dev-docker-image }}" || -z "${{ inputs.build-artifact-name }}" || -z "${{ inputs.wheel-artifact-name }}" ]]; then
+              echo "Error: When using pre-built artifacts, all three inputs must be provided:"
+              echo "  - dev-docker-image: '${{ inputs.dev-docker-image }}'"
+              echo "  - build-artifact-name: '${{ inputs.build-artifact-name }}'"
+              echo "  - wheel-artifact-name: '${{ inputs.wheel-artifact-name }}'"
+              exit 1
+            fi
+          fi
+
+          # Use provided artifacts if available, otherwise use built artifacts
+          if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
+            echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          fi
+
   tests-to-run:
+    needs: [resolve-artifacts]
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     outputs:
       ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
@@ -213,14 +265,14 @@ jobs:
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    if: ${{ needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
@@ -229,7 +281,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -237,13 +289,13 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.tests-to-run.outputs.models-unit-tests == 'true' }}
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -251,7 +303,7 @@ jobs:
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -259,13 +311,13 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
@@ -273,7 +325,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
-    needs: [build-artifact, tests-to-run]
+    needs: [resolve-artifacts, tests-to-run]
 
     strategy:
       fail-fast: false
@@ -281,36 +333,36 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
       post_commit_only: true
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [build-artifact, tests-to-run]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
-    needs: [build-artifact, tests-to-run]
+    needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -318,14 +370,14 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
