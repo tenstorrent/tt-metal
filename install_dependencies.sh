@@ -351,8 +351,8 @@ prep_redhat_system() {
     fi
 
     # RHEL/Rocky/Alma: enable EPEL and CRB for devel packages
-    echo "[INFO] Installing EPEL repository..."
-    dnf install -y epel-release
+    echo "[INFO] Installing EPEL repository and dnf plugins..."
+    dnf install -y epel-release dnf-plugins-core
 
     echo "[INFO] Enabling CRB repository for development packages..."
     dnf config-manager --set-enabled crb 2>/dev/null || \
@@ -651,6 +651,13 @@ verify_compiler() {
             expected_cxx="g++-14"; expected_cc="gcc-14" ;;
         gcc)
             if command -v g++ >/dev/null 2>&1; then
+                local gcc_major
+                gcc_major=$(get_compiler_major_version g++)
+                if [ -n "$gcc_major" ] && [ "$gcc_major" -lt 12 ] 2>/dev/null; then
+                    echo "[ERROR] GCC $gcc_major is too old. tt-metal requires GCC >= 12."
+                    echo "[ERROR] On this system, try '--compiler clang' instead."
+                    exit 1
+                fi
                 echo "[OK] Compiler verified: $(g++ --version 2>/dev/null | head -1)"
                 return 0
             fi
@@ -844,16 +851,23 @@ install() {
     install_packages
 
     # On RedHat, openmpi installs to /usr/lib64/openmpi/ and is not in PATH by default.
-    # Persist the paths so subsequent build steps (e.g., build_metal.sh in Docker) can find MPI.
+    # Create symlinks so MPI tools are available in all contexts (Docker RUN, non-login shells).
+    # Also set up /etc/profile.d for LD_LIBRARY_PATH and PKG_CONFIG_PATH in login shells.
     if is_redhat_based && [ "$distributed" -eq 1 ]; then
         if [ -d /usr/lib64/openmpi/bin ]; then
+            for bin in /usr/lib64/openmpi/bin/*; do
+                local name
+                name="$(basename "$bin")"
+                [ -e "/usr/local/bin/$name" ] || ln -s "$bin" "/usr/local/bin/$name"
+            done
+            echo "[INFO] Created symlinks for openmpi binaries in /usr/local/bin/"
+
             cat > /etc/profile.d/openmpi.sh << 'MPIEOF'
-export PATH="/usr/lib64/openmpi/bin:$PATH"
 export LD_LIBRARY_PATH="/usr/lib64/openmpi/lib:${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="/usr/lib64/openmpi/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 MPIEOF
             source /etc/profile.d/openmpi.sh
-            echo "[INFO] Configured openmpi paths in /etc/profile.d/openmpi.sh"
+            echo "[INFO] Configured openmpi library paths in /etc/profile.d/openmpi.sh"
         fi
     fi
 

@@ -74,6 +74,10 @@ use_compiler() {
         else
             cc="${cxx/++/}"
         fi
+        if ! command -v "$cc" >/dev/null 2>&1; then
+            echo "ERROR: C compiler '$cc' not found (derived from '$cxx')"
+            exit 1
+        fi
         c_compiler_path="$(command -v "$cc")"
     fi
 }
