@@ -200,6 +200,7 @@ template <
     uint32_t index_transposed_cb_index,
     uint32_t values_cb_index,
     uint32_t output_ind_cb_index,
+    uint32_t tile_width,
     bool first_call>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
@@ -306,7 +307,7 @@ void top_k() {
             cb_push_back(index_transposed_cb_index, Wt);
         }
 
-        constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;
+        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
@@ -392,6 +393,7 @@ void kernel_main() {
     constexpr uint32_t seed = get_compile_time_arg_val(14);
     constexpr uint32_t cb_local_vals = get_compile_time_arg_val(15);
     constexpr uint32_t temp_cb_index = get_compile_time_arg_val(16);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(17);
     generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;
@@ -410,6 +412,7 @@ void kernel_main() {
         index_transposed_cb_index,
         values_cb_index,
         output_ind_cb_index,
+        TILE_WIDTH,
         true>();
     constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
 

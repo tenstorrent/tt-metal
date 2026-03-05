@@ -3,14 +3,11 @@
 
 #include "argmax_single_core_program_factory.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
-
-using namespace tt::constants;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
@@ -93,8 +90,10 @@ static std::vector<uint32_t> get_ctime_args_single_core(
         }
         case Layout::TILE: {
             const uint32_t logical_rank = input.logical_shape().size();
-            const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
-            const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
+            const uint32_t tile_width = input.tensor_spec().tile().get_width();
+            const uint32_t tile_height = input.tensor_spec().tile().get_height();
+            const uint32_t w_tiles = input_shape[rank - 1] / tile_width;
+            const uint32_t h_tiles = input_shape[rank - 2] / tile_height;
             const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
             const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
             const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
@@ -104,8 +103,8 @@ static std::vector<uint32_t> get_ctime_args_single_core(
                 dst_cb_index,
                 src_page_size,
                 dst_page_size,
-                TILE_HEIGHT,
-                TILE_WIDTH,
+                tile_height,
+                tile_width,
                 h_tiles,
                 w_tiles,
                 h_logical,
