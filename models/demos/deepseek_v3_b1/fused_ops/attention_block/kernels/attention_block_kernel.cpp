@@ -467,6 +467,7 @@ void kernel_main() {
         };
         DPRINT << " CCL RECEIVER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
+    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -615,6 +616,7 @@ void kernel_main() {
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
         DPRINT << " THIS IS MLA CORE " << ENDL();
+        DPRINT << " PER CORE RTA ARG IDX " << per_core_rta_arg_idx << ENDL();
         constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
         uint32_t cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         uint32_t core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -628,6 +630,8 @@ void kernel_main() {
         uint32_t mcast_end_y = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(per_core_rta_arg_idx));
         per_core_rta_arg_idx += num_tree_reduction_steps * 4;
+
+        DPRINT << " AFTTER MLA ARGS " << per_core_rta_arg_idx << ENDL();
 
         flash_mla_args = {
             .pos_addr = get_common_arg_val<uint32_t>(1),
@@ -781,10 +785,12 @@ void kernel_main() {
             .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
             .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
+            .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx),
             // scatter_arrival_enabled=1, so we need to pass the semaphore address
             .scatter_arrival_sem_addr = get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
         };
+        per_core_rta_arg_idx += SdpaReduceWorkerCTArgs::scatter_num_rows * 2;  // x, y value per dest
+        DPRINT << " SDPA REDUCE WORKER ARGS " << per_core_rta_arg_idx << ENDL();
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<
@@ -836,6 +842,7 @@ void kernel_main() {
         per_core_rta_arg_idx += fabric_args_offset;
         DPRINT << " CCL SENDER ARGS AFTER " << per_core_rta_arg_idx << ENDL();
     }
+    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
@@ -1130,6 +1137,7 @@ void kernel_main() {
     // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
+    DPRINT << " PER CORE RTA ARG IDX FINAL " << per_core_rta_arg_idx << ENDL();
     deepseek_compute_kernel_init();
 #endif
 

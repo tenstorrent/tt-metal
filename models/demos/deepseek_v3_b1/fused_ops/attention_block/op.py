@@ -3869,8 +3869,9 @@ class AttentionBlock:
 
                         if mesh_coord == ttnn.MeshCoordinate(0, 0):
                             print(
-                                f"after extend {mesh_coord} broadcast_worker_core {broadcast_worker_core}",
+                                f"after extend {mesh_coord} broadcast_worker_core brisc {broadcast_worker_core}",
                                 writer_rt_args_ref,
+                                len(writer_rt_args_ref),
                             )
                         break
 
@@ -3927,8 +3928,9 @@ class AttentionBlock:
                     extend_fabric_args(sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y], brisc_fabric_args)
                     if mesh_coord == ttnn.MeshCoordinate(0, 0):
                         print(
-                            f"after extend {mesh_coord} fwd_core {fwd_core}",
+                            f"after extend {mesh_coord} fwd_core brisc {fwd_core}",
                             sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y],
+                            len(sdpa_forwarder_brisc_rt_args[fwd_core.x][fwd_core.y]),
                         )
 
                     sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = list(
@@ -3949,8 +3951,9 @@ class AttentionBlock:
                     extend_fabric_args(sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y], ncrisc_fabric_args)
                     if mesh_coord == ttnn.MeshCoordinate(0, 0):
                         print(
-                            f"after extend {mesh_coord} fwd_core {fwd_core}",
+                            f"after extend {mesh_coord} fwd_core ncrisc {fwd_core}",
                             sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y],
+                            len(sdpa_forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y]),
                         )
 
                 for group in kernel_result.groups:
@@ -3990,7 +3993,11 @@ class AttentionBlock:
                     )
                 ccl_sender_ncrisc_rt_args_ref.extend(ccl["sender_ncrisc_common_rt_args"])
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_ncrisc_rt_args_ref)
+                    print(
+                        f"after extend {mesh_coord} ccl_sender_core ncrisc {ccl_sender_core}",
+                        ccl_sender_ncrisc_rt_args_ref,
+                        len(ccl_sender_ncrisc_rt_args_ref),
+                    )
                 ccl_sender_brisc_rt_args_ref = program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
@@ -3998,7 +4005,11 @@ class AttentionBlock:
                     print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
                 ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", ccl_sender_brisc_rt_args_ref)
+                    print(
+                        f"after extend {mesh_coord} ccl_sender_core brisc {ccl_sender_core}",
+                        ccl_sender_brisc_rt_args_ref,
+                        len(ccl_sender_brisc_rt_args_ref),
+                    )
                 ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
                     gather_core.x
                 ][gather_core.y]
@@ -4006,7 +4017,11 @@ class AttentionBlock:
                     print(f"before extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
                 ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    print(f"after extend {mesh_coord} gather_core {gather_core}", ccl_receiver_ncrisc_rt_args_ref)
+                    print(
+                        f"after extend {mesh_coord} gather_core ncrisc {gather_core}",
+                        ccl_receiver_ncrisc_rt_args_ref,
+                        len(ccl_receiver_ncrisc_rt_args_ref),
+                    )
 
                 fabric_node_id = ccl["fabric_node_id"]
                 neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
@@ -4026,25 +4041,21 @@ class AttentionBlock:
                     print(f"before extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
                 if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    print(f"after extend {mesh_coord} ccl_sender_core {ccl_sender_core}", sender_brisc_rt_args_ref)
+                    print(
+                        f"after extend {mesh_coord} ccl_sender_core brisc {ccl_sender_core}",
+                        sender_brisc_rt_args_ref,
+                        len(sender_brisc_rt_args_ref),
+                    )
 
                 receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
                 receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
                     gather_core.y
                 ]
-                receiver_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl["receiver_link"]],
-                    program,
-                    receiver_ncrisc_kernel_idx,
-                    gather_core,
+                print(
+                    f"final extend {mesh_coord} gather_core {gather_core}",
+                    receiver_ncrisc_rt_args_ref,
+                    len(receiver_ncrisc_rt_args_ref),
                 )
-                if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    print(f"before extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
-                extend_fabric_args(receiver_ncrisc_rt_args_ref, receiver_fabric_args)
-                if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    print(f"after extend {mesh_coord} gather_core {gather_core}", receiver_ncrisc_rt_args_ref)
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
 

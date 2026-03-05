@@ -86,7 +86,9 @@ def _extend_runtime_args(existing_rt_args, rt_args, core_range_set, print_flag=F
                 print(f"extend {coord} {existing_rt_args[coord.x][coord.y]}")
             existing_rt_args[coord.x][coord.y].extend(list(args))
             if print_flag:
-                print(f"after extend {coord} {existing_rt_args[coord.x][coord.y]}")
+                print(
+                    f"after extend {coord} {existing_rt_args[coord.x][coord.y]}, {len(existing_rt_args[coord.x][coord.y])}"
+                )
 
 
 class PostSDPA:
@@ -1644,20 +1646,6 @@ class PostSDPA:
                     ccl_sender_core,
                 )
                 sender_brisc_rt_args_ref.extend(sender_fabric_args)
-
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
-                    gather_core.y
-                ]
-                receiver_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl["receiver_link"]],
-                    program,
-                    receiver_ncrisc_kernel_idx,
-                    gather_core,
-                )
-                receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
 
             # ==================================================================
             # SDPA runtime args and fabric connection setup
