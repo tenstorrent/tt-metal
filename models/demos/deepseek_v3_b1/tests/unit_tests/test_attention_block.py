@@ -65,7 +65,7 @@ def create_fabric_router_config(max_payload_size):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
         }

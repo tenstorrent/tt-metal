@@ -1435,7 +1435,7 @@ void kernel_main() {
                     deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                     sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
                 }
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
                 if constexpr (Core::is_matmul4_core) {
                     constexpr uint32_t scatter_arrival_semaphore_id =
                         get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
