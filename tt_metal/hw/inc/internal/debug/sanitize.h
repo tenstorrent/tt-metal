@@ -390,16 +390,12 @@ uint32_t debug_sanitize_noc_addr(
                         return_code = DebugSanitizeNocMulticastInvalidRange;
                     }
                 }
-#else
-                // WH/BH: Allow wrap-around coordinates for Tensix cores
 #endif
             } else {
 #ifdef ARCH_QUASAR
                 if (x > x_end || y > y_end) {
                     return_code = DebugSanitizeNocMulticastInvalidRange;
                 }
-#else
-                // WH/BH: Allow wrap-around in physical coordinates for Tensix cores
 #endif
             }
         } else {
