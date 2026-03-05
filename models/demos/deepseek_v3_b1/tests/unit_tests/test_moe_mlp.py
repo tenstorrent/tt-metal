@@ -12,7 +12,6 @@ Run:
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_moe.py -v -s
 """
 
-import time
 from typing import Any, NamedTuple
 
 import pytest
@@ -731,7 +730,6 @@ def create_reference_mlp_models(state_dict, layer_idx):
 @pytest.mark.requires_grid_size((13, 10))
 def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
-    test_t0 = time.perf_counter()
     M = RoutedExpert.M
     K = RoutedExpert.K
 
@@ -928,7 +926,6 @@ def test_moe_fused_with_reduce(
             f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
         )
 
-    test_t0 = time.perf_counter()
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
@@ -1225,7 +1222,6 @@ def test_moe_fused_with_reduce(
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
-    test_t0 = time.perf_counter()
     M = RoutedExpert.M
     K = RoutedExpert.K
 
@@ -1389,7 +1385,6 @@ def test_mlp_with_reduce(
             f"{bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
         )
 
-    test_t0 = time.perf_counter()
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     logger.info(f"Created submesh with shape: {submesh.shape}")
 
