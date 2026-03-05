@@ -60,6 +60,10 @@ struct MaxUtilConfig {
     // Number of loops within each kernel of a single program dispatch.
     uint32_t num_wl_loops = 100;
 
+    // Number of loops for the slow (cos) workload kernel per dispatch.
+    // Controlled via the duty-cycle map; 0 means no slow workload is run.
+    uint32_t num_slow_wl_loops = 0;
+
     // Data transfer size in bytes.
     uint32_t data_transfer_size = 2048;  // 2KB
 
@@ -133,7 +137,11 @@ static uint32_t get_fpu_utilization_pct() {
 
 /// Returns a MaxUtilConfig that covers every compute core on @p device.
 static MaxUtilConfig full_grid_config(
-    IDevice* device, uint32_t num_tiles, uint32_t num_iterations, uint32_t num_wl_loops) {
+    IDevice* device,
+    uint32_t num_tiles,
+    uint32_t num_iterations,
+    uint32_t num_wl_loops,
+    uint32_t num_slow_wl_loops = 0) {
     auto grid = device->compute_with_storage_grid_size();
     MaxUtilConfig cfg;
     cfg.grid_start = {0, 0};
@@ -141,6 +149,7 @@ static MaxUtilConfig full_grid_config(
     cfg.num_tiles = num_tiles;
     cfg.num_iterations = num_iterations;
     cfg.num_wl_loops = num_wl_loops;
+    cfg.num_slow_wl_loops = num_slow_wl_loops;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
     return cfg;
 }
@@ -490,6 +499,78 @@ static uint32_t nearest_fpu_pct(uint32_t pct) {
 static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) { return kFpuUtilToCyclesMap.at(nearest_fpu_pct(pct)); }
 
 // ---------------------------------------------------------------------------
+// Duty-cycle control map
+//
+// Maps hot-workload duty cycle percentage (in 10% increments) to the number
+// of slow cos() loops to interleave between each max-util dispatch.
+//
+// Values are CALIBRATED FOR num_wl_loops = 1000.  At runtime the raw map
+// value is scaled linearly by (num_wl_loops / 1000) so that the duty cycle
+// stays correct regardless of the hot-workload loop count:
+//
+//   num_slow_wl_loops = map_value_at_1000 × num_wl_loops / 1000
+//
+// A duty_cycle of 100 means no slow workload is injected (num_slow_wl_loops=0).
+// Lower duty cycles inject progressively more slow cos() loops so that:
+//   duty_cycle ≈ T_hot / (T_hot + T_slow × num_slow_wl_loops)
+//
+// Tune the values below on hardware by timing both workloads at 1000 loops.
+// ---------------------------------------------------------------------------
+
+static constexpr uint32_t kDutyCycleCalibrationLoops = 1000;
+
+// clang-format off
+// Derived experimentally at 1000 loops.
+static const std::map<uint32_t, uint32_t> kDutyCycleToSlowLoopsMap = {
+    {10,  1260},  // 90/10
+    {20,   560},  // 80/20
+    {30,   327},  // 70/30
+    {40,   210},  // 60/40
+    {50,   140},  // 50/50
+    {60,    95},  // 40/60
+    {70,    61},  // 30/70
+    {80,    36},  // 20/80
+    {90,    18},  // 10/90
+    {100,    0},  // full duty cycle: no slow workload injected
+};
+// clang-format on
+
+/// Reads MAX_UTIL_DUTY_CYCLE_PCT from the environment.
+/// Valid values: 10, 20, 30, 40, 50, 60, 70, 80, 90, 100.
+/// Returns 100 (no slow workload) if the variable is absent or invalid.
+static uint32_t get_duty_cycle_pct() {
+    const char* env = std::getenv("MAX_UTIL_DUTY_CYCLE");
+    if (env != nullptr) {
+        try {
+            int val = std::stoi(env);
+            if (kDutyCycleToSlowLoopsMap.count(static_cast<uint32_t>(val))) {
+                return static_cast<uint32_t>(val);
+            }
+        } catch (...) {
+        }
+        log_warning(
+            LogTest,
+            "MAX_UTIL_DUTY_CYCLE_PCT='{}' is not one of {{10,20,30,40,50,60,70,80,90,100}} – using default of 100",
+            env);
+    }
+    return 100;
+}
+
+/// Returns the num_slow_wl_loops for a given duty cycle, scaled to match the
+/// actual hot-workload loop count.  Map values are calibrated at
+/// kDutyCycleCalibrationLoops; scaling is linear so that the ratio of
+/// hot-time to slow-time remains constant across different loop counts.
+static uint32_t duty_cycle_to_slow_loops(uint32_t duty_cycle_pct, uint32_t num_wl_loops) {
+    auto it = kDutyCycleToSlowLoopsMap.find(duty_cycle_pct);
+    if (it == kDutyCycleToSlowLoopsMap.end() || it->second == 0) {
+        return 0;
+    }
+    // 64-bit multiply to avoid overflow before dividing back down.
+    uint64_t scaled = static_cast<uint64_t>(it->second) * num_wl_loops / kDutyCycleCalibrationLoops;
+    return static_cast<uint32_t>(scaled);
+}
+
+// ---------------------------------------------------------------------------
 // build_program – constructs the main Program
 //
 // Decoupled kernels: BRISC and NCRISC generate NOC traffic only,
@@ -666,6 +747,116 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 }
 
 // ---------------------------------------------------------------------------
+// build_slow_cos_program – constructs the slow (cos) program
+//
+// All three RISCVs run the same noc-address layout as build_program but the
+// compute kernel runs SFPU cosine instead of MVMUL, making it significantly
+// lighter on the FPU.  Reader/writer kernels are the same noop variants as in
+// build_program.  The slow workload loops num_slow_wl_loops times per dispatch.
+// ---------------------------------------------------------------------------
+
+static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg) {
+    const CoreRange core_range(cfg.grid_start, cfg.grid_end);
+    const CoreRangeSet core_range_set({core_range});
+
+    log_info(
+        LogTest,
+        "Slow-cos program: {} cores, {} enqueues × {} slow inner iterations",
+        core_range.size(),
+        cfg.num_iterations,
+        cfg.num_slow_wl_loops);
+
+    Program program = CreateProgram();
+
+    // -- Reader kernel (BRISC / NOC0): reuse the same noop reader --
+    auto reader_kernel = CreateKernel(
+        program,
+        "tests/didt/max_util_workload/kernels/max_util_reader.cpp",
+        core_range_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args =
+                {
+                    cfg.num_slow_wl_loops,   // 0: num_loops
+                    cfg.l1_buffer3_addr,     // 1: l1_tx_A_addr
+                    cfg.l1_buffer4_addr,     // 2: l1_tx_B_addr
+                    cfg.l1_buffer7_addr,     // 3: l1_rx_addr
+                    cfg.l1_buffer8_addr,     // 4: (unused)
+                    cfg.l1_buffer9_addr,     // 5: (unused)
+                    cfg.l1_buffer10_addr,    // 6: (unused)
+                    cfg.data_transfer_size,  // 7: transfer_size
+                },
+        });
+
+    // -- Writer kernel (NCRISC / NOC1): reuse the same noop writer --
+    auto writer_kernel = CreateKernel(
+        program,
+        "tests/didt/max_util_workload/kernels/max_util_writer.cpp",
+        core_range_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args =
+                {
+                    cfg.num_slow_wl_loops,   // 0: num_loops
+                    cfg.l1_buffer5_addr,     // 1: l1_tx_A_addr
+                    cfg.l1_buffer6_addr,     // 2: l1_tx_B_addr
+                    cfg.l1_buffer7_addr,     // 3: (unused)
+                    cfg.l1_buffer8_addr,     // 4: (unused)
+                    cfg.l1_buffer9_addr,     // 5: l1_rx_addr
+                    cfg.l1_buffer10_addr,    // 6: (unused)
+                    cfg.data_transfer_size,  // 7: transfer_size
+                },
+        });
+
+    // -- Compute kernel (TRISC): SFPU cosine on L1 data --
+    CreateKernel(
+        program,
+        "tests/didt/max_util_workload/kernels/slow_cos_compute.cpp",
+        core_range_set,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .compile_args =
+                {
+                    cfg.l1_buffer0_addr,    // 0: l1_buffer0_addr (bfloat16 input)
+                    cfg.l1_buffer1_addr,    // 1: l1_buffer1_addr (bfloat16, kept for unpack HW compat)
+                    cfg.l1_buffer2_addr,    // 2: l1_buffer2_addr (output)
+                    cfg.num_tiles,          // 3: num_tiles (8)
+                    cfg.num_slow_wl_loops,  // 4: num_loops
+                },
+        });
+
+    // Set runtime args for reader/writer (same noop pattern as build_program).
+    CoreCoord phys_tl = device->worker_core_from_logical_core(cfg.grid_start);
+    CoreCoord phys_br = device->worker_core_from_logical_core(cfg.grid_end);
+    uint32_t grid_size = (cfg.grid_end.x - cfg.grid_start.x + 1) * (cfg.grid_end.y - cfg.grid_start.y + 1);
+    uint32_t num_dests = grid_size - 1;
+
+    std::vector<uint32_t> sender_args = {
+        1u,
+        static_cast<uint32_t>(phys_tl.x),
+        static_cast<uint32_t>(phys_tl.y),
+        static_cast<uint32_t>(phys_br.x),
+        static_cast<uint32_t>(phys_br.y),
+        num_dests};
+    std::vector<uint32_t> idle_args = {0u, 0u, 0u, 0u, 0u, 0u};
+
+    for (uint32_t y = cfg.grid_start.y; y <= cfg.grid_end.y; ++y) {
+        for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
+            CoreCoord core = {x, y};
+            bool is_reader_sender = (x == cfg.grid_start.x && y == cfg.grid_start.y);
+            bool is_writer_sender = (x == cfg.grid_end.x && y == cfg.grid_end.y);
+            SetRuntimeArgs(program, reader_kernel, core, is_reader_sender ? sender_args : idle_args);
+            SetRuntimeArgs(program, writer_kernel, core, is_writer_sender ? sender_args : idle_args);
+        }
+    }
+
+    return program;
+}
+
+// ---------------------------------------------------------------------------
 // log_eth_bw – reads per-core timing from ETH L1 and logs DRAM bandwidth
 // ---------------------------------------------------------------------------
 
@@ -771,14 +962,28 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     // Set up ETH DRAM streaming (active ETH cores only); keep buffer alive until Finish.
     auto eth_dram_buf = setup_eth_stream_config(device, cfg);
 
-    // Phase 2: Build and run main program
+    // Phase 2: Build and run main program, optionally interleaved with slow cos.
     auto mesh_workload = distributed::MeshWorkload();
     mesh_workload.add_program(target, build_program(device, cfg));
 
-    for (uint32_t i = 0; i < cfg.num_iterations - 1; ++i) {
-        distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+    const bool has_slow_wl = cfg.num_slow_wl_loops > 0;
+    auto slow_cos_workload = distributed::MeshWorkload();
+    if (has_slow_wl) {
+        slow_cos_workload.add_program(target, build_slow_cos_program(device, cfg));
+        log_info(
+            LogTest, "Duty-cycle interleave: slow cos loops={} between each max-util dispatch", cfg.num_slow_wl_loops);
     }
-    distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/true);
+
+    for (uint32_t i = 0; i < cfg.num_iterations; ++i) {
+        bool is_last = (i == cfg.num_iterations - 1);
+        if (has_slow_wl) {
+            // Pattern: max_util (non-blocking) → slow_cos (blocking on last)
+            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+            distributed::EnqueueMeshWorkload(cq, slow_cos_workload, /*blocking=*/is_last);
+        } else {
+            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/is_last);
+        }
+    }
     distributed::Finish(cq);
 
     // Report per-ETH-core DRAM bandwidth after the program completes.
@@ -787,7 +992,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     log_info(
         LogTest,
         "MaxUtilWorkload [single-device] done: device={}, grid=[{},{}]->[{},{}], tiles={}, "
-        "enqueues={}, inner_iters={}",
+        "enqueues={}, inner_iters={}, slow_cos_loops={}",
         device->id(),
         cfg.grid_start.x,
         cfg.grid_start.y,
@@ -795,7 +1000,8 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         cfg.grid_end.y,
         cfg.num_tiles,
         cfg.num_iterations,
-        cfg.num_wl_loops);
+        cfg.num_wl_loops,
+        cfg.num_slow_wl_loops);
 
     return true;
 }
@@ -805,7 +1011,8 @@ static bool run_all_devices(
     const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_tiles,
     uint32_t num_iterations,
-    uint32_t num_wl_loops) {
+    uint32_t num_wl_loops,
+    uint32_t num_slow_wl_loops = 0) {
     auto& cq = mesh_device->mesh_command_queue();
 
     // Phase 1: Pre-fill on all devices
@@ -814,7 +1021,7 @@ static bool run_all_devices(
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         IDevice* device = mesh_device->get_device(coord[0], coord[1]);
-        MaxUtilConfig cfg = full_grid_config(device, num_tiles, num_iterations, num_wl_loops);
+        MaxUtilConfig cfg = full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops);
 
         auto prefill_prog = build_prefill_program(device, cfg);
         device_configs[device] = cfg;
@@ -837,8 +1044,10 @@ static bool run_all_devices(
         eth_dram_bufs[device] = setup_eth_stream_config(device, cfg);
     }
 
-    // Phase 2: Main program on all devices
+    // Phase 2: Main program on all devices, optionally interleaved with slow cos.
     auto mesh_workload = distributed::MeshWorkload();
+    auto slow_cos_mesh_workload = distributed::MeshWorkload();
+    bool has_slow_wl = false;
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         IDevice* device = mesh_device->get_device(coord[0], coord[1]);
@@ -847,13 +1056,27 @@ static bool run_all_devices(
         auto target = distributed::MeshCoordinateRange(coord, coord);
         mesh_workload.add_program(target, build_program(device, cfg));
 
+        if (cfg.num_slow_wl_loops > 0) {
+            slow_cos_mesh_workload.add_program(target, build_slow_cos_program(device, cfg));
+            has_slow_wl = true;
+        }
+
         log_info(LogTest, "Main program queuing: device={}", device->id());
     }
 
-    for (uint32_t i = 0; i < num_iterations - 1; ++i) {
-        distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+    if (has_slow_wl) {
+        log_info(LogTest, "Duty-cycle interleave active: slow cos between each max-util dispatch");
     }
-    distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/true);
+
+    for (uint32_t i = 0; i < num_iterations; ++i) {
+        bool is_last = (i == num_iterations - 1);
+        if (has_slow_wl) {
+            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/false);
+            distributed::EnqueueMeshWorkload(cq, slow_cos_mesh_workload, /*blocking=*/is_last);
+        } else {
+            distributed::EnqueueMeshWorkload(cq, mesh_workload, /*blocking=*/is_last);
+        }
+    }
     distributed::Finish(cq);
 
     // Report per-ETH-core DRAM bandwidth for every device.
@@ -919,9 +1142,21 @@ void max_util_stress(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     IDevice* device = mesh_device->impl().get_device(0);
     uint32_t num_iterations = get_num_iterations();
     uint32_t num_wl_loops = get_num_wl_loops();
-    log_info(LogTest, "MaxUtilWorkload_Stress: num_iterations={}, num_wl_loops={}", num_iterations, num_wl_loops);
-    MaxUtilConfig cfg =
-        full_grid_config(device, /*num_tiles=*/8, /*num_iterations=*/num_iterations, /*num_wl_loops=*/num_wl_loops);
+    uint32_t duty_cycle_pct = get_duty_cycle_pct();
+    uint32_t num_slow_wl_loops = duty_cycle_to_slow_loops(duty_cycle_pct, num_wl_loops);
+    log_info(
+        LogTest,
+        "MaxUtilWorkload_Stress: num_iterations={}, num_wl_loops={}, duty_cycle={}%, num_slow_wl_loops={}",
+        num_iterations,
+        num_wl_loops,
+        duty_cycle_pct,
+        num_slow_wl_loops);
+    MaxUtilConfig cfg = full_grid_config(
+        device,
+        /*num_tiles=*/8,
+        /*num_iterations=*/num_iterations,
+        /*num_wl_loops=*/num_wl_loops,
+        /*num_slow_wl_loops=*/num_slow_wl_loops);
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
 
@@ -929,9 +1164,21 @@ void max_util_stress(const shared_ptr<distributed::MeshDevice>& mesh_device) {
 void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     uint32_t num_iterations = get_num_iterations();
     uint32_t num_wl_loops = get_num_wl_loops();
-    log_info(LogTest, "MaxUtilWorkload_AllDevices: num_iterations={}, num_wl_loops={}", num_iterations, num_wl_loops);
+    uint32_t duty_cycle_pct = get_duty_cycle_pct();
+    uint32_t num_slow_wl_loops = duty_cycle_to_slow_loops(duty_cycle_pct, num_wl_loops);
+    log_info(
+        LogTest,
+        "MaxUtilWorkload_AllDevices: num_iterations={}, num_wl_loops={}, duty_cycle={}%, num_slow_wl_loops={}",
+        num_iterations,
+        num_wl_loops,
+        duty_cycle_pct,
+        num_slow_wl_loops);
     EXPECT_TRUE(run_all_devices(
-        mesh_device, /*num_tiles=*/8, /*num_iterations=*/num_iterations, /*num_wl_loops=*/num_wl_loops));
+        mesh_device,
+        /*num_tiles=*/8,
+        /*num_iterations=*/num_iterations,
+        /*num_wl_loops=*/num_wl_loops,
+        /*num_slow_wl_loops=*/num_slow_wl_loops));
 }
 
 }  // namespace unit_tests::didt::max_util_workload
