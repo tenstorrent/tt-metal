@@ -1,3 +1,4 @@
+# golden: layer_norm_rm
 /create-op
 Create a TTNN operation called layer_norm_rm that performs layer normalization on
 row-major interleaved tensors.

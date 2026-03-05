@@ -104,6 +104,49 @@ echo "Results:   $RESULTS_DIR"
 echo "=========================="
 echo ""
 
+run_golden_tests() {
+    # Run golden tests for a prompt inside the clone's subshell.
+    # Args: $1=prompt_file $2=clone_dir $3=log_dir $4=prompt_name $5=run_id
+    local prompt_file="$1" clone_dir="$2" log_dir="$3" prompt_name="$4" run_id="$5"
+
+    # Parse "# golden: <op_name>" from prompt file
+    local golden_op
+    golden_op="$(grep -oP '^# golden: \K\S+' "$prompt_file" || true)"
+    if [[ -z "$golden_op" ]]; then
+        echo "[${prompt_name}:${run_id}] No golden test tag found, skipping"
+        return 0
+    fi
+
+    local golden_dir="${clone_dir}/eval/golden_tests/${golden_op}"
+    if [[ ! -d "$golden_dir" ]]; then
+        echo "[${prompt_name}:${run_id}] Golden dir not found: ${golden_dir}, skipping"
+        return 0
+    fi
+
+    echo "[${prompt_name}:${run_id}] Running golden tests for '${golden_op}'..."
+    local golden_log="${log_dir}/golden_test.log"
+    local golden_results="${log_dir}/golden_results.txt"
+
+    # Run via tt-test.sh (handles device lock and venv activation)
+    scripts/tt-test.sh --run-all "eval/golden_tests/${golden_op}/" \
+        > "$golden_log" 2>&1 || true
+
+    # Parse pytest summary line: "X passed, Y failed, Z errors" (any combination)
+    local summary_line
+    summary_line="$(grep -E '=+ .*(passed|failed|error).* =+' "$golden_log" | tail -1 || true)"
+
+    local passed=0 failed=0 errors=0
+    if [[ -n "$summary_line" ]]; then
+        passed="$(echo "$summary_line" | grep -oP '\d+(?= passed)' || echo 0)"
+        failed="$(echo "$summary_line" | grep -oP '\d+(?= failed)' || echo 0)"
+        errors="$(echo "$summary_line" | grep -oP '\d+(?= error)' || echo 0)"
+    fi
+    local total=$(( passed + failed + errors ))
+
+    echo "PASSED=${passed} FAILED=${failed} ERRORS=${errors} TOTAL=${total}" > "$golden_results"
+    echo "[${prompt_name}:${run_id}] Golden tests: ${passed}/${total} passed"
+}
+
 run_single() {
     local prompt_file="$1"
     local run_id="$2"
@@ -235,6 +278,9 @@ WRAPPER
         # Clean up: wait for background processes to finish (may already be done)
         wait "$build_pid" 2>/dev/null || true
         wait "$venv_pid" 2>/dev/null || true
+
+        # 6b. Run golden tests (needs build+venv complete, device access via tt-test.sh)
+        run_golden_tests "$prompt_file" "$clone_dir" "$log_dir" "$prompt_name" "$run_id"
     ) || claude_exit=$?
 
     echo "[${prompt_name}:${run_id}] Exited with code: $claude_exit"
@@ -244,13 +290,24 @@ WRAPPER
     local mins=$(( elapsed / 60 ))
     local secs=$(( elapsed % 60 ))
 
+    # Read golden results if available
+    local golden_suffix=""
+    if [[ -f "${log_dir}/golden_results.txt" ]]; then
+        local g_passed g_total
+        g_passed="$(grep -oP 'PASSED=\K\d+' "${log_dir}/golden_results.txt")"
+        g_total="$(grep -oP 'TOTAL=\K\d+' "${log_dir}/golden_results.txt")"
+        if [[ "$g_total" -gt 0 ]]; then
+            golden_suffix=" (${g_passed}/${g_total} golden)"
+        fi
+    fi
+
     local result
-    if [[ $claude_exit -eq 0 ]]; then
-        result="PASS"
-    elif [[ -f "${log_dir}/result.txt" ]] && grep -q "_FAIL" "${log_dir}/result.txt"; then
+    if [[ -f "${log_dir}/result.txt" ]] && grep -q "_FAIL" "${log_dir}/result.txt"; then
         result="$(cat "${log_dir}/result.txt")"
+    elif [[ $claude_exit -eq 0 ]]; then
+        result="PASS${golden_suffix:- (no golden tests)}"
     else
-        result="FAIL (exit $claude_exit)"
+        result="FAIL (exit $claude_exit)${golden_suffix}"
     fi
     echo "$result" > "${log_dir}/result.txt"
     echo "[${prompt_name}:${run_id}] ${result} (${mins}m ${secs}s)"
@@ -282,13 +339,34 @@ ERROR_COUNT=0
 while IFS= read -r result_file; do
     result="$(cat "$result_file")"
     case "$result" in
-        PASS)          PASS_COUNT=$((PASS_COUNT + 1)) ;;
+        PASS*)         PASS_COUNT=$((PASS_COUNT + 1)) ;;
         *_FAIL)        ERROR_COUNT=$((ERROR_COUNT + 1)) ;;
         *)             FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
     esac
 done < <(find "$RESULTS_DIR" -name "result.txt" -type f)
 
 TOTAL=$((PASS_COUNT + FAIL_COUNT + ERROR_COUNT))
+
+# --- Aggregate golden test results ---
+GOLDEN_PASSED_TOTAL=0
+GOLDEN_TESTS_TOTAL=0
+GOLDEN_RUNS=0
+
+while IFS= read -r golden_file; do
+    local_passed="$(grep -oP 'PASSED=\K\d+' "$golden_file" || echo 0)"
+    local_total="$(grep -oP 'TOTAL=\K\d+' "$golden_file" || echo 0)"
+    if [[ "$local_total" -gt 0 ]]; then
+        GOLDEN_PASSED_TOTAL=$((GOLDEN_PASSED_TOTAL + local_passed))
+        GOLDEN_TESTS_TOTAL=$((GOLDEN_TESTS_TOTAL + local_total))
+        GOLDEN_RUNS=$((GOLDEN_RUNS + 1))
+    fi
+done < <(find "$RESULTS_DIR" -name "golden_results.txt" -type f)
+
+GOLDEN_SUMMARY=""
+if [[ $GOLDEN_RUNS -gt 0 ]]; then
+    GOLDEN_SUMMARY="
+Golden:    ${GOLDEN_PASSED_TOTAL}/${GOLDEN_TESTS_TOTAL} passed (across ${GOLDEN_RUNS} run(s))"
+fi
 
 cat > "${RESULTS_DIR}/summary.txt" <<EOF
 === Evaluation Summary ===
@@ -300,7 +378,7 @@ Runs:      $NUM_RUNS per prompt
 Results:   $PASS_COUNT/$TOTAL passed
   PASS:    $PASS_COUNT
   FAIL:    $FAIL_COUNT
-  INFRA:   $ERROR_COUNT
+  INFRA:   $ERROR_COUNT${GOLDEN_SUMMARY}
 ===========================
 EOF
 

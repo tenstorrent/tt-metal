@@ -1,3 +1,4 @@
+# golden: layer_norm_rm
 /create-op
 Build me a simple TTNN operation layer_norm_rm which takes a row-major interleaved tensor,
 and does layer normalization.

@@ -7,12 +7,14 @@
 # Automatically resets the device after hangs, ensuring the next runner
 # always gets a clean device.
 #
-# Usage: scripts/tt-test.sh [--dev] <test_path> [extra_pytest_args...]
+# Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
 #               on hang with full triage + watcher log dump.
+#   --run-all   Run all tests instead of stopping on first failure (-x).
+#               Useful for eval scoring where you need full pass/fail counts.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -36,10 +38,15 @@ TRIAGE_LOG="/tmp/tt-test-triage-$$.log"
 
 # --- Parse flags ---
 DEV_MODE=false
+FAIL_FAST=true
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
             DEV_MODE=true
+            shift
+            ;;
+        --run-all)
+            FAIL_FAST=false
             shift
             ;;
         *)
@@ -139,7 +146,12 @@ touch "$DIRTY_FLAG"
 
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
-pytest "${TEST_PATH}" -x "$@"
+# --run-all: skip -x to get full pass/fail counts (for eval scoring)
+if [[ "$FAIL_FAST" == true ]]; then
+    pytest "${TEST_PATH}" -x "$@"
+else
+    pytest "${TEST_PATH}" "$@"
+fi
 EXIT_CODE=$?
 
 echo "========================================" >&2
