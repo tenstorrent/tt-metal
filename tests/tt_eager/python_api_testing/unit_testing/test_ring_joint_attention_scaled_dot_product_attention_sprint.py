@@ -55,7 +55,7 @@ GALAXY_SP_SIZE = 8  # Sequence parallel size (devices per ring)
 
 # Workload configuration constants - per-device sequence lengths
 GALAXY_SEQ_LENS_PER_DEVICE = [2368, 9472]  # Galaxy per-device sequence lengths (12x10 grid)
-NON_GALAXY_SEQ_LENS_PER_DEVICE = [2080, 8416]
+NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240, 8544]
 HEADS_PER_DEVICE = 10  # Number of attention heads per device
 HEAD_DIMENSION = 128  # Attention head dimension
 BATCH_SIZE = 1  # Default batch size
@@ -820,12 +820,17 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d):
             iters_per_core = q_per_core * k_num_chunks  # Each Q chunk attends to all K chunks in ring
 
             # Compute padding waste
+            # Q and K are both sharded per node, so padding is per-node padded * ring_size
             local_q_padded = local_q_num_chunks * q_chunk_size
-            global_k_padded = k_num_chunks * k_chunk_size
-            local_q_waste = local_q_padded - local_seq_len
+            global_q_padded = local_q_padded * ring_size
+            local_k_num_chunks = math.ceil(local_seq_len / k_chunk_size)
+            local_k_padded = local_k_num_chunks * k_chunk_size
+            global_k_padded = local_k_padded * ring_size
+            local_q_waste = global_q_padded - s
             global_k_waste = global_k_padded - s
-            actual_work = local_seq_len * s  # Local Q attending to global K
-            padded_work = local_q_padded * global_k_padded
+            actual_work = s * s  # Global Q attending to global K
+            padded_work = global_q_padded * global_k_padded
+
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
 
             # Compute work distribution (slot) waste - based on local Q chunks
