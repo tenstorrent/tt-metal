@@ -1133,29 +1133,37 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         not_done_cores.insert(virtual_core);
     }
 
-    log_debug(tt::LogMetal, "Initializing DRAM cores");
-    constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
-    auto dram_dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
-    auto dram_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DRAM);
-    auto dram_launch_msg = dram_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
     std::unordered_set<CoreCoord> dram_not_done_cores;
-    const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
-    for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-        CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
-        dram_core_info.view().absolute_logical_x() = dram_noc.x;
-        dram_core_info.view().absolute_logical_y() = dram_noc.y;
-        uint64_t core_info_addr =
-            hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO) + dram_l1_noc_offset;
-        cluster_.write_core(
-            dram_core_info.data(),
-            dram_core_info.size(),
-            {static_cast<size_t>(device_id), virtual_dram_core},
-            core_info_addr);
-        initialize_firmware(
-            device_id, HalProgrammableCoreType::DRAM, virtual_dram_core, dram_launch_msg.view(), dram_go_msg.view());
-        dram_not_done_cores.insert(virtual_dram_core);
+    bool has_dram_fw = hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) <
+                       hal_.get_programmable_core_type_count();
+    if (has_dram_fw) {
+        log_debug(tt::LogMetal, "Initializing DRAM cores");
+        constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
+        auto dram_dev_msgs_factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
+        auto dram_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DRAM);
+        auto dram_launch_msg = dram_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+        auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+        const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
+        for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
+            dram_core_info.view().absolute_logical_x() = dram_noc.x;
+            dram_core_info.view().absolute_logical_y() = dram_noc.y;
+            uint64_t core_info_addr =
+                hal_.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO) + dram_l1_noc_offset;
+            cluster_.write_core(
+                dram_core_info.data(),
+                dram_core_info.size(),
+                {static_cast<size_t>(device_id), virtual_dram_core},
+                core_info_addr);
+            initialize_firmware(
+                device_id,
+                HalProgrammableCoreType::DRAM,
+                virtual_dram_core,
+                dram_launch_msg.view(),
+                dram_go_msg.view());
+            dram_not_done_cores.insert(virtual_dram_core);
+        }
     }
 
     cluster_.l1_barrier(device_id);
