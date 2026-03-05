@@ -697,13 +697,10 @@ def run_all_to_all_dispatch_metadata_test(
     ],
     indirect=["mesh_device"],
 )
-def test_correctness(
-    mesh_device,
-    mesh_shape,
-    cluster_axis,
-):
+@pytest.mark.parametrize("experts_per_device", [2])
+def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     batches_per_device = 32
-    experts = 2 * mesh_shape[1]  # 2 * 8 for 1x8 mesh, 2 * 16 for 1x16 mesh
+    experts = experts_per_device * mesh_shape[cluster_axis]
     select_experts_k = 8
     hidden_size = 7168
     seq_len = 1

@@ -689,6 +689,7 @@ def _run_test(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
 @pytest.mark.parametrize("token_parallel_core_dim", [4])
 @pytest.mark.parametrize("data_parallel_core_dim", [4])
@@ -704,6 +705,7 @@ def test_decode(
     hidden_size,
     seq,
     cluster_axis,
+    experts_per_device,
     worker_core_range,
     token_parallel_core_dim,
     data_parallel_core_dim,
@@ -712,7 +714,7 @@ def test_decode(
     num_test_iters,
     num_inner_iters,
 ):
-    experts = 2 * mesh_shape[1]  # 2 * 8 for 1x8 mesh, 2 * 16 for 1x16 mesh
+    experts = experts_per_device * mesh_shape[cluster_axis]
     mesh_device.disable_and_clear_program_cache()
 
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])

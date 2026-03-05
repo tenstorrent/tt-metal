@@ -273,6 +273,7 @@ def prepare_output_tensor_from_combine_writer(
     output_shard_tensor = torch.stack(combine_output_shards)
 
     buffer_size_total_tokens = 512
+    # assert output_shard_tensor.shape[0] == output_shard_height_dim * output_shard_width_dim * experts_per_device
 
     output_shape = (
         output_shard_height_dim,
@@ -385,9 +386,24 @@ def create_torch_w0(L, E, K, N):
 
     Returns:
         torch_w0: Tensor of shape (L, E, K, N)
-    """
 
-    torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    Weight initialization controlled by WEIGHT_INIT_MODE env var:
+        - "baseline" or "golden": constant weights (0.1)
+        - "random_w0w1": random w0/w1, golden w2
+        - "random_w2": golden w0/w1, random w2
+        - "random_all" (default): all random weights
+    """
+    mode = os.environ.get("WEIGHT_INIT_MODE", "random_all")
+
+    if mode in ["baseline", "golden", "random_w2"]:
+        # Use constant/golden weights for w0
+        torch_w0 = torch.ones((L, E, K, N), dtype=torch.bfloat16) * 0.1
+        logger.info(f"[WEIGHT_INIT] w0: GOLDEN (constant 0.1) - mode={mode}")
+    else:
+        # Use random weights for w0
+        torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+        logger.info(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
+
     return torch_w0
 
 
@@ -403,9 +419,24 @@ def create_torch_w1(L, E, K, N):
 
     Returns:
         torch_w1: Tensor of shape (L, E, K, N)
-    """
 
-    torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    Weight initialization controlled by WEIGHT_INIT_MODE env var:
+        - "baseline" or "golden": constant weights (0.1)
+        - "random_w0w1": random w0/w1, golden w2
+        - "random_w2": golden w0/w1, random w2
+        - "random_all" (default): all random weights
+    """
+    mode = os.environ.get("WEIGHT_INIT_MODE", "random_all")
+
+    if mode in ["baseline", "golden", "random_w2"]:
+        # Use constant/golden weights for w1
+        torch_w1 = torch.ones((L, E, K, N), dtype=torch.bfloat16) * 0.1
+        logger.info(f"[WEIGHT_INIT] w1: GOLDEN (constant 0.1) - mode={mode}")
+    else:
+        # Use random weights for w1
+        torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+        logger.info(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
+
     return torch_w1
 
 
@@ -421,9 +452,24 @@ def create_torch_w2(L, E, N, K):
 
     Returns:
         torch_w2: Tensor of shape (L, E, N, K)
-    """
 
-    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    Weight initialization controlled by WEIGHT_INIT_MODE env var:
+        - "baseline" or "golden": constant weights (0.1)
+        - "random_w0w1": random w0/w1, golden w2
+        - "random_w2": golden w0/w1, random w2
+        - "random_all" (default): all random weights
+    """
+    mode = os.environ.get("WEIGHT_INIT_MODE", "random_all")
+
+    if mode in ["baseline", "golden", "random_w0w1"]:
+        # Use constant/golden weights for w2
+        torch_w2 = torch.ones((L, E, N, K), dtype=torch.bfloat16) * 0.1
+        logger.info(f"[WEIGHT_INIT] w2: GOLDEN (constant 0.1) - mode={mode}")
+    else:
+        # Use random weights for w2
+        torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+        logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
+
     return torch_w2
 
 
@@ -960,6 +1006,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
@@ -975,6 +1022,7 @@ def test_moe_compute(
     mesh_device,
     mesh_shape,
     cluster_axis,
+    experts_per_device,
     tokens_per_device,
     selected_experts_k,
     num_layers,
@@ -998,7 +1046,7 @@ def test_moe_compute(
     torch.manual_seed(2003)
     random.seed(2003)
 
-    experts = 2 * mesh_shape[1]
+    experts = experts_per_device * mesh_shape[cluster_axis]
 
     #########################################
     # TEST SETUP
@@ -1007,7 +1055,6 @@ def test_moe_compute(
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
     total_tokens = tokens_per_device * num_dispatch_devices
-    experts_per_device = experts // num_devices
 
     logger.info(f"Test configuration:")
     logger.info(f"  mesh_shape: {mesh_shape}")
