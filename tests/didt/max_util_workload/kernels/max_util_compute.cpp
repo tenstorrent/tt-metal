@@ -10,11 +10,12 @@
 // No CB dependencies, no waits - runs compute at full speed.
 //
 // Compile-time args:
-//   0: l1_buffer0_addr  – L1 address of pre-filled buffer 0 (float16_b)
-//   1: l1_buffer1_addr  – L1 address of pre-filled buffer 1 (float16_b)
-//   2: l1_buffer2_addr  – L1 output buffer for compute results (8 float16_b tiles)
-//   3: num_tiles        – number of tiles to process per iteration (8)
-//   4: num_loops        – number of workload repetitions (stress-test loop)
+//   0: l1_buffer0_addr     – L1 address of pre-filled buffer 0 (float16_b)
+//   1: l1_buffer1_addr     – L1 address of pre-filled buffer 1 (float16_b)
+//   2: l1_buffer2_addr     – L1 output buffer for compute results (8 float16_b tiles)
+//   3: num_tiles           – number of tiles to process per iteration (8)
+//   4: num_loops           – number of workload repetitions (stress-test loop)
+//   5: cycles_to_wait      – number of cycles to wait before running the next inner loop
 
 #ifdef TRISC_UNPACK
 ALWI void max_util_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr) {
@@ -145,6 +146,7 @@ ALWI void max_util_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_bu
 #endif
 
 #ifdef TRISC_MATH
+template <uint32_t cycles_to_wait>
 ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
@@ -278,6 +280,12 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (uint32_t j = 0; j < num_tiles; j++) {
             ckernel_template::run();
+            if constexpr (cycles_to_wait) {
+#pragma GCC unroll cycles_to_wait
+                for (uint32_t k = 0; k < cycles_to_wait; k++) {
+                    TTI_NOP;
+                }
+            }
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
@@ -397,19 +405,26 @@ ALWI void max_util_sfpu(uint32_t num_loops, uint32_t num_tiles) {
 #endif
 
 void kernel_main() {
+    // std::uint64_t t0 = ckernel::read_wall_clock();
+
     constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
     constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
     constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_loops = get_compile_time_arg_val(4);
+    constexpr uint32_t cycles_to_wait = get_compile_time_arg_val(5);
 
     // TRISC0: perform unpack A (float16_b) and unpack B (float16_b) to SRC_A and SRC_B
     UNPACK((max_util_unpack(num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr)));
 
     // TRISC1: perform MVMUL to DST
-    MATH((max_util_math(num_loops, num_tiles)));
+    MATH((max_util_math<cycles_to_wait>(num_loops, num_tiles)));
 
     // TRISC2: perform pack to output L1 addr or SFPU programming
     PACK((max_util_pack(num_loops, num_tiles, l1_buffer2_addr)));
     // PACK((max_util_sfpu(num_loops, num_tiles)));
+
+    // std::uint64_t t1 = ckernel::read_wall_clock();
+    // std::uint64_t kernel_fpu_cycles = (16*8)*num_loops*num_tiles;
+    // MATH((DPRINT << "Kernel FPU utilization: " << (kernel_fpu_cycles*100) / (t1 - t0) << "%" << ENDL()));
 }
