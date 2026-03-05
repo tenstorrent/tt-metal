@@ -8,7 +8,7 @@ void kernel_main() {
     // Runtime args
     const uint32_t start_wt = get_arg_val<uint32_t>(0);
 
-    // Compiletime args
+    // Compile time args
     const uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));  // Final core readiness signal
     const uint32_t sender_semaphore = get_semaphore(get_compile_time_arg_val(1));    // Local core completion signal
     constexpr uint32_t noc_final_x = get_compile_time_arg_val(2);                    // Final core X coordinate

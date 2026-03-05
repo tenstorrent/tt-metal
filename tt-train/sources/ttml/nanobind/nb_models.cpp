@@ -155,12 +155,12 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         "memory_efficient_runner",
         [](nb::callable fw_callable,
            const ttml::autograd::TensorPtr& input,
-           const ttml::autograd::TensorPtr& mask,
+           const std::optional<ttml::autograd::TensorPtr>& mask,
            nb::args args,
            nb::kwargs kwargs) {
             auto fw_impl = [fw_callable, args, kwargs](
                                const ttml::autograd::TensorPtr& model_input,
-                               const ttml::autograd::TensorPtr& model_mask) {
+                               const std::optional<ttml::autograd::TensorPtr>& model_mask) {
                 nb::gil_scoped_acquire guard;
                 nb::object tensor_obj = fw_callable(model_input, model_mask, *args, **kwargs);
                 return nb::cast<autograd::TensorPtr>(tensor_obj);

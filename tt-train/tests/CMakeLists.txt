@@ -47,6 +47,7 @@ set(SOURCES
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
+    ops/distributed/ring_sdpa_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
@@ -82,7 +83,7 @@ set_target_properties(
             TRUE
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
-target_precompile_headers(ttml_tests REUSE_FROM ttml)
+target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 

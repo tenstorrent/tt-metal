@@ -45,7 +45,7 @@ std::unordered_map<SocketConnection, uint32_t> get_receiver_ids_per_sender(const
     return connection_to_receiver_id;
 }
 
-// Get the maximum number of downstreams per sender core to calcalate size of the metadata buffer.
+// Get the maximum number of downstreams per sender core to calculate size of the metadata buffer.
 // This will get cleaned up along with improved socket APIs. See Issue #27207
 uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
     std::unordered_map<MeshCoreCoord, uint32_t> num_downstreams_per_core;
@@ -69,10 +69,12 @@ void validate_fabric_config_for_sockets(
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
         tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
         tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
-        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
-                                           // physical device
+        tt_fabric::FabricConfig::DISABLED,  // Fabric can be disabled as long as socket endpoints are on the same
+                                            // physical device
+
     };
 
     bool fabric_config_supported = supported_fabrics.contains(fabric_config);

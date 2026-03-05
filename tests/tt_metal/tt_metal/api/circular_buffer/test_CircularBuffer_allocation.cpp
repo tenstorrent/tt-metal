@@ -212,7 +212,8 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+        auto& mesh_device = devices_.at(id);
+        auto& cq = mesh_device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -221,28 +222,34 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         auto& program_ = workload.get_programs().at(device_range);
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-        auto buffer_size = page_size * 128;
-        tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = this->devices_.at(id)->get_devices()[0],
-            .size = buffer_size,
-            .page_size = buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::L1};
-        auto l1_buffer = CreateBuffer(buff_config);
+        DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+        DeviceAddr l1_bank_size = l1_max_size - l1_unreserved_base;
 
-        // L1 buffer is entirely in bank 0
-        auto core = l1_buffer->allocator()->get_logical_core_from_bank_id(0);
+        // Allocate a MeshBuffer that consumes most of L1 bank 0 (top-down), leaving room for
+        // only one tile worth of CBs.
+        uint32_t alignment = mesh_device->allocator()->get_alignment(BufferType::L1);
+        DeviceAddr buffer_size = (l1_bank_size - page_size) / alignment * alignment;
+        distributed::ReplicatedBufferConfig replicated_config = {
+            .size = buffer_size,
+        };
+        distributed::DeviceLocalBufferConfig local_config = {
+            .page_size = buffer_size,
+            .buffer_type = tt::tt_metal::BufferType::L1,
+        };
+        auto l1_mesh_buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+
+        auto core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
         CoreRange cr(core, core);
         CoreRangeSet cr_set({cr});
         initialize_program(program_, cr_set);
 
-        uint32_t num_pages =
-            ((l1_buffer->address() - devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1)) / max_cbs_ /
-             page_size) +
-            1;
-        CBConfig cb_config = {.num_pages = num_pages};
-        for (uint32_t buffer_id = 0; buffer_id < max_cbs_; buffer_id++) {
+        // Two CBs of page_size each will push the CB region past the MeshBuffer's lowest
+        // occupied address, triggering the collision.
+        CBConfig cb_config;
+        for (uint32_t buffer_id = 0; buffer_id < 2; buffer_id++) {
             CircularBufferConfig config1 =
-                CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}})
+                CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}})
                     .set_page_size(buffer_id, cb_config.page_size);
             CreateCircularBuffer(program_, core, config1);
         }
@@ -552,6 +559,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         detail::WriteToBuffer(src_dram_buffer, src_vec);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> result_vec;
         detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -575,6 +583,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
 
         // relaunch program
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> second_result_vec;
         detail::ReadFromBuffer(dst_dram_buffer, second_result_vec);
