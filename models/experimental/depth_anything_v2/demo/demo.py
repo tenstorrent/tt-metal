@@ -11,6 +11,7 @@ except ImportError:
     exit(1)
 
 import os
+import traceback
 
 from PIL import Image
 
@@ -22,7 +23,7 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     print(f"Loading model: {model_id}")
 
     # 1. Load PyTorch Model (Reference)
-    try:
+    try: 
         torch_model = AutoModelForDepthEstimation.from_pretrained(
             model_id, torch_dtype=torch.float32, trust_remote_code=True
         )
@@ -35,9 +36,9 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
 
     # 2. Initialize Tenstorrent Device
     device = None
-    try:
+    try: 
         device_id = 0
-        device = ttnn.CreateDevice(device_id=device_id)
+        device = ttnn.open_device(device_id=device_id, l1_small_size=16384)
         print(f"Device {device_id} opened.")
     except Exception as e:
         print(f"Warning: Failed to open Tenstorrent device (HW not present?): {e}")
@@ -102,6 +103,7 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
             print("Skipping inference because device is not available.")
     except Exception as e:
         print(f"Inference failed: {e}")
+        traceback.print_exc()
 
     # 6. Cleanup
     if device is not None:
