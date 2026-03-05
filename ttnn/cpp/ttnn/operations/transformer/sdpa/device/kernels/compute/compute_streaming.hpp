@@ -402,6 +402,7 @@ void mul_block_bcast_cols_acc(
         tile_regs_commit();
         tile_regs_wait();
         dst_index = 0;
+#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_mop_config<false, false, false>(out_cb, cur_cols)));
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
@@ -409,6 +410,14 @@ void mul_block_bcast_cols_acc(
             dst_index += cur_cols;
         }
         PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
+#else
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            for (uint32_t j = 0; j < cur_cols; j++) {
+                uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base + j;
+                pack_tile<true>(dst_index++, out_cb, out_tile_index);
+            }
+        }
+#endif
         tile_regs_release();
     }
 }
@@ -439,12 +448,13 @@ void normalize_row_streaming(
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
-            // legacy_compat=false uses hardware SFPARECIP + loadmacro pipeline instead of
-            // the slow SFPI Newton-Raphson loop. Full-tile RC mode is safe: only column 0
-            // has meaningful data (from the matmul), and mul_tiles_bcast_cols downstream
-            // only reads column 0.
+#ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0)));
+#else
+            recip_tile_init();
+            MATH((recip_tile(0)));
+#endif
             tile_regs_commit();
 
             tile_regs_wait();
@@ -734,9 +744,9 @@ static void sdpa_inner_loop_step(
                 }
                 {
                     MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack (partial)");
-                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_init_short(cb_q_in, cb_kt_in, true, kt_remainder, sbh, in0_block_w);
+                    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
+                    mm_no_mop_init_short(cb_q_in, cb_kt_in, true, kt_remainder, sbh, in0_block_w);
 #else
                 mm_block_init_short(cb_q_in, cb_kt_in, true, kt_remainder, sbh, in0_block_w);
 #endif
