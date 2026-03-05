@@ -6,6 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -249,7 +250,7 @@ class TransformerBlock(LightweightModule):
         # Use the batch_size parameter instead of inferring from shape[-3]
         # because for [32, 1, S, H] tensors, shape[-3] is 1, not 32
         # This reshape is only applicable in prefill mode with batched prefill
-        if mode == "prefill" and batch_size > 1:
+        if mode == Mode.PREFILL and batch_size > 1:
             residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)

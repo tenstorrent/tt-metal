@@ -297,7 +297,7 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        # Galaxy 70B approach: tokens come in as [padded_batch, S] for batched prefill
+        # For batched prefill, tokens come in as [padded_batch, S]
         # Each user's tokens are at their slot index in dimension 0
         # Reshape to [1, 1, 1, padded_batch * S] for embedding
         if batch_size > 1:
