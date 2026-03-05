@@ -18,6 +18,13 @@ skus:
       - pipeline-perf
       - in-service
 
+  wh_llmbox_perf_release:
+    runs_on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - in-release
+
   bh_p100:
     runs_on:
       - cloud-virtual-machine
@@ -30,6 +37,13 @@ skus:
       - pipeline-functional
       - topology-6u
       - in-service
+
+  wh_galaxy_release:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-functional
+      - topology-6u
+      - in-release
 
   bh_galaxy:
     runs_on:
@@ -62,6 +76,95 @@ skus:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-stable
 
+  bh_p100_perf:
+    runs_on:
+      - pipeline-perf
+      - P100
+      - in-service
+
+  bh_p100a_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-P100a-viommu-stable
+
+  bh_p150b_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-stable
+
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
+
+  wh_n300_perf:
+    runs_on:
+      - N300
+      - in-service
+      - bare-metal
+      - pipeline-perf
+
+  bh_p150:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-functional
+
+  bh_p150_perf:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+
+  bh_llmbox:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+
+  bh_loudbox:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LoudBox
+      - pipeline-functional
+
+  bh_p300:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P300-viommu
+      - pipeline-yyz2-lfc
+  bh_p300_viommu:
+    runs_on:
+      - pipeline-yyz2-lfc
+      - P300-viommu
+      - in-service
+
+  bh_quietbox:
+    runs_on:
+      - BH-LLMBox
+      - pipeline-functional
+      - in-service
+
+  bh_quietbox_perf:
+    runs_on:
+      - BH-LLMBox
+      - pipeline-perf
+      - in-service
+
+  bh_deskbox:
+    runs_on:
+      - BH-DeskBox
+      - pipeline-functional
+      - in-service
+
+  bh_loudbox_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-BH-LoudBox-viommu-stable
+
+  bh_quietbox_2:
+    runs_on:
+      - BH-QB-GE
+      - pipeline-perf
+      - in-service

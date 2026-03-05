@@ -23,7 +23,7 @@
 
 namespace ttnn::operations::pool {
 
-// Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
+// Generic invoke function for both max and avg pool operations. Most of the arguments are shared except for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
 
@@ -742,8 +742,7 @@ static std::vector<Tensor> pool2d_DRAM(
             ttnn::Shape{batch_size, output_height, output_width, channels},
             dram_slice_config_,
             output_layout,
-            input_tensor.device(),
-            false /*conv_bypass*/);
+            input_tensor.device());
     }
 
     // Validate that kernel size can fit in the slices
@@ -874,7 +873,7 @@ static std::vector<Tensor> pool2d_DRAM(
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
 
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config, false /*conv_bypass*/);
+        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
 
     return {dram_output_tensor};
 }

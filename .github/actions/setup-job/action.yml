@@ -25,6 +25,14 @@ inputs:
     description: 'Enable LLK asserts'
     default: false
     type: boolean
+  enable-kernel-ccache:
+    description: 'Enable kernel ccache for JIT compilation at runtime'
+    default: false
+    type: boolean
+  redis-ccache-storage:
+    description: 'Redis storage for kernel ccache (runtime JIT compilation). Uses separate Redis instance from build ccache (REDIS_USER/REDIS_PASSWORD) to allow different retention/performance policies. Format: redis://user:password@host:port|read-only=false'
+    required: false
+    default: ''
   use-evaluation-image:
     description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
@@ -105,6 +113,31 @@ runs:
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
       shell: bash
 
+    # Kernel ccache configuration for JIT compilation at test runtime
+    # This is separate from build ccache (REDIS_USER/REDIS_PASSWORD) which caches C++ compilation
+    # Different Redis backends allow:
+    # - Build ccache: Large binaries, infrequent changes, high retention
+    # - Kernel ccache: Smaller JIT objects, frequent compilations, different eviction policies
+    - name: Set up kernel ccache
+      if: ${{ inputs.enable-kernel-ccache == 'true' && github.event_name != 'pull_request' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal kernel ccache"
+        echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+        echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
+        echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+        echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+        echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+
+        if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
+          echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
+          exit 1
+        fi
+        echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
+
+        mkdir -p /tmp/ccache
+      shell: bash
+
     - name: Set up env vars for auto-triage
       if: ${{ inputs.auto-triage == 'true' }}
       working-directory: ${{ inputs.path }}
@@ -113,6 +146,7 @@ runs:
         TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
         echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH 1>&2" >> $GITHUB_ENV
         echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}" >> $GITHUB_ENV
+        echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> $GITHUB_ENV
         echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
         echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH" >> $GITHUB_ENV
       shell: bash

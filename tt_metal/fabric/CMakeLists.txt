@@ -57,6 +57,8 @@ target_sources(
         builder/router_connection_mapping.cpp
         channel_trimming_export.cpp
         channel_trimming_import.cpp
+        channel_trimming_io.cpp
+        channel_trimming_report.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
@@ -79,6 +81,9 @@ target_sources(
         topology_mapper.cpp
         topology_mapper_utils.cpp
         topology_solver.cpp
+        physical_grouping_descriptor_core.cpp
+        physical_grouping_descriptor_graph_building.cpp
+        physical_grouping_descriptor_matching.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
@@ -89,6 +94,7 @@ set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/router_port_directions.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
 )
 
 # Collect all generated protobuf files

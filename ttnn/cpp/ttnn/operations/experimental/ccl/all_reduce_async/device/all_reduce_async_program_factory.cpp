@@ -170,7 +170,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, device_index, topology, true);
     auto [forward_args, backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        topology, coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
     // Tensor Info
     [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -296,7 +296,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     /*
         Overview of algorithm:
 
-        - Ouput: each link gets assigned a start and end core index, since multiple links
+        - Output: each link gets assigned a start and end core index, since multiple links
             may have to read different offesets within a shard on the same core
         - First, assign all the necessary cores needed for a link. This may result in the link
             containing extra pages. This will result in an overflow, which is used to detect

@@ -139,7 +139,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
-            "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
+            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}",
             optional_output_tensor_shape,
             output_tensor_spec.logical_shape());
         TT_FATAL(
@@ -793,9 +793,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             K);
                         uint32_t batches_per_bank = in1_shard_height_in_tiles / K;
                         uint32_t B = get_batch_size(b_shape_padded);
+                        // The kernel addresses batch b via: bank_id = b / batches_per_bank.
+                        // Total shard capacity (batches_per_bank * num_banks) must be >= B
+                        // to ensure all batches map to valid banks. It may exceed B when the
+                        // batch dimension is padded up to distribute evenly across banks.
                         TT_FATAL(
-                            batches_per_bank * num_banks == B,
-                            "HEIGHT_SHARDED input B: batches_per_bank ({}) * num_banks ({}) = {} must equal "
+                            batches_per_bank * num_banks >= B,
+                            "HEIGHT_SHARDED input B: batches_per_bank ({}) * num_banks ({}) = {} must be >= "
                             "batch size B ({})",
                             batches_per_bank,
                             num_banks,

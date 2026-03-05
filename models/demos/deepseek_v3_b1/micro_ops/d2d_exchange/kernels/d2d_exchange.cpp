@@ -13,13 +13,12 @@ constexpr uint32_t sender_socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t receiver_socket_config_addr = get_compile_time_arg_val(1);
 constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(2);
 constexpr uint32_t page_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_whole_fabric_packets_link_0 = get_compile_time_arg_val(4);
-constexpr uint32_t num_whole_fabric_packets_link_1 = get_compile_time_arg_val(5);
-constexpr uint32_t whole_packet_size = get_compile_time_arg_val(6);
-constexpr uint32_t partial_packet_size = get_compile_time_arg_val(7);
-constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(8);
-constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(9);
-constexpr bool use_fabric_on_sender = get_compile_time_arg_val(10);
+constexpr uint32_t num_whole_fabric_packets_per_link = get_compile_time_arg_val(4);
+constexpr uint32_t whole_packet_size = get_compile_time_arg_val(5);
+constexpr uint32_t partial_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(7);
+constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(8);
+constexpr bool use_fabric_on_sender = get_compile_time_arg_val(9);
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -42,6 +41,7 @@ FORCE_INLINE void write_data_to_local_core_with_ack(
     noc_async_writes_flushed();
 }
 
+template <bool flush = true>
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
@@ -50,11 +50,17 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t packet_size) {
     packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
+        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
+        packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
-    fabric_connection.send_payload_flush_blocking_from_address(
-        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    if constexpr (flush) {
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    } else {
+        fabric_connection.send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    }
 }
 
 FORCE_INLINE void send_pages_over_socket(
@@ -67,36 +73,47 @@ FORCE_INLINE void send_pages_over_socket(
     uint32_t l1_read_addr,
     uint64_t dst_addr) {
     if constexpr (use_fabric_on_sender) {
-        for (uint32_t i = 0; i < num_whole_fabric_packets_link_0; ++i) {
-            write_data_to_remote_core_with_ack(
+        constexpr uint32_t num_fabric_connections = 2;
+        // Initialize base src + dst addrs pers link
+        constexpr uint32_t page_size_per_link = page_size / num_fabric_connections;
+        uint32_t l1_read_addr_0 = l1_read_addr;
+        uint32_t l1_read_addr_1 = l1_read_addr + page_size_per_link;
+        uint64_t dst_addr_0 = dst_addr;
+        uint64_t dst_addr_1 = dst_addr + page_size_per_link;
+
+        for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
+            write_data_to_remote_core_with_ack<false>(
                 downstream_fabric_connection,
                 downstream_data_packet_header_addr,
-                l1_read_addr,
-                dst_addr,
+                l1_read_addr_0,
+                dst_addr_0,
                 downstream_bytes_sent_noc_addr,
                 whole_packet_size);
-            l1_read_addr += whole_packet_size;
-            dst_addr += whole_packet_size;
-        }
-
-        for (uint32_t i = 0; i < num_whole_fabric_packets_link_1; ++i) {
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
+                l1_read_addr_1,
+                dst_addr_1,
                 downstream_bytes_sent_noc_addr,
                 whole_packet_size);
-            l1_read_addr += whole_packet_size;
-            dst_addr += whole_packet_size;
+            l1_read_addr_0 += whole_packet_size;
+            l1_read_addr_1 += whole_packet_size;
+            dst_addr_0 += whole_packet_size;
+            dst_addr_1 += whole_packet_size;
         }
-
         if constexpr (partial_packet_size > 0) {
+            write_data_to_remote_core_with_ack<false>(
+                downstream_fabric_connection,
+                downstream_data_packet_header_addr,
+                l1_read_addr_0,
+                dst_addr_0,
+                downstream_bytes_sent_noc_addr,
+                partial_packet_size);
             write_data_to_remote_core_with_ack(
                 downstream_fabric_connection_2,
                 downstream_data_packet_header_addr_2,
-                l1_read_addr,
-                dst_addr,
+                l1_read_addr_1,
+                dst_addr_1,
                 downstream_bytes_sent_noc_addr,
                 partial_packet_size);
         }

@@ -6,7 +6,13 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_allclose,
+    flush_subnormal_values_to_zero,
+)
+from tests.ttnn.unit_tests.operations.eltwise.test_unary_pow import generate_clean_bf16_tensor
 
 pytestmark = pytest.mark.use_module_device
 
@@ -344,3 +350,45 @@ def test_binary_ng_pow(device, input_a, input_b, dtype):
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
     assert pcc >= 0.999
+
+
+# unary power FP32 tests
+@pytest.mark.parametrize("exponent", [2.0, -2.0, -3.56, 0.5, -0.5, -0.566, -2])
+def test_pow(exponent, device):
+    torch.manual_seed(42)
+
+    torch_base = torch.rand([4, 4], dtype=torch.float32)
+    torch_output = torch.pow(torch_base, exponent)
+    ttnn_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_output = ttnn.pow(ttnn_base, exponent)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_allclose(torch_output, ttnn_output, atol=2.5e-4, rtol=5e-7)
+
+
+@pytest.mark.parametrize("exponent", [0.25, 0.5, 0.75, -0.25, -0.5, -0.75])
+def test_pow_arange_masking_fp32(exponent, device):
+    tt_input = generate_clean_bf16_tensor(torch.float32)
+
+    tt_input = flush_subnormal_values_to_zero(tt_input)
+    in_range = (tt_input.abs() >= 1e-4) & (tt_input.abs() <= 1e4)
+    tt_input = tt_input[in_range]
+
+    tt_in = ttnn.from_torch(
+        tt_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    golden = golden_function(tt_input, exponent, device=device)
+
+    tt_result = ttnn.pow(tt_in, exponent)
+    result = ttnn.to_torch(tt_result)
+    result = flush_subnormal_values_to_zero(result)
+    golden = flush_subnormal_values_to_zero(golden)
+
+    assert_allclose(golden, result, atol=5e-4, rtol=8e-7)

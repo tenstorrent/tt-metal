@@ -68,7 +68,7 @@ def load_inputs(user_input, len_per_batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    # It clips the excerpt to the max length provided to allow testing different long context lengths
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -917,7 +917,9 @@ def test_demo_text(
             # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
-        # Save prefill token
+        # Save prefill token (unpack tuple when device sampling returns logprobs)
+        if isinstance(toks, tuple):
+            toks = toks[0]
         prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")

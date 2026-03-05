@@ -58,13 +58,15 @@ class MLA2D(MLA1D):
         torch_metaweight: torch.Tensor,
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
+        memory_config: ttnn.MemoryConfig,
+        padding_needed: tuple[int, int, int] = (0, 0, 0),
     ) -> SavedWeight:
         if dims[0] is not None:
             slices = torch.split(torch_metaweight, 1, dim=dims[0])
             assert all(torch.allclose(s1, s2) for s1, s2 in zip(slices[:-1], slices[1:]))
             torch_metaweight = slices[0]
             dims = (None, dims[1])
-        return super()._convert_weight(path, torch_metaweight, dims, mesh_device)
+        return super()._convert_weight(path, torch_metaweight, dims, mesh_device, memory_config, padding_needed)
 
     @classmethod
     def prefill_model_config(
@@ -101,21 +103,6 @@ class MLA2D(MLA1D):
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
         }
-
-    @classmethod
-    def create_page_table(
-        cls,
-        paged_config: PagedAttentionConfig,
-        mesh_device: ttnn.MeshDevice,
-        page_table: torch.Tensor | None = None,
-        batch_size_per_row: int = USERS_PER_ROW,
-    ) -> ttnn.Tensor:
-        return super().create_page_table(
-            paged_config=paged_config,
-            mesh_device=mesh_device,
-            page_table=page_table,
-            batch_size=batch_size_per_row * mesh_device.shape[0],
-        )
 
     @classmethod
     def create_state(

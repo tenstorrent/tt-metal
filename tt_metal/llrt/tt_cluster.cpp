@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
@@ -343,7 +344,7 @@ void Cluster::assign_mem_channels_to_devices(
     ChipId mmio_device_id, const std::unordered_set<ChipId>& controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt::umd::Cluster and denotes the max number of host memory channels per
     // MMIO device Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
-    // One WH gateway should have 8 remote deivces in its control group.
+    // One WH gateway should have 8 remote devices in its control group.
     TT_ASSERT(controlled_device_ids.size() <= 9, "Unable to assign each device to its own host memory channel!");
     uint16_t channel = 0;
     this->device_to_host_mem_channel_[mmio_device_id] = channel++;
@@ -1174,7 +1175,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
     }
 
     std::set<std::pair<ChipId, ChipId>> pairs_done;
-    // to reserve specified number of cores, ensure that the same are avaialble on connected chip id as well
+    // to reserve specified number of cores, ensure that the same are available on connected chip id as well
     for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         const auto& connected_chips_and_cores = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
         for (const auto& [connected_chip_id, cores] : connected_chips_and_cores) {
@@ -1205,7 +1206,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
                 if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
-                    // already reserved for fabric, potenially by the connected chip id
+                    // already reserved for fabric, potentially by the connected chip id
                     num_reserved_cores++;
                     continue;
                 }
@@ -1466,6 +1467,16 @@ uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_by
         return this->hal_->get_dma_alignment();
     }
     return 1;
+}
+
+umd::ClusterDescriptor* Cluster::get_cluster_desc() const {
+    TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
+    return this->cluster_desc_;
+}
+
+const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
+    TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+    return driver_;
 }
 
 }  // namespace tt
