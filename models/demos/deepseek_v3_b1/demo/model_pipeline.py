@@ -105,3 +105,9 @@ class ModelPipeline:
         )
         next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
         return next_token_id
+
+    def barrier(self) -> None:
+        self.pipeline.barrier()
+
+    def terminate(self) -> None:
+        self.pipeline.terminate()

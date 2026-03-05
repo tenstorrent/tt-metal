@@ -167,7 +167,7 @@ def run_demo(
                 logger.info("Decode step {} output token: {}", step + 1, next_token_id)
             logger.info("Generated {} tokens total", len(generated))
 
-        model_pipeline.pipeline.barrier()
+        model_pipeline.barrier()
     logger.info("Pod pipeline complete")
 
 
