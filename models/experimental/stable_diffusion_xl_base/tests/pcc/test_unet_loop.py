@@ -23,6 +23,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
+from models.common.utility_functions import is_blackhole
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
