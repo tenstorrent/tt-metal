@@ -53,6 +53,7 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(21);
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(24);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;

@@ -89,7 +89,7 @@ void kernel_main() {
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("TILE_WIDTH");
     constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;

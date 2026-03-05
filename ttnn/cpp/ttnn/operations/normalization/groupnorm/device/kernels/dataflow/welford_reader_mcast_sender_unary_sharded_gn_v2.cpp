@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
@@ -19,10 +18,12 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(9);
 
     // These are numbers in absolute terms, on a per group, per batch, per core with tiling
     constexpr uint32_t block_hw = get_compile_time_arg_val(10);
     constexpr uint32_t num_groups = get_compile_time_arg_val(11);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(12);
 
     const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
     const bool has_mcast_last_group = get_arg_val<uint32_t>(1);
@@ -158,7 +159,7 @@ void kernel_main() {
     // This is the stride between two consecutive local means/variances in the cb_ex_partial
     constexpr uint32_t local_stride = 2;
     constexpr uint32_t global_stride = NOC_L1_READ_ALIGNMENT_BYTES / 2;
-    constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tt::constants::TILE_HEIGHT;
+    constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / TILE_HEIGHT;
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -167,7 +168,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_reserve_back(cb_repack, per_core_N);
         uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
-        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
@@ -194,8 +195,7 @@ void kernel_main() {
             auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_vars_ptr);
 
             auto local_result =
-                combine_welford_stats<tt::constants::TILE_WIDTH, block_hw * tt::constants::TILE_WIDTH, local_stride>(
-                    p_local_means, p_local_vars);
+                combine_welford_stats<TILE_WIDTH, block_hw * TILE_WIDTH, local_stride>(p_local_means, p_local_vars);
 
             // Write this to cb_ex_global
             auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
@@ -222,10 +222,9 @@ void kernel_main() {
             }
 
             // Read mean and variance arrays from cb_ex_global, then combine using Welford
-            auto global_result = combine_welford_stats<
-                num_mcast_cores,
-                block_hw * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT,
-                global_stride>(p_global_means, p_global_vars);
+            auto global_result =
+                combine_welford_stats<num_mcast_cores, block_hw * TILE_WIDTH * TILE_HEIGHT, global_stride>(
+                    p_global_means, p_global_vars);
 
             // Write this to cb_ex_global
             p_global_means[0] = global_result.mean;
@@ -287,7 +286,7 @@ void kernel_main() {
         cb_wait_front(cb_repack_out, per_core_N);
         uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
         uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
-        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
