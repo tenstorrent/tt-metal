@@ -65,6 +65,26 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config);
 
+struct DramConfig {
+    NOC noc = NOC::NOC_0;
+    std::vector<uint32_t> compile_args;
+    std::map<std::string, std::string> defines;
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+};
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config);
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config);
+
 struct KernelSource {
     enum SourceType { FILE_PATH, SOURCE_CODE };
 
@@ -114,6 +134,7 @@ public:
         DataMovementConfig,
         EthernetConfig,
         ComputeConfig,
+        DramConfig,
         experimental::quasar::QuasarDataMovementConfig,
         experimental::quasar::QuasarComputeConfig>;
 
@@ -321,6 +342,44 @@ public:
 
 private:
     const EthernetConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+class DramKernel : public Kernel {
+public:
+    DramKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DramConfig& config) :
+        Kernel(
+            HalProgrammableCoreType::DRAM,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {}
+
+    ~DramKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const DramConfig config_;
 
     uint8_t expected_num_binaries() const override;
 
