@@ -87,10 +87,17 @@ bool safe_remove_all(const std::filesystem::path& path) {
             sync_filesystem(path);
             return true;
         }
-        if (is_not_found_error(ec) || ec == std::errc::directory_not_empty) {
+        if (is_not_found_error(ec)) {
             return true;
         }
-        if (!is_estale_error(ec)) {
+        // Retry on ESTALE (stale NFS handle) or ENOTEMPTY (transient race condition).
+        // ENOTEMPTY can occur when:
+        //   - Another process creates files while remove_all is running
+        //   - NFS "silly-rename" files (.nfsXXXX) appear when deleting files held open by other processes
+        //   - Mount points exist inside the directory
+        // Retrying gives concurrent operations time to complete.
+        bool is_retryable = is_estale_error(ec) || ec == std::errc::directory_not_empty;
+        if (!is_retryable) {
             log_warning(tt::LogMetal, "Failed to remove_all {}: {}", path.string(), ec.message());
             return false;
         }

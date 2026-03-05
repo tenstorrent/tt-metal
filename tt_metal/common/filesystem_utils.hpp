@@ -44,10 +44,10 @@
 // The utilities below automatically retry operations that fail with ESTALE,
 // giving the NFS cache time to refresh before retrying.
 //
-// Sync() behavior
-// ---------------
-// Write operations (remove, rename, create_directories, hard_link/copy) call
-// ::sync() after successful completion. This ensures:
+// Sync behavior
+// -------------
+// Write operations (remove, rename, create_directories, hard_link/copy)
+// sync the filesystem after successful completion. This ensures:
 //
 //   - Data durability: All written data is flushed to stable storage on
 //     the NFS server before returning.
@@ -58,10 +58,13 @@
 //   - Corruption prevention: In crash scenarios, data is less likely to be
 //     lost or corrupted.
 //
+// Implementation:
+//   - On Linux: Uses syncfs() to sync only the specific filesystem containing
+//     the target path, minimizing impact on concurrent I/O in other filesystems.
+//   - On other platforms: Falls back to process-wide sync().
+//
 // Performance implications:
-//   - ::sync() is a process-wide flush that affects ALL pending I/O across
-//     the entire process, not just the file being operated on.
-//   - This can impact concurrent I/O operations in other threads.
+//   - Even with syncfs(), the flush affects all pending I/O on that filesystem.
 //   - Use these utilities when correctness and durability matter more than
 //     raw performance. For high-throughput scenarios, use std::filesystem
 //     directly with your own error handling.
@@ -71,15 +74,16 @@
 // All functions in this namespace are blocking and may sleep during retry:
 //
 //   - Maximum retry attempts: 5 (kMaxFsRetries)
-//   - Base delay per attempt: 500ms * attempt_number (linear backoff)
-//   - Jitter: Write operations add up to 100ms of random jitter to prevent
-//     thundering herd issues when multiple processes retry simultaneously
+//   - Base delay: kFsRetryDelayMs * attempt_number (linear backoff)
+//   - Jitter: Write operations add up to kFsRetryJitterMs of random jitter
+//     per retry to prevent thundering herd issues
 //
-//   - Maximum total sleep time for write operations: ~7.5 seconds
-//     (500 + 1000 + 1500 + 2000 + 2500 = 7500ms, plus up to 100ms jitter)
+//   - Sleep occurs before retries 1-4 (not before first attempt or after last)
+//   - Maximum total sleep time for write operations: ~5.4 seconds
+//     (500 + 1000 + 1500 + 2000 = 5000ms, plus up to 400ms total jitter)
 //
-//   - Maximum total sleep time for read-only operations: ~7.5 seconds
-//     (500 + 1000 + 1500 + 2000 + 2500 = 7500ms, no jitter)
+//   - Maximum total sleep time for read-only operations: ~5 seconds
+//     (500 + 1000 + 1500 + 2000 = 5000ms, no jitter)
 //
 //   Note: Read-only operations (exists, is_directory, file_size, etc.) do not
 //   include jitter since they don't modify state. Write operations (remove,
@@ -94,7 +98,7 @@ namespace tt::filesystem {
 // Maximum number of retries for filesystem operations on NFS
 inline constexpr int kMaxFsRetries = 5;
 // Base delay between retries (in milliseconds), multiplied by attempt number
-inline constexpr int kFsRetryDelayMs = 250;
+inline constexpr int kFsRetryDelayMs = 500;
 // Maximum random jitter for write operations (in milliseconds) to prevent thundering herd
 inline constexpr int kFsRetryJitterMs = 100;
 
@@ -109,8 +113,12 @@ inline bool is_not_found_error(const std::error_code& ec) { return ec == std::er
 // Returns true if file was removed or didn't exist, false on other errors.
 bool safe_remove(const std::filesystem::path& path);
 
-// Safe remove_all that ignores ENOENT/ENOTEMPTY and retries on ESTALE.
-// Calls ::sync() after successful removal. Includes jitter on retries.
+// Safe remove_all that retries on ESTALE and ENOTEMPTY (transient race conditions).
+// ENOTEMPTY is retried because it can occur when:
+//   - Another process creates files while remove_all is running
+//   - NFS "silly-rename" files (.nfsXXXX) appear when deleting files held open by other processes
+//   - Mount points exist inside the directory
+// Syncs filesystem after successful removal. Includes jitter on retries.
 // Returns true if directory was removed or didn't exist, false on other errors.
 bool safe_remove_all(const std::filesystem::path& path);
 
