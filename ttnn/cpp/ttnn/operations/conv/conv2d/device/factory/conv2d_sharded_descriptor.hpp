@@ -10,12 +10,11 @@
 
 namespace ttnn::prim::conv2d_detail {
 
-// ProgramDescriptorFactoryConcept factory for height-sharded and block-sharded conv2d.
+// Descriptor-based factory for height-sharded and block-sharded conv2d.
 //
 // Uses the optional prepare_resources hook to create the sliding window config
-// tensor (a device-side allocation).  The framework's DescriptorMeshWorkloadFactoryAdapter
-// handles all cache-hit dispatch: buffer address patching, dynamic CB patching,
-// and resource lifetime management.
+// tensor (a device-side allocation).  The framework handles all cache-hit dispatch:
+// buffer address patching, dynamic CB patching, and resource lifetime management.
 struct Conv2dShardedDescriptorFactory {
     // Creates the sliding window config tensor (device-side allocation).
     // Called once on cache miss; the returned DeviceStorage is kept alive across

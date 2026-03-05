@@ -1,6 +1,6 @@
 # Migrate Operation to ProgramDescriptor Pattern
 
-Migrate a device operation from the old `CachedProgram` / `ProgramFactoryConcept` architecture to the new `ProgramDescriptor` / `ProgramDescriptorFactoryConcept` architecture.
+Migrate a device operation from the old `CachedProgram` / `ProgramFactoryConcept` architecture to the new `ProgramDescriptor`-based architecture.
 
 ## Usage
 
@@ -153,7 +153,7 @@ No need to duplicate kernel files.
 type hash to avoid cache collisions:
 
 ```cpp
-tt::stl::hash::hash_t MyNewDeviceOperation::compute_program_hash(
+std::uint64_t MyNewDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     auto hashable_attrs = attrs;
     hashable_attrs.seed = 0;  // Zero out dynamic fields that don't affect compilation
