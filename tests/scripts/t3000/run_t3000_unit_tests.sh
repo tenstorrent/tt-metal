@@ -618,6 +618,10 @@ run_t3000_ccl_tests() {
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
   # pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-DataType.BFLOAT16-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
 
+  # neighbor pad: 1D correctness check + 2D correctness check
+  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
+  pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
