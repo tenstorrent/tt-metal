@@ -13,6 +13,53 @@ from loguru import logger
 import ttnn
 
 
+def get_gate_outputs(
+    indices: torch.Tensor,
+    num_chips: int,
+    n_routed_experts: int,
+    experts_per_chip: int,
+    seq_len_per_chip: int,
+    num_experts_per_tok: int,
+) -> tuple:
+    """
+    Compute dispatch offsets and token counts from router indices.
+
+    This processes the gate/router output indices to determine:
+    1. Where each token should be written in the dispatch buffer (offsets)
+    2. How many tokens each expert receives (counter)
+
+    Args:
+        indices: Expert indices tensor (num_chips, seq_len_per_chip, num_experts_per_tok)
+        num_chips: Number of chips in the system
+        n_routed_experts: Total number of routed experts across all chips
+        experts_per_chip: Number of experts per chip
+        seq_len_per_chip: Sequence length per chip
+        num_experts_per_tok: Number of experts each token routes to
+
+    Returns:
+        chip_to_n_routed_expert_offset: Base offset for each expert from each chip
+            Shape: (num_chips, n_routed_experts)
+        chip_to_routed_expert_tokens: Total tokens per expert per chip
+            Shape: (num_chips, experts_per_chip)
+        cum_sum: Cumulative sum of token counts across chips
+            Shape: (num_chips, n_routed_experts)
+    """
+    # Count tokens per expert per chip
+    chip_to_n_routed_expert_counter = torch.zeros((num_chips, n_routed_experts), dtype=torch.int32)
+    for chip in range(num_chips):
+        for token in range(seq_len_per_chip):
+            for topk_indice in range(num_experts_per_tok):
+                routed_expert = indices[chip, token, topk_indice]
+                chip_to_n_routed_expert_counter[chip, routed_expert] += 1
+
+    # Compute cumulative offsets
+    cum_sum = torch.cumsum(chip_to_n_routed_expert_counter, dim=0)
+    chip_to_n_routed_expert_offset = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
+    chip_to_routed_expert_tokens = cum_sum[-1].view(num_chips, experts_per_chip).to(torch.int32)
+
+    return chip_to_n_routed_expert_offset, chip_to_routed_expert_tokens, cum_sum
+
+
 def compute_constants(seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor):
     """
     Compute derived constants for MoE configuration.
