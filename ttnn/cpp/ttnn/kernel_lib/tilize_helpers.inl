@@ -55,9 +55,10 @@ constexpr bool has_supported_fast_tilize_format() {
     return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
 }
 
-template <uint32_t input_cb, uint32_t output_cb>
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 constexpr bool can_use_fast_tilize() {
-    return has_32x32_tiles<output_cb>() &&
+    return block_width_tiles < 256 &&
+           has_32x32_tiles<output_cb>() &&
            !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_cb>();
 }
@@ -82,17 +83,19 @@ ALWI void assert_tilize_cb_page_sizes(bool asymmetric_cb_pages) {
 // =============================================================================
 
 template <
+    uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
 ALWI void tilize(
-    uint32_t block_width_tiles,
     uint32_t num_blocks,
     std::optional<uint32_t> total_input_pages) {
 
     // Compile-time validation
+    static_assert(block_width_tiles > 0,
+        "block_width_tiles must be greater than 0");
     static_assert(input_cb != output_cb,
         "Tilize cannot be done in-place: input_cb and output_cb must be different");
     static_assert(input_cb < 32,
@@ -101,11 +104,10 @@ ALWI void tilize(
         "Invalid output_cb: must be less than 32");
 
     // Runtime parameter validation
-    ASSERT(block_width_tiles > 0);
     ASSERT(num_blocks > 0);
 
     // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format)
-    constexpr bool use_fast = can_use_fast_tilize<input_cb, output_cb>();
+    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_cb, output_cb>();
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =

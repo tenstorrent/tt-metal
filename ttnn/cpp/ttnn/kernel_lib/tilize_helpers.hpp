@@ -62,6 +62,7 @@ enum class WaitMode : uint8_t {
  *
  * ── Template Parameters (compile-time) ──────────────────────────────────────
  *
+ *   block_width_tiles — Number of output tiles per block (width in tiles, FIRST template param).
  *   input_cb         — Input circular buffer index (0–31, row-major data).
  *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
@@ -78,7 +79,6 @@ enum class WaitMode : uint8_t {
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
- *   block_width_tiles  — Number of output tiles per block (width in tiles).
  *   num_blocks         — Number of tile-rows to process (height in tiles).
  *   total_input_pages  — Total input CB pages across all blocks (default: std::nullopt).
  *       omitted (symmetric): Input and output CBs both have tile-sized pages.
@@ -98,40 +98,40 @@ enum class WaitMode : uint8_t {
  *   compute_kernel_hw_startup(cb_in, cb_out);
  *
  *   // 1. Basic tilize (most common — symmetric, both CBs have tile-sized pages)
- *   compute_kernel_lib::tilize<cb_in, cb_out>(block_width_tiles, num_blocks);
+ *   compute_kernel_lib::tilize<block_width_tiles, cb_in, cb_out>(num_blocks);
  *
  *   // 2. Asymmetric — input CB has row-sized pages, output CB has tile-sized pages
- *   compute_kernel_lib::tilize<cb_in, cb_out>(out_tiles_per_block, num_blocks, total_rows);
+ *   compute_kernel_lib::tilize<out_tiles_per_block, cb_in, cb_out>(num_blocks, total_rows);
  *
  *   // 3. Asymmetric, single block — all rows tilized at once
- *   compute_kernel_lib::tilize<cb_in, cb_out>(total_out_tiles, 1, total_rows);
+ *   compute_kernel_lib::tilize<total_out_tiles, cb_in, cb_out>(1, total_rows);
  *
  *   // 4. Register reconfiguration (switching data formats mid-kernel)
  *   using namespace compute_kernel_lib::tilize_config;
- *   compute_kernel_lib::tilize<new_cb, cb_out,
+ *   compute_kernel_lib::tilize<16, new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(16, 5);
+ *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(5);
  *
  *   // 5. Caller-managed synchronization (data already in CB)
- *   compute_kernel_lib::tilize<cb_in, cb_out,
+ *   compute_kernel_lib::tilize<block_w, cb_in, cb_out,
  *          tilize_config::InitUninitMode::InitAndUninit,
- *          tilize_config::WaitMode::NoWait>(block_w, num_blocks);
+ *          tilize_config::WaitMode::NoWait>(num_blocks);
  *
  *   // 6. Multiple back-to-back tilize calls — skip redundant init/uninit between them
- *   compute_kernel_lib::tilize<cb_in, cb_out, tilize_config::InitUninitMode::InitOnly>(w, blocks);   // first
- *   compute_kernel_lib::tilize<cb_in, cb_out, tilize_config::InitUninitMode::Neither>(w, blocks);    // middle
- *   compute_kernel_lib::tilize<cb_in, cb_out, tilize_config::InitUninitMode::UninitOnly>(w, blocks); // last
+ *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::InitOnly>(blocks);   // first
+ *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::Neither>(blocks);    // middle
+ *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::UninitOnly>(blocks); // last
  */
 template <
+    uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
-ALWI void tilize(
-    uint32_t block_width_tiles, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
+ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib
 

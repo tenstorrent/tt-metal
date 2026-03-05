@@ -40,9 +40,7 @@ void kernel_main() {
             compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(granularity);
 
             // Wait on writer to update block. Tilize with reconfiguration
-            compute_kernel_lib::tilize<untilized_cache2_cb, out_cb>(
-                Wt,          // block_width_tiles
-                granularity  // num_blocks
+            compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(granularity  // num_blocks
             );
         }
         reconfig_data_format_srca(cache_cb, in_cb);

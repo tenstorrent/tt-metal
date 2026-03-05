@@ -214,19 +214,21 @@ void kernel_main() {
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
     compute_kernel_lib::tilize<
+        per_core_N,
         cb_in_rm,
         cb_in,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_N, per_core_M);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
     compute_kernel_lib::tilize<
+        per_core_N,
         cb_in_rm,
         cb_in,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,  // should have unninit also
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_N, per_core_M);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_wait_front(cb_in, per_core_MN);
 #else
