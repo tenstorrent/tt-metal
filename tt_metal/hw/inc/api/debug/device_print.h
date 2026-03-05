@@ -170,7 +170,8 @@ struct bf16_t {
         }                                                                                                             \
     }
 
-#define DEVICE_PRINT_INITIALIZE_LOCK() device_print_detail::locking::initialize_lock();
+#define DEVICE_PRINT_INITIALIZE_LOCK() device_print_detail::locking::initialize_lock()
+#define DEVICE_PRINT_KERNEL_FINISHED() device_print_detail::locking::update_kernel_finished()
 
 namespace device_print_detail {
 
@@ -1054,9 +1055,6 @@ bool acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
-    // TODO: Once kernel is being started, we should update risc_state to KernelNotPrinted if it is not set to
-    // PrintingDisabled.
-
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1089,6 +1087,13 @@ bool acquire_lock() {
     // Release buffer lock and return we should not print.
     release_lock();
     return false;
+}
+
+void update_kernel_finished() {
+    volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
+    if (device_print_buffer->aux.risc_state[PROCESSOR_INDEX] != DevicePrintRiscCoreState::PrintingDisabled) {
+        device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelNotPrinted;
+    }
 }
 
 void release_lock() {
@@ -1217,5 +1222,6 @@ constexpr uint32_t get_total_message_size(Args&&...) {
 
 #define DEVICE_PRINT(format, ...)
 #define DEVICE_PRINT_INITIALIZE_LOCK()
+#define DEVICE_PRINT_KERNEL_FINISHED()
 
 #endif

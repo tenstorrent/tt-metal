@@ -431,6 +431,7 @@ extern "C" uint32_t _start1() {
 
         record_stack_usage(stack_free);
         WAYPOINT("D1");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }
