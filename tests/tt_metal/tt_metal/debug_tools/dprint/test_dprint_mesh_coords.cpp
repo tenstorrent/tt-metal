@@ -201,11 +201,11 @@ TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersAllCoords) {
         auto [row, col] = local_coords[i];
 
         if (i > 0) {
-            MeshDispatchFixture::TearDown();
+            DPrintMeshFixture::TearDown();
             MetalContext::instance().teardown();
             CMAKE_UNIQUE_NAMESPACE::ConfigureDPrintForCoord(
                 MetalContext::instance().rtoptions(), dprint_file_name, row, col);
-            MeshDispatchFixture::SetUp();
+            DPrintMeshFixture::SetUp();
         }
 
         ASSERT_FALSE(
