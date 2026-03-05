@@ -24,7 +24,6 @@ from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_s
 class ModelPipeline:
     def __init__(
         self,
-        mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         use_real_weights: bool,
         lm_head_fp32_dest_acc_en: bool = True,
@@ -42,7 +41,7 @@ class ModelPipeline:
             raise RuntimeError(
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
-        self.mesh_device = mesh_device
+        self.mesh_device = self._open_mesh_device()
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
@@ -81,6 +80,20 @@ class ModelPipeline:
     def is_host(self) -> bool:
         return self.pipeline.my_mesh_id == 0
 
+    def _open_mesh_device():
+        fabric_router_config = ttnn._ttnn.fabric.FabricRouterConfig()
+        fabric_router_config.max_packet_payload_size_bytes = 7168
+        ttnn.set_fabric_config(
+            ttnn.FabricConfig.FABRIC_2D,
+            ttnn.FabricReliabilityMode.STRICT_INIT,
+            None,
+            ttnn.FabricTensixConfig.DISABLED,
+            ttnn.FabricUDMMode.DISABLED,
+            ttnn.FabricManagerMode.DEFAULT,
+            fabric_router_config,
+        )
+        return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 2))
+
     def run_inference(
         self,
         prompt_token_ids: list[int],
@@ -95,7 +108,7 @@ class ModelPipeline:
 
         Must only be called on mesh_id == 0 (the host process).
         """
-        if not self.is_host:
+        if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("run_inference() must only be called on mesh id 0")
         assert self._model is not None
 
