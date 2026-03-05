@@ -157,10 +157,14 @@ AddressableCoreType get_core_type(
     // be in either the virtual or physical Tensix range. Only apply this relaxed
     // check when we know the cmd buf is busy (mid-transaction), to avoid false
     // acceptance of genuinely bad addresses when the cmd buf is idle.
+    // To confirm the hypothesis, we require a proper mixed state (one axis virtual,
+    // other physical) and verify the physical axis is not a harvested coordinate.
     if (cmd_buf_mid_transaction) {
         if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
-            bool x_valid = false;
-            bool y_valid = false;
+            bool x_in_virtual = false;
+            bool y_in_virtual = false;
+            bool x_in_physical = false;
+            bool y_in_physical = false;
 #ifdef ARCH_BLACKHOLE
             uint32_t virtual_end_x = (uint32_t)core_info->noc_size_x - 1;
             uint32_t virtual_end_y = (uint32_t)core_info->noc_size_y - 1;
@@ -170,34 +174,79 @@ AddressableCoreType get_core_type(
 #endif
             if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X) &&
                 x <= NOC_0_X(noc_id, core_info->noc_size_x, virtual_end_x)) {
-                x_valid = true;
+                x_in_virtual = true;
             }
             if (y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y) &&
                 y <= NOC_0_Y(noc_id, core_info->noc_size_y, virtual_end_y)) {
-                y_valid = true;
+                y_in_virtual = true;
             }
             if (noc_id == 0) {
                 if (x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
                     x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1)) {
-                    x_valid = true;
+                    x_in_physical = true;
                 }
                 if (y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
                     y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
-                    y_valid = true;
+                    y_in_physical = true;
                 }
             } else {
                 if (x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
                     x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1)) {
-                    x_valid = true;
+                    x_in_physical = true;
                 }
                 if (y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
                     y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
-                    y_valid = true;
+                    y_in_physical = true;
                 }
             }
-            if (x_valid && y_valid) {
-                is_virtual_coord = false;
-                return AddressableCoreType::TENSIX;
+            // Must be a valid mixed state: one axis virtual, other physical.
+            // Both-virtual or both-physical would have matched earlier in strict checks.
+            if ((x_in_virtual && y_in_physical) || (x_in_physical && y_in_virtual)) {
+                // Verify each axis maps to a real existing core:
+                // - Physical axis must not be a harvested physical coordinate
+                // - Virtual axis must not be a harvested virtual coordinate
+                // - Neither axis should match a non-worker core coordinate
+                bool valid = true;
+                // Check physical axis against harvested physical coords
+                for (uint32_t idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+                    uint16_t h = core_info->harvested_coords[idx];
+                    if constexpr (tensix_harvest_axis == 0x1) {
+                        if (y_in_physical && y == NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)h)) {
+                            valid = false;
+                        }
+                    } else if constexpr (tensix_harvest_axis == 0x2) {
+                        if (x_in_physical && x == NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)h)) {
+                            valid = false;
+                        }
+                    }
+                }
+                // Check virtual axis against harvested virtual coords
+                for (uint32_t idx = 0; idx < MAX_HARVESTED_ON_AXIS; idx++) {
+                    uint16_t vh = core_info->virtual_harvested_coords[idx];
+                    if constexpr (tensix_harvest_axis == 0x1) {
+                        if (y_in_virtual && y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)vh)) {
+                            valid = false;
+                        }
+                    } else if constexpr (tensix_harvest_axis == 0x2) {
+                        if (x_in_virtual && x == NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)vh)) {
+                            valid = false;
+                        }
+                    }
+                }
+                // Check neither axis matches a non-worker physical core coordinate
+                for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
+                    uint8_t nw_x =
+                        NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->non_worker_cores[idx].x);
+                    uint8_t nw_y =
+                        NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->non_worker_cores[idx].y);
+                    if ((x_in_physical && x == nw_x) || (y_in_physical && y == nw_y)) {
+                        valid = false;
+                    }
+                }
+                if (valid) {
+                    is_virtual_coord = false;
+                    return AddressableCoreType::TENSIX;
+                }
             }
         }
     }
