@@ -1486,7 +1486,6 @@ void kernel_main() {
                 DeviceZoneScopedN("MCAST3");
                 mcast3(mcast3_args);
             }
-            mcast3.teardown();
 
             // ========================================================================
             // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
@@ -1514,14 +1513,16 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
             // Signal CCL sender that gather3 is complete (gather receiver only)
             if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
+                static_assert(noc_mode == DM_DYNAMIC_NOC, "CCL signal must be sent on dynamic NOC");
+                constexpr uint8_t CCL_SIGNAL_NOC = 0;
                 constexpr uint32_t gather3_completion_semaphore_id =
                     get_named_compile_time_arg_val("gather3_completion_semaphore_id");
                 constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
                 constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
-                uint64_t ccl_sender_semaphore_addr =
-                    get_noc_addr(ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id));
-                noc_semaphore_inc(ccl_sender_semaphore_addr, 1);
-                noc_async_atomic_barrier();
+                uint64_t ccl_sender_semaphore_addr = get_noc_addr(
+                    ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id), CCL_SIGNAL_NOC);
+                noc_semaphore_inc(ccl_sender_semaphore_addr, 1, CCL_SIGNAL_NOC);
+                noc_async_atomic_barrier(CCL_SIGNAL_NOC);
             }
 #endif
 
@@ -1578,4 +1579,5 @@ void kernel_main() {
             // CCL Sender TRISC is no-op
 #endif
     }
+    mcast.teardown();
 }
