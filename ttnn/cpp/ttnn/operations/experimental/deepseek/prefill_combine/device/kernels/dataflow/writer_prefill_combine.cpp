@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 // Debug print control - set to 0 to disable combine debug prints, 1 to enable
 #define ENABLE_COMBINE_DEBUG 0
@@ -111,63 +112,64 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[num_chips] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
-    DPRINT_COMBINE << "Opening fabric connections async..." << ENDL();
-    std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        for (uint32_t link = 0; link < num_links; link++) {
-            if (directions[dir]) {
-                fabric_connections[dir][link] =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-                fabric_connections[dir][link].open_start();
-            }
-        }
-    }
-
-    // Set up packet header from CB (cb_id 4)
     constexpr uint32_t cb_packet_header_id = 4;
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
     auto* unicast_packet_header =
         reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
 
-    DPRINT_COMBINE << "Waiting for fabric connections barrier..." << ENDL();
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        for (uint32_t link = 0; link < num_links; link++) {
-            if (directions[dir]) {
-                fabric_connections[dir][link].open_finish();
+    std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
+    {
+        DeviceZoneScopedN("combine-open-connections");
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            for (uint32_t link = 0; link < num_links; link++) {
+                if (directions[dir]) {
+                    fabric_connections[dir][link] =
+                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                            rt_args_idx);
+                    fabric_connections[dir][link].open_start();
+                }
+            }
+        }
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            for (uint32_t link = 0; link < num_links; link++) {
+                if (directions[dir]) {
+                    fabric_connections[dir][link].open_finish();
+                }
             }
         }
     }
 
-    // Use link 0 connections for init semaphore exchange
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        if (directions[dir]) {
-            init_connections[dir] = fabric_connections[dir][0];
+    {
+        DeviceZoneScopedN("combine-init-sync");
+        std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            if (directions[dir]) {
+                init_connections[dir] = fabric_connections[dir][0];
+            }
+        }
+
+        const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            ReplicateGroup::NONE,
+            num_chips>(init_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            if (directions[dir]) {
+                fabric_connections[dir][0] = init_connections[dir];
+            }
         }
     }
 
-    // Send init semaphore to all devices
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    DPRINT_COMBINE << "Sending init semaphore to configured targets..." << ENDL();
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        ReplicateGroup::NONE,
-        num_chips>(init_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        if (directions[dir]) {
-            fabric_connections[dir][0] = init_connections[dir];
-        }
+    {
+        DeviceZoneScopedN("combine-wait-init");
+        noc_semaphore_wait((uint32_t*)init_semaphore_address, num_chips - 1);
+        noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
     }
-
-    // Wait for all devices to complete initialization
-    DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, num_chips - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
 
     uint32_t fabric_send_counter = 0;
 
@@ -182,72 +184,75 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
-    for (uint32_t expert_idx = 0; expert_idx < experts_per_chip; ++expert_idx) {
-        DPRINT_COMBINE << "Processing expert " << expert_idx << "/" << experts_per_chip << ENDL();
-        for (uint32_t tok_idx = 0; tok_idx < experts_tok_counter[expert_idx]; ++tok_idx) {
-            cb_wait_front(cb_dispatched_buffer_id, 1);
-            cb_wait_front(cb_dispatched_metadata_id, 1);
-
-            uint32_t buffer_cb_addr = get_read_ptr(cb_dispatched_buffer_id);
-            uint32_t metadata_cb_addr = get_read_ptr(cb_dispatched_metadata_id);
-            volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_cb_addr);
-
-            auto dst_chip = metadata[0];
-            auto dst_token_idx = metadata[1];
-            auto dst_topk_indice = metadata[2];
-
-            DPRINT_COMBINE << "  Token " << tok_idx << "/" << experts_tok_counter[expert_idx]
-                           << ": dst_chip=" << dst_chip << " dst_token_idx=" << dst_token_idx
-                           << " dst_topk_indice=" << dst_topk_indice << ENDL();
-
-            // Calculate output page index
-            // Output shape: (num_chips, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-            // Pages are laid out as: token * num_experts_per_tok + topk_indice
-            uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-
-            if (dst_chip == linearized_mesh_coord) {
-                // DPRINT_COMBINE << "    Token" << dst_token_idx << " is local to this chip." << ENDL();
-                // Local write - direct NOC write to DRAM
-                noc_async_write_page(output_page_idx, output_addr_gen, buffer_cb_addr);
-                noc_async_write_barrier();
-            } else {
-                // Remote write via fabric
-                // DPRINT_COMBINE << "    Token" << dst_token_idx << " is remote to this chip. Destination chip: "
-                //                << dst_chip << ENDL();
-#ifdef DEST_CHIP_ID
-                if constexpr (is_1d_topology<topology>()) {
-                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                    uint32_t link = fabric_send_counter % num_links;
-                    fabric_send_counter++;
-
-                    uint32_t distance =
-                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                    fabric_set_unicast_route<false>(
-                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        output_addr_gen,
-                        fabric_connections[route][link],
-                        unicast_packet_header,
-                        buffer_cb_addr,
-                        output_page_idx,
-                        (int)aligned_output_page_size,
-                        l1_alignment);
+    {
+        DeviceZoneScopedN("combine-expert-loop");
+        for (uint32_t expert_idx = 0; expert_idx < experts_per_chip; ++expert_idx) {
+            DPRINT_COMBINE << "Processing expert " << expert_idx << "/" << experts_per_chip << ENDL();
+            for (uint32_t tok_idx = 0; tok_idx < experts_tok_counter[expert_idx]; ++tok_idx) {
+                {
+                    DeviceZoneScopedN("combine-wait-reader");
+                    cb_wait_front(cb_dispatched_buffer_id, 1);
+                    cb_wait_front(cb_dispatched_metadata_id, 1);
                 }
-#endif
-            }
 
-            cb_pop_front(cb_dispatched_buffer_id, 1);
-            cb_pop_front(cb_dispatched_metadata_id, 1);
+                uint32_t buffer_cb_addr = get_read_ptr(cb_dispatched_buffer_id);
+                uint32_t metadata_cb_addr = get_read_ptr(cb_dispatched_metadata_id);
+                volatile tt_l1_ptr uint32_t* metadata =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_cb_addr);
+
+                auto dst_chip = metadata[0];
+                auto dst_token_idx = metadata[1];
+                auto dst_topk_indice = metadata[2];
+
+                DPRINT_COMBINE << "  Token " << tok_idx << "/" << experts_tok_counter[expert_idx]
+                               << ": dst_chip=" << dst_chip << " dst_token_idx=" << dst_token_idx
+                               << " dst_topk_indice=" << dst_topk_indice << ENDL();
+
+                uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
+
+                if (dst_chip == linearized_mesh_coord) {
+                    DeviceZoneScopedN("combine-local-write");
+                    noc_async_write_page(output_page_idx, output_addr_gen, buffer_cb_addr);
+                    noc_async_write_barrier();
+                } else {
+#ifdef DEST_CHIP_ID
+                    if constexpr (is_1d_topology<topology>()) {
+                        DeviceZoneScopedN("combine-fabric-send");
+                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                        uint32_t link = fabric_send_counter % num_links;
+                        fabric_send_counter++;
+
+                        uint32_t distance =
+                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                        fabric_set_unicast_route<false>(
+                            (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+
+                        fabric_send_noc_unicast<fabric_max_packet_size>(
+                            output_addr_gen,
+                            fabric_connections[route][link],
+                            unicast_packet_header,
+                            buffer_cb_addr,
+                            output_page_idx,
+                            (int)aligned_output_page_size,
+                            l1_alignment);
+                    }
+#endif
+                }
+
+                cb_pop_front(cb_dispatched_buffer_id, 1);
+                cb_pop_front(cb_dispatched_metadata_id, 1);
+            }
         }
     }
 
 #ifdef DEST_CHIP_ID
-    // Close fabric connections to prevent resource conflicts with subsequent operations
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        for (uint32_t link = 0; link < num_links; link++) {
-            if (directions[dir]) {
-                fabric_connections[dir][link].close();
+    {
+        DeviceZoneScopedN("combine-close-connections");
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            for (uint32_t link = 0; link < num_links; link++) {
+                if (directions[dir]) {
+                    fabric_connections[dir][link].close();
+                }
             }
         }
     }

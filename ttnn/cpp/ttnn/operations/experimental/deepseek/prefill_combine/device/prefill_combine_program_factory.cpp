@@ -192,7 +192,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         program,
         worker_core_grid,
         dispatched_buffer,
-        /*buffering_factor=*/2,
+        /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_0,
         "dispatched_buffer");
 
@@ -200,7 +200,7 @@ PrefillCombineDeviceOperation::PrefillCombineProgramFactory::create_at(
         program,
         worker_core_grid,
         dispatched_metadata,
-        /*buffering_factor=*/2,
+        /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_1,
         "dispatched_metadata");
 

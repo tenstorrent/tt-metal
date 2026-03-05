@@ -252,19 +252,19 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
 
     // Create reader CBs
     detail::create_tensor_cb(
-        program, sender_core_grid, input_tensor, /*buffering_factor=*/3, /*cb_id=*/tt::CBIndex::c_0, "input_tensor");
+        program, sender_core_grid, input_tensor, /*buffering_factor=*/16, /*cb_id=*/tt::CBIndex::c_0, "input_tensor");
     detail::create_tensor_cb(
         program,
         sender_core_grid,
         indices_tensor,
-        /*buffering_factor=*/3,
+        /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_1,
         "indices_tensor");
     detail::create_tensor_cb(
         program,
         sender_core_grid,
         weights_tensor,
-        /*buffering_factor=*/3,
+        /*buffering_factor=*/16,
         /*cb_id=*/tt::CBIndex::c_2,
         "weights_tensor");
     detail::create_tensor_cb(

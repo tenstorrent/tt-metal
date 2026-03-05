@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 // #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 // Debug print control - set to 0 to disable dispatch debug prints, 1 to enable
@@ -150,19 +151,6 @@ void kernel_main() {
     DPRINT_DISPATCH << ENDL();
     //
 
-    DPRINT_DISPATCH << "DEBUG: Before opening fabric connections" << ENDL();
-    std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        for (uint32_t link = 0; link < num_links; link++) {
-            if (directions[dir]) {
-                fabric_connections[dir][link] =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-                fabric_connections[dir][link].open_start();
-            }
-        }
-    }
-    DPRINT_DISPATCH << "DEBUG: After opening fabric connections" << ENDL();
-
     // Set up packet headers from CB (cb_packet_header_id from compile-time args)
     uint32_t packet_header_buffer_address = get_read_ptr(cb_packet_header_id);
     auto* unicast_packet_header =
@@ -170,43 +158,54 @@ void kernel_main() {
     auto* metadata_packet_header = reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(
         packet_header_buffer_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader));
 
-    DPRINT_DISPATCH << "DEBUG: Before fabric connections barrier" << ENDL();
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        for (uint32_t link = 0; link < num_links; link++) {
-            if (directions[dir]) {
-                fabric_connections[dir][link].open_finish();
+    std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
+    {
+        DeviceZoneScopedN("dispatch-open-connections");
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            for (uint32_t link = 0; link < num_links; link++) {
+                if (directions[dir]) {
+                    fabric_connections[dir][link] =
+                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                            rt_args_idx);
+                    fabric_connections[dir][link].open_start();
+                }
+            }
+        }
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            for (uint32_t link = 0; link < num_links; link++) {
+                if (directions[dir]) {
+                    fabric_connections[dir][link].open_finish();
+                }
             }
         }
     }
-    DPRINT_DISPATCH << "DEBUG: After fabric connections barrier" << ENDL();
 
-    // Use link 0 connections for init semaphore exchange
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        if (directions[dir]) {
-            init_connections[dir] = fabric_connections[dir][0];
+    {
+        DeviceZoneScopedN("dispatch-init-sync");
+        std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            if (directions[dir]) {
+                init_connections[dir] = fabric_connections[dir][0];
+            }
+        }
+
+        const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            ReplicateGroup::NONE,
+            num_devices>(
+            init_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            if (directions[dir]) {
+                fabric_connections[dir][0] = init_connections[dir];
+            }
         }
     }
-
-    // CRITICAL: Send init semaphore increments to other devices BEFORE waiting
-    // Each device sends to configured targets, then waits for (num_devices - 1) increments
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    DPRINT_DISPATCH << "DEBUG: Before send_init_semaphore_to_configured_targets" << ENDL();
-    send_init_semaphore_to_configured_targets<
-        linearized_mesh_coord,
-        topology,
-        src_chip_id,
-        mesh_rows,
-        mesh_cols,
-        ReplicateGroup::NONE,  // Send to all devices
-        num_devices>(init_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
-
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        if (directions[dir]) {
-            fabric_connections[dir][0] = init_connections[dir];
-        }
-    }
-    DPRINT_DISPATCH << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -235,9 +234,11 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
-    // Wait for all devices to complete fabric initialization
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
+    {
+        DeviceZoneScopedN("dispatch-wait-init");
+        noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
+        noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+    }
 
     uint32_t fabric_send_counter = 0;
 
@@ -267,74 +268,45 @@ void kernel_main() {
     // Reserve CB for metadata buffer (using L1 memory accessible by NOC)
     cb_reserve_back(cb_metadata_temp_id, 1);
 
-    for (uint32_t token_idx = token_start_idx; token_idx < token_end_idx; ++token_idx) {
-        DPRINT_DISPATCH << "Processing token_idx: " << token_idx << ENDL();
+    {
+        DeviceZoneScopedN("dispatch-token-loop");
+        for (uint32_t token_idx = token_start_idx; token_idx < token_end_idx; ++token_idx) {
+            DPRINT_DISPATCH << "Processing token_idx: " << token_idx << ENDL();
 
-        cb_wait_front(cb_indices_id, 1);
-        cb_wait_front(cb_weights_id, 1);
-        cb_wait_front(cb_input_id, 1);
+            {
+                DeviceZoneScopedN("dispatch-wait-reader");
+                cb_wait_front(cb_indices_id, 1);
+                cb_wait_front(cb_weights_id, 1);
+                cb_wait_front(cb_input_id, 1);
+            }
 
-        uint32_t input_token_read_addr = get_read_ptr(cb_input_id);
-        int32_t* indices = (int32_t*)(get_read_ptr(cb_indices_id));
-        uint16_t* weights = (uint16_t*)(get_read_ptr(cb_weights_id));  // this is really a bfloat16 data
-        for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
-            auto routed_expert = indices[k];
-            auto expert_chip = routed_expert / experts_per_chip;
-            auto expert_index_within_chip = routed_expert % experts_per_chip;
+            uint32_t input_token_read_addr = get_read_ptr(cb_input_id);
+            int32_t* indices = (int32_t*)(get_read_ptr(cb_indices_id));
+            uint16_t* weights = (uint16_t*)(get_read_ptr(cb_weights_id));
+            for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
+                auto routed_expert = indices[k];
+                auto expert_chip = routed_expert / experts_per_chip;
+                auto expert_index_within_chip = routed_expert % experts_per_chip;
 
-            DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")" << ENDL();
+                DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")"
+                                << ENDL();
 
-            auto& offset = offsets[routed_expert];
+                auto& offset = offsets[routed_expert];
 
-            // Calculate byte offsets from page indices
-            // aligned_page_size is in elements, need to multiply by element size to get bytes
-            auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
-            auto output_token_write_addr =
-                output_addr_gen.get_noc_addr(0) + page_idx * aligned_output_page_size * 2;  // bfloat16 = 2 bytes
-            auto metadata_write_addr =
-                metadata_addr_gen.get_noc_addr(0) + page_idx * aligned_metadata_page_size * 4;  // int32 = 4 bytes
+                auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
+                auto output_token_write_addr =
+                    output_addr_gen.get_noc_addr(0) + page_idx * aligned_output_page_size * 2;
+                auto metadata_write_addr =
+                    metadata_addr_gen.get_noc_addr(0) + page_idx * aligned_metadata_page_size * 4;
 
-            if (expert_chip == linearized_mesh_coord) {
-                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip." << ENDL();
-                // For local dispatch, we can directly write to the output buffer without going through the fabric
-                noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
-                noc_async_writes_flushed();  // is it formally needed?
-
-                uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
-                volatile tt_l1_ptr int32_t* metadata = reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
-
-                // Set actual metadata values
-                metadata[0] = linearized_mesh_coord;
-                metadata[1] = token_idx;
-                metadata[2] = k;
-                metadata[3] = routed_expert;
-                metadata[4] = weights[k];
-
-                // Write metadata from CB to output tensor
-                noc_async_write_page(page_idx, metadata_addr_gen, metadata_cb_addr);
-                noc_async_writes_flushed();
-
-            } else {
-                DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
-                                << " chip." << ENDL();
-                if constexpr (is_1d_topology<topology>()) {
-                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                    uint32_t link = fabric_send_counter % num_links;
-                    fabric_send_counter++;
-
-                    uint32_t distance =
-                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                    fabric_set_unicast_route<false>(
-                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        output_addr_gen,
-                        fabric_connections[route][link],
-                        unicast_packet_header,
-                        input_token_read_addr,
-                        page_idx,
-                        (int)aligned_output_page_size,
-                        l1_alignment);
+                if (expert_chip == linearized_mesh_coord) {
+                    DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is local to this chip."
+                                    << ENDL();
+                    {
+                        DeviceZoneScopedN("dispatch-local-payload");
+                        noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
+                        noc_async_writes_flushed();
+                    }
 
                     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
                     volatile tt_l1_ptr int32_t* metadata =
@@ -346,81 +318,87 @@ void kernel_main() {
                     metadata[3] = routed_expert;
                     metadata[4] = weights[k];
 
-                    uint32_t meta_distance =
-                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                    fabric_set_unicast_route<false>(
-                        (volatile tt_l1_ptr LowLatencyPacketHeader*)metadata_packet_header, meta_distance);
+                    {
+                        DeviceZoneScopedN("dispatch-local-metadata");
+                        noc_async_write_page(page_idx, metadata_addr_gen, metadata_cb_addr);
+                        noc_async_writes_flushed();
+                    }
 
-                    uint32_t meta_link = fabric_send_counter % num_links;
-                    fabric_send_counter++;
+                } else {
+                    DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
+                                    << " chip." << ENDL();
+                    if constexpr (is_1d_topology<topology>()) {
+                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        uint32_t link = fabric_send_counter % num_links;
+                        fabric_send_counter++;
 
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        metadata_addr_gen,
-                        fabric_connections[route][meta_link],
-                        metadata_packet_header,
-                        metadata_cb_addr,
-                        page_idx,
-                        (int)aligned_metadata_page_size,
-                        l1_alignment);
+                        uint32_t distance =
+                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+
+                        {
+                            DeviceZoneScopedN("dispatch-fabric-payload");
+                            fabric_set_unicast_route<false>(
+                                (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+
+                            fabric_send_noc_unicast<fabric_max_packet_size>(
+                                output_addr_gen,
+                                fabric_connections[route][link],
+                                unicast_packet_header,
+                                input_token_read_addr,
+                                page_idx,
+                                (int)aligned_output_page_size,
+                                l1_alignment);
+                        }
+
+                        uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
+                        volatile tt_l1_ptr int32_t* metadata =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
+
+                        metadata[0] = linearized_mesh_coord;
+                        metadata[1] = token_idx;
+                        metadata[2] = k;
+                        metadata[3] = routed_expert;
+                        metadata[4] = weights[k];
+
+                        {
+                            DeviceZoneScopedN("dispatch-fabric-metadata");
+                            uint32_t meta_distance =
+                                manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                            fabric_set_unicast_route<false>(
+                                (volatile tt_l1_ptr LowLatencyPacketHeader*)metadata_packet_header, meta_distance);
+
+                            fabric_send_noc_unicast<fabric_max_packet_size>(
+                                metadata_addr_gen,
+                                fabric_connections[route][link],
+                                metadata_packet_header,
+                                metadata_cb_addr,
+                                page_idx,
+                                (int)aligned_metadata_page_size,
+                                l1_alignment);
+                        }
+                    }
                 }
-                // } else {
-                // TODO:
-                //     // Fast fail - untested path
-                //     DPRINT << "Fabric send for non-1D topology is currently untested. Failing fast." << ENDL();
-                //     return;
 
-                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
-                //         output_addr_gen,
-                //         fabric_connections,
-                //         unicast_packet_header,
-                //         dest_chip_ids[expert_chip],
-                //         dest_mesh_ids[expert_chip],
-                //         input_token_read_addr,
-                //         page_idx,
-                //         (int)aligned_output_page_size * 2,  // bfloat16 = 2 bytes
-                //         l1_alignment);
-
-                //     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
-                //     volatile tt_l1_ptr int32_t* metadata =
-                //         reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
-
-                //     // Set actual metadata values
-                //     metadata[0] = linearized_mesh_coord;
-                //     metadata[1] = token_idx;
-                //     metadata[2] = k;
-                //     metadata[3] = routed_expert;
-                //     metadata[4] = weights[k];
-
-                //     fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size>(
-                //         metadata_addr_gen,
-                //         fabric_connections,
-                //         metadata_packet_header,
-                //         dest_chip_ids[expert_chip],
-                //         dest_mesh_ids[expert_chip],
-                //         metadata_cb_addr,
-                //         page_idx,
-                //         (int)aligned_metadata_page_size,  // int32 = 4 bytes
-                //         l1_alignment);
-                // }
+                offset++;
             }
+            noc_async_write_barrier();
 
-            offset++;
+            cb_pop_front(cb_indices_id, 1);
+            cb_pop_front(cb_weights_id, 1);
+            cb_pop_front(cb_input_id, 1);
         }
-        noc_async_write_barrier();  // not needed if there were no local dispatches
-
-        cb_pop_front(cb_indices_id, 1);
-        cb_pop_front(cb_weights_id, 1);
-        cb_pop_front(cb_input_id, 1);
     }
 
-    // Release CB for next use
     cb_push_back(cb_metadata_temp_id, 1);
 
 #ifdef DEST_CHIP_ID
-    for (uint32_t dir = 0; dir < 4; dir++) {
-        for (uint32_t link = 0; link < num_links; link++) {
-            if (directions[dir]) {
-                fabric_connections[dir][link].close();
+    {
+        DeviceZoneScopedN("dispatch-close-connections");
+        for (uint32_t dir = 0; dir < 4; dir++) {
+            for (uint32_t link = 0; link < num_links; link++) {
+                if (directions[dir]) {
+                    fabric_connections[dir][link].close();
+                }
             }
         }
     }

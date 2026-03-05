@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 // Debug print control - set to 0 to disable dispatch debug prints, 1 to enable
 #define ENABLE_DISPATCH_DEBUG 0
@@ -119,42 +120,89 @@ void kernel_main() {
     // dispatch to; experts counter (chips/fractured ==1, experts_per_chip)
     // =====
 
-    // =====
-    // read offsets
-    DPRINT_DISPATCH << "Fetching offset tensor offsets_pages=" << offsets_pages
-                    << " offset_page_size=" << offsets_page_size << ENDL();
-    const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
-    for (uint32_t i = 0; i < offsets_pages; i++) {
-        DPRINT_DISPATCH << "Fetching offsets tensor index: " << i << ENDL();
-        cb_reserve_back(cb_offsets_id, 1);
+    {
+        DeviceZoneScopedN("dispatch-read-offsets");
+        DPRINT_DISPATCH << "Fetching offset tensor offsets_pages=" << offsets_pages
+                        << " offset_page_size=" << offsets_page_size << ENDL();
+        const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
+        for (uint32_t i = 0; i < offsets_pages; i++) {
+            DPRINT_DISPATCH << "Fetching offsets tensor index: " << i << ENDL();
+            cb_reserve_back(cb_offsets_id, 1);
 
-        uint32_t l1_write_addr = get_write_ptr(cb_offsets_id);
-        noc_async_read_page(i, offsets_addr_gen, l1_write_addr);
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_offsets_id, offsets_pages);
-
-    // =====
-    // read input, indices and weights and push to writer core CB
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
-    const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
-    for (uint32_t token = token_start_idx; token < token_end_idx; token++) {
-        DPRINT_DISPATCH << "Fetching token index: " << token << ENDL();
-        cb_reserve_back(cb_indices_id, 1);
-        cb_reserve_back(cb_weights_id, 1);
-        cb_reserve_back(cb_input_id, 1);
-
-        uint32_t l1_write_addr = get_write_ptr(cb_indices_id);
-        noc_async_read_page(token, indices_addr_gen, l1_write_addr);
-        l1_write_addr = get_write_ptr(cb_weights_id);
-        noc_async_read_page(token, weights_addr_gen, l1_write_addr);
-        l1_write_addr = get_write_ptr(cb_input_id);
-        noc_async_read_page(token, input_addr_gen, l1_write_addr);
+            uint32_t l1_write_addr = get_write_ptr(cb_offsets_id);
+            noc_async_read_page(i, offsets_addr_gen, l1_write_addr);
+        }
         noc_async_read_barrier();
-        cb_push_back(cb_indices_id, 1);
-        cb_push_back(cb_weights_id, 1);
-        cb_push_back(cb_input_id, 1);
-        // Fetch input, weights and indices and push it to the writer core
+        cb_push_back(cb_offsets_id, offsets_pages);
+    }
+
+    {
+        constexpr uint32_t read_batch_size = 8;
+
+        const uint32_t indices_fifo_limit = get_local_cb_interface(cb_indices_id).fifo_limit;
+        const uint32_t indices_fifo_size = get_local_cb_interface(cb_indices_id).fifo_size;
+        const uint32_t weights_fifo_limit = get_local_cb_interface(cb_weights_id).fifo_limit;
+        const uint32_t weights_fifo_size = get_local_cb_interface(cb_weights_id).fifo_size;
+        const uint32_t input_fifo_limit = get_local_cb_interface(cb_input_id).fifo_limit;
+        const uint32_t input_fifo_size = get_local_cb_interface(cb_input_id).fifo_size;
+
+        DeviceZoneScopedN("dispatch-read-tokens");
+        const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
+        const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
+        const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
+
+        for (uint32_t token = token_start_idx; token < token_end_idx; token += read_batch_size) {
+            uint32_t batch_end = (token + read_batch_size < token_end_idx) ? token + read_batch_size : token_end_idx;
+            uint32_t batch_count = batch_end - token;
+
+            {
+                DeviceZoneScopedN("dispatch-read-wait-writer");
+                cb_reserve_back(cb_indices_id, batch_count);
+                cb_reserve_back(cb_weights_id, batch_count);
+                cb_reserve_back(cb_input_id, batch_count);
+            }
+
+            {
+                DeviceZoneScopedN("dispatch-read-dram");
+                uint32_t indices_base = get_write_ptr(cb_indices_id);
+                uint32_t weights_base = get_write_ptr(cb_weights_id);
+                uint32_t input_base = get_write_ptr(cb_input_id);
+
+                for (uint32_t t = 0; t < batch_count; t++) {
+                    uint32_t indices_addr = indices_base + t * aligned_indices_page_size;
+                    if (indices_addr >= indices_fifo_limit) {
+                        indices_addr -= indices_fifo_size;
+                    }
+                    noc_async_read_page(token + t, indices_addr_gen, indices_addr);
+
+                    uint32_t weights_addr = weights_base + t * aligned_weights_page_size;
+                    if (weights_addr >= weights_fifo_limit) {
+                        weights_addr -= weights_fifo_size;
+                    }
+                    noc_async_read_page(token + t, weights_addr_gen, weights_addr);
+
+                    uint32_t input_addr = input_base + t * aligned_input_page_size;
+                    if (input_addr >= input_fifo_limit) {
+                        input_addr -= input_fifo_size;
+                    }
+                    noc_async_read_page(token + t, input_addr_gen, input_addr);
+                }
+                noc_async_read_barrier();
+            }
+
+            auto split_push_back = [](uint32_t cb_id, uint32_t count, uint32_t fifo_limit, uint32_t page_size) {
+                uint32_t pages_until_wrap = (fifo_limit - get_write_ptr(cb_id)) / page_size;
+                if (count <= pages_until_wrap) {
+                    cb_push_back(cb_id, count);
+                } else {
+                    cb_push_back(cb_id, pages_until_wrap);
+                    cb_push_back(cb_id, count - pages_until_wrap);
+                }
+            };
+
+            split_push_back(cb_indices_id, batch_count, indices_fifo_limit, aligned_indices_page_size);
+            split_push_back(cb_weights_id, batch_count, weights_fifo_limit, aligned_weights_page_size);
+            split_push_back(cb_input_id, batch_count, input_fifo_limit, aligned_input_page_size);
+        }
     }
 }
