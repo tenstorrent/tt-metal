@@ -100,9 +100,17 @@ jobs:
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
+      ttnn-changed-ops: ${{ steps.find-changes.outputs.ttnn-changed-ops }}
     steps:
-      - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+      - name: Find changed files
+        id: find-changes
+        shell: bash
+        run: .github/scripts/utils/find-changed-files.sh
 
   build:
     if: ${{ github.ref_name == 'main' ||
@@ -303,6 +311,10 @@ jobs:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       merge-gate-call: true
+      # Change-aware test routing: only run test groups for changed op families.
+      # Core dependency changes (tt_metal, cmake) force "all" via find-changed-files.sh.
+      # On main pushes, run everything.
+      changed-ops: ${{ github.ref_name == 'main' && 'all' || needs.find-changes.outputs.ttnn-changed-ops }}
 
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
