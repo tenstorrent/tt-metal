@@ -577,7 +577,7 @@ def test_rotary_embedding_llama_with_program_cache(
 
     num_ops = 2  # 2 * rope
     if mode == "decode":
-        # RopeSetup stores cos/sin in ROW MAJOR layout (no untilize is needed in embedding)
+        # RotarySetup stores cos/sin in ROW MAJOR layout (no untilize is needed in embedding)
         num_ops += 3  # embedding + transpose + interleaved_to_sharded
 
         if batch % ttnn.TILE_SIZE != 0:
