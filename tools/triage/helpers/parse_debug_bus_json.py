@@ -207,6 +207,7 @@ def main() -> None:
                     continue
                 printed_any = True
                 print(f"\n[{device_key}] {block_type} — {loc_key}")
+                print(f"Failed RISCs: {loc_data['failed_riscs']}")
                 _print_groups_for_location(selected_groups, debug_bus, groups_data)
 
     if not printed_any:
