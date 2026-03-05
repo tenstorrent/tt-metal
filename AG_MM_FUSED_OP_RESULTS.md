@@ -7,83 +7,33 @@
 
 ---
 
-## Same config: Fused vs Baseline (separate path)
+## Same config: Fused vs non-fused (separate path)
 
-**Yes.** For every test, fused and separate (baseline) use the **exact same config**:
+For every test, fused and separate (non-fused) use the **exact same config**:
 - Same **core grid** (e.g. 8×8, 7×8)
 - Same **num_links**
 - Same **M, K, N** and block/subblock sizes
 
 The test is parametrized once; only `use_fused` is toggled (`True` = fused op, `False` = separate AG then MM). So when you run e.g. `-k "8x8_4links and wan2_4k4k4k"`, both `separate` and `fused` use grid 8×8, 4 links, and 4096×4096×4096.
 
-**Baseline numbers to run:** For every (size, grid, links) where we have fused results, run the **separate** path with the same `-k` (e.g. `-k "separate and 8x8_4links and wan2_4k4k4k"`) and record AG + MM kernel times from the profiler CSV. Then compare fused vs (AG + MM) for that config.
+**Non-fused numbers to run:** For every (size, grid, links) where we have fused results, run the **separate** path with the same `-k` (e.g. `-k "separate and 8x8_4links and wan2_4k4k4k"`) and record AG + MM kernel times from the profiler CSV. Then compare fused vs (AG + MM) for that config.
 
 ---
 
-## WAN2 tests default vs our tests
-
-| Aspect | WAN2.2 default (`models/tt_dit/tests/models/wan2_2/test_all_gather_minimal_matmul_async.py`) | Our tests (`tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py`) |
-|--------|----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| **Mesh** | (2,4), (8,4), (4,8) — multiple topologies | (8,4) only — Galaxy |
-| **Core grid** | 4×4, 8×8, 12×9 (varies by config) | 8×8, 6×8, 4×8, 7×8 (7×7 removed; 7×9 excluded) |
-| **Sizes** | 32768×4096×4096 (4k4k4k), 75776×5120×… (QKV, FF1, etc.) | 4096×4096×4096, 8192×3584×2048, 131072×3584×2048, + K-padded 4096 variants |
-| **Features** | Bias, GELU, addcmul, chunks; `use_non_fused` for separate path | No bias/activation/addcmul; simple AG+MM only |
-| **AG output buffer (separate)** | `(per_device_M, k_per_device*ring_size)` with `ShardTensor2dMesh(..., dims=[None, None])` | `(1,1,M,K)` with **ReplicateTensorToMesh** (full K per device for MM) |
-| **Purpose** | WAN 2.2 model coverage, multiple shapes and features | Fused vs baseline comparison for Galaxy, Llama ISL sizes, PCC, and 7×9 “max usable” grid |
-
-So: WAN2 default = model test suite (multiple meshes, shapes, bias/activation). Our tests = same-op comparison (Galaxy, same config for fused vs separate, Llama 8k/128k + 4k).
-
----
-
-## 7×9 grid – NOC constraint (excluded)
-
-**7×9 is not in the test parametrization** because it triggers:
-
-`TT_FATAL: Illegal NOC usage: data movement kernels on logical core (x=6,y=8) cannot use the same NOC, doing so results in hangs!`
-
-- **Cause:** On core (6, 8) the program places two data-movement kernels (DM0 and DM1). The runtime requires that when both run on the same core, one must use NOC0 and the other NOC1; here both end up using the same NOC.
-- **Where:** Check in `tt_metal/tt_metal.cpp` (Tensix DM kernel NOC validation). The op’s kernel placement for 7×9 leads to this violation.
-- **Action:** 7×9 is omitted from the grid list until the op (or kernel placement) assigns NOCs so that DM0/DM1 on the same core use different NOCs. Use 7×8 as the “max usable” Llama grid for now.
-
----
-
-## Baseline (older run, 4×8 core grid)
+## Older results (just for reference, uses 4×8 core grid)
 
 Per-device kernel times from **teja/Allgather+matmul_fused_perf_results** prefill CSVs (FF2 layer). **Not** the current unit-test results — reference only.
 
-| ISL | Core grid | Baseline (AG + MM) µs | Fused op µs |
+| ISL | Core grid | Non-fused (AG + MM) µs | Fused op µs |
 |-----|-----------|------------------------|-------------|
 | 8k | 4×8 | 1842 (AG 523.71 + MM 1318.09) | 2912.61 |
 | 128k | 4×8 | 27633 (AG 8010.90 + MM 19622.12) | 46013.96 |
 
-**Cores used in that baseline (separate path):** From **baseline_8k/8k/prefill.csv** (FF2 layer rows: AllGatherAsync 8192×896→3584, then Matmul 8192×3584×2048): **AllGather used 40 cores** per device and **Matmul used 56 cores** per device (column CORES). So in the separate path, AG and MM use **different** core sets/counts — not the same grid. Our unit-test comparison uses the **same** core grid for both (e.g. 8×8) so fused vs baseline is apples-to-apples.
-
----
-
-## Ops Profiler CSV Layout
-
-The profiler writes `ops_perf_results_<timestamp>.csv` with columns (key ones):
-
-| Column # | Name | Description |
-|----------|------|--------------|
-| 1 | OP CODE | e.g. `AllGatherMinimalMatmulAsyncOp`, `AllGatherAsyncOp`, `MinimalMatmulOp` |
-| 2 | OP TYPE | `tt_dnn_device` |
-| 4 | DEVICE ID | 0–31 (per device) |
-| 19 | DEVICE KERNEL DURATION [ns] | **Primary metric** – kernel time in nanoseconds |
-| 20 | DEVICE KERNEL DURATION DM START [ns] | |
-| 21–23 | DEVICE KERNEL DURATION PER CORE MIN/MAX/AVG [ns] | |
-| 29 | DEVICE ERISC KERNEL DURATION [ns] | Ethernet/fabric time |
-| 30 | DEVICE TRISC0 KERNEL DURATION [ns] | Compute time |
-
-- Each row = one op invocation on one device.
-- Fused run: 5 iters × 32 devices = 160 rows of `AllGatherMinimalMatmulAsyncOp`.
-- Baseline (separate) run: 160 rows of `AllGatherAsyncOp` + 160 rows of `MinimalMatmulOp` (or similar); sum AG + MM per (device, iter) for total baseline time.
+**Cores used in that non-fused (separate path):** From **baseline_8k/8k/prefill.csv** (FF2 layer rows: AllGatherAsync 8192×896→3584, then Matmul 8192×3584×2048): **AllGather used 40 cores** per device and **Matmul used 56 cores** per device (column CORES). So in the separate path, AG and MM use **different** core sets/counts — not the same grid. Our unit-test comparison uses the **same** core grid for both (e.g. 8×8) so fused vs non-fused is apples-to-apples.
 
 ---
 
 ## Test 1: Fused AG+MM - WAN 2.2 Size (4k x 4k x 4k)
-
-**Date**: 2026-03-04 21:26:50
 
 **Configuration**:
 | Parameter | Value |
@@ -91,7 +41,7 @@ The profiler writes `ops_perf_results_<timestamp>.csv` with columns (key ones):
 | M | 4096 |
 | K | 4096 (K_per_device = 1024) |
 | N | 4096 |
-| Grid | 8x8 (72 cores) |
+| Grid | 8×8 (64 cores) |
 | Links | 4 |
 | Workers/Link | 2 |
 | Math Fidelity | HiFi2 |
@@ -111,9 +61,9 @@ _(Source: profiler “Device kernel duration perf summary (device=31)”. Per-de
 
 ---
 
-## Baseline (Separate path)
+## Non-fused (Separate path)
 
-4k4k4k separate path (AG then MM) now runs after fixing persistent buffer to use full-K per device (ReplicateTensorToMesh for AG output). **PR reference** (unfused): 963 µs AG, 1785 µs MM. **Our run** (8×8 4 links, device 31 avg): 452 µs AG, 1779 µs MM → baseline **2231 µs**; fused same config **1858 µs** (~17% faster).
+4k4k4k separate path (AG then MM) now runs after fixing persistent buffer to use full-K per device (ReplicateTensorToMesh for AG output). **PR reference** (unfused): 963 µs AG, 1785 µs MM. **Our run** (8×8 4 links, device 31 avg): 452 µs AG, 1779 µs MM → non-fused **2231 µs**; fused same config **1858 µs** (~17% faster).
 
 ---
 
@@ -125,9 +75,9 @@ _(Source: profiler “Device kernel duration perf summary (device=31)”. Per-de
 
 **Prefix:** `python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and <GRID_LINKS> and <SIZE_ID>" -v'`
 
-Record **single-device avg** from profiler: `Device kernel duration perf summary (device=31): ... avg=...ns` → µs. **Baseline** = separate path (AG + MM) same config; sum AG + MM kernel µs from profiler CSV.
+Record **single-device avg** from profiler: `Device kernel duration perf summary (device=31): ... avg=...ns` → µs. **Non-fused** = separate path (AG + MM) same config; sum AG + MM kernel µs from profiler CSV.
 
-| # | Size (M×K×N) | Grid | Links | Status | Baseline (µs) | Fused (µs) | PCC | Run command `-k` fragment |
+| # | Size (M×K×N) | Grid | Links | Status | Non-fused (µs) | Fused (µs) | PCC | Run command `-k` fragment |
 |---|--------------|------|-------|--------|---------------|------------|-----|---------------------------|
 | 1 | 4096×4096×4096 | 8×8 | 4 | Done | 2231 | 1858 | ✅ | `8x8_4links and wan2_4k4k4k` |
 | 2 | 4096×4096×4096 | 8×8 | 2 | Done | 2574 | 2156 | ✅ | `8x8_2links and wan2_4k4k4k` |
@@ -152,30 +102,21 @@ Record **single-device avg** from profiler: `Device kernel duration perf summary
 |  |  |  |  |  |  |  |  |  |
 
 **K padded to 4096 (PCC 0.999+)**
-| # | Size (M×K×N) | Grid | Links | Status | Baseline (µs) | Fused (µs) | PCC | Run command `-k` fragment |
+| # | Size (M×K×N) | Grid | Links | Status | Non-fused (µs) | Fused (µs) | PCC | Run command `-k` fragment |
 |---|--------------|------|-------|--------|---------------|------------|-----|---------------------------|
 | 1 | 8192×4096×2048 | 8×8 | 4 | Done | 2742 | 1955 | ✅ PCC 0.9998 | `8x8_4links and llama_8k_ff2_K4096` |
 | 2 | 8192×4096×2048 | 8×8 | 2 | Done | 3442 | 2668 | ✅ PCC 0.9998 | `8x8_2links and llama_8k_ff2_K4096` |
 |  |  |  |  |  |  |  |  |  |
 | 3 | 131072×4096×2048 | 8×8 | 4 | Done | 42150 | 29475 | ✅ PCC 1.0 | `8x8_4links and llama_128k_ff2_K4096` |
 | 4 | 131072×4096×2048 | 8×8 | 2 | Done | 52900 | 39015 | ✅ | `8x8_2links and llama_128k_ff2_K4096` |
-**Baseline commands (run separate path, then share profiler CSV; we fill Baseline column):**
-Always include **`separate`** in the `-k` so only the baseline (AG then MM) runs — one test. Without it, both `separate` and `fused` can match and the run executes twice. For **llama_8k_ff2** and **llama_128k_ff2** use **`and not K4096`** so only the original (K=3584) runs — otherwise two tests run (e.g. llama_128k_ff2 and llama_128k_ff2_K4096). 4×8 4 links rows removed (CoreRangeSet overlap). Run in table order (#15 next; #16 baseline filled, fused not run). 7×7 removed (7×8 works better). **Row 14 (128k 8×8 2 links):** baseline and fused are **projected** (see below), not measured. For any **llama_8k_ff2** row use **`and not K4096`** so only one test runs.
+
 
 ## Tried shapes (K padded to 4096 – PCC hypothesis)
-
 Same Llama M/N but **K padded to 4096** (power of 2) to test whether non–power-of-2 K (3584) is the culprit for low PCC. Results are in the **K padded to 4096** table above (with row gap after main table).
 
-Examples:
-```bash
-# 8k with padded K=4096 (done – PCC passed)
-python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and 8x8_4links and llama_8k_ff2_K4096" -v'
 
-# 128k K=4096 – check if PCC improves (same hypothesis)
-python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and 8x8_4links and llama_128k_ff2_K4096" -v'
-```
-
----
+## Non-fused commands (run separate path, then share profiler CSV; we fill Non-fused column)
+Always include **`separate`** in the `-k` so only the non-fused (AG then MM) runs — one test. Without it, both `separate` and `fused` can match and the run executes twice. For **llama_8k_ff2** and **llama_128k_ff2** use **`and not K4096`** so only the original (K=3584) runs — otherwise two tests run (e.g. llama_128k_ff2 and llama_128k_ff2_K4096). 4×8 4 links rows removed (CoreRangeSet overlap). Run in table order (#15 next; #16 non-fused filled, fused not run). 7×7 removed (7×8 works better). **Row 14 (128k 8×8 2 links):** non-fused and fused are **projected** (see below), not measured. For any **llama_8k_ff2** row use **`and not K4096`** so only one test runs.
 
 ## num_links, num_workers_per_link, and core grid
 
@@ -199,29 +140,19 @@ So the **grid x dimension** (e.g. 8 or 7) must be divisible by `num_links`. Exam
 
 ---
 
-## Earlier 8k ISL fused op (per device, from prefill)
 
-From **~/teja/Allgather+matmul_fused_perf_results/fused_8k/8k/prefill.csv** (full Llama 8k prefill run, per-device):
+Examples:
+```bash
+# 8k with padded K=4096 (done – PCC passed)
+python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and 8x8_4links and llama_8k_ff2_K4096" -v'
 
-- **AllGatherMinimalMatmulAsyncOp:** **2912.61 µs** (device 0, 1 call)
-- Shapes in that run: IN0 8192×896, IN1 3584×2048, OUT 8192×3584 (one of the FF layers; our unit-test llama_8k_ff2 is 8192×3584×2048 for FF2).
-- All values in that CSV are **per device** (single device, prefill trace).
-
-Use this as a reference when comparing unit-test 8k grid/link numbers (table above) to the earlier full-model 8k run.
-
----
-
-## Earlier 128k fused op (per device, from prefill)
-
-From **~/teja/Allgather+matmul_fused_perf_results/fused_128k/128k/prefill.csv** (full Llama 128k prefill run, per-device):
-
-- **AllGatherMinimalMatmulAsyncOp:** **46,013.96 µs** (~46.0 ms) (device 0, 1 call)
-- Shapes: IN0 131072×896 (M×K_per_device), IN1 3584×2048 (K×N), OUT 131072×3584 (M×K after gather; FF layer).
-- All values in that CSV are **per device** (single device, prefill trace).
-
-Unit-test 128k comparison: 4×8 2 links gave **48,313 µs** (table above) — in the same range as this earlier fused 128k run. 8×8 4 links gave **26,629 µs** (faster with more links / larger grid).
+# 128k K=4096 – check if PCC improves (same hypothesis)
+python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and 8x8_4links and llama_128k_ff2_K4096" -v'
+```
 
 ---
+
+
 
 ## PCC and dimensions (4k vs Llama 8k/128k)
 
@@ -247,13 +178,13 @@ N=2048 is a power of 2 and is unlikely to be the primary cause. Worth checking i
 
 ## Conclusions
 
-1. **8×8 is where fused beats baseline.** Only the **8×8** core grid shows a clear fused-vs-baseline win; both paths use the **same config** (grid, links, M/K/N). Smaller or different grids (6×8, 4×8, 7×8) either don’t improve as much or aren’t the Llama deployment shape.
+1. **8×8 is where fused beats non-fused.** Only the **8×8** core grid shows a clear fused-vs-non-fused win; both paths use the **same config** (grid, links, M/K/N). Smaller or different grids (6×8, 4×8, 7×8) either don’t improve as much or aren’t the Llama deployment shape.
 
-2. **Earlier numbers used a restricted grid.** Previous baseline/fused numbers (e.g. from teja/Allgather+matmul_fused_perf_results) were with a **4×8** core grid. The branch was **updated recently** to use the **full grid** (8×8, 6×8, 7×8, 4×8) so comparisons are now apples-to-apples.
+2. **Earlier numbers used a restricted grid.** Previous non-fused/fused numbers (e.g. from teja/Allgather+matmul_fused_perf_results) were with a **4×8** core grid. The branch was **updated recently** to use the **full grid** (8×8, 6×8, 7×8, 4×8) so comparisons are now apples-to-apples.
 
 3. **7×8 is bandwidth-limited for Llama.** The **7×8** grid is the max usable for the Llama 70B model (device layout), but it is **limited to num_links = 1** (7 is prime), so all-gather bandwidth is low and perf is limited. In the **separate** path, Llama’s matmul uses **56 cores** only; the fused op uses the same 7×8 grid, so it doesn’t get extra link parallelism there.
 
-4. **Max Llama grid (7×8) doesn’t show a win.** Because of the single-link constraint, the **maximum available grid for Llama (7×8)** does **not** show the same fused-vs-baseline improvement as 8×8.
+4. **Max Llama grid (7×8) doesn’t show a win.** Because of the single-link constraint, the **maximum available grid for Llama (7×8)** does **not** show the same fused-vs-non-fused improvement as 8×8.
 
 5. **Padded K (3584 → 4096) fixes PCC and adds ~100 µs.** Padding **K from 3584 to 4096** (power of 2) improves **PCC to 0.99+** and increases kernel duration by **~100 µs**; acceptable for correctness.
 
