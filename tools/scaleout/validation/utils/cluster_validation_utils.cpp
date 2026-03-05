@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
+#include "tools/scaleout/validation/utils/ethernet_link_api.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
@@ -1239,64 +1240,9 @@ LinkMetricsResult send_traffic_and_validate_links(
     return process_link_statuses(statuses_per_link, log_ethernet_metrics);
 }
 
-void point_to_point_barrier(const ResetPair& reset_pair) {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    TT_FATAL(
-        *distributed_context.rank() == reset_pair.src_rank || *distributed_context.rank() == reset_pair.dst_rank,
-        "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
-        reset_pair.src_rank,
-        reset_pair.dst_rank,
-        *distributed_context.rank());
-
-    uint32_t tag = (reset_pair.src_rank << 8) | reset_pair.dst_rank;
-
-    if (*distributed_context.rank() == reset_pair.src_rank) {
-        int sync_msg = 1;
-        distributed_context.ssend(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.dst_rank)},
-            tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
-    } else {
-        int sync_msg = 0;
-        distributed_context.recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.src_rank)},
-            tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
-    }
-}
-
-void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_t dst_chan) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    std::vector<uint32_t> set = {1};
-
-    const auto& sender_soc_desc = cluster.get_soc_desc(src_chip);
-    const auto& receiver_soc_desc = cluster.get_soc_desc(dst_chip);
-    auto logical_src_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-    auto logical_dst_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
-    auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-        src_chip, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
-    auto dst_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-        dst_chip, tt_xy_pair(logical_dst_coord.x, logical_dst_coord.y), CoreType::ETH);
-
-    cluster.write_core(src_chip, src_coord, set, 0x1EFC);
-    cluster.write_core(dst_chip, dst_coord, set, 0x1EFC);
-
-    bool reset = false;
-    while (!reset) {
-        std::vector<uint32_t> reset_src = {0};
-        std::vector<uint32_t> reset_dst = {0};
-
-        cluster.read_core(reset_src, sizeof(uint32_t), tt_cxy_pair(src_chip, src_coord), 0x1EFC);
-        cluster.read_core(reset_dst, sizeof(uint32_t), tt_cxy_pair(dst_chip, dst_coord), 0x1EFC);
-        reset = !(reset_src[0] || reset_dst[0]);
-    }
-}
-
 void forward_link_reset_metadata_from_controller(
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>>& ordered_exit_nodes,
-    std::unordered_map<uint32_t, std::vector<ResetPair>>& ordered_reset_pairs,
-    std::vector<EthChannelIdentifier>& exit_nodes_to_reset,
-    std::vector<ResetPair>& reset_pairs) {
+    std::vector<EthChannelIdentifier>& exit_nodes_to_reset) {
     constexpr uint32_t CONTROLLER_RANK = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
@@ -1307,9 +1253,6 @@ void forward_link_reset_metadata_from_controller(
             }
             auto serialized_exit_nodes = tt::scaleout::validation::serialize_eth_chan_identifiers_to_bytes(exit_nodes);
             auto serialized_exit_nodes_size = serialized_exit_nodes.size();
-            auto serialized_reset_pairs =
-                tt::scaleout::validation::serialize_reset_pairs_to_bytes(ordered_reset_pairs[rank]);
-            auto serialized_reset_pairs_size = serialized_reset_pairs.size();
 
             distributed_context.send(
                 tt::stl::Span<std::byte>(
@@ -1321,20 +1264,8 @@ void forward_link_reset_metadata_from_controller(
                     tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
-
-            distributed_context.send(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
-                tt::tt_metal::distributed::multihost::Tag{0});
-            distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
-                tt::tt_metal::distributed::multihost::Tag{0});
         }
         exit_nodes_to_reset = ordered_exit_nodes[*distributed_context.rank()];
-        reset_pairs = ordered_reset_pairs[*distributed_context.rank()];
     } else {
         std::size_t serialized_exit_nodes_size = 0;
         distributed_context.recv(
@@ -1350,27 +1281,7 @@ void forward_link_reset_metadata_from_controller(
             tt::tt_metal::distributed::multihost::Tag{0});
         exit_nodes_to_reset =
             tt::scaleout::validation::deserialize_eth_chan_identifiers_from_bytes(serialized_exit_nodes);
-        std::size_t serialized_reset_pairs_size = 0;
-        distributed_context.recv(
-            tt::stl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
-            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
-            tt::tt_metal::distributed::multihost::Tag{0});
-        std::vector<uint8_t> serialized_reset_pairs(serialized_reset_pairs_size);
-        distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
-            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
-            tt::tt_metal::distributed::multihost::Tag{0});
-        reset_pairs = tt::scaleout::validation::deserialize_reset_pairs_from_bytes(serialized_reset_pairs);
     }
-
-    TT_FATAL(
-        exit_nodes_to_reset.size() == reset_pairs.size(),
-        "Expected reset pairs to be the same size as the number of links to reset {} {} {}",
-        exit_nodes_to_reset.size(),
-        reset_pairs.size(),
-        *distributed_context.rank());
 }
 
 void reset_local_ethernet_links(
@@ -1381,9 +1292,11 @@ void reset_local_ethernet_links(
     for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
     }
-    std::vector<uint32_t> set = {1};
-    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
 
+    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+    std::vector<ResetLink> links_to_reset;
+
+    // Collect all links to reset
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         if (physical_system_descriptor.get_host_name_for_asic(asic_id) != physical_system_descriptor.my_host_name()) {
             continue;
@@ -1411,36 +1324,40 @@ void reset_local_ethernet_links(
                 reset_cores[*dst_asic_id].insert(dst_chan);
                 const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
                 const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
-                log_output_rank0(
-                    "Host: " + asic_descriptor.host_name + " Resetting Link " + std::to_string(src_chan) + " on " +
-                    " Tray: " + std::to_string(*asic_descriptor.tray_id) + " Location: " +
-                    std::to_string(*asic_descriptor.asic_location) + " and Link: " + std::to_string(dst_chan) + " on " +
-                    " Tray: " + std::to_string(*dst_asic_descriptor.tray_id) +
-                    " Location: " + std::to_string(*dst_asic_descriptor.asic_location));
 
-                reset_local_link(src_chip_id, dst_chip_id, src_chan, dst_chan);
+                std::string src_log_message = "Host: " + asic_descriptor.host_name + " Link " +
+                                              std::to_string(src_chan) +
+                                              " Tray: " + std::to_string(*asic_descriptor.tray_id) +
+                                              " Location: " + std::to_string(*asic_descriptor.asic_location);
+                std::string dst_log_message = "Host: " + dst_asic_descriptor.host_name + " Link " +
+                                              std::to_string(dst_chan) +
+                                              " Tray: " + std::to_string(*dst_asic_descriptor.tray_id) +
+                                              " Location: " + std::to_string(*dst_asic_descriptor.asic_location);
+
+                links_to_reset.push_back({src_chip_id, src_chan, src_log_message});
+                links_to_reset.push_back({dst_chip_id, dst_chan, dst_log_message});
             }
         }
     }
+
+    // Perform resets on all links in vector
+    send_reset_msg_to_links(links_to_reset);
 }
 
 void get_cross_node_ethernet_links_to_reset(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_metal::AsicTopology& asic_topology,
-    std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
-    std::vector<ResetPair>& cross_node_reset_pairs) {
+    std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
     constexpr uint32_t CONTROLLER_RANK = 0;
 
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
-    std::unordered_map<uint32_t, std::vector<ResetPair>> ordered_reset_pairs;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> paired_asic_ids;
 
     for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
         ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
             std::vector<EthChannelIdentifier>();
-        ordered_reset_pairs[physical_system_descriptor.get_rank_for_hostname(host)] = std::vector<ResetPair>();
     }
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
@@ -1473,53 +1390,43 @@ void get_cross_node_ethernet_links_to_reset(
                         tt::tt_metal::TrayID{0},
                         tt::tt_metal::ASICLocation{0},
                         eth_connection.dst_chan});
-                    ordered_reset_pairs[src_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
-                    ordered_reset_pairs[dst_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
                 }
             }
         }
     }
-    forward_link_reset_metadata_from_controller(
-        ordered_exit_nodes, ordered_reset_pairs, cross_node_links_to_reset, cross_node_reset_pairs);
+    forward_link_reset_metadata_from_controller(ordered_exit_nodes, cross_node_links_to_reset);
 }
 
 void reset_cross_node_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
-    const std::vector<ResetPair>& cross_node_reset_pairs) {
+    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    std::vector<uint32_t> set = {1};
-
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
     for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
-    for (size_t i = 0; i < cross_node_links_to_reset.size(); i++) {
-        const auto& link = cross_node_links_to_reset[i];
-        const auto& reset_pair = cross_node_reset_pairs[i];
+    std::vector<ResetLink> links_to_reset;
 
-        auto src_chip_id = asic_id_to_chip_id[*link.asic_id];
-        const auto& src_soc_desc = cluster.get_soc_desc(src_chip_id);
-        auto logical_src_coord = src_soc_desc.get_eth_core_for_channel(link.channel, CoordSystem::LOGICAL);
-        auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-            src_chip_id, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
+    // Collect all cross-node links to reset
+    for (const auto& link : cross_node_links_to_reset) {
+        auto chip_id = asic_id_to_chip_id[*link.asic_id];
         const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
-        log_output_rank0(
-            "Resetting Cross-Node Link " + std::to_string(link.channel) + " on " + std::to_string(*link.asic_id) +
-            " Host: " + asic_descriptor.host_name + " Tray: " + std::to_string(*asic_descriptor.tray_id) +
-            " Location: " + std::to_string(*asic_descriptor.asic_location));
-        point_to_point_barrier(reset_pair);
-        cluster.write_core(src_chip_id, src_coord, set, 0x1EFC);
-        std::vector<uint32_t> reset = {1};
-        while (reset[0]) {
-            cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
-        }
+
+        std::string log_message = "Cross-Node Link on Host: " + asic_descriptor.host_name +
+                                  " Link: " + std::to_string(link.channel) +
+                                  " Tray: " + std::to_string(*asic_descriptor.tray_id) +
+                                  " Location: " + std::to_string(*asic_descriptor.asic_location);
+
+        links_to_reset.push_back({chip_id, link.channel, log_message});
     }
+
+    // Perform resets on all links in vector
+    send_reset_msg_to_links(links_to_reset);
+
+    // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    // Barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding.
-    // This is critical because cross-node resets involve coordination between paired hosts.
     distributed_context.barrier();
 }
 
@@ -1535,10 +1442,11 @@ void reset_ethernet_links(
 
     // Reset All Cross-Node Ethernet Links, specified in the topology.
     std::vector<EthChannelIdentifier> cross_node_links_to_reset;
-    std::vector<ResetPair> cross_node_reset_pairs;
-    get_cross_node_ethernet_links_to_reset(
-        physical_system_descriptor, asic_topology, cross_node_links_to_reset, cross_node_reset_pairs);
-    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset, cross_node_reset_pairs);
+    get_cross_node_ethernet_links_to_reset(physical_system_descriptor, asic_topology, cross_node_links_to_reset);
+    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset);
+
+    // Give everything 5 more seconds to stabilize after reset completion
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 }
 
 // ============================================================================
