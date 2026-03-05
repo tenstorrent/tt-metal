@@ -107,6 +107,9 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
 @pytest.mark.parametrize("tile_h", [8, 16])
 @pytest.mark.parametrize("tile_w", [16])
 def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, tile_h, tile_w):
+    if tile_h == 8 and is_llk_assert_enabled():
+        pytest.skip("Hits LLK assert check for L1 memory access.")
+
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((n, c, m, k), dtype=torch.bfloat16)
