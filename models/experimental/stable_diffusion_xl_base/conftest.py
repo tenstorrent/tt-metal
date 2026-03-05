@@ -154,6 +154,23 @@ def sdxl_inpainting_unet_location(model_location_generator, is_ci_v2_env):
         return "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 
 
+@pytest.fixture(scope="session")
+def sdxl_inpainting_pipeline_location(model_location_generator, is_ci_v2_env):
+    """
+    Returns the location for full SDXL inpainting pipeline.
+    In CIv2: Downloads once per session from large file cache.
+    In CIv1/local: Returns HF repo ID.
+    """
+    if is_ci_v2_env:
+        return model_location_generator(
+            "stable-diffusion-xl-1.0-inpainting-0.1",
+            download_if_ci_v2=True,
+            ci_v2_timeout_in_s=1800,
+        )
+    else:
+        return "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
+
+
 # --- Refiner Model Locations ---
 
 

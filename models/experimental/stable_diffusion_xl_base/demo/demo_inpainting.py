@@ -34,6 +34,8 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_inpainting_pipeline
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_inpainting_pipeline_location,
     image_resolution,
     prompts,
     negative_prompts,
@@ -82,10 +84,10 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
-        "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+        sdxl_inpainting_pipeline_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env,
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
@@ -370,6 +372,8 @@ def test_demo(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_inpainting_pipeline_location,
     image_resolution,
     prompt,
     negative_prompt,
@@ -395,6 +399,8 @@ def test_demo(
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_inpainting_pipeline_location,
         image_resolution,
         prompt,
         negative_prompt,
