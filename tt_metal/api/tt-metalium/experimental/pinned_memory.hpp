@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+// UMD: re-exports ChipId (used extensively in PinnedMemory API).
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::umd {

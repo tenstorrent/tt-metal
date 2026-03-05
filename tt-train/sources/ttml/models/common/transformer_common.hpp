@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <yaml-cpp/yaml.h>
+
 #include <core/ttnn_all_includes.hpp>
 #include <optional>
 #include <tuple>
