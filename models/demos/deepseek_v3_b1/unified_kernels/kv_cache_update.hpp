@@ -136,7 +136,7 @@ struct KVCacheUpdate {
                 uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                     noc_async_read_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.page_size;
+                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
                 }
                 noc_async_read_barrier();
 
@@ -168,7 +168,7 @@ struct KVCacheUpdate {
                 cb_addr = get_read_ptr(kv_cache_output_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                     noc_async_write_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.page_size;
+                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
                 }
                 noc_async_write_barrier();
                 cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
