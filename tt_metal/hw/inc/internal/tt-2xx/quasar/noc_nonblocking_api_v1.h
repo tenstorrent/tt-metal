@@ -223,11 +223,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     }
 }
 
+// Quasar has only 1 NOC -- dynamic NOC is not supported.
+template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::READS_NUM_ISSUED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    return false;
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc) {
@@ -351,33 +351,30 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
     }
 }
 
+template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    return false;
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint32_t noc) {
     return (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) == noc_nonposted_writes_num_issued[noc]);
 }
 
+template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    return false;
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_t noc) {
     return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT) == noc_posted_writes_num_issued[noc]);
 }
 
+template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    return false;
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
@@ -394,11 +391,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
+template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
-    uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
-    uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
-    uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
-    return (status_reg_val == (self_risc_acked + other_risc_acked));
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    return false;
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
@@ -447,42 +443,9 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     }
 }
 
+template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_init() {
-#pragma GCC unroll 0
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
-        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-        uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
-
-        // program brisc cmd_buf 0
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_BRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-
-        // program brisc cmd_buf 1
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_BRISC_WR_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-
-        // program ncrisc cmd_buf 2
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_NCRISC_RD_CMD_BUF,
-            NOC_RET_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-
-        // program ncrisc cmd_buf 3
-        NOC_CMD_BUF_WRITE_REG(
-            noc,
-            DYNAMIC_NOC_NCRISC_WR_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-    }
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 // set noc local memory state for a single kernel from the global state
@@ -501,43 +464,15 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
-template <NocBarrierType barrier_type, uint32_t status_register>
+template <NocBarrierType barrier_type, uint32_t status_register, typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    using underlying_tensix_processor_types_t = std::underlying_type_t<TensixProcessorTypes>;
-    constexpr underlying_tensix_processor_types_t dm0 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM0);
-    constexpr underlying_tensix_processor_types_t dm1 =
-        static_cast<underlying_tensix_processor_types_t>(TensixProcessorTypes::DM1);
-
-    set_noc_counter_val<dm0, barrier_type>(NOC_0, noc0_status_reg);
-    set_noc_counter_val<dm0, barrier_type>(NOC_1, 0);
-    set_noc_counter_val<dm1, barrier_type>(NOC_0, 0);
-    set_noc_counter_val<dm1, barrier_type>(NOC_1, noc1_status_reg);
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
+template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
-    // Pipeline all register reads first to hide latency
-    uint32_t noc0_reads_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_RD_RESP_RECEIVED);
-    uint32_t noc1_reads_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_RD_RESP_RECEIVED);
-    uint32_t noc0_nonposted_writes_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    uint32_t noc1_nonposted_writes_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    uint32_t noc0_nonposted_writes_acked = NOC_STATUS_READ_REG(NOC_0, NIU_MST_WR_ACK_RECEIVED);
-    uint32_t noc1_nonposted_writes_acked = NOC_STATUS_READ_REG(NOC_1, NIU_MST_WR_ACK_RECEIVED);
-    uint32_t noc0_nonposted_atomics_acked = NOC_STATUS_READ_REG(NOC_0, NIU_MST_ATOMIC_RESP_RECEIVED);
-    uint32_t noc1_nonposted_atomics_acked = NOC_STATUS_READ_REG(NOC_1, NIU_MST_ATOMIC_RESP_RECEIVED);
-    uint32_t noc0_posted_writes_num_issued = NOC_STATUS_READ_REG(NOC_0, NIU_MST_POSTED_WR_REQ_SENT);
-    uint32_t noc1_posted_writes_num_issued = NOC_STATUS_READ_REG(NOC_1, NIU_MST_POSTED_WR_REQ_SENT);
-    dynamic_noc_local_barrier_init<NocBarrierType::READS_NUM_ISSUED, NIU_MST_RD_RESP_RECEIVED>(
-        noc0_reads_num_issued, noc1_reads_num_issued);
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED, NIU_MST_NONPOSTED_WR_REQ_SENT>(
-        noc0_nonposted_writes_num_issued, noc1_nonposted_writes_num_issued);
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_WRITES_ACKED, NIU_MST_WR_ACK_RECEIVED>(
-        noc0_nonposted_writes_acked, noc1_nonposted_writes_acked);
-    dynamic_noc_local_barrier_init<NocBarrierType::NONPOSTED_ATOMICS_ACKED, NIU_MST_ATOMIC_RESP_RECEIVED>(
-        noc0_nonposted_atomics_acked, noc1_nonposted_atomics_acked);
-    dynamic_noc_local_barrier_init<NocBarrierType::POSTED_WRITES_NUM_ISSUED, NIU_MST_POSTED_WR_REQ_SENT>(
-        noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
@@ -1502,25 +1437,9 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
 }
 
-template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS, typename T = void>
 inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
-    for (uint32_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
-        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
-            invalidate_l1_cache();
-        }
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
-            invalidate_l1_cache();
-        }
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
-            invalidate_l1_cache();
-        }
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc)) {
-            invalidate_l1_cache();
-        }
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
-            invalidate_l1_cache();
-        }
-    }
+    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <bool write, bool posted>

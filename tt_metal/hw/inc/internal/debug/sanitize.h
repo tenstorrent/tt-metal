@@ -277,10 +277,13 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint16_t expected = DebugSanitizeOK;
 
 #if defined(QUASAR)
-    uint16_t temp = 0xDEAD;
-    if (__atomic_compare_exchange_n(&v[noc_id].return_code, &expected, temp, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+    // On Quasar multiple DMs share a single noc_index, so use CAS to claim the slot first
+    // DebugSanitizePending acts as a lock, only one DM wins the race and gets to write the metadata for host
+    // to read
+    if (__atomic_compare_exchange_n(
+            &v[noc_id].return_code, &expected, DebugSanitizePending, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
 #else
-    if (v[noc_id].return_code == DebugSanitizeOK)
+    if (v[noc_id].return_code == expected)
 #endif
     {
         v[noc_id].noc_addr = noc_addr;
@@ -293,7 +296,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
 #if defined(QUASAR)
         // __ATOMIC_RELEASE ensures all writes above are visible before this
         // for host to read
-        __atomic_store_n(&v[noc_id].return_code, return_code, __ATOMIC_RELEASE)
+        __atomic_store_n(&v[noc_id].return_code, return_code, __ATOMIC_RELEASE);
 #else
         v[noc_id].return_code = return_code;
 #endif

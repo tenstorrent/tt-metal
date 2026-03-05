@@ -242,6 +242,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthSrcL1AddrOverflow = 15,
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
+    DebugSanitizePending = 0xDEAD,
 };
 
 struct debug_assert_msg_t {
