@@ -100,7 +100,7 @@ def test_cross_attention_transformer_text_inference(
         # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
         n_iter = 3
         if is_ci_env:
-            # Special case for 90B model in CI only 2 layers will be used for comparision regardless of the actual number of layers in the model.
+            # Special case for 90B model in CI only 2 layers will be used for comparison regardless of the actual number of layers in the model.
             # In CI, test only 2 layers with 1 being cross-attention layer to reduce runtime
             config.text_config.num_hidden_layers = 2
             config.text_config.cross_attention_layers = [0]
@@ -225,7 +225,7 @@ def test_cross_attention_transformer_text_inference(
 
         TEXT_ONLY = False
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             T = get_ref_model_logits(
                 i,
                 position_ids=position_ids.unsqueeze(0).expand(batch, -1),
@@ -421,7 +421,7 @@ def test_cross_attention_transformer_text_inference(
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
         prev_pos = cur_pos
 
-        if mode == "prefill":
+        if mode == Mode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

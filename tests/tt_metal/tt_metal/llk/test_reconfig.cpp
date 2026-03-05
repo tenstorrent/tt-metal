@@ -327,6 +327,7 @@ bool single_core_reconfig(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Comparison Checking

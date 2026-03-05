@@ -105,6 +105,7 @@ struct Broadcast {
         uint32_t ring_index;
         uint32_t secondary_sync_sem;
         uint32_t num_connections;
+        uint32_t fabric_args_start_index = 0;
     };
 
     // TRISC args - not used for CCL broadcast op
@@ -132,15 +133,21 @@ struct Broadcast {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
+                        static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        tt_memmove<true, false, false, 0>(
-                            get_write_ptr(CTArgs::cb0_id), recv.read_ptr, args.socket_page_size);
+
+                        noc_async_read(
+                            get_noc_addr(recv.read_ptr),
+                            get_write_ptr(CTArgs::cb0_id),
+                            args.socket_page_size,
+                            1 - noc_index);
+                        noc_async_read_barrier(1 - noc_index);
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
-                        socket_notify_sender(recv);
+                        socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
                     } else {
 #endif
@@ -157,11 +164,14 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
+                PacketHeaderPool::reset();
                 constexpr uint32_t num_primary_connections = (CTArgs::start_distance_in_hops_forward > 0 ? 1 : 0) +
                                                              (CTArgs::start_distance_in_hops_backward > 0 ? 1 : 0);
 
                 constexpr uint32_t secondary_connection_idx = num_primary_connections;
-                size_t arg_for_fab = 0;
+
+                // Reset pool so broadcast can be called across loop iterations
+                PacketHeaderPool::reset();
 
                 auto sem_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
                 auto fused_route_id = PacketHeaderPool::allocate_header_n(num_primary_connections);
@@ -170,8 +180,9 @@ struct Broadcast {
 
                 tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
+                size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
-                    open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                    open_connections(fabric_connection, args.num_connections, fabric_args_start_index);
                 }
 
                 uint8_t starts[] = {
@@ -247,16 +258,24 @@ struct Broadcast {
                     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
                     // 3. wait for mcast output ready semaphore
+                    // NOTE: We use wait_min instead of wait+reset to handle the case where broadcast
+                    // is async and a fast device increments the semaphore multiple times before a slow
+                    // device observes it. With wait+reset the slow device could miss an increment and
+                    // hang. In a real decoder this shouldn't be a problem because other ops
+                    // between iterations will naturally sync the devices, but wait_min is a
+                    // pragmatic choice to streamline standalone testing.
                     if (args.wait_output_semaphore) {
+                        WATCHER_RING_BUFFER_PUSH(0xA1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait(sem_ptr, args.out_ready_sem_wait_value);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                        WATCHER_RING_BUFFER_PUSH(0xA2);
                     }
 
                     // 4. global semaphore reset
                     if (args.reset_global_semaphore) {
-                        noc_semaphore_set(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
@@ -265,15 +284,17 @@ struct Broadcast {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender
                     if (args.wait_output_semaphore) {
+                        WATCHER_RING_BUFFER_PUSH(0xB1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait(sem_ptr, args.out_ready_sem_wait_value);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                        WATCHER_RING_BUFFER_PUSH(0xB2);
                     }
 
                     // Reset semaphore after receiving data
                     if (args.reset_global_semaphore) {
-                        noc_semaphore_set(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
 
                     // broadcast the received data along the primary axis
@@ -298,15 +319,17 @@ struct Broadcast {
                 } else {
                     // Receiver: wait for data from broadcaster
                     if (args.wait_output_semaphore) {
+                        WATCHER_RING_BUFFER_PUSH(0xC1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
-                        noc_semaphore_wait(sem_ptr, args.out_ready_sem_wait_value);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                        WATCHER_RING_BUFFER_PUSH(0xC2);
                     }
 
                     // Reset global semaphore
                     if (args.reset_global_semaphore) {
-                        noc_semaphore_set(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
                 }
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {

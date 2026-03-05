@@ -350,7 +350,7 @@ class StableDiffusion3Pipeline:
         if model_checkpoint_path is not None:
             checkpoint_name = model_checkpoint_path
             logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
-        # defatult config per mesh shape
+        # default config per mesh shape
         default_config = {
             (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
             (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},
@@ -1103,7 +1103,7 @@ def _get_t5_prompt_embeds(
     )
 
     # Call the new T5Encoder
-    hidden_states = text_encoder(prompt=tt_text_input_ids, device=device)
+    hidden_states = text_encoder(prompt=tt_text_input_ids)
 
     # Use the final layer output (last element in the list)
     tt_prompt_embeds = hidden_states[-1]

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -10,7 +11,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::experimental::prim {

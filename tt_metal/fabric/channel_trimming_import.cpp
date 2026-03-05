@@ -5,44 +5,18 @@
 #include "channel_trimming_import.hpp"
 
 #include <limits>
-#include <stdexcept>
 #include <string>
-#include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // NocSendType
 
 namespace tt::tt_fabric {
 
 namespace {
-
-// Parse "chip_N" → N
-ChipId parse_chip_key(const std::string& key) {
-    constexpr auto prefix = std::string_view("chip_");
-    TT_FATAL(
-        key.size() > prefix.size() && key.substr(0, prefix.size()) == prefix,
-        "Invalid chip key in trimming profile: '{}'",
-        key);
-    return static_cast<ChipId>(std::stoi(key.substr(prefix.size())));
-}
-
-// Parse "eth_channel_N" → N
-chan_id_t parse_eth_channel_key(const std::string& key) {
-    constexpr auto prefix = std::string_view("eth_channel_");
-    TT_FATAL(
-        key.size() > prefix.size() && key.substr(0, prefix.size()) == prefix,
-        "Invalid eth channel key in trimming profile: '{}'",
-        key);
-    return static_cast<chan_id_t>(std::stoi(key.substr(prefix.size())));
-}
-
-// Parse hex string like "0x001F" → uint16_t
-uint16_t parse_hex_bitfield(const std::string& str) {
-    return static_cast<uint16_t>(std::stoul(str, nullptr, 16));
-}
 
 // Map NocSendType string name back to its enum value.
 // Returns -1 if the string is not recognized.
@@ -139,20 +113,6 @@ void import_noc_send_types(const YAML::Node& chan_data, ChannelTrimmingOverrides
     }
 }
 
-// Collect all scalar keys from a YAML map node into a vector.
-// Must be done before any operator[] lookups on the map's children, because
-// yaml-cpp's operator[] mutates the underlying node (inserting null entries)
-// which corrupts in-progress iteration.
-std::vector<std::string> collect_map_keys(const YAML::Node& map_node) {
-    std::vector<std::string> keys;
-    for (auto it = map_node.begin(); it != map_node.end(); ++it) {
-        if (it->first.IsScalar()) {
-            keys.push_back(it->first.as<std::string>());
-        }
-    }
-    return keys;
-}
-
 }  // namespace
 
 ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& yaml_path) {
@@ -209,6 +169,71 @@ ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& ya
     }
 
     log_info(tt::LogFabric, "Loaded {} channel trimming overrides from profile", overrides.size());
+    return overrides;
+}
+
+ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std::string& yaml_path) {
+    log_info(tt::LogFabric, "Loading channel trimming global overrides from: {}", yaml_path);
+
+    YAML::Node root = YAML::LoadFile(yaml_path);
+    TT_FATAL(
+        root["channel_trimming_overrides"],
+        "Override YAML missing 'channel_trimming_overrides' root key: {}",
+        yaml_path);
+
+    ChannelTrimmingGlobalOverrides overrides;
+    const auto& overrides_node = root["channel_trimming_overrides"];
+
+    auto vc_keys = collect_map_keys(overrides_node);
+    for (const auto& vc_key : vc_keys) {
+        // Parse "vcN" → N
+        TT_FATAL(
+            vc_key.size() >= 3 && vc_key.substr(0, 2) == "vc",
+            "Invalid VC key '{}' in override YAML (expected 'vc0', 'vc1', ...)",
+            vc_key);
+        size_t vc = std::stoul(vc_key.substr(2));
+        TT_FATAL(
+            vc < builder_config::MAX_NUM_VCS,
+            "VC index {} exceeds MAX_NUM_VCS ({}) in override YAML",
+            vc,
+            builder_config::MAX_NUM_VCS);
+
+        const auto& vc_node = overrides_node[vc_key];
+        auto& vc_override = overrides.per_vc[vc];
+
+        if (vc_node["force_enable_all_sender_channels"]) {
+            vc_override.force_enable_all_sender_channels = vc_node["force_enable_all_sender_channels"].as<bool>();
+        }
+        if (vc_node["force_enable_all_receiver_channels"]) {
+            vc_override.force_enable_all_receiver_channels = vc_node["force_enable_all_receiver_channels"].as<bool>();
+        }
+        if (vc_node["force_enable_sender_channels"]) {
+            std::vector<size_t> indices;
+            for (const auto& idx_node : vc_node["force_enable_sender_channels"]) {
+                indices.push_back(idx_node.as<size_t>());
+            }
+            vc_override.force_enable_sender_channels = std::move(indices);
+        }
+        if (vc_node["force_enable_receiver_channels"]) {
+            std::vector<size_t> indices;
+            for (const auto& idx_node : vc_node["force_enable_receiver_channels"]) {
+                indices.push_back(idx_node.as<size_t>());
+            }
+            vc_override.force_enable_receiver_channels = std::move(indices);
+        }
+
+        log_debug(
+            tt::LogFabric,
+            "  VC{}: force_all_sender={} force_all_receiver={} sender_indices={} receiver_indices={}",
+            vc,
+            vc_override.force_enable_all_sender_channels.value_or(false),
+            vc_override.force_enable_all_receiver_channels.value_or(false),
+            vc_override.force_enable_sender_channels.has_value() ? vc_override.force_enable_sender_channels->size() : 0,
+            vc_override.force_enable_receiver_channels.has_value() ? vc_override.force_enable_receiver_channels->size()
+                                                                   : 0);
+    }
+
+    log_info(tt::LogFabric, "Loaded channel trimming global overrides from: {}", yaml_path);
     return overrides;
 }
 

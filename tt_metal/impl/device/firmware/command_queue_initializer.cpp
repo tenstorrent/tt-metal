@@ -59,9 +59,19 @@ void CommandQueueInitializer::init(
 
 void CommandQueueInitializer::configure() {}
 
-void CommandQueueInitializer::teardown() {
+void CommandQueueInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Dispatch),
+        "CommandQueueInitializer must be torn down after DispatchKernelInitializer");
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Fabric),
+        "CommandQueueInitializer must be torn down after FabricFirmwareInitializer");
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Profiler),
+        "CommandQueueInitializer must be torn down after ProfilerInitializer");
     devices_.clear();
     initialized_ = false;
+    init_done.erase(key);
 }
 
 bool CommandQueueInitializer::is_initialized() const { return initialized_; }
@@ -72,11 +82,7 @@ void CommandQueueInitializer::initialize_host(Device* dev) const {
     // Create system memory writer for this device to have an associated interface to hardware command
     // queue (i.e. hugepage). Need to do this before FW init so we know what dispatch cores to reset.
     if (using_fast_dispatch()) {
-        detail::DispatchStateCheck(true);
         dev->init_command_queue_host();
-    } else {
-        detail::DispatchStateCheck(false);
-        TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 }
 

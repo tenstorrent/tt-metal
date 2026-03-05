@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -232,6 +233,9 @@ def run_test_forward_pass_mla2d(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_mla",
+        real_weights=module_path is not None,
+        layer_id=module_path,
     )
     model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
@@ -315,11 +319,16 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 )
 
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": optimal_topology,
         }
     ],
     indirect=True,

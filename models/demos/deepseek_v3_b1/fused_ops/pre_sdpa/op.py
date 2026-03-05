@@ -7,6 +7,12 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
+    FlashMLADecode,
+    get_max_page_size_and_num_pages,
+    get_noc_max_page_size,
+)
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -41,20 +47,31 @@ class PreSDPA:
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
-        position_ids,
+        local_position_ids,
+        global_position_ids,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
+        kv_cache_tensor,
+        scale,
         epsilon=1e-6,
         num_qnope_heads=64,
         num_qrope_heads=64,
         qnope_head_dim=128,
         qrope_head_dim=64,
         heads_per_row=8,
-        knope_dim=512,
-        krope_dim=64,
+        nope_dim=512,
+        rope_dim=64,
+        kv_cache_update=True,
     ):
         """
-        PyTorch reference implementation for validation.
+        PyTorch reference implementation of the fused PreSDPA pipeline:
+          RMSNorm → Matmul → GatherReduce → RMSNorm2 → Matmul2 → Matmul3(Qnope) + RoPE(Qrope)
+          → [optional] DKV Matmul → KV RMSNorm → K RoPE → KV cache update
+          → FlashMLA decode
+
+        The KV cache branch is controlled by kv_cache_update.  When False the
+        cache is used as-is (no new entry is written), which models non-owning
+        SP devices that only run MLA over their existing local cache.
 
         Args:
             input_tensor: Input tensor (torch.Tensor) [1, K]
@@ -66,19 +83,34 @@ class PreSDPA:
                                     e.g., [64, 128, 512] for batched matmul on Qnope heads
             sin_tensor: Sin tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
             cos_tensor: Cos tensor (torch.Tensor) [max_seq_len, qrope_head_dim]
-            position_ids: Position indices (torch.Tensor) [batch] for decode mode
-            epsilon: Small value to avoid division by zero
+            local_position_ids: Device-local position indices (torch.Tensor) [batch].
+                          Used for KV cache write position and MLA sequence length.
+                          In SP mode this is the normalized position within the device's
+                          local KV cache slice.
+            global_position_ids: Global position indices (torch.Tensor) [batch].
+                          Used for Q/K RoPE cos/sin table lookup, since the rotation
+                          tables are full-length and replicated across all SP devices.
+            dkv_matmul_weights_tensor: DKV matmul weights (torch.Tensor) [K, nope_dim + rope_dim]
+            dkv_rmsnorm_gamma_tensor: DKV RMSNorm gamma (torch.Tensor) [1, nope_dim]
+            kv_cache_tensor: KV cache (torch.Tensor) [1, 1, seq_len, nope_dim + rope_dim]
+            scale: Scale factor for FlashMLA
+            epsilon: Small value to avoid division by zero (default 1e-6)
             num_qnope_heads: Number of Qnope heads (default 64)
             num_qrope_heads: Number of Qrope heads (default 64)
             qnope_head_dim: Dimension per Qnope head (default 128)
             qrope_head_dim: Dimension per Qrope head (default 64)
             heads_per_row: Number of heads per grid row (default 8)
+            nope_dim: NOPE dimension / KV nope dim (default 512)
+            rope_dim: RoPE dimension / KV rope dim (default 64)
+            kv_cache_update: When True (default), compute new KV entry and write it into
+                             the cache at local_position_ids[0].  When False, skip the
+                             KV cache update and use the cache as-is for MLA.
 
         Returns:
-            Tuple of (qnope_output, qrope_output, sdpa_interleaved):
-            - qnope_output: [num_qnope_heads, 1, qnope_out_dim] after matmul3
-            - qrope_output: [num_qrope_heads, 1, qrope_head_dim] after RoPE
-            - sdpa_interleaved: [8, 8, 576] interleaved QNOPE/QROPE output for SDPA
+            Tuple of (full_q, new_kv, mla_output):
+            - full_q: [1, 1, num_qnope_heads, nope_dim + rope_dim] combined Q heads
+            - new_kv: [1, 1, 1, nope_dim + rope_dim] new KV entry (None when kv_cache_update is False)
+            - mla_output: [num_heads * heads_per_row, nope_dim] MLA attention output
         """
         from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
 
@@ -98,54 +130,49 @@ class PreSDPA:
         qrope_heads = matmul2_result[:, num_qnope_heads * qnope_head_dim :].reshape(num_qrope_heads, 1, qrope_head_dim)
 
         # Matmul3: Batched matmul on Qnope heads
-        # [64, 1, 128] @ [64, 128, 512] -> [64, 1, 512]
         qnope_output = torch.bmm(qnope_heads, matmul3_weights_tensor)
 
-        # Apply RoPE to Qrope heads
-        # qrope_heads: [num_qrope_heads, 1, qrope_head_dim] = [64, 1, 64]
-        # Reshape for RopeSingleCore.golden: [batch, n_heads, seq_len, head_dim] = [1, 64, 1, 64]
-        qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)  # [1, 64, 1, 64]
-        # position_ids_expanded: [batch, seq_len] = [1, 1]
-        position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
-        # Apply RoPE
+        # Apply RoPE to Qrope heads (cos/sin indexed by global position)
+        qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)
+        global_position_ids_expanded = global_position_ids.unsqueeze(1)
         qrope_output_reshaped = RopeSingleCore.golden(
-            qrope_reshaped_for_rope, cos_tensor, sin_tensor, position_ids_expanded
+            qrope_reshaped_for_rope, cos_tensor, sin_tensor, global_position_ids_expanded
         )
-        # Reshape back: [1, 64, 1, 64] -> [64, 1, 64]
-        qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)  # [64, 1, 64]
+        qrope_output = qrope_output_reshaped.squeeze(0).permute(1, 0, 2)
 
-        # CreateQHeads: Combine QNOPE and QROPE outputs for SDPA
-        # After 3-phase tilization, output is [64, 576] where each row is one head:
-        #   row[i] = [qnope_first256[i], qnope_second256[i], qrope[i]] = [qnope[512], qrope[64]]
-        # Heads are grouped by receiver core: 8 cores × 8 heads = 64 rows
-        num_rows = num_qnope_heads // heads_per_row  # 8 receiver cores
-        qnope_out_dim = qnope_output.shape[2]  # 512
-        combined_head_dim = qnope_out_dim + qrope_head_dim  # 512 + 64 = 576
+        combined_head_dim = nope_dim + rope_dim
+        full_q = torch.concat([qnope_output, qrope_output], dim=-1).reshape(1, 1, num_qnope_heads, combined_head_dim)
 
-        # Reshape qnope_output: [64, 1, 512] -> [8, 8, 512]
-        qnope_reshaped = qnope_output.squeeze(1).reshape(num_rows, heads_per_row, qnope_out_dim)
+        full_kv = kv_cache_tensor.to(full_q.dtype)
+        new_kv = None
 
-        # Reshape qrope_output: [64, 1, 64] -> [8, 8, 64]
-        qrope_reshaped = qrope_output.squeeze(1).reshape(num_rows, heads_per_row, qrope_head_dim)
+        if kv_cache_update:
+            dkv = input_layernorm @ dkv_matmul_weights_tensor
+            kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
+            kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
+            k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, global_position_ids).squeeze(0)
+            new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
+            full_kv = torch.cat([full_kv, new_kv], dim=2)
 
-        # Build [8, 8, 576] then reshape to [64, 576] for tilized output format
-        sdpa_interleaved = torch.zeros(num_rows, heads_per_row, combined_head_dim, dtype=qnope_output.dtype)
-        sdpa_interleaved[:, :, :qnope_out_dim] = qnope_reshaped
-        sdpa_interleaved[:, :, qnope_out_dim:] = qrope_reshaped
-        # Reshape: [8, 8, 576] -> [64, 576] (each row = one head)
-        sdpa_interleaved = sdpa_interleaved.reshape(num_rows * heads_per_row, combined_head_dim)
-
-        # KV Cache Branch
-        dkv = input_layernorm @ dkv_matmul_weights_tensor
-        kv, k_rope = torch.split(dkv, [knope_dim, krope_dim], dim=-1)
-        kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
-        k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
-        full_kv_cache_tensor = torch.cat([kv, k_rope], dim=-1)
-
-        return qnope_output, qrope_output, sdpa_interleaved, full_kv_cache_tensor
+        output = FlashMLADecode.golden(full_q, full_kv, local_position_ids, nope_dim, scale).squeeze()
+        return full_q, new_kv, output
 
     @staticmethod
-    def op(
+    def get_num_semaphores(skip_ccl=False):
+        return 10 if skip_ccl else 13
+
+    @staticmethod
+    def create_semaphores(mesh_device, skip_ccl=False):
+        num_semaphores = PreSDPA.get_num_semaphores(skip_ccl)
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(num_semaphores)]
+        return semaphores
+
+    @staticmethod
+    def get_program_context(
         input_tensor_mesh,
         intermediate_tensor_mesh,
         gamma_tensor,
@@ -163,6 +190,7 @@ class PreSDPA:
         kv_cache_tensor,
         position_id,
         position_ids_tensor,
+        scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -182,11 +210,11 @@ class PreSDPA:
         Args:
             input_tensor_mesh: Input mesh tensor (must be sharded on single core per device)
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
-            gamma_tensor: Gamma/weight tensor (must be sharded, same shape as input)
-            matmul_weights_tensor: Matmul weights tensor (must be width sharded)
-            rmsnorm2_gamma_tensor: Gamma tensor for second RMSNorm (1536 elements = 3 tiles of 16x32)
-            matmul2_weights_tensor: Matmul2 weights tensor (width sharded, shuffled for interleaved output)
-            matmul3_weights_tensor: Matmul3 weights tensor (height sharded on Qnope grid, [128, 512] per core)
+            gamma_tensor: OverlappedTensor for attn_norm gamma (shares fused o_proj/gate/gamma buffer)
+            matmul_weights_tensor: OverlappedTensor for packed q_a_proj weights (shares fused buffer)
+            rmsnorm2_gamma_tensor: OverlappedTensor for q_norm gamma (shares fused o_proj/gate/gamma buffer)
+            matmul2_weights_tensor: OverlappedTensor for shuffled q_b_proj weights (shares fused buffer)
+            matmul3_weights_tensor: OverlappedTensor for kv_b1_proj weights (shares fused kv_b12 buffer)
             qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
             qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
             trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
@@ -203,7 +231,16 @@ class PreSDPA:
             noc_mode: NOC mode for the kernel (dedicated or dynamic)
 
         Returns:
-            output_tensor with pre-SDPA operations applied
+            Tuple of (io_tensors, full_device_grid, per_device_contexts) where:
+            - full_device_grid: CoreRangeSet covering the full device compute grid
+            - per_device_contexts: List of dicts, one per device, each containing:
+                ncrisc_compile_time_args, brisc_compile_time_args,
+                brisc_named_compile_time_args, ncrisc_named_compile_time_args,
+                trisc_named_compile_time_args, brisc_common_runtime_args,
+                ncrisc_common_runtime_args, trisc_common_runtime_args,
+                unified_compile_time_core_descriptors, per_core_compile_time_descriptors,
+                per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
+                cbs_list, worker_core, fabric_node_id, dst_nodes
         """
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
@@ -217,11 +254,9 @@ class PreSDPA:
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
-        gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
-        matmul_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor)
-        rmsnorm2_gamma_tensors_per_device = ttnn.get_device_tensors(rmsnorm2_gamma_tensor)
-        matmul2_weights_tensors_per_device = ttnn.get_device_tensors(matmul2_weights_tensor)
-        matmul3_weights_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor)
+        gamma_fused_tensors_per_device = ttnn.get_device_tensors(gamma_tensor.fused_tensor)
+        fused_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor.fused_tensor)
+        kv_b12_fused_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor.fused_tensor)
         qrope_sin_tensors_per_device = ttnn.get_device_tensors(qrope_sin_tensor)
         qrope_cos_tensors_per_device = ttnn.get_device_tensors(qrope_cos_tensor)
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
@@ -229,20 +264,24 @@ class PreSDPA:
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
         position_ids_tensors_per_device = ttnn.get_device_tensors(position_ids_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        dkv_matmul_weights_tensors_per_device = ttnn.get_device_tensors(dkv_matmul_weights_tensor)
-        dkv_rmsnorm_gamma_tensors_per_device = ttnn.get_device_tensors(dkv_rmsnorm_gamma_tensor)
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
+
+        assert semaphores is not None and len(semaphores) == PreSDPA.get_num_semaphores(skip_ccl)
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
         barrier_sem_addr = 0
         secondary_sync_sem_addr = 0
-        if not skip_ccl and semaphores is not None:
-            out_ready_semaphore = semaphores[0]
-            barrier_semaphore = semaphores[1]
-            secondary_sync_semaphore = semaphores[2]
+        semaphore_index = 0
+        if not skip_ccl:
+            out_ready_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
+            barrier_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
+            secondary_sync_semaphore = semaphores[semaphore_index]
+            semaphore_index += 1
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
@@ -295,14 +334,10 @@ class PreSDPA:
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
 
-        # Matmul1 grid from weight shard spec (single packed weight tensor)
-        matmul_weights_sample = matmul_weights_tensors_per_device[0]
-        matmul_weights_memory_config = matmul_weights_sample.memory_config()
-        matmul_weights_core_grid = matmul_weights_memory_config.shard_spec.grid
+        # Matmul1 grid from OverlappedTensor metadata (single packed weight tensor)
+        matmul_weights_core_grid = matmul_weights_tensor.core_range_set
         if len(list(matmul_weights_core_grid.ranges())) != 1:
             raise ValueError("matmul weights core grid must be a single rectangular range for packed K-split")
-        if matmul_weights_memory_config.shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
-            raise ValueError("matmul weights shard orientation must be ROW_MAJOR for packed K-split")
         matmul_bbox = matmul_weights_core_grid.bounding_box()
         matmul_grid_size = matmul_bbox.grid_size()
         matmul_num_cores = matmul_grid_size.x * matmul_grid_size.y
@@ -314,25 +349,19 @@ class PreSDPA:
             raise ValueError(f"matmul core grid must have 96 cores for this K-split path, got {matmul_num_cores}")
         matmul_half_num_cores = matmul_num_cores // 2
 
-        # Calculate per-core width in tiles for matmul1 (from shard spec)
-        matmul_weights_tile = matmul_weights_sample.get_tile()
-        matmul_weights_shard_shape = matmul_weights_memory_config.shard_spec.shape
+        # Calculate per-core width in tiles for matmul1 (from OverlappedTensor)
+        matmul_weights_shard_shape = matmul_weights_tensor.shard_shape
         matmul_weights_shard_width = matmul_weights_shard_shape[1]  # Width dimension
-        matmul_out_w = matmul_weights_shard_width // matmul_weights_tile.tile_shape[1]  # Per-core width in tiles
+        matmul_out_w = matmul_weights_shard_width // matmul_weights_tensor.tile_shape[1]  # Per-core width in tiles
 
-        # Calculate per-core width in tiles for matmul2 (from shard spec)
-        matmul2_weights_sample = matmul2_weights_tensors_per_device[0]
-        matmul2_weights_memory_config = matmul2_weights_sample.memory_config()
-        matmul2_weights_core_grid = matmul2_weights_memory_config.shard_spec.grid
-        matmul2_weights_tile = matmul2_weights_sample.get_tile()
-        matmul2_weights_shard_shape = matmul2_weights_memory_config.shard_spec.shape
+        # Calculate per-core width in tiles for matmul2 (from OverlappedTensor)
+        matmul2_weights_core_grid = matmul2_weights_tensor.core_range_set
+        matmul2_weights_shard_shape = matmul2_weights_tensor.shard_shape
         matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
-        matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tile.tile_shape[1]  # Per-core width in tiles
+        matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tensor.tile_shape[1]  # Per-core width in tiles
 
         # Extract matmul3 weights core grid (for inferring QNOPE grid dimensions)
-        matmul3_weights_sample = matmul3_weights_tensors_per_device[0]
-        matmul3_weights_memory_config = matmul3_weights_sample.memory_config()
-        matmul3_weights_core_grid = matmul3_weights_memory_config.shard_spec.grid
+        matmul3_weights_core_grid = matmul3_weights_tensor.core_range_set
 
         # ========================================================================
         # Qnope/Qrope grid configuration (for interleaved Q head layout)
@@ -380,6 +409,8 @@ class PreSDPA:
             ]
         )
 
+        dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor.core_range_set
+
         # Krope grid: columns 8-9, rows 8-9 (2 cores total)
         krope_grid = ttnn.CoreRangeSet(
             {
@@ -389,6 +420,8 @@ class PreSDPA:
                 )
             }
         )
+
+        kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
         # Use the merged grids for certain shared CBs between Q rope and K rope
         qkv_grid = qrope_grid.merge(krope_grid)
 
@@ -427,17 +460,13 @@ class PreSDPA:
 
         # KV Cache Branch grid configuration
         # DKV Matmul (9x2)
-        dkv_matmul_weights_sample = dkv_matmul_weights_tensors_per_device[0]
-        dkv_matmul_weights_memory_config = dkv_matmul_weights_sample.memory_config()
-        dkv_matmul_weights_core_grid = dkv_matmul_weights_memory_config.shard_spec.grid
+        dkv_matmul_weights_core_grid = dkv_matmul_weights_tensor.core_range_set
 
-        # Calculate per-core width in tiles for matmul (from shard spec)
-        # Get shard width directly from shard_spec and divide by tile width from tensor
-        dkv_matmul_weights_tile = dkv_matmul_weights_sample.get_tile()
-        dkv_matmul_weights_shard_shape = dkv_matmul_weights_memory_config.shard_spec.shape
+        # Calculate per-core width in tiles for dkv matmul (from overlapped tensor shard spec)
+        dkv_matmul_weights_shard_shape = dkv_matmul_weights_tensor.shard_shape
         dkv_matmul_weights_shard_width = dkv_matmul_weights_shard_shape[1]  # Width dimension
         dkv_matmul_out_w = (
-            dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
+            dkv_matmul_weights_shard_width // dkv_matmul_weights_tensor.tile_shape[1]
         )  # Per-core width in tiles
 
         # ========================================================================
@@ -466,23 +495,41 @@ class PreSDPA:
         mcast_is_part_of_receiver_grid = main_grid.contains(rmsnorm_core_grid)
 
         # Semaphore IDs for mcast synchronization
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
+        mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mcast_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
         # Only use noc0 semaphore since senders are on NOC_0 (default for NCRISC)
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
+        gather_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        gather_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
         # Gather-reduce for matmul path reuses gather semaphore IDs
-        gather_reduce_noc0_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
-        gather_reduce_noc1_receiver_semaphore_id = gather_noc1_receiver_semaphore_id
+        gather_reduce_noc0_receiver_semaphore_addr = gather_noc0_receiver_semaphore_addr
+        gather_reduce_noc1_receiver_semaphore_addr = gather_noc1_receiver_semaphore_addr
 
         # CreateQHeads 3-phase semaphore IDs (reuse existing IDs, safe since prior ops have completed)
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
-        nope_phase1_semaphore_id = gather_noc0_receiver_semaphore_id  # ID 2
-        nope_phase2_semaphore_id = gather_noc1_receiver_semaphore_id  # ID 3
-        rope_semaphore_id = mcast_data_sender_semaphore_id  # ID 0 (mcast completed before CreateQHeads)
+        nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
+        nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
+        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
+
+        # Semaphore IDs for MLA
+        mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_ncrisc_brisc_sync_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_receiver_ready_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_q_input_mcast_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
+        mla_kv_cache_cur_pos_ready_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -500,8 +547,6 @@ class PreSDPA:
         cb_page_size = tile_size
 
         # CB indices (grouped by stage)
-        # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
-        bcast_pkt_cb = 35  # Packet buffer for CCL broadcast
         input_cb = 0
         gamma_cb = 1
         rmsnorm_output_cb = 2
@@ -541,6 +586,21 @@ class PreSDPA:
         kv_cache_output_cb = 32  # Output CB for KV Cache Branch
         kv_cache_intermed_cb = 33  # Intermed CB for KV Cache Branch
         kv_cache_input_cb = 34  # Input CB for KV Cache Branch
+
+        # MLA parameters
+        mla_q_in_cb = create_q_heads_out_cb  # In for MLA q heads
+        mla_k_in_cb = 35  # Input CB for MLA
+        mla_mask_cb = 36  # Mask CB for MLA
+        mla_interm_out_cb = 37  # Intermediate output CB for MLA
+        mla_interm_ms_cb = 38  # Intermediate MS CB for MLA
+        mla_out_in_cb = 39  # Output input CB for MLA
+        mla_ms_in_cb = 40  # Output MS CB for MLA
+        mla_out_o_cb = 41  # Output O CB for MLA
+        mla_out_ms_cb = 42  # Output MS CB for MLA
+        mla_out_final_cb = 43  # Output final CB for MLA
+
+        # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
+        bcast_pkt_cb = 44  # Packet buffer for CCL broadcast
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -590,8 +650,8 @@ class PreSDPA:
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
             ("mcast_num_cores", mcast_num_cores),
-            ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
+            ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
             ("mcast_src_cb", rmsnorm_output_cb),
             ("mcast_dst_cb", matmul_input_cb),
@@ -601,7 +661,7 @@ class PreSDPA:
 
         # Mcast receiver compile-time args (named args for NCRISC)
         mcast_receiver_named_compile_time_args = [
-            ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+            ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
         ]
@@ -671,11 +731,9 @@ class PreSDPA:
         # Output: [1, 512] = 16 tiles of 1x32 per core
         # ========================================================================
         matmul3_num_tiles_k = 4  # 128 / 32 = 4 tiles (input width)
-        matmul3_weights_memory_config = matmul3_weights_sample.memory_config()
-        matmul3_weights_tile = matmul3_weights_sample.get_tile()
-        matmul3_weights_shard_shape = matmul3_weights_memory_config.shard_spec.shape
+        matmul3_weights_shard_shape = matmul3_weights_tensor.shard_shape
         matmul3_weights_shard_width = matmul3_weights_shard_shape[1]  # Width dimension (512)
-        matmul3_out_w = matmul3_weights_shard_width // matmul3_weights_tile.tile_shape[1]  # 512/32 = 16 tiles
+        matmul3_out_w = matmul3_weights_shard_width // matmul3_weights_tensor.tile_shape[1]  # 512/32 = 16 tiles
 
         # Matmul3 compile-time args (only on Qnope cores)
         # NCRISC: in1, num_tiles
@@ -779,9 +837,9 @@ class PreSDPA:
             ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
             ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
             # 3 semaphores for race-free synchronization
-            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
+            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
+            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
             ("cqh_qnope_src_cb", matmul3_output_cb),  # QNOPE sends from matmul3 output
             ("cqh_qrope_src_cb", qrope_output_cb),  # QROPE sends from qrope output
             ("cqh_qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
@@ -794,9 +852,9 @@ class PreSDPA:
         # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
         # Prefixed with "cqh_" to avoid name collisions with other BRISC args
         create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-            ("cqh_nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-            ("cqh_rope_semaphore_id", rope_semaphore_id),
+            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
+            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
+            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
@@ -860,7 +918,6 @@ class PreSDPA:
         # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
         gather_reduce_noc0_num_senders = gather_reduce_num_senders
         gather_reduce_noc1_num_senders = 0
-
         # Gather sender compile-time args (named args for NCRISC on matmul cores)
         # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
         # Grid-based destination and sender index are computed in kernel from my_logical_x_/y_.
@@ -869,7 +926,7 @@ class PreSDPA:
             ("gather_reduce_dest_noc_x", gather_reduce_dest_noc_core.x),
             ("gather_reduce_dest_noc_y", gather_reduce_dest_noc_core.y),
             ("gather_reduce_data_size_bytes", gather_reduce_data_size_bytes),
-            ("gather_reduce_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
+            ("gather_reduce_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
             ("gather_reduce_src_cb", matmul_output_cb),
             ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
             ("gather_reduce_grid_start_x", matmul_bbox.start.x),
@@ -888,8 +945,8 @@ class PreSDPA:
         gather_reduce_receiver_named_compile_time_args = [
             ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
             ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
-            ("gather_reduce_noc0_receiver_semaphore_id", gather_reduce_noc0_receiver_semaphore_id),
-            ("gather_reduce_noc1_receiver_semaphore_id", gather_reduce_noc1_receiver_semaphore_id),
+            ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
             ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
@@ -944,8 +1001,7 @@ class PreSDPA:
         # KV Cache Branch: Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
         # Sender runs on NCRISC (NOC_0 default), Receiver runs on BRISC (NOC_1 default)
         # ========================================================================
-        dkv_rmsnorm_gamma_sample = dkv_rmsnorm_gamma_tensors_per_device[0]
-        dkv_gather_receiver_core = dkv_rmsnorm_gamma_sample.memory_config().shard_spec.grid.ranges()[0].start
+        dkv_gather_receiver_core = dkv_rmsnorm_gamma_tensor.core_range_set.ranges()[0].start
         dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_grid)
 
         # Get NOC coordinates for gather destination (receiver core)
@@ -977,7 +1033,7 @@ class PreSDPA:
             ("dkv_gather_dest_noc_x", dkv_gather_dest_noc_core.x),
             ("dkv_gather_dest_noc_y", dkv_gather_dest_noc_core.y),
             ("dkv_gather_data_size_bytes", dkv_gather_data_size_bytes),
-            ("dkv_gather_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
+            ("dkv_gather_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_src_cb", dkv_matmul_output_cb),  # Source CB for gather (dkv matmul output)
             ("dkv_gather_src_num_pages", dkv_gather_src_num_pages),
             ("dkv_gather_sender_grid_start_x", dkv_gather_sender_grid_start_x),
@@ -995,8 +1051,8 @@ class PreSDPA:
         dkv_gather_receiver_named_compile_time_args = [
             ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
             ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
-            ("dkv_gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
-            ("dkv_gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
+            ("dkv_gather_noc0_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
+            ("dkv_gather_noc1_receiver_semaphore_addr", gather_noc1_receiver_semaphore_addr),
             ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),
             ("dkv_gather_dst_num_pages", dkv_gather_src_num_pages),
         ]
@@ -1032,18 +1088,201 @@ class PreSDPA:
         ]
 
         # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
+        flash_mla_program_config = FlashMLADecode.ProgramConfig()
+        device_chunk_size = flash_mla_program_config.device_chunk_size
         kv_cache_brisc_named_compile_time_args = [
             ("krope_output_cb", krope_output_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
+            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
+            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
+            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
+            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
+            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
+            ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+        ]
+
+        # Flash MLA named compile-time args
+        # a lot of the setup is reused from the FlashMLADecode op
+        k_chunk_size = flash_mla_program_config.k_chunk_size
+        num_q_heads_per_core = 8
+        k_shape = kv_cache_tensor.padded_shape
+        kv_cache_mem_config = kv_cache_tensor.memory_config()
+        kv_shard_shape = kv_cache_mem_config.nd_shard_spec.shard_shape
+        assert kv_cache_mem_config.is_sharded(), "KV cache must be ND sharded (not interleaved)"
+        assert (
+            hasattr(kv_cache_mem_config, "nd_shard_spec") and kv_cache_mem_config.nd_shard_spec is not None
+        ), "KV cache must use ND sharding with nd_shard_spec"
+
+        # Validate k_chunk_size matches KV cache shard height
+        kv_shard_shape = kv_cache_mem_config.nd_shard_spec.shard_shape
+        kv_shard_height = kv_shard_shape[2]  # Shape is [batch, nkv, seq_len, head_dim]
+        assert kv_shard_height == k_chunk_size, (
+            f"k_chunk_size ({k_chunk_size}) must match KV cache shard height ({kv_shard_height}). "
+            f"Each KV shard should contain exactly one k_chunk."
+        )
+
+        S = k_shape[2]
+        DH = k_shape[3]
+
+        # number of Q shards
+        B = sdpa_input_grid.num_cores()  # 8 shards
+        assert QROPE_HEAD_DIM == B * num_q_heads_per_core
+
+        Q_TILE_HEIGHT = num_q_heads_per_core
+        K_TILE_HEIGHT = 32
+        TILE_WIDTH = 32
+
+        num_kv_heads = k_shape[1]
+        Bkv = k_shape[0]
+        St = S // K_TILE_HEIGHT  # K/V use standard tile height
+        DHt = DH // TILE_WIDTH
+        vDHt = QNOPE_DATA_SIZE // TILE_WIDTH
+        PNHt = num_q_heads_per_core // Q_TILE_HEIGHT  # Q uses its own tile height
+
+        Sk_chunk_t = k_chunk_size // K_TILE_HEIGHT  # K chunks use K tile height
+
+        optimized_mla_grid = flash_mla_program_config.grid
+        num_s_blocks = optimized_mla_grid.NUM_BLOCKS
+        cores_per_s_block = optimized_mla_grid.CORES_PER_BLOCK
+
+        k_tile_size = kv_cache_tensor.get_tile().get_tile_size(kv_cache_tensor.dtype)
+        k_chunk_tiles = Sk_chunk_t * DHt
+        noc_max_page_size = get_noc_max_page_size()
+        k_page_size, k_num_pages = get_max_page_size_and_num_pages(noc_max_page_size, k_chunk_tiles, k_tile_size)
+
+        # Validate Q shards fit in one S block (max 8 Q shards)
+        assert B <= cores_per_s_block, f"Too many Q shards ({B}), max is {cores_per_s_block}"
+
+        # Calculate parallelization parameters
+        # Each batch (Q shard) gets 8 cores: 1 from each S block
+        num_cores_per_batch = num_s_blocks  # 8 cores per Q shard (seq len parallelism)
+        num_active_mla_cores = B * num_cores_per_batch  # Total active cores
+        num_cores_per_head = num_cores_per_batch // num_kv_heads  # Cores per KV head
+        num_heads_per_core = max(1, math.ceil(num_kv_heads / num_cores_per_batch))
+
+        assert PNHt == 1, f"PNHt must be 1, got {PNHt}"
+        assert num_kv_heads == 1, f"num_kv_heads must be 1, got {num_kv_heads}"
+        assert num_heads_per_core == 1, f"num_heads_per_core must be 1, got {num_heads_per_core}"
+        assert Bkv == 1, f"Bkv must be 1, got {Bkv}"
+
+        if fp32_dest_acc_en:
+            mla_dst_size = 8 if fp32_dest_acc_en else 16
+        else:
+            mla_dst_size = 4 if fp32_dest_acc_en else 8
+
+        assert mla_dst_size >= 8, f"mla_dst_size must be >= 8, got {mla_dst_size}"
+
+        q_tiles = PNHt * DHt
+        q_tiny_tile = ttnn.Tile((Q_TILE_HEIGHT, TILE_WIDTH))
+        q_tile_size = q_tiny_tile.get_tile_size(data_format)
+        q_chunk_size_bytes = q_tiles * q_tile_size
+
+        # Double buffer K for overlap between DRAM reads and compute.
+        # Receivers signal sender when ready (CB reserved) to ensure consistent addresses.
+        k_tiles = Sk_chunk_t * DHt * 2
+
+        out0_t = PNHt * vDHt
+        statistics_tiles = PNHt
+
+        s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
+        mla_input_output_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
+        )
+
+        # This gives the interleaved layout needed for parallelization
+        mla_all_cores = []
+        for batch_idx in range(B):
+            for s_block_idx in range(num_s_blocks):
+                x, y = optimized_mla_grid.get_cores(s_block_idx)[batch_idx]
+                mla_all_cores.append((x, y))
+
+        # Build core grid from all active cores
+        mla_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in mla_all_cores]
+        )
+
+        # Create core group with the same layout
+        mla_core_group = [ttnn.CoreCoord(x, y) for x, y in mla_all_cores]
+
+        # Multicast: each S block's first core (Q1) reads KV and multicasts to others in that S block
+        # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
+        num_mcast_dests = cores_per_s_block - 1  # 7 receivers per S block
+
+        mla_brisc_named_compile_time_args = [
+            ("vDHt", vDHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("num_cores_per_head", num_cores_per_head),
+            ("mla_reducer_semaphore_addr", mla_reducer_semaphore_addr),
+            ("k_chunk_size", k_chunk_size),
+            ("q_chunk_size_bytes", q_chunk_size_bytes),
+            ("DHt", DHt),
+            ("num_mcast_dests", num_mcast_dests),
+            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
+            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
+            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
+            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
+            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
+            ("mla_q_input_mcast_semaphore_addr", mla_q_input_mcast_semaphore_addr),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
+            ("k_num_pages", k_num_pages),
+            ("k_page_size", k_page_size),
+            ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
+            ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
+            ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
+            ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_q_in_cb", mla_q_in_cb),
+            ("mla_mask_cb", mla_mask_cb),
+            ("mla_out_in_cb", mla_out_in_cb),
+            ("mla_ms_in_cb", mla_ms_in_cb),
+            ("mla_out_o_cb", mla_out_o_cb),
+            ("mla_out_ms_cb", mla_out_ms_cb),
+        ]
+        mla_ncrisc_named_compile_time_args = [
+            ("St", St),
+            ("DHt", DHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("num_cores_per_head", num_cores_per_head),
+            ("k_chunk_size", k_chunk_size),
+            ("mla_mcast_semaphore_addr", mla_mcast_semaphore_addr),
+            ("k_page_size", k_page_size),
+            ("k_num_pages", k_num_pages),
+            ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
+            ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
+            ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+            ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
+            ("mla_k_in_cb", mla_k_in_cb),
+        ]
+        mla_trisc_named_compile_time_args = [
+            ("St", St),
+            ("DHt", DHt),
+            ("vDHt", vDHt),
+            ("PNHt", PNHt),
+            ("Sk_chunk_t", Sk_chunk_t),
+            ("k_chunk_size", k_chunk_size),
+            ("num_cores_per_head", num_cores_per_head),
+            ("q_heads_parallel_factor", B),
+            ("scale_fp32", float_to_uint32(scale)),
+            ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
+            ("dst_size", mla_dst_size),
+            ("mla_q_in_cb", mla_q_in_cb),
+            ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_mask_cb", mla_mask_cb),
+            ("mla_interm_out_cb", mla_interm_out_cb),
+            ("mla_interm_ms_cb", mla_interm_ms_cb),
+            ("mla_out_in_cb", mla_out_in_cb),
+            ("mla_ms_in_cb", mla_ms_in_cb),
+            ("mla_out_o_cb", mla_out_o_cb),
+            ("mla_out_ms_cb", mla_out_ms_cb),
+            ("mla_out_final_cb", mla_out_final_cb),
         ]
 
         # Create tile descriptor for proper tile dimensions
@@ -1054,8 +1293,7 @@ class PreSDPA:
         rmsnorm2_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
         rmsnorm2_page_size = TILE_16x32.get_tile_size(data_format)
 
-        # Create mesh program descriptor
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        per_device_contexts = []
 
         # ========================================================================
         # Kernel descriptors
@@ -1082,17 +1320,13 @@ class PreSDPA:
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
-                gamma_tensor_device = gamma_tensors_per_device[device_idx]
-                matmul_weights_tensor_device = matmul_weights_tensors_per_device[device_idx]
-                rmsnorm2_gamma_tensor_device = rmsnorm2_gamma_tensors_per_device[device_idx]
-                matmul2_weights_tensor_device = matmul2_weights_tensors_per_device[device_idx]
-                matmul3_weights_tensor_device = matmul3_weights_tensors_per_device[device_idx]
+                gamma_fused_tensor_device = gamma_fused_tensors_per_device[device_idx]
+                fused_weights_tensor_device = fused_weights_tensors_per_device[device_idx]
+                kv_b12_fused_tensor_device = kv_b12_fused_tensors_per_device[device_idx]
                 qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 trans_mat_tensor_device = trans_mat_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
-                dkv_matmul_weights_tensor_device = dkv_matmul_weights_tensors_per_device[device_idx]
-                dkv_rmsnorm_gamma_tensor_device = dkv_rmsnorm_gamma_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
                 position_ids_tensor_device = position_ids_tensors_per_device[device_idx]
@@ -1173,32 +1407,32 @@ class PreSDPA:
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB: Gamma (created from sharded tensor)
-                gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor_device)
-                # Update the tile descriptor in the format descriptor
+                # CB: Gamma (backed by fused overlapped tensor)
+                gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    gamma_cb, gamma_tensor, gamma_fused_tensor_device
+                )
                 gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-                # CB: RMSNorm2 Gamma (created from sharded tensor, 3 tiles of 16x32)
-                rmsnorm2_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor_device
+                # CB: RMSNorm2 Gamma (backed by fused overlapped tensor)
+                rmsnorm2_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor, gamma_fused_tensor_device
                 )
-                # Update the tile descriptor in the format descriptor to match rmsnorm2 tile shape
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
                 # CBs overlapped with sdpa_kv_cache L1 buffer (consumed before SDPA runs)
                 sdpa_kv_cache_running_offset = 0
+                sdpa_kv_cache_running_offset_mcast_core = 0
 
                 # CB: CCL broadcast packet buffer
                 bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
-                sdpa_kv_cache_running_offset += bcast_pkt_cb_descriptor.total_size
 
                 # CB: RMSNorm output buffer
                 rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm_output_cb,
                     sdpa_kv_cache_buffer_device,
-                    address_offset=sdpa_kv_cache_running_offset,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
                     total_size=num_tiles * cb_page_size,
                 )
                 rmsnorm_output_cb_descriptor.format_descriptors = [
@@ -1209,22 +1443,23 @@ class PreSDPA:
                         tile=tile_descriptor,
                     )
                 ]
+                sdpa_kv_cache_running_offset_mcast_core += rmsnorm_output_cb_descriptor.total_size
 
-                # CB: Matmul weights (created from sharded tensor)
-                matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul_weights_cb, matmul_weights_tensor_device
+                # CB: Matmul weights (backed by fused overlapped tensor)
+                matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul_weights_cb, matmul_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB: Matmul input buffer (1x32 tiles, receives mcast data)
                 # Senders will query the write pointer of this CB to get the receiver address.
                 # Tensor-backed on full device grid (superset of sender/receiver grids) so senders
                 # can use get_write_ptr to get receiver address. This CB is consumed before SDPA runs.
-                # CB: Matmul input — overlap with kv_cache L1 buffer at offset 14336 B.
+                # CB: Matmul input — overlap with kv_cache L1 buffer.
                 matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul_input_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 0 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=matmul_input_total_size,
                 )
                 matmul_input_cb_descriptor.format_descriptors = [
@@ -1235,16 +1470,15 @@ class PreSDPA:
                         tile=matmul_input_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
-
+                sdpa_out_interm_running_offset += matmul_input_cb_descriptor.total_size
                 # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
-                # at offset 0 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
                 matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 14336 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=matmul_output_page_size,
                 )
                 matmul_output_cb_descriptor.format_descriptors = [
@@ -1255,14 +1489,13 @@ class PreSDPA:
                         tile=matmul_output_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += matmul_output_cb_descriptor.total_size  # +64 B
-
-                # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
-                # at offset 64 B. This CB is consumed before SDPA runs.
+                sdpa_out_interm_running_offset += matmul_output_cb_descriptor.total_size
+                # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
+                # This CB is consumed before SDPA runs.
                 rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm2_input_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 14400 B
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
                 )
                 rmsnorm2_input_cb_descriptor.format_descriptors = [
@@ -1273,18 +1506,17 @@ class PreSDPA:
                         tile=rmsnorm2_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += rmsnorm2_input_cb_descriptor.total_size  # +3072 B
-
+                sdpa_kv_cache_running_offset_mcast_core += rmsnorm2_input_cb_descriptor.total_size
                 # CB9 lifecycle:
                 # 1) RMSNorm2 writes normalized output here
                 # 2) Mcast2 reads from CB9 and writes to matmul2 input CB
 
                 # CB 8: gather_reduce half1 scratch buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
-                # at offset 3136 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 gather_reduce_half1_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     gather_reduce_half1_scratch_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 17472 B
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
                 )
                 gather_reduce_half1_scratch_cb_descriptor.format_descriptors = [
@@ -1295,21 +1527,12 @@ class PreSDPA:
                         tile=rmsnorm2_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += gather_reduce_half1_scratch_cb_descriptor.total_size  # +3072 B
-
+                sdpa_kv_cache_running_offset_mcast_core += gather_reduce_half1_scratch_cb_descriptor.total_size
                 # CB: RMSNorm2 output buffer (3 tiles)
-                rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=rmsnorm2_output_cb,
-                    data_format=data_format,
-                    page_size=rmsnorm2_page_size,
-                    tile=rmsnorm2_tile_descriptor,
-                )
-                rmsnorm2_output_cb_core_ranges = rmsnorm_core_grid
-
                 rmsnorm2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm2_output_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 20544 B
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=sdpa_kv_cache_running_offset_mcast_core,
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
                 )
                 rmsnorm2_output_cb_descriptor.format_descriptors = [
@@ -1320,15 +1543,14 @@ class PreSDPA:
                         tile=rmsnorm2_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += rmsnorm2_output_cb_descriptor.total_size  # +3072 B
-
+                sdpa_kv_cache_running_offset_mcast_core += rmsnorm2_output_cb_descriptor.total_size
                 # CB: Matmul2 input buffer (1x1536 with 1x32 tiles = 48 tiles) — overlap with
-                # sdpa_out_interm L1 buffer at offset 9280 B. This CB is consumed before SDPA runs.
+                # sdpa_out_interm L1 buffer. This CB is consumed before SDPA runs.
                 matmul2_input_total_size = matmul2_num_tiles_k * matmul_input_page_size  # 48 * 64 bytes
                 matmul2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul2_input_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 23616 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=matmul2_input_total_size,
                 )
                 matmul2_input_cb_descriptor.format_descriptors = [
@@ -1339,20 +1561,19 @@ class PreSDPA:
                         tile=matmul_input_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size  # +3072 B
-
-                # CB: Matmul2 weights (created from sharded tensor, 4 tiles per core)
-                matmul2_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul2_weights_cb, matmul2_weights_tensor_device
+                sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size
+                # CB: Matmul2 weights (backed by fused overlapped tensor)
+                matmul2_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul2_weights_cb, matmul2_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB 12: Matmul2 output buffer — overlap with sdpa_out_interm L1 buffer
-                # at offset 12352 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 matmul2_output_total_size = matmul2_out_w * matmul_output_page_size  # 4 * 64 = 256 bytes per core
                 matmul2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul2_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 26688 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=matmul2_output_total_size,
                 )
                 matmul2_output_cb_descriptor.format_descriptors = [
@@ -1363,22 +1584,21 @@ class PreSDPA:
                         tile=matmul_output_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += matmul2_output_cb_descriptor.total_size  # +256 B
-
-                # CB 13: Matmul3 weights (created from sharded tensor on Qnope grid)
-                matmul3_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    matmul3_weights_cb, matmul3_weights_tensor_device
+                sdpa_out_interm_running_offset += matmul2_output_cb_descriptor.total_size
+                # CB 13: Matmul3 weights (backed by fused kv_b12 overlapped tensor)
+                matmul3_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    matmul3_weights_cb, matmul3_weights_tensor, kv_b12_fused_tensor_device
                 )
 
                 # CB 14: Matmul3 output buffer — overlap with sdpa_out_interm L1 buffer
-                # at offset 12608 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 matmul3_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul3_output_page_size = TILE_1x32.get_tile_size(data_format)
                 matmul3_output_total_size = matmul3_out_w * matmul3_output_page_size  # 16 tiles
                 matmul3_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul3_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 26944 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=matmul3_output_total_size,
                 )
                 matmul3_output_cb_descriptor.format_descriptors = [
@@ -1389,17 +1609,16 @@ class PreSDPA:
                         tile=matmul3_output_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += matmul3_output_cb_descriptor.total_size  # +1024 B
-
+                sdpa_out_interm_running_offset += matmul3_output_cb_descriptor.total_size
                 # CB 15: Qrope output buffer — overlap with sdpa_out_interm L1 buffer
-                # at offset 13632 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 qrope_output_page_size = TILE_1x32.get_tile_size(data_format)
                 qrope_output_total_size = matmul2_out_w * qrope_output_page_size  # 4 tiles
                 qrope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 27968 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=qrope_output_total_size,
                 )
                 qrope_output_cb_descriptor.format_descriptors = [
@@ -1410,8 +1629,7 @@ class PreSDPA:
                         tile=qrope_output_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += qrope_output_cb_descriptor.total_size  # +256 B
-
+                sdpa_out_interm_running_offset += qrope_output_cb_descriptor.total_size
                 # CB 17: Cos (DRAM, read by NCRISC)
                 qrope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 qrope_cos_cb_format = ttnn.CBFormatDescriptor(
@@ -1445,12 +1663,12 @@ class PreSDPA:
                 )
 
                 # CB 20: Rotated input intermediate CB — overlap with sdpa_out_interm L1 buffer
-                # at offset 13888 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
                 qrope_rotated_input_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_rotated_input_interm_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 28224 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=qrope_interm_tile_size,
                 )
                 qrope_rotated_input_interm_cb_descriptor.format_descriptors = [
@@ -1461,14 +1679,13 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
-                sdpa_out_interm_running_offset += qrope_rotated_input_interm_cb_descriptor.total_size  # +128 B
-
+                sdpa_out_interm_running_offset += qrope_rotated_input_interm_cb_descriptor.total_size
                 # CB 21: Cos intermediate CB — overlap with sdpa_out_interm L1 buffer
-                # at offset 14016 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 qrope_cos_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_cos_interm_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 28352 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=qrope_interm_tile_size,
                 )
                 qrope_cos_interm_cb_descriptor.format_descriptors = [
@@ -1479,14 +1696,13 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
-                sdpa_out_interm_running_offset += qrope_cos_interm_cb_descriptor.total_size  # +128 B
-
+                sdpa_out_interm_running_offset += qrope_cos_interm_cb_descriptor.total_size
                 # CB 22: Sin intermediate CB — overlap with sdpa_out_interm L1 buffer
-                # at offset 14144 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 qrope_sin_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_sin_interm_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 28480 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=qrope_interm_tile_size,
                 )
                 qrope_sin_interm_cb_descriptor.format_descriptors = [
@@ -1497,13 +1713,12 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
-                sdpa_out_interm_running_offset += qrope_sin_interm_cb_descriptor.total_size  # +128 B
-
+                sdpa_out_interm_running_offset += qrope_sin_interm_cb_descriptor.total_size
                 # CB 31: CreateQHeads intermediate buffer (row-major data before tilization)
                 # Senders write row-major data here via NOC, receiver marks pages, TRISC tilizes to output
                 # Allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
                 # so senders can use get_write_ptr to determine the L1 destination address
-                TILE_8x32 = ttnn.Tile((8, 32))
+                TILE_8x32 = ttnn.Tile((Q_TILE_HEIGHT, 32))
                 create_q_heads_interm_tile_descriptor = ttnn.TileDescriptor(TILE_8x32)
                 create_q_heads_interm_page_size = TILE_8x32.get_tile_size(data_format)  # 8*32*2 = 512 bytes
                 create_q_heads_interm_total_size = (
@@ -1512,7 +1727,7 @@ class PreSDPA:
                 create_q_heads_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     create_q_heads_receiver_in_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 28608 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=create_q_heads_interm_total_size,
                 )
                 create_q_heads_interm_cb_descriptor.format_descriptors = [
@@ -1523,27 +1738,39 @@ class PreSDPA:
                         tile=create_q_heads_interm_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += create_q_heads_interm_cb_descriptor.total_size  # +9216 B
-
+                sdpa_out_interm_running_offset += create_q_heads_interm_cb_descriptor.total_size
                 # CB 16: CreateQHeads output buffer (tilized data, backed by output tensor)
                 # Only allocated on receiver cores (SDPA Input grid) - senders no longer write here
-                create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    create_q_heads_out_cb, output_tensor_device
+                # This CB is input to SDPA, put it on all cores but only 8 cores have data
+                create_q_heads_out_tile_descriptor = ttnn.TileDescriptor(TILE_8x32)
+                create_q_heads_out_page_size = create_q_heads_interm_page_size
+                create_q_heads_out_total_size = create_q_heads_out_page_size * q_tiles
+                create_q_heads_out_cb_descriptor = ttnn.CBDescriptor(
+                    total_size=create_q_heads_out_total_size,
+                    core_ranges=mla_core_grid,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            create_q_heads_out_cb,
+                            data_format,
+                            create_q_heads_out_page_size,
+                            create_q_heads_out_tile_descriptor,
+                        )
+                    ],
                 )
 
-                # CB: DKV Matmul weights buffer
-                dkv_matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    dkv_matmul_weights_cb, dkv_matmul_weights_tensor_device
+                # CB: DKV Matmul weights buffer (backed by fused overlapped tensor)
+                dkv_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    dkv_matmul_weights_cb, dkv_matmul_weights_tensor, fused_weights_tensor_device
                 )
 
                 # CB 24: DKV Matmul output — overlap with sdpa_out_interm L1 buffer
-                # at offset 14272 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 dkv_matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
                 dkv_matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     dkv_matmul_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 37824 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=dkv_matmul_output_page_size,
                 )
                 dkv_matmul_output_cb_descriptor.format_descriptors = [
@@ -1554,16 +1781,15 @@ class PreSDPA:
                         tile=dkv_matmul_output_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += dkv_matmul_output_cb_descriptor.total_size  # +64 B
-
+                sdpa_out_interm_running_offset += dkv_matmul_output_cb_descriptor.total_size
                 # CB 25: KV RMSNorm input buffer — overlap with sdpa_out_interm L1 buffer
-                # at offset 14336 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 kv_rmsnorm_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
                 kv_rmsnorm_page_size = TILE_16x32.get_tile_size(input_tensor_sample.dtype)
                 kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     kv_rmsnorm_input_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 37888 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=1 * kv_rmsnorm_page_size,
                 )
                 kv_rmsnorm_input_cb_descriptor.format_descriptors = [
@@ -1574,21 +1800,20 @@ class PreSDPA:
                         tile=kv_rmsnorm_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
-
-                # CB: KV RMSNorm gamma buffer
-                kv_rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor_device
+                sdpa_out_interm_running_offset += kv_rmsnorm_input_cb_descriptor.total_size
+                # CB: KV RMSNorm gamma buffer (backed by fused overlapped tensor)
+                kv_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor, gamma_fused_tensor_device
                 )
                 kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
                 kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
 
                 # CB 27: KV RMSNorm output buffer — overlap with sdpa_out_interm L1 buffer
-                # at offset 15360 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     kv_rmsnorm_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 38912 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
                 )
                 kv_rmsnorm_output_cb_descriptor.format_descriptors = [
@@ -1599,8 +1824,7 @@ class PreSDPA:
                         tile=kv_rmsnorm_tile_descriptor,
                     )
                 ]
-                sdpa_out_interm_running_offset += kv_rmsnorm_output_cb_descriptor.total_size  # +1024 B
-
+                sdpa_out_interm_running_offset += kv_rmsnorm_output_cb_descriptor.total_size
                 # CB 29: Cos (DRAM, read by NCRISC)
                 krope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 krope_cos_cb_format = ttnn.CBFormatDescriptor(
@@ -1628,12 +1852,12 @@ class PreSDPA:
                 )
 
                 # CB 28: KRoPE output — overlap with sdpa_out_interm L1 buffer
-                # at offset 16384 B. This CB is consumed before SDPA runs.
+                # This CB is consumed before SDPA runs.
                 krope_tile_size = TILE_1x32.get_tile_size(data_format)
                 krope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     krope_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=sdpa_out_interm_running_offset,  # 39936 B
+                    address_offset=sdpa_out_interm_running_offset,
                     total_size=1 * krope_tile_size,
                 )
                 krope_output_cb_descriptor.format_descriptors = [
@@ -1644,12 +1868,9 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
-                sdpa_out_interm_running_offset += krope_output_cb_descriptor.total_size  # +64 B
-
-                dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor_device.memory_config().shard_spec.grid
+                sdpa_out_interm_running_offset += krope_output_cb_descriptor.total_size
                 TILE_32x32 = ttnn.Tile((32, 32))
                 kv_cache_page_size = TILE_32x32.get_tile_size(ttnn.bfloat8_b)
-                kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
                 kv_cache_num_tiles = 16
                 kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=kv_cache_input_cb,
@@ -1685,10 +1906,121 @@ class PreSDPA:
                     core_ranges=kv_cache_update_grid,
                     format_descriptors=[kv_cache_intermed_cb_format],
                 )
+
+                # Flash MLA cb descriptors
+                mla_cb_descriptors = []
+
+                q_df = data_format
+                k_df = kv_cache_tensor.dtype
+                stats_df = ttnn.bfloat16
+
+                q_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
+                stats_tile_descriptor = ttnn.TileDescriptor(q_tiny_tile)
+                stats_tile = q_tiny_tile
+                stats_tile_size = stats_tile.get_tile_size(stats_df)
+
+                mla_intermed_output_tiles = out0_t * optimized_mla_grid.NUM_TREE_REDUCTION_STEPS
+                mla_intermed_ms_tiles = PNHt * optimized_mla_grid.NUM_TREE_REDUCTION_STEPS
+
+                # cb_k_in: K input (full tile)
+                mla_k_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    mla_k_in_cb,
+                    sdpa_kv_cache_buffer_device,
+                    address_offset=0,
+                    total_size=k_tiles * k_tile_size,
+                )
+                mla_k_in_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=mla_k_in_cb,
+                        data_format=k_df,
+                        page_size=k_tile_size,
+                        tile=ttnn.TileDescriptor(kv_cache_tensor.get_tile()),
+                    )
+                ]
+                mla_cb_descriptors.append(mla_k_in_cb_descriptor)
+                # V is read directly from K buffer (strided matmul) - no separate V CB needed
+
+                # cb_mask: Mask input
+                mla_cb_descriptors.append(
+                    ttnn.CBDescriptor(
+                        total_size=q_tile_size,
+                        core_ranges=mla_core_grid,
+                        format_descriptors=[ttnn.CBFormatDescriptor(mla_mask_cb, q_df, q_tile_size)],
+                    )
+                )
+
+                if optimized_mla_grid.NUM_TREE_REDUCTION_STEPS > 0:
+                    # cb_out_in: output input (tiny tile)
+                    mla_out_in_total_size = mla_intermed_output_tiles * stats_tile_size
+                    mla_out_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        mla_out_in_cb,
+                        sdpa_out_interm_buffer_device,
+                        address_offset=0,
+                        total_size=mla_out_in_total_size,
+                    )
+                    mla_out_in_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=mla_out_in_cb,
+                            data_format=stats_df,
+                            page_size=stats_tile_size,
+                            tile=stats_tile_descriptor,
+                        )
+                    ]
+                    mla_cb_descriptors.append(mla_out_in_cb_descriptor)
+
+                    # cb_ms_in: m/s stats input (m and s are packed into single tile)
+                    mla_ms_in_total_size = mla_intermed_ms_tiles * stats_tile_size
+                    mla_ms_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        mla_ms_in_cb,
+                        sdpa_out_interm_buffer_device,
+                        address_offset=mla_out_in_total_size,
+                        total_size=mla_ms_in_total_size,
+                    )
+                    mla_ms_in_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=mla_ms_in_cb,
+                            data_format=stats_df,
+                            page_size=stats_tile_size,
+                            tile=stats_tile_descriptor,
+                        )
+                    ]
+                    mla_cb_descriptors.append(mla_ms_in_cb_descriptor)
+
+                # Position tensor is now height-sharded - no CB needed, read directly from L1
+
+                # mla_out_o_cb/mla_interm_out_cb: output O (tiny tile)
+                mla_cb_descriptors.append(
+                    ttnn.CBDescriptor(
+                        total_size=out0_t * stats_tile_size,
+                        core_ranges=mla_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
+                            ttnn.CBFormatDescriptor(
+                                mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor
+                            ),
+                        ],
+                    )
+                )
+
+                # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
+                mla_cb_descriptors.append(
+                    ttnn.CBDescriptor(
+                        total_size=statistics_tiles * stats_tile_size,
+                        core_ranges=mla_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(mla_out_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
+                            ttnn.CBFormatDescriptor(mla_interm_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
+                        ],
+                    )
+                )
+
+                # mla_out_final_cb: final sharded output
+                final_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_final_cb, output_tensor)
+
                 kv_cache_tensor_accessor_args = ttnn.TensorAccessorArgs(kv_cache_tensor_device)
                 brisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
                 ncrisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
-                # ========================================================================
+                # =======================================================================
                 # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
                 # ========================================================================
                 # BRISC sender: data_size_bytes, src_num_pages, rmsnorm2_output_cb (grid/semaphores reused from mcast)
@@ -1702,35 +2034,105 @@ class PreSDPA:
                     ("mcast2_dst_num_pages", mcast2_dst_num_pages),
                 ]
 
-                # ========================================================================
-                # Semaphore descriptors
-                # ========================================================================
+                k_addr = kv_cache_tensor_device.buffer_address()
 
-                # Mcast semaphores (ID 0 and 1)
-                mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_sender_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
+                # Setup MLA per core runtime args
+                mla_ncrisc_per_core_args = []
+                mla_brisc_per_core_args = []
+                mla_trisc_per_core_args = []
 
-                mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=mcast_data_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
+                output_core_physical_xs = []
+                output_core_physical_ys = []
 
-                # Gather semaphores (ID 2 and 3 - two semaphores for NOC0 and NOC1, but only NOC0 is used)
-                gather_noc0_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather_noc0_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
+                for i in range(num_active_mla_cores):
+                    if i % num_cores_per_batch == 0:  # First core in batch group is output (S1)
+                        core_physical = device.worker_core_from_logical_core(mla_core_group[i])
+                        output_core_physical_xs.append(core_physical.x)
+                        output_core_physical_ys.append(core_physical.y)
 
-                gather_noc1_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather_noc1_receiver_semaphore_id,
-                    core_ranges=full_device_grid,
-                    initial_value=0,
-                )
+                s_block_mcast_coords = []
+                for s_idx in range(num_s_blocks):
+                    coords = optimized_mla_grid.physical_multicast_coords(device, s_idx)
+                    s_block_mcast_coords.append(coords)
+
+                for i in range(num_active_mla_cores):
+                    core = mla_core_group[i]
+
+                    s_block_idx = i % num_s_blocks
+                    cur_batch = i // num_cores_per_batch
+                    core_num_in_reduce = i % num_cores_per_head
+                    core_num_in_output = i % num_cores_per_batch
+
+                    do_reduce = 1 if optimized_mla_grid.is_tree_reduction_receiver(s_block_idx) else 0
+                    is_output_core = 1 if s_block_idx == 0 else 0
+                    is_mcast_sender = 1 if i < num_s_blocks else 0
+
+                    mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, _ = s_block_mcast_coords[s_block_idx]
+
+                    if s_block_idx < 4:
+                        vc = s_block_idx & 0x1
+                    else:
+                        vc = 2 + ((s_block_idx - 4) & 0x1)
+
+                    output_core_noc_x = (
+                        output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
+                    )
+                    output_core_noc_y = (
+                        output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
+                    )
+
+                    # NCRISC per-core runtime args (common args: k_addr, pos_addr)
+                    mla_ncrisc_per_core_args.append(
+                        (
+                            core,
+                            [
+                                cur_batch,
+                                core_num_in_reduce,
+                                is_mcast_sender,
+                                mcast_start_x,
+                                mcast_start_y,
+                                vc,
+                            ],
+                        )
+                    )
+
+                    # Tree reduction partner coordinates
+                    tree_reduction_info = optimized_mla_grid.get_tree_reduction_partner_coords(
+                        device, s_block_idx, cur_batch
+                    )
+
+                    # BRISC per-core runtime args (common args: pos_addr)
+                    mla_brisc_args = [
+                        cur_batch,
+                        core_num_in_reduce,
+                        is_output_core,
+                        is_mcast_sender,
+                        output_core_noc_x,
+                        output_core_noc_y,
+                        mcast_start_x,
+                        mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
+                    ]
+                    for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
+                        mla_brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+                    mla_brisc_per_core_args.append((core, mla_brisc_args))
+
+                    is_sender_after_reduce = (
+                        1 if (do_reduce and optimized_mla_grid.is_tree_reduction_sender(s_block_idx)) else 0
+                    )
+
+                    # TRISC per-core runtime args (common args: pos_addr)
+                    mla_trisc_args = [
+                        do_reduce,
+                        is_output_core,
+                        cur_batch,
+                        core_num_in_reduce,
+                        is_sender_after_reduce,
+                    ]
+                    for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
+                        mla_trisc_args.extend([role_code, partner_s_block_idx])
+                    mla_trisc_per_core_args.append((core, mla_trisc_args))
 
                 # ================================================================
                 # CCL Broadcast common runtime args (computed before UnifiedKernelDescriptor)
@@ -1783,23 +2185,30 @@ class PreSDPA:
                         num_connections,
                     ]
 
-                # TRISC common runtime args (shared scalar values)
-                trisc_common_runtime_args = [
-                    epsilon_packed,  # idx 0
-                    scalar_packed,  # idx 1
-                    scalar2_packed,  # idx 2
-                    kv_scalar_packed,  # idx 3
-                    kv_cache_input_cb,
-                    kv_cache_output_cb,
-                    kv_cache_intermed_cb,
-                ]
-
                 # RoPE DRAM address args (per-device)
                 qrope_cos_tensor_address = qrope_cos_tensor_device.buffer_address()
                 qrope_sin_tensor_address = qrope_sin_tensor_device.buffer_address()
                 krope_cos_tensor_address = krope_cos_tensor_device.buffer_address()
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
                 position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
+
+                kv_cache_sp_named_compile_time_args = [
+                    ("kv_cache_device_chunk_size", device_chunk_size),
+                    ("kv_cache_sp_device_idx", row),
+                    ("kv_cache_num_sp_devices", mesh_rows),
+                ]
+
+                # TRISC common runtime args (shared scalar values)
+                trisc_common_runtime_args = [
+                    epsilon_packed,  # idx 0
+                    scalar_packed,  # idx 1
+                    scalar2_packed,  # idx 2
+                    kv_scalar_packed,  # idx 3
+                    kv_cache_input_cb,  # idx 4
+                    kv_cache_output_cb,  # idx 5
+                    kv_cache_intermed_cb,  # idx 6
+                    position_ids_tensor_addr,  # idx 7
+                ]
 
                 qrope_ncrisc_addr_args = [
                     ("qrope_cos_tensor_address", qrope_cos_tensor_address),
@@ -1820,12 +2229,8 @@ class PreSDPA:
                 krope_cores = ttnn.corerange_to_cores(krope_grid)
                 krope_start_tile_offset_core_values = [(core, idx * krope_Wt) for idx, core in enumerate(krope_cores)]
 
-                unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
-                    core_ranges=full_device_grid,
-                    ncrisc_compile_time_args=ncrisc_compile_time_args,
-                    brisc_compile_time_args=brisc_compile_time_args,
-                    ncrisc_named_compile_time_args=bcast_ncrisc_named_compile_time_args
+                ncrisc_named_compile_time_args = (
+                    bcast_ncrisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
                     + mcast_receiver_named_compile_time_args
                     + matmul_ncrisc_named_compile_time_args
@@ -1841,11 +2246,17 @@ class PreSDPA:
                     + kv_rmsnorm_ncrisc_named_compile_time_args
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
-                    + krope_ncrisc_addr_args,
-                    # NCRISC common runtime args:
-                    ncrisc_common_runtime_args=ncrisc_bcast_common_args,
-                    # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather_reduce receiver + matmul2 + mcast2 + matmul3 + qrope + create_q_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
-                    brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
+                    + krope_ncrisc_addr_args
+                    + kv_cache_sp_named_compile_time_args
+                    + mla_ncrisc_named_compile_time_args
+                )
+                ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
+                    k_addr,
+                    position_ids_tensor_addr,
+                ]
+
+                brisc_named_compile_time_args = (
+                    bcast_brisc_named_compile_time_args
                     + mcast_sender_named_compile_time_args
                     + matmul_brisc_named_compile_time_args
                     + gather_reduce_receiver_named_compile_time_args
@@ -1856,11 +2267,14 @@ class PreSDPA:
                     + create_q_heads_brisc_named_compile_time_args
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
-                    + kv_cache_brisc_named_compile_time_args,
-                    # BRISC common runtime args: bcast args
-                    brisc_common_runtime_args=[int(kv_cache_tensor_device.buffer_address()), position_id],
-                    # TRISC named compile-time args: rmsnorm compute + matmul + gather-reduce + rmsnorm2 + matmul2 + matmul3 + qrope + create_q_heads + dkv_matmul + kv_rmsnorm + krope
-                    trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
+                    + kv_cache_brisc_named_compile_time_args
+                    + kv_cache_sp_named_compile_time_args
+                    + mla_brisc_named_compile_time_args
+                )
+                brisc_common_runtime_args = [k_addr, position_ids_tensor_addr]
+
+                trisc_named_compile_time_args = (
+                    bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
                     + matmul_trisc_named_compile_time_args
                     + gather_reduce_trisc_named_compile_time_args
@@ -1872,201 +2286,302 @@ class PreSDPA:
                     + dkv_matmul_trisc_named_compile_time_args
                     + kv_rmsnorm_trisc_named_compile_time_args
                     + krope_trisc_named_compile_time_args
-                    + kv_cache_trisc_named_compile_time_args,
-                    # TRISC common runtime args (shared by all cores)
-                    trisc_common_runtime_args=trisc_common_runtime_args,
-                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.LoFi,
-                        math_approx_mode=False,
-                        fp32_dest_acc_en=fp32_dest_acc_en,
-                        dst_full_sync_en=fp32_dest_acc_en,
-                    ),
-                    # Per-core compile-time role differentiation
-                    unified_compile_time_core_descriptors=[
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_input_core",
-                            core_range=rmsnorm_core,  # First core is the input core
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_matmul_core",
-                            core_range=matmul_weights_core_grid,  # 96 matmul cores (12x8)
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_matmul2_core",
-                            core_range=matmul2_weights_core_grid,  # matmul2 cores
-                            value=1,
-                            other_value=0,
-                        ),
-                        # Qnope/Qrope core differentiation for interleaved Q head layout
-                        # Qnope cores: 64 cores (8x8 grid), each handles 1 head of 128 elements
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_qnope_core",
-                            core_range=qnope_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        # Qrope cores: 32 cores (4x8 grid), each handles 2 heads of 64 elements
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_qrope_core",
-                            core_range=qrope_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        # SDPA Input cores: 8 cores (4×2 grid), receive interleaved QNOPE/QROPE data
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_sdpa_input_core",
-                            core_range=sdpa_input_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        # DKV Matmul core: 9x2 grid, each core handles 1 head of 32 dim
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_dkv_matmul_core",
-                            core_range=dkv_matmul_weights_core_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_kv_rmsnorm_core",
-                            core_range=dkv_rmsnorm_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_knope_core",
-                            core_range=dkv_gather_sender_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_krope_core",
-                            core_range=krope_grid,
-                            value=1,
-                            other_value=0,
-                        ),
-                    ],
-                    per_core_compile_time_descriptors=[
-                        PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="qrope_start_tile_offset",
-                            core_values=qrope_start_tile_offset_core_values,
-                            other_value=0,
-                        ),
-                        PerCoreCompileTimeDescriptor(
-                            named_compile_time_arg="krope_start_tile_offset",
-                            core_values=krope_start_tile_offset_core_values,
-                            other_value=0,
-                        ),
-                    ],
-                    # Per-core runtime args for fabric (BRISC only, on worker_core)
-                    # Initialize empty args that will be populated by setup_routing_plane_connection
-                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        ncrisc_args=[(worker_core, [])],  # Fabric args appended after program creation
-                    ),
-                    noc_mode=noc_mode,
+                    + kv_cache_trisc_named_compile_time_args
+                    + kv_cache_sp_named_compile_time_args
+                    + mla_trisc_named_compile_time_args
                 )
 
-                # ================================================================
-                # Create program descriptor
-                # ================================================================
+                unified_compile_time_core_descriptors = [
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_input_core",
+                        core_range=rmsnorm_core,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_matmul_core",
+                        core_range=matmul_weights_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_matmul2_core",
+                        core_range=matmul2_weights_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_qnope_core",
+                        core_range=qnope_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_qrope_core",
+                        core_range=qrope_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_sdpa_input_core",
+                        core_range=sdpa_input_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_dkv_matmul_core",
+                        core_range=dkv_matmul_weights_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_kv_rmsnorm_core",
+                        core_range=dkv_rmsnorm_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_knope_core",
+                        core_range=dkv_gather_sender_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_krope_core",
+                        core_range=krope_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_mla_core",
+                        core_range=mla_core_grid,
+                        value=1,
+                        other_value=0,
+                    ),
+                ]
+
+                per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="qrope_start_tile_offset",
+                        core_values=qrope_start_tile_offset_core_values,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="krope_start_tile_offset",
+                        core_values=krope_start_tile_offset_core_values,
+                        other_value=0,
+                    ),
+                ]
+
+                per_core_ncrisc_args = mla_ncrisc_per_core_args
+                per_core_brisc_args = mla_brisc_per_core_args
+                per_core_trisc_args = mla_trisc_per_core_args
+
                 cbs_list = [
-                    in_cb_descriptor,
                     gamma_cb_descriptor,
                     rmsnorm_output_cb_descriptor,
                     matmul_weights_cb_descriptor,
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
-                    rmsnorm2_gamma_cb_descriptor,  # CB 6: RMSNorm2 gamma
-                    rmsnorm2_input_cb_descriptor,  # CB 7: RMSNorm2 input
-                    gather_reduce_half1_scratch_cb_descriptor,  # CB 8: gather_reduce half1 scratch
-                    rmsnorm2_output_cb_descriptor,  # CB 9: RMSNorm2 output
-                    matmul2_input_cb_descriptor,  # CB 10: Matmul2 input
-                    matmul2_weights_cb_descriptor,  # CB 11: Matmul2 weights
-                    matmul2_output_cb_descriptor,  # CB 12: Matmul2 output (intermediate)
-                    matmul3_weights_cb_descriptor,  # CB 13: Matmul3 weights
-                    matmul3_output_cb_descriptor,  # CB 14: Matmul3 output (Qnope final)
-                    qrope_output_cb_descriptor,  # CB 15: Qrope output (RoPE output)
-                    create_q_heads_out_cb_descriptor,  # CB 16: CreateQHeads output (tilized, linked to tensor)
-                    qrope_cos_cb_descriptor,  # CB 17: Cos (DRAM, read by NCRISC)
-                    qrope_sin_cb_descriptor,  # CB 18: Sin (DRAM, read by NCRISC)
-                    qrope_trans_mat_cb_descriptor,  # CB 19: Trans_mat (sharded tensor)
-                    qrope_rotated_input_interm_cb_descriptor,  # CB 20: Rotated input intermediate
-                    qrope_cos_interm_cb_descriptor,  # CB 21: Cos intermediate
-                    qrope_sin_interm_cb_descriptor,  # CB 22: Sin intermediate
-                    dkv_matmul_weights_cb_descriptor,  # CB 23: DKV Matmul weights
-                    dkv_matmul_output_cb_descriptor,  # CB 24: DKV Matmul output
-                    kv_rmsnorm_input_cb_descriptor,  # CB 25: KV RMSNorm input
-                    kv_rmsnorm_gamma_cb_descriptor,  # CB 26: KV RMSNorm gamma
-                    kv_rmsnorm_output_cb_descriptor,  # CB 27: KV RMSNorm output
-                    krope_output_cb_descriptor,  # CB 28: KV Cache Branch RoPE output
-                    krope_cos_cb_descriptor,  # CB 29: Cos (DRAM, read by NCRISC)
-                    krope_sin_cb_descriptor,  # CB 30: Sin (DRAM, read by NCRISC)
-                    create_q_heads_interm_cb_descriptor,  # CB 31: CreateQHeads intermediate (row-major)
-                    kv_cache_output_cb_descriptor,  # CB 32: KV Cache output
-                    kv_cache_intermed_cb_descriptor,  # CB 33: KV Cache intermed
-                    kv_cache_input_cb_descriptor,  # CB 34: KV Cache input
+                    rmsnorm2_gamma_cb_descriptor,
+                    rmsnorm2_input_cb_descriptor,
+                    gather_reduce_half1_scratch_cb_descriptor,
+                    rmsnorm2_output_cb_descriptor,
+                    matmul2_input_cb_descriptor,
+                    matmul2_weights_cb_descriptor,
+                    matmul2_output_cb_descriptor,
+                    matmul3_weights_cb_descriptor,
+                    matmul3_output_cb_descriptor,
+                    qrope_output_cb_descriptor,
+                    create_q_heads_out_cb_descriptor,
+                    qrope_cos_cb_descriptor,
+                    qrope_sin_cb_descriptor,
+                    qrope_trans_mat_cb_descriptor,
+                    qrope_rotated_input_interm_cb_descriptor,
+                    qrope_cos_interm_cb_descriptor,
+                    qrope_sin_interm_cb_descriptor,
+                    dkv_matmul_weights_cb_descriptor,
+                    dkv_matmul_output_cb_descriptor,
+                    kv_rmsnorm_input_cb_descriptor,
+                    kv_rmsnorm_gamma_cb_descriptor,
+                    kv_rmsnorm_output_cb_descriptor,
+                    krope_output_cb_descriptor,
+                    krope_cos_cb_descriptor,
+                    krope_sin_cb_descriptor,
+                    create_q_heads_interm_cb_descriptor,
+                    kv_cache_output_cb_descriptor,
+                    kv_cache_intermed_cb_descriptor,
+                    kv_cache_input_cb_descriptor,
+                    *mla_cb_descriptors,
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
-                program = ttnn.ProgramDescriptor(
-                    kernels=unified_kernel.get_kernel_descriptors().kernels,
-                    cbs=cbs_list,
-                    semaphores=[
-                        mcast_sender_semaphore_descriptor,  # ID 0
-                        mcast_receiver_semaphore_descriptor,  # ID 1
-                        gather_noc0_receiver_semaphore_descriptor,  # ID 2 (reused by create_q_heads)
-                        gather_noc1_receiver_semaphore_descriptor,  # ID 3
-                    ],
+                per_device_contexts.append(
+                    {
+                        "coord": coord,
+                        "ncrisc_compile_time_args": ncrisc_compile_time_args,
+                        "brisc_compile_time_args": brisc_compile_time_args,
+                        "brisc_named_compile_time_args": brisc_named_compile_time_args,
+                        "ncrisc_named_compile_time_args": ncrisc_named_compile_time_args,
+                        "trisc_named_compile_time_args": trisc_named_compile_time_args,
+                        "brisc_common_runtime_args": brisc_common_runtime_args,
+                        "ncrisc_common_runtime_args": ncrisc_common_runtime_args,
+                        "trisc_common_runtime_args": trisc_common_runtime_args,
+                        "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
+                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
+                        "per_core_ncrisc_args": per_core_ncrisc_args,
+                        "per_core_brisc_args": per_core_brisc_args,
+                        "per_core_trisc_args": per_core_trisc_args,
+                        "input_cb_descriptor": in_cb_descriptor,
+                        "output_cb_descriptor": final_output_cb_descriptor,
+                        "cbs_list": cbs_list,
+                        "worker_core": worker_core,
+                        "fabric_node_id": fabric_node_id,
+                        "dst_nodes": dst_nodes,
+                    }
                 )
 
-                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
-                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
-                if not skip_ccl and num_connections > 0:
-                    # Find the BRISC (writer) kernel whose core_ranges includes worker_core
-                    for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and (
-                            isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
-                            or (
-                                isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                                and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
-                            )
-                        ):
-                            writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
-                            fabric_args = ttnn.setup_routing_plane_connection(
-                                fabric_node_id, dst_nodes, [0], program, idx, worker_core
-                            )
-                            writer_rt_args_ref.extend(fabric_args)
-                            break
+        return full_device_grid, per_device_contexts
 
-                mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-
-        result = ttnn.generic_op(
-            [
-                input_tensor_mesh,
-                intermediate_tensor_mesh,
-                gamma_tensor,
-                matmul_weights_tensor,
-                rmsnorm2_gamma_tensor,
-                matmul2_weights_tensor,
-                matmul3_weights_tensor,
-                trans_mat_tensor,
-                qrope_cos_tensor,
-                qrope_sin_tensor,
-                krope_cos_tensor,
-                krope_sin_tensor,
-                position_ids_tensor,
-                dkv_matmul_weights_tensor,
-                dkv_rmsnorm_gamma_tensor,
-                kv_cache_tensor,
-                sdpa_kv_cache_buffer,
-                sdpa_out_interm_buffer,
-                output_tensor,
-            ],
-            mesh_program_descriptor,
+    @staticmethod
+    def op(
+        input_tensor_mesh,
+        intermediate_tensor_mesh,
+        gamma_tensor,
+        matmul_weights_tensor,
+        rmsnorm2_gamma_tensor,
+        matmul2_weights_tensor,
+        matmul3_weights_tensor,
+        qrope_sin_tensor,
+        qrope_cos_tensor,
+        trans_mat_tensor,
+        krope_cos_tensor,
+        krope_sin_tensor,
+        dkv_matmul_weights_tensor,
+        dkv_rmsnorm_gamma_tensor,
+        kv_cache_tensor,
+        position_id,
+        position_ids_tensor,
+        scale,
+        output_tensor,
+        sdpa_kv_cache_buffer,
+        sdpa_out_interm_buffer,
+        sender_coord,
+        semaphores=None,
+        cluster_axis=0,
+        secondary_cluster_axis=1,
+        num_links=1,
+        epsilon=1e-6,
+        fp32_dest_acc_en=False,
+        skip_ccl=False,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+    ):
+        io_tensors = [
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            gamma_tensor.fused_tensor,
+            matmul_weights_tensor.fused_tensor,
+            matmul3_weights_tensor.fused_tensor,
+            trans_mat_tensor,
+            qrope_cos_tensor,
+            qrope_sin_tensor,
+            krope_cos_tensor,
+            krope_sin_tensor,
+            position_ids_tensor,
+            kv_cache_tensor,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
+            output_tensor,
+        ]
+        full_device_grid, per_device_contexts = PreSDPA.get_program_context(
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            gamma_tensor,
+            matmul_weights_tensor,
+            rmsnorm2_gamma_tensor,
+            matmul2_weights_tensor,
+            matmul3_weights_tensor,
+            qrope_sin_tensor,
+            qrope_cos_tensor,
+            trans_mat_tensor,
+            krope_cos_tensor,
+            krope_sin_tensor,
+            dkv_matmul_weights_tensor,
+            dkv_rmsnorm_gamma_tensor,
+            kv_cache_tensor,
+            position_id,
+            position_ids_tensor,
+            scale,
+            output_tensor,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
+            sender_coord,
+            semaphores,
+            cluster_axis,
+            secondary_cluster_axis,
+            num_links,
+            epsilon,
+            fp32_dest_acc_en,
+            skip_ccl,
+            noc_mode,
         )
 
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        for ctx in per_device_contexts:
+            unified_kernel = UnifiedKernelDescriptor(
+                kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
+                core_ranges=full_device_grid,
+                ncrisc_compile_time_args=ctx["ncrisc_compile_time_args"],
+                brisc_compile_time_args=ctx["brisc_compile_time_args"],
+                ncrisc_named_compile_time_args=ctx["ncrisc_named_compile_time_args"],
+                ncrisc_common_runtime_args=ctx["ncrisc_common_runtime_args"],
+                brisc_named_compile_time_args=ctx["brisc_named_compile_time_args"],
+                brisc_common_runtime_args=ctx["brisc_common_runtime_args"],
+                trisc_named_compile_time_args=ctx["trisc_named_compile_time_args"],
+                trisc_common_runtime_args=ctx["trisc_common_runtime_args"],
+                trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=fp32_dest_acc_en,
+                    dst_full_sync_en=fp32_dest_acc_en,
+                ),
+                unified_compile_time_core_descriptors=ctx["unified_compile_time_core_descriptors"],
+                per_core_compile_time_descriptors=ctx["per_core_compile_time_descriptors"],
+                per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                    ncrisc_args=ctx["per_core_ncrisc_args"],
+                    brisc_args=ctx["per_core_brisc_args"],
+                    trisc_args=ctx["per_core_trisc_args"],
+                ),
+                noc_mode=noc_mode,
+            )
+
+            program = ttnn.ProgramDescriptor(
+                kernels=unified_kernel.get_kernel_descriptors().kernels,
+                cbs=[ctx["input_cb_descriptor"], *ctx["cbs_list"], ctx["output_cb_descriptor"]],
+                semaphores=[],
+            )
+
+            coord = ctx["coord"]
+            worker_core = ctx["worker_core"]
+            dst_nodes = ctx["dst_nodes"]
+            if not skip_ccl and len(dst_nodes) > 0:
+                for idx, kernel in enumerate(program.kernels):
+                    if kernel.core_ranges.contains(worker_core) and (
+                        isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
+                        or (
+                            isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
+                            and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
+                        )
+                    ):
+                        writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
+                        fabric_args = ttnn.setup_routing_plane_connection(
+                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, worker_core
+                        )
+                        writer_rt_args_ref.extend(fabric_args)
+                        break
+
+            mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+        result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result

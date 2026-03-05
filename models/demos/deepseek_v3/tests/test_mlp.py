@@ -183,7 +183,15 @@ def test_forward_pass(
 
     # Generate module configs and state
     weight_config = get_test_weight_config(
-        MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
+        MLPClass,
+        hf_config,
+        (state_dict,) * num_module_layers,
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_mlp",
+        real_weights=module_path is not None,
+        layer_id=module_path,
     )
     model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
@@ -199,8 +207,13 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass
-    tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
+    # TTNN forward pass - collective operations handled inside forward functions
+    # SharedExpert needs handle_tensor_parallel=True for standalone testing to enable CCLs
+    # NonExpert and MLP don't have this parameter and handle CCLs internally
+    if MLPClass.__name__ == "SharedExpert":
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
+    else:
+        tt_output = run_module_forward(MLPClass, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]

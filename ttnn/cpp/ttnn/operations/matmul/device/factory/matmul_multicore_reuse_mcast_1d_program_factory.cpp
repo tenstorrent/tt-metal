@@ -281,7 +281,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
     const auto in0_tensor_stride_h = transpose_a ? 1 : K;
@@ -304,6 +314,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
 
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
@@ -337,6 +348,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
             (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
@@ -1123,7 +1135,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1219,6 +1241,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in0_block_h,                // in0_block_h
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)in0_last_ktile_h,
 
         (std::uint32_t)extract_shard_sub_blocks,
         (std::uint32_t)in0_shard_width_in_tiles,
@@ -1908,8 +1931,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (!intersection.empty()) {
-            non_idle_cores_vec.push_back(intersection.bounding_box());
+        for (const auto& ir : intersection.ranges()) {
+            non_idle_cores_vec.push_back(ir);
         }
     }
     all_cores = CoreRangeSet(non_idle_cores_vec);

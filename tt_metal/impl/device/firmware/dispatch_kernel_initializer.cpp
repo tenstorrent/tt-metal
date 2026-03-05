@@ -66,10 +66,11 @@ void DispatchKernelInitializer::init(
 
     devices_ = devices;
 
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::WORKER, descriptor_->num_cqs());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<tt::tt_metal::DispatchMemMap>(CoreType::ETH, descriptor_->num_cqs());
+    bool is_galaxy_cluster = descriptor_->cluster().is_galaxy_cluster();
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+        CoreType::WORKER, descriptor_->num_cqs(), descriptor_->hal(), is_galaxy_cluster);
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
+        CoreType::ETH, descriptor_->num_cqs(), descriptor_->hal(), is_galaxy_cluster);
 
     // Skip firmware initialization for mock devices
     if (descriptor_->is_mock_device()) {
@@ -97,13 +98,16 @@ void DispatchKernelInitializer::configure() {
     initialized_ = true;
 }
 
-void DispatchKernelInitializer::teardown() {
+void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
+    // Dispatch is torn down first; no prior teardown order to assert.
     if (!using_fast_dispatch()) {
+        init_done.erase(key);
         return;
     }
 
     // Mock devices don't have sysmem_manager, skip FD teardown
     if (descriptor_->is_mock_device()) {
+        init_done.erase(key);
         return;
     }
 
@@ -114,6 +118,7 @@ void DispatchKernelInitializer::teardown() {
 
     devices_.clear();
     initialized_ = false;
+    init_done.erase(key);
 }
 
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }

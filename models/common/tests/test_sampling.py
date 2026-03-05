@@ -6,8 +6,8 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.sampling import LogProbsCalculator
 from models.common.utility_functions import comp_pcc
-from models.common.utils import LogProbsCalculator
 
 
 @pytest.mark.parametrize(
@@ -72,6 +72,62 @@ def test_log_probs_calculation(shape, mesh_device):
     print(f"pcc={pcc}")
 
     assert passing, f"Assertion failed, PCC={pcc}"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 8 * 18992],  # Qwen3 on T3K
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_log_probs_returns_none_when_disabled(shape, mesh_device):
+    """Test that calculate_log_probs returns None when enable_log_probs is False."""
+    log_probs_calculator = LogProbsCalculator(mesh_device)
+
+    torch_tensor = torch.randn(shape)
+    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
+    indices_tensor = argmax_tensor.reshape(
+        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
+    )
+
+    logits_tensor = ttnn.from_torch(
+        torch_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_indices_tensor = ttnn.from_torch(
+        indices_tensor,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Log probs disabled (default) - should return None
+    log_probs_calculator.set_log_probs_mode(False)
+    result = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
+    assert result is None, f"Expected None when log_probs disabled, got {type(result)}"
+
+    # Log probs enabled - should return a tensor (not None)
+    log_probs_calculator.set_log_probs_mode(True)
+    num_devices = mesh_device.get_num_devices()
+    result = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
+    if num_devices in (8, 32) and log_probs_calculator.num_devices_for_sharding >= 2:
+        assert result is not None, "Expected tensor when log_probs enabled on supported device"
+    else:
+        assert result is None, "Expected None on unsupported device count"
 
 
 @pytest.mark.parametrize(

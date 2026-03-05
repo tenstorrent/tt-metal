@@ -7,13 +7,13 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -64,7 +64,9 @@ struct RouterEdge {
 struct hash_pair {
     template <class T1, class T2>
     size_t operator()(const std::pair<T1, T2>& p) const {
-        return tt::stl::hash::hash_objects(std::hash<T1>{}(p.first), std::hash<T2>{}(p.second));
+        size_t seed = std::hash<T1>{}(p.first);
+        seed ^= std::hash<T2>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        return seed;
     }
 };
 
@@ -91,7 +93,7 @@ using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<ChipId,
 using AnnotatedIntermeshConnections =
     std::vector<std::tuple<std::pair<uint32_t, port_id_t>, std::pair<uint32_t, port_id_t>>>;
 
-// Parsed from the Mesh Graph Descriptor. The user can specify the number of channels betweeen meshes (relaxed mode)
+// Parsed from the Mesh Graph Descriptor. The user can specify the number of channels between meshes (relaxed mode)
 // or pin connectiosn to specific exit nodes (strict mode).
 // Stores connections specified in relaxed mode. Mapping: src_mesh -> dst_mesh -> num_channels
 using RequestedIntermeshConnections = std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>;

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
@@ -2286,7 +2287,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogenous across devices.
+    // where the number of active eth cores is heterogeneous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {
@@ -2466,7 +2467,7 @@ void update_traced_program_dispatch_commands(
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogenous across devices.
+    // where the number of active eth cores is heterogeneous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {
