@@ -12,8 +12,6 @@ action_proj_out, and dual forward paths (video + action).
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import torch
 from loguru import logger
 
@@ -27,12 +25,12 @@ from models.tt_dit.layers.normalization import DistributedLayerNorm
 from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
-from models.tt_dit.utils.padding import pad_vision_seq_parallel
+from models.tt_dit.utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
 from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
 
 from .attention_wan import WanAttention
-from models.experimental.lingbot_va.reference.model import WanRotaryPosEmbed
+from .wan_rotary_pos_embed import WanRotaryPosEmbed
 
 
 # Lingbot-VA config (from reference model.py)
@@ -163,9 +161,6 @@ class WanTransformerBlock(Module):
             packer_l1_acc=True,
         )
 
-        device_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ffn.net.0.proj", "ffn.ff1")
         rename_substate(state, "ffn.net.2", "ffn.ff2")
@@ -202,8 +197,7 @@ class WanTransformerBlock(Module):
         shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
             shifted_temb_1BTD, 6, dim=2
         )
-
-        # NOTE: workaround - addcmul (fused and unfused) is less accurate with fp32 gate input
+        # addcmul gate in bfloat16 for numerical accuracy
         gate_msa_1B1D = ttnn.typecast(gate_msa_1B1D, dtype=ttnn.bfloat16)
         c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
 
@@ -297,6 +291,7 @@ class WanTransformer3DModel(Module):
         head_dim = dim // num_heads
         self.num_heads = num_heads
         self.rope = WanRotaryPosEmbed(
+            mesh_device=mesh_device,
             attention_head_dim=head_dim,
             patch_size=patch_size,
             max_seq_len=rope_max_seq_len,
@@ -317,6 +312,7 @@ class WanTransformer3DModel(Module):
             mesh_device=mesh_device,
         )
 
+        # Text and timestep for video path; text always from condition_embedder.
         self.condition_embedder = WanTimeTextImageEmbedding(
             dim=dim,
             time_freq_dim=freq_dim,
@@ -326,7 +322,7 @@ class WanTransformer3DModel(Module):
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
         )
-
+        # Timestep-only for action path (action_mode=True).
         self.condition_embedder_action = WanTimeTextImageEmbedding(
             dim=dim,
             time_freq_dim=freq_dim,
@@ -391,21 +387,8 @@ class WanTransformer3DModel(Module):
             packer_l1_acc=True,
         )
 
-        device_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
-
-    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
-        super().save(directory, prefix=prefix)
-        directory = Path(directory)
-        torch.save(self.rope.state_dict(), directory / f"{prefix}rope.pt")
-
-    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
-        super().load(directory, prefix=prefix)
-        directory = Path(directory)
-        self.rope.load_state_dict(torch.load(directory / f"{prefix}rope.pt"))
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        self.rope.load_state_dict(pop_substate(state, "rope"))
+        pop_substate(state, "rope")
 
         # Map reference patch_embedding_mlp (Linear) -> patch_embedding (WanPatchEmbed expects conv-form weight)
         rename_substate(state, "patch_embedding_mlp", "patch_embedding")
@@ -428,38 +411,37 @@ class WanTransformer3DModel(Module):
         return self.cached_rope_features[tuple(grid_id.shape)]
 
     def prepare_rope_features(self, grid_id: torch.Tensor):
-        """Compute RoPE from grid_id (B, 3, L). Reference WanRotaryPosEmbed returns freqs_cis (complex).
-        Convert to rope_cos/rope_sin with shape [1, 1, L, head_dim] required by wan_fused_rmsnorm_post_allgather
-        (head_dim=128; reference gives head_dim/2=64, so we repeat each value for the two dims per pair)."""
-        logger.info("Preparing rope features for shape %s", grid_id.shape)
-        rotary_emb = self.rope(grid_id)  # (B, L, head_dim/2) complex
-        rope_cos = rotary_emb.real  # (B, L, head_dim/2) = (1, L, 64)
-        rope_sin = rotary_emb.imag  # (B, L, head_dim/2)
-        # wan_fused_rmsnorm_post_allgather expects [1, 1, seq_len, head_dim] with head_dim=128
-        # Reference has 64 cos/sin (one per pair); repeat to get 128 for kernel
-        rope_cos_11LD = rope_cos.unsqueeze(1).repeat(1, 1, 1, 2)  # (1, 1, L, 128)
-        rope_sin_11LD = rope_sin.unsqueeze(1).repeat(1, 1, 1, 2)  # (1, 1, L, 128)
-        rope_cos_11LD = pad_vision_seq_parallel(
-            rope_cos_11LD, num_devices=self.parallel_config.sequence_parallel.factor
-        )
-        rope_sin_11LD = pad_vision_seq_parallel(
-            rope_sin_11LD, num_devices=self.parallel_config.sequence_parallel.factor
-        )
-        trans_mat = get_rot_transformation_mat()
-        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
-        tt_rope_cos_1HND = from_torch(
-            rope_cos_11LD,
-            device=self.mesh_device,
-            dtype=ttnn.float32,
-            mesh_axes=[..., sp_axis, None],
-        )
-        tt_rope_sin_1HND = from_torch(
-            rope_sin_11LD,
-            device=self.mesh_device,
-            dtype=ttnn.float32,
-            mesh_axes=[..., sp_axis, None],
-        )
-        tt_trans_mat = bf16_tensor(trans_mat, device=self.mesh_device)
+        """Build RoPE cos/sin and transformation matrix from grid_id (B, 3, L). Pads for sequence parallel."""
+        logger.debug("Preparing rope features for shape {}", grid_id.shape)
+        grid_id_tt = bf16_tensor(grid_id, device=self.mesh_device)
+        rope_cos_tt, rope_sin_tt = self.rope(grid_id_tt)  # each [B, L, 128] ttnn
+        B, L, D = rope_cos_tt.shape
+        rope_cos_11LD = ttnn.reshape(rope_cos_tt, (1, 1, L, D))
+        rope_sin_11LD = ttnn.reshape(rope_sin_tt, (1, 1, L, D))
+        num_devices = self.parallel_config.sequence_parallel.factor
+        padded_len = get_padded_vision_seq_len(L, num_devices)
+        if padded_len > L:
+            pad_len = padded_len - L
+            zeros = ttnn.zeros(
+                (1, 1, pad_len, D), device=self.mesh_device, dtype=rope_cos_11LD.dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            rope_cos_11LD = ttnn.concat([rope_cos_11LD, zeros], dim=2)
+            rope_sin_11LD = ttnn.concat([rope_sin_11LD, zeros], dim=2)
+        if num_devices == 1:
+            tt_rope_cos_1HND = ttnn.typecast(rope_cos_11LD, ttnn.float32)
+            tt_rope_sin_1HND = ttnn.typecast(rope_sin_11LD, ttnn.float32)
+        else:
+            # Multi-device SP: shard via from_torch (no in-place shard of device tensor)
+            sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+            rope_cos_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_cos_11LD)[0])
+            rope_sin_torch = ttnn.to_torch(ttnn.get_device_tensors(rope_sin_11LD)[0])
+            tt_rope_cos_1HND = from_torch(
+                rope_cos_torch, device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None]
+            )
+            tt_rope_sin_1HND = from_torch(
+                rope_sin_torch, device=self.mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None]
+            )
+        tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
 
     def prepare_text_conditioning(
@@ -496,10 +478,17 @@ class WanTransformer3DModel(Module):
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
     def preprocess_spatial_input_host(self, spatial: torch.Tensor):
-        """Patchify video (B, C, F, H, W) -> (1, B, N, C*p0*p1*p2) and pad for SP."""
+        """Patchify video (B, C, F, H, W) -> (1, B, N, C*p0*p1*p2) and pad for sequence parallel."""
         B, C, F, H, W = spatial.shape
-        logger.info("Preprocessing spatial input with shape %s", spatial.shape)
-        assert B == 1, "Batch size must be 1"
+        logger.debug("Preprocessing spatial input with shape {}", spatial.shape)
+        # NOTE: The current implementation only supports batch size 1.
+        # This is likely due to assumptions made in the patchification, device parallelism,
+        # and tensor reshaping logic. Supporting batch > 1 would require refactoring the
+        # logic for mesh/device sharding and sequence parallel padding.
+        if B != 1:
+            raise NotImplementedError(
+                "Batch size >1 is not currently supported. The current implementation assumes B==1 for correct patchification, reshaping, and data parallelism. To support batch>1, the code would require changes in padding, sharding, and output postprocessing."
+            )
         pF, pH, pW = self.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
