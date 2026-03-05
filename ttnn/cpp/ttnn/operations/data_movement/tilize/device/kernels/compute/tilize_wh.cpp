@@ -7,22 +7,19 @@
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 // #include "api/debug/dprint.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
-    const uint32_t block_size_col = get_compile_time_arg_val(0);
-    const uint32_t block_size_row = get_compile_time_arg_val(1);
-    const uint32_t third_dim = get_compile_time_arg_val(2);
+    constexpr uint32_t block_size_col = get_compile_time_arg_val(0);
+    constexpr uint32_t block_size_row = get_compile_time_arg_val(1);
+    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    tilize_init(tt::CBIndex::c_0, block_size_row, tt::CBIndex::c_16);
-    for (uint32_t b = 0; b < block_size_col * third_dim; ++b) {
-        cb_wait_front(tt::CBIndex::c_0, block_size_row);
-        cb_reserve_back(tt::CBIndex::c_16, block_size_row);
-
-        tilize_block(tt::CBIndex::c_0, block_size_row, tt::CBIndex::c_16);
-
-        cb_push_back(tt::CBIndex::c_16, block_size_row);
-        cb_pop_front(tt::CBIndex::c_0, block_size_row);
-    }
-    tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_lib::tilize<
+        block_size_row,
+        tt::CBIndex::c_0,
+        tt::CBIndex::c_16,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size_col * third_dim);
 }

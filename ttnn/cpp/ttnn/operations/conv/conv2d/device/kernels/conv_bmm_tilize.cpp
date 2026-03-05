@@ -12,32 +12,46 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 // #include "api/debug/dprint.h"
 
 #define DEBUG_PRINT 0
 
 #ifdef SPLIT_READER
-template <bool init_tilize = true, bool uninit_tilize = true>
+template <
+    uint32_t in_block_w,
+    uint32_t in_cb_id,
+    uint32_t out_cb_id,
+    bool init_tilize = true,
+    bool uninit_tilize = true>
 __attribute__((noinline)) void tilize_in(
 #else
-template <bool init_tilize = true, bool uninit_tilize = true>
+template <
+    uint32_t in_block_w,
+    uint32_t in_cb_id,
+    uint32_t out_cb_id,
+    bool init_tilize = true,
+    bool uninit_tilize = true>
 void tilize_in(
 #endif
-    uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    if constexpr (init_tilize) {
-        fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
-    }
-    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
-        cb_wait_front(in_cb_id, in_block_w);
-        cb_reserve_back(out_cb_id, in_block_w);
-        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-        cb_push_back(out_cb_id, in_block_w);
-        cb_pop_front(in_cb_id, in_block_w);
-    }
-    if constexpr (uninit_tilize) {
-        fast_tilize_uninit(in_cb_id, out_cb_id);
-    }
+    uint32_t in_num_subblocks) {
+    // Replaced manual tilize loop with unified helper function
+    // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
+
+    constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
+        init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
+                                     : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
+                    : (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::UninitOnly
+                                     : compute_kernel_lib::tilize_config::InitUninitMode::Neither);
+    compute_kernel_lib::tilize<
+        in_block_w,
+        in_cb_id,
+        out_cb_id,
+        init_uninit_mode,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -280,12 +294,16 @@ void kernel_main() {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<true, !split_reader || split_reader_cb_shared>(
-                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        tilize_in<
+                            in0_block_w,
+                            in0_pretilize_cb_id,
+                            tilized_in0_cb_id,
+                            true,
+                            !split_reader || split_reader_cb_shared>(in0_num_subblocks_read);
 
                         if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
+                                in0_num_subblocks_read_last);
                         }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
@@ -310,14 +328,14 @@ void kernel_main() {
                     }
 
                     if constexpr (!activation_reuse) {
-                        tilize_in<true, !split_reader>(
-                            in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
+                            in0_num_subblocks_read);
                     }
 
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
+                                in0_num_subblocks_read_last);
                         } else {
                             PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
                             tilize_in_reuse_split_reader<
@@ -599,17 +617,15 @@ void kernel_main() {
                     }
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
-                    untilize_init(matmul_partials_cb);
-                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                        for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
-                            cb_wait_front(matmul_partials_cb, out_block_w);
-                            cb_reserve_back(out_cb_id, out_block_w);
-                            untilize_block(matmul_partials_cb, out_block_w, out_cb_id);
-                            cb_push_back(out_cb_id, out_block_w);
-                            cb_pop_front(matmul_partials_cb, out_block_w);
-                        }
-                    }
-                    untilize_uninit(matmul_partials_cb);
+                    // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
+                    compute_kernel_lib::untilize<
+                        out_block_w,
+                        matmul_partials_cb,
+                        out_cb_id,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                        in0_num_subblocks * out_subblock_h);
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
