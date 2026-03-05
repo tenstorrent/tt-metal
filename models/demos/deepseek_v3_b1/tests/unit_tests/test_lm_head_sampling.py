@@ -577,7 +577,7 @@ def test_single_device(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_single_device_mtp(
+def test_single_device_mtp(
     bh_2d_mesh_device,
     use_fp32,
     seed,
@@ -1245,7 +1245,7 @@ def test_multidevice(
     ],
     indirect=True,
 )
-def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_mtp(
+def test_multidevice_mtp(
     bh_2d_mesh_device,
     use_fp32,
     final_mesh_coord,

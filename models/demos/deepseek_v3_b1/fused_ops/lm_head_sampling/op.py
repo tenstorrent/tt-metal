@@ -143,9 +143,6 @@ class LMHeadSampling:
         tied_mask = scores_f32 == max_score
         selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
 
-        logger.info(f"max score: {max_score}")
-        logger.info(f"selected index: {selected_index}")
-
         if not fuse_mtp:
             return selected_index.reshape(1, 1)
 
@@ -170,9 +167,6 @@ class LMHeadSampling:
         # Step 8: Project through eh_projection_tensor
         # [1, hidden_dim + embedding_dim] @ [hidden_dim + embedding_dim, output_dim] = [1, output_dim]
         mtp_output = concat_he @ eh_projection_tensor
-
-        logger.info(f"MTP fusion: token_id={token_id}, concat shape={concat_he.shape}, output shape={mtp_output.shape}")
-
         return selected_index.reshape(1, 1), mtp_output
 
     @staticmethod
