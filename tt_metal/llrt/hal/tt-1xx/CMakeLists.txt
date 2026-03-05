@@ -47,6 +47,7 @@ target_sources(
         blackhole/bh_hal_tensix.cpp
         blackhole/bh_hal_active_eth.cpp
         blackhole/bh_hal_idle_eth.cpp
+        blackhole/bh_hal_dram.cpp
 )
 target_include_directories(bh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_include_directories(bh_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole)

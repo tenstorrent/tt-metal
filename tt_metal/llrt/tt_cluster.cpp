@@ -608,6 +608,10 @@ bool Cluster::is_ethernet_core(const CoreCoord& core, ChipId chip_id) const {
     return this->virtual_eth_cores_.contains(chip_id) and this->virtual_eth_cores_.at(chip_id).contains(core);
 }
 
+bool Cluster::is_dram_core(const CoreCoord& core, ChipId chip_id) const {
+    return this->virtual_dram_cores_.contains(chip_id) and this->virtual_dram_cores_.at(chip_id).contains(core);
+}
+
 const std::unordered_set<CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {
     return this->virtual_worker_cores_.at(chip_id);
 }

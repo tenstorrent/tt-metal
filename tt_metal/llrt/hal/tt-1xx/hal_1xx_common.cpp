@@ -65,6 +65,10 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             defines.push_back("RISC_B0_HW");
             break;
         }
+        case HalProgrammableCoreType::DRAM: {
+            defines.push_back("COMPILE_FOR_DRISC");
+            break;
+        }
         default:
             TT_ASSERT(
                 false,
@@ -74,7 +78,8 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     }
 
     // Defines for the shared subordinate eth fw source
-    if (params.core_type == HalProgrammableCoreType::IDLE_ETH || params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+    if (params.core_type == HalProgrammableCoreType::IDLE_ETH ||
+        params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
         defines.push_back(fmt::format(
             "PROGRAMMABLE_CORE_TYPE={} ", static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
     }
@@ -138,6 +143,11 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                 default: TT_THROW("Invalid processor id {}", params.processor_id);
             }
             break;
+        case HalProgrammableCoreType::DRAM:
+            if (params.is_fw) {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/drisc.cc");
+            }
+            break;
         default:
             TT_ASSERT(
                 false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(params.core_type));
@@ -156,6 +166,7 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
         case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";
         case HalProgrammableCoreType::IDLE_ETH:
             return params.processor_id == 0 ? "idle_erisc" : "subordinate_idle_erisc";
+        case HalProgrammableCoreType::DRAM: return "drisc";
         default:
             TT_THROW(
                 "Unsupported programmable core type {} to query target name", enchantum::to_string(params.core_type));
