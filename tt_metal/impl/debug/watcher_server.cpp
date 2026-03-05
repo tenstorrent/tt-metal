@@ -387,6 +387,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         // Initialize debug asserts to not tripped.
         data.assert_status().pc()      = DEBUG_SANITIZE_SENTINEL_OK_32;
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
+<<<<<<< HEAD
         data.assert_status().which()   = DEBUG_SANITIZE_SENTINEL_OK_8;
 
         // Initialize debug ring buffer to a known init val, we'll check against this to see if any
