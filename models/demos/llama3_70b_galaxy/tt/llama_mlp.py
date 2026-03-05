@@ -2,14 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
-
-# Enable fused AllGather+MatMul for FF2 in prefill (experimental)
-USE_FUSED_AG_MM = os.environ.get("USE_FUSED_AG_MM", "0") == "1"
 
 
 def pad_to_next_multiple(tensor):
@@ -291,14 +287,13 @@ class TtLlamaMLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
 
-        # Fused AllGather+MatMul path (experimental)
-        if USE_FUSED_AG_MM and seq_len >= 4096 and batch_size == 1:
+        # Fused AllGather+MatMul path (same config as unit test: grid, num_links from divisibility, num_workers_per_link, etc.)
+        if self.model_config.get("USE_FUSED_AG_MM", False) and seq_len >= 4096 and batch_size == 1:
             w2_out = self.tt_ccl.line_all_gather_matmul(
                 w2_in,
                 self.w2_interleaved,
                 dim=3,
                 cluster_axis=1,
-                num_links=3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 matmul_config=minimal_pc_2,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
@@ -306,13 +301,18 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w2_in)
         else:
-            # Original separate AllGather + MatMul path
+            # Separate AllGather + MatMul path (use 1 link when FF2_AG_1_LINK for apples-to-apples with fused)
+            num_links_ag = 1 if self.model_config.get("FF2_AG_1_LINK", False) else 3
             w2_in_gathered = self.tt_ccl.line_all_gather(
-                w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+                w2_in,
+                cluster_axis=1,
+                num_links=num_links_ag,
+                memory_config=w3_out.memory_config(),
+                buffer_key="FF3",
+                dim=3,
             )
             ttnn.deallocate(w2_in)
 
-            # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
             if seq_len < 4096 or batch_size > 1:
                 w2_out = ttnn.linear(
                     w2_in_gathered,

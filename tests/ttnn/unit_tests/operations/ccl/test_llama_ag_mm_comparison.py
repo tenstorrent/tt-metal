@@ -75,11 +75,12 @@ def run_ag_mm_test(
     use_fused,
     num_iters=5,
     validate=True,
+    force_transpose=True,
 ):
     """Run AllGather + MatMul test (either fused or separate)."""
 
     logger.info(
-        f"{'FUSED' if use_fused else 'SEPARATE'}: M={M}, K={K}, N={N}, grid=({core_grid.x},{core_grid.y}), links={num_links}"
+        f"{'FUSED' if use_fused else 'SEPARATE'}: M={M}, K={K}, N={N}, grid=({core_grid.x},{core_grid.y}), links={num_links}, force_transpose={force_transpose}"
     )
 
     # Use the matmul core_grid for semaphores (not full compute grid)
@@ -107,14 +108,17 @@ def run_ag_mm_test(
         compute_with_storage_grid_size=core_grid,
     )
 
-    # Adjust num_links based on grid divisibility
+    # Adjust num_links based on grid divisibility (fused op: grid_x % num_links when force_transpose, else grid_y % num_links)
     effective_num_links = num_links
-    if core_grid.x % num_links != 0:
+    div_axis = core_grid.x if force_transpose else core_grid.y
+    if div_axis % num_links != 0:
         for nl in [4, 3, 2, 1]:
-            if core_grid.x % nl == 0:
+            if div_axis % nl == 0:
                 effective_num_links = nl
                 break
-        logger.warning(f"Adjusted num_links: {num_links} -> {effective_num_links}")
+        logger.warning(
+            f"Adjusted num_links: {num_links} -> {effective_num_links} (div_axis={'x' if force_transpose else 'y'}={div_axis})"
+        )
 
     # Per-device K (ring_size=4 for Galaxy cluster_axis=1)
     ring_size = mesh_device.shape[1]  # cluster_axis=1
@@ -162,10 +166,10 @@ def run_ag_mm_test(
             for _ in range(num_iters)
         ]
 
-    # Calculate num_workers_per_link: total workers must fit in in0 axis (grid.x with force_transpose).
+    # Calculate num_workers_per_link: total workers must fit in in0 axis (grid.x when force_transpose, else grid.y).
     # Otherwise the last link gets fewer cores and barrier/sync can hang (e.g. 6x8 grid + 2 links
     # with 4 workers/link => 8 workers but only 6 cores => link1 has 2 cores, sync waits forever).
-    max_workers_total = core_grid.x  # in0_parallel_axis_cores when force_transpose=True
+    max_workers_total = core_grid.x if force_transpose else core_grid.y
     num_workers_per_link = max(1, min(8 // effective_num_links, max_workers_total // effective_num_links))
 
     # Run iterations and validate first iteration
@@ -180,7 +184,7 @@ def run_ag_mm_test(
                 num_links=effective_num_links,
                 topology=ttnn.Topology.Ring,
                 cluster_axis=1,
-                force_transpose=True,
+                force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=8,
             )
@@ -315,4 +319,45 @@ def test_ag_mm(
         num_links=num_links,
         use_fused=use_fused,
         num_iters=5,
+        force_transpose=True,
+    )
+
+
+# 7×8 grid with force_transpose=False: divisibility uses grid_y (8), so num_links=2 is valid.
+# Only for 4k4k4k (M=N) so C++ transpose_core_grid = (M>N) = false and check is on grid_y.
+# Known: fused path segfaults (op bug with force_transpose=False on 7×8); skipped until op is fixed.
+@pytest.mark.skip(reason="Fused op segfaults with force_transpose=False on 7×8 grid; skip until op/kernel fixed")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="galaxy"),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "use_fused",
+    [False, True],
+    ids=["separate", "fused"],
+)
+def test_ag_mm_7x8_force_transpose_false(
+    mesh_device,
+    device_params,
+    use_fused,
+):
+    """7×8 grid, 2 links, force_transpose=False — one shape (4k4k4k) so grid_y % num_links and we get 2-link bandwidth."""
+    run_ag_mm_test(
+        mesh_device=mesh_device,
+        M=4096,
+        K=4096,
+        N=4096,
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        core_grid=ttnn.CoreCoord(7, 8),
+        num_links=2,
+        use_fused=use_fused,
+        num_iters=5,
+        force_transpose=False,
     )

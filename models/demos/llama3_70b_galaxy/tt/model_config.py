@@ -901,13 +901,15 @@ class TtModelArgs:
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
                     )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
+                elif (
+                    seq_len <= 16384
+                ):  # Both 8K and 16K; subblock 2×2 to match unit test (test_llama_ag_mm_comparison) for comparable fused op results
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
                         N_block_size=8,
                         subblock_h=2,
-                        subblock_w=4,
+                        subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
                     )
                 elif seq_len <= 32768:
@@ -939,6 +941,15 @@ class TtModelArgs:
                     )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
+            # Fused AllGather+MatMul for FF2 prefill (same config as test_llama_ag_mm_comparison).
+            # Enable: set model_config["USE_FUSED_AG_MM"]=True or env USE_FUSED_AG_MM=1. Default False.
+            default_fused = os.environ.get("USE_FUSED_AG_MM", "0") == "1"
+            self.model_config["USE_FUSED_AG_MM"] = self.model_config.get("USE_FUSED_AG_MM", default_fused)
+            # Use 1 link for FF2 AllGather in non-fused path (apples-to-apples with fused on 7×8).
+            # Enable: env FF2_AG_1_LINK=1. Default False.
+            self.model_config["FF2_AG_1_LINK"] = self.model_config.get(
+                "FF2_AG_1_LINK", os.environ.get("FF2_AG_1_LINK", "0") == "1"
+            )
 
             def w2_prg_config(seq_len):
                 if seq_len == 128:

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import ttnn
 import torch
 from loguru import logger
@@ -30,7 +31,14 @@ from models.common.warmup import WarmupForwardMixin
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     """
     Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    If env SKIP_PREFILL_WARMUP=1, returns []; if PREFILL_WARMUP_LENGTHS is set (e.g. 8192 or 128,8192),
+    returns only those lengths so warmup runs just those (e.g. for 8k-only profiling).
     """
+    if os.environ.get("SKIP_PREFILL_WARMUP", "0") == "1":
+        return []
+    restricted = os.environ.get("PREFILL_WARMUP_LENGTHS", "")
+    if restricted:
+        return [int(x.strip()) for x in restricted.split(",") if x.strip()]
     return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
 
 
