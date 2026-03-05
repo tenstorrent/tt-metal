@@ -1170,16 +1170,19 @@ def ttnn_graph_report():
         try:
             yield
         finally:
-            report_path.mkdir(parents=True, exist_ok=True)
-            json_path = report_path / "graph_capture.json"
-            ttnn.graph.end_graph_capture_to_file(str(json_path))
-            if json_path.exists():
-                from ttnn.graph_report import import_report
+            if not ttnn.graph.is_graph_capture_active():
+                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+            else:
+                report_path.mkdir(parents=True, exist_ok=True)
+                json_path = report_path / "graph_capture.json"
+                ttnn.graph.end_graph_capture_to_file(str(json_path))
+                if json_path.exists():
+                    from ttnn.graph_report import import_report
 
-                import_report(json_path, report_path)
+                    import_report(json_path, report_path)
 
-            config_path = report_path / "config.json"
-            ttnn.save_config_to_json_file(config_path)
+                config_path = report_path / "config.json"
+                ttnn.save_config_to_json_file(config_path)
     finally:
         ttnn.graph.disable_buffer_pages()
 
