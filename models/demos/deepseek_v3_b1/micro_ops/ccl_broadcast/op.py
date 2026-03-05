@@ -12,6 +12,7 @@ broadcasts data to all other devices in a mesh using a neighbor-exchange topolog
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.utils import fabric_config_enables_torus_x, fabric_config_enables_torus_y
 
 MAX_NUM_LINKS = 2
 
@@ -63,6 +64,7 @@ class BroadcastConfig:
         chunk_size_bytes=None,
         bcast_cb_id=None,
         num_links=1,
+        fabric_config=None,
     ):
         self.mesh_device = mesh_device
         self.input_tensor_mesh = input_tensor_mesh
@@ -78,6 +80,7 @@ class BroadcastConfig:
             raise ValueError("Expected explicit `bcast_cb_id`")
         self.bcast_cb_id = int(bcast_cb_id)
         self.num_links = int(num_links)
+        self.fabric_config = fabric_config
         if self.num_links <= 0:
             raise ValueError("num_links must be greater than zero")
         if self.num_links > MAX_NUM_LINKS:
@@ -115,6 +118,9 @@ class BroadcastConfig:
 
         self._resolve_chunk_size(chunk_size_bytes)
         self._setup_fabric_rt_arg_count = None
+        self._torus_x_enabled = fabric_config_enables_torus_x(self.fabric_config)
+        self._torus_y_enabled = fabric_config_enables_torus_y(self.fabric_config)
+        self._children_map = self._build_children_map()
         self._compute_topology_and_args()
         self.cb_ids = {"bcast_data": self.bcast_cb_id}
 
@@ -148,53 +154,99 @@ class BroadcastConfig:
         self.last_chunk_size_bytes = self.tensor_size_bytes % self.chunk_size_bytes or self.chunk_size_bytes
         self.num_chunks = (self.tensor_size_bytes + self.chunk_size_bytes - 1) // self.chunk_size_bytes
 
+    @staticmethod
+    def _neighbor_minus(coord, dim, torus_enabled):
+        if torus_enabled:
+            return (coord - 1 + dim) % dim
+        return coord - 1 if coord > 0 else None
+
+    @staticmethod
+    def _neighbor_plus(coord, dim, torus_enabled):
+        if torus_enabled:
+            return (coord + 1) % dim
+        return coord + 1 if coord < dim - 1 else None
+
+    @staticmethod
+    def _axis_distance(coord_a, coord_b, dim, torus_enabled):
+        linear_distance = abs(coord_a - coord_b)
+        if torus_enabled:
+            return min(linear_distance, dim - linear_distance)
+        return linear_distance
+
+    def _pick_parent_1hop(self, current_coord, target_coord, dim, torus_enabled):
+        if current_coord == target_coord:
+            return current_coord
+
+        coord_minus = self._neighbor_minus(current_coord, dim, torus_enabled)
+        coord_plus = self._neighbor_plus(current_coord, dim, torus_enabled)
+
+        if coord_minus is None:
+            return coord_plus
+        if coord_plus is None:
+            return coord_minus
+
+        distance_minus = self._axis_distance(coord_minus, target_coord, dim, torus_enabled)
+        distance_plus = self._axis_distance(coord_plus, target_coord, dim, torus_enabled)
+        if distance_minus < distance_plus:
+            return coord_minus
+        # Includes tie-break case (choose positive direction).
+        return coord_plus
+
+    def _build_parent_map(self):
+        """
+        Build a 1-hop parent map for NE broadcast routing.
+
+        High-level idea:
+        - If node is on root row: move along columns toward root_col (X deduction).
+        - Else: move along rows toward root_row in same column (Y deduction).
+        - For torus-enabled axis, both minus/plus 1-hop candidates exist and we pick
+          the one with smaller wrapped distance to target; ties choose + direction.
+
+        8x4 example (root = R at (0,0)):
+
+            FABRIC_2D (no wrap):
+              row 0:  R -> (0,1) -> (0,2) -> (0,3)
+              col c:  (0,c) v (1,c) v ... v (7,c)
+
+            TORUS_X only:
+              row 0:  R -> (0,1), and R -> (0,3) -> (0,2)
+              col c:  same as FABRIC_2D (no Y wrap)
+
+            TORUS_Y only:
+              row 0:  same as FABRIC_2D (no X wrap)
+              col c:  (0,c) -> (1,c) and (0,c) -> (7,c), then continue by nearest hop
+
+            TORUS_XY:
+              combine TORUS_X row behavior with TORUS_Y column behavior.
+        """
+        parent_map = {}
+        for row in range(self.mesh_rows):
+            for col in range(self.mesh_cols):
+                node_coord = (row, col)
+                if node_coord == (self.root_row, self.root_col):
+                    parent_map[node_coord] = None
+                    continue
+
+                # Nodes on root row choose parent on root row (column axis movement).
+                if row == self.root_row:
+                    parent_col = self._pick_parent_1hop(col, self.root_col, self.mesh_cols, self._torus_x_enabled)
+                    parent_map[node_coord] = (self.root_row, parent_col)
+                # Other nodes choose parent in same column (row axis movement).
+                else:
+                    parent_row = self._pick_parent_1hop(row, self.root_row, self.mesh_rows, self._torus_y_enabled)
+                    parent_map[node_coord] = (parent_row, col)
+        return parent_map
+
+    def _build_children_map(self):
+        parent_map = self._build_parent_map()
+        children_map = {(row, col): [] for row in range(self.mesh_rows) for col in range(self.mesh_cols)}
+        for node_coord, parent_coord in parent_map.items():
+            if parent_coord is not None:
+                children_map[parent_coord].append(node_coord)
+        return children_map
+
     def _compute_dst_coords(self, row, col):
-        """
-        Compute downstream mesh coordinates for the XY spanning tree.
-
-        Example (4x4, root=(1,1)):
-             (0,0) (0,1) (0,2) (0,3)
-               ^     ^     ^     ^
-             (1,0)<-(1,1)->(1,2)->(1,3)
-               |     |     |     |
-             (2,0) (2,1) (2,2) (2,3)
-               |     |     |     |
-             (3,0) (3,1) (3,2) (3,3)
-        """
-        dst_coords = []
-        root_row = self.root_row
-        root_col = self.root_col
-
-        # Root fans out to immediate row neighbors and immediate column neighbors.
-        if row == root_row and col == root_col:
-            if root_col > 0:
-                dst_coords.append((root_row, root_col - 1))
-            if root_col < self.mesh_cols - 1:
-                dst_coords.append((root_row, root_col + 1))
-            if root_row > 0:
-                dst_coords.append((root_row - 1, root_col))
-            if root_row < self.mesh_rows - 1:
-                dst_coords.append((root_row + 1, root_col))
-            return dst_coords
-
-        # Nodes in root row continue row chain away from root, and fan to up/down.
-        if row == root_row:
-            if col < root_col and col > 0:
-                dst_coords.append((root_row, col - 1))
-            if col > root_col and col < self.mesh_cols - 1:
-                dst_coords.append((root_row, col + 1))
-            if root_row > 0:
-                dst_coords.append((root_row - 1, col))
-            if root_row < self.mesh_rows - 1:
-                dst_coords.append((root_row + 1, col))
-            return dst_coords
-
-        # Non-root-row nodes only propagate along column direction.
-        if row < root_row and row > 0:
-            dst_coords.append((row - 1, col))
-        if row > root_row and row < self.mesh_rows - 1:
-            dst_coords.append((row + 1, col))
-        return dst_coords
+        return self._children_map[(row, col)]
 
     def _compute_topology_and_args(self):
         self._per_device = {}
@@ -360,6 +412,7 @@ class DeepseekMinimalBroadcast:
         chunk_size_bytes=None,
         bcast_cb_id=None,
         num_links=1,
+        fabric_config=None,
     ):
         if bcast_cb_id is None:
             raise ValueError("Expected explicit `bcast_cb_id`")
@@ -383,6 +436,7 @@ class DeepseekMinimalBroadcast:
             chunk_size_bytes=chunk_size_bytes,
             bcast_cb_id=bcast_cb_id,
             num_links=num_links,
+            fabric_config=fabric_config,
         )
 
     @staticmethod
@@ -394,6 +448,7 @@ class DeepseekMinimalBroadcast:
         chunk_size_bytes=None,
         num_links=1,
         num_iterations=1,
+        fabric_config=None,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -422,6 +477,7 @@ class DeepseekMinimalBroadcast:
             chunk_size_bytes=chunk_size_bytes,
             bcast_cb_id=0,
             num_links=num_links,
+            fabric_config=fabric_config,
         )
 
         # Create mesh program descriptor

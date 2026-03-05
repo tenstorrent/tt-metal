@@ -395,3 +395,161 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
             assert torch.allclose(
                 received, sender_tensor, rtol=1e-3, atol=1e-3
             ), f"Host-iter {host_iter}: device {device_idx} received stale/incorrect chunked broadcast data"
+
+
+def _run_ccl_broadcast_torus_8x4_functional_case(
+    mesh_device,
+    sender_row,
+    sender_col,
+    fabric_config,
+):
+    mesh_rows, mesh_cols = 8, 4
+    num_links = 2
+    output_shape = [1, 7168]
+    input_shard_shape = (1, 7168)
+    tensor_mem_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    layout = ttnn.TILE_LAYOUT
+    input_dtype = ttnn.bfloat16
+    bcast_core = ttnn.CoreCoord(0, 0)
+
+    num_devices = mesh_rows * mesh_cols
+    submesh = mesh_device
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
+        layout=layout,
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+    )
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
+
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        semaphores=semaphores,
+        num_links=num_links,
+        fabric_config=fabric_config,
+    )
+    ttnn.synchronize_device(submesh)
+
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(received, torch_expected, rtol=1e-3, atol=1e-3), (
+            f"fabric={fabric_config}, sender=({sender_row},{sender_col}), " f"device={device_idx} mismatch"
+        )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+@pytest.mark.skip(reason="Run only on systems with Y-dimension torus links enabled.")
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_y(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "fabric_router_config": create_fabric_router_config(15232),
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.skipif(ttnn.get_num_devices() < 32, reason="Requires at least 32 devices (8x4 mesh)")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("sender_row,sender_col", [(0, 0), (7, 3), (0, 2), (4, 2)])
+@pytest.mark.skip(reason="Run only on systems with Y-dimension torus links enabled.")
+def test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_xy(
+    mesh_device, silicon_arch_blackhole, sender_row, sender_col, device_params
+):
+    _run_ccl_broadcast_torus_8x4_functional_case(
+        mesh_device=mesh_device,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        fabric_config=device_params["fabric_config"],
+    )

@@ -180,3 +180,17 @@ def merge_per_core_runtime_args(*groups):
                 core_to_index[key] = len(merged)
                 merged.append((core, args_list))
     return merged
+
+
+def fabric_config_enables_torus_x(fabric_config) -> bool:
+    return fabric_config in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    )
+
+
+def fabric_config_enables_torus_y(fabric_config) -> bool:
+    return fabric_config in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    )
