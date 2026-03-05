@@ -128,12 +128,7 @@ jobs:
           # Unpack artifacts
           mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
 
-          # Install the wheel to pull in all Python dependencies (graphviz, numpy, etc.),
-          # then do an editable install from the source tree. This replaces the wheel's
-          # ttnn with the source tree version (which includes the compiled _ttnn.so from
-          # the tar.zst), while keeping all third-party deps accessible from the venv.
-          mpirun --pernode pip install $(find /ci/artifacts | grep whl)
-          mpirun --pernode pip install --no-build-isolation --no-deps -e /home/user/tt-metal
+          mpirun --pernode /opt/venv/bin/pip install $(find /ci/artifacts | grep whl)
 
       - name: Run Physical discovery test
         timeout-minutes: 10
