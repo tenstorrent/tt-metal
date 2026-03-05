@@ -7,6 +7,46 @@
 
 ---
 
+## Same config: Fused vs Baseline (separate path)
+
+**Yes.** For every test, fused and separate (baseline) use the **exact same config**:
+- Same **core grid** (e.g. 8×8, 7×8)
+- Same **num_links**
+- Same **M, K, N** and block/subblock sizes
+
+The test is parametrized once; only `use_fused` is toggled (`True` = fused op, `False` = separate AG then MM). So when you run e.g. `-k "8x8_4links and wan2_4k4k4k"`, both `separate` and `fused` use grid 8×8, 4 links, and 4096×4096×4096.
+
+**Baseline numbers to run:** For every (size, grid, links) where we have fused results, run the **separate** path with the same `-k` (e.g. `-k "separate and 8x8_4links and wan2_4k4k4k"`) and record AG + MM kernel times from the profiler CSV. Then compare fused vs (AG + MM) for that config.
+
+---
+
+## WAN2 tests default vs our tests
+
+| Aspect | WAN2.2 default (`models/tt_dit/tests/models/wan2_2/test_all_gather_minimal_matmul_async.py`) | Our tests (`tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py`) |
+|--------|----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| **Mesh** | (2,4), (8,4), (4,8) — multiple topologies | (8,4) only — Galaxy |
+| **Core grid** | 4×4, 8×8, 12×9 (varies by config) | 8×8, 6×8, 4×8, 7×8 (7×7 removed; 7×9 excluded) |
+| **Sizes** | 32768×4096×4096 (4k4k4k), 75776×5120×… (QKV, FF1, etc.) | 4096×4096×4096, 8192×3584×2048, 131072×3584×2048, + K-padded 4096 variants |
+| **Features** | Bias, GELU, addcmul, chunks; `use_non_fused` for separate path | No bias/activation/addcmul; simple AG+MM only |
+| **AG output buffer (separate)** | `(per_device_M, k_per_device*ring_size)` with `ShardTensor2dMesh(..., dims=[None, None])` | `(1,1,M,K)` with **ReplicateTensorToMesh** (full K per device for MM) |
+| **Purpose** | WAN 2.2 model coverage, multiple shapes and features | Fused vs baseline comparison for Galaxy, Llama ISL sizes, PCC, and 7×9 “max usable” grid |
+
+So: WAN2 default = model test suite (multiple meshes, shapes, bias/activation). Our tests = same-op comparison (Galaxy, same config for fused vs separate, Llama 8k/128k + 4k).
+
+---
+
+## 7×9 grid – NOC constraint (excluded)
+
+**7×9 is not in the test parametrization** because it triggers:
+
+`TT_FATAL: Illegal NOC usage: data movement kernels on logical core (x=6,y=8) cannot use the same NOC, doing so results in hangs!`
+
+- **Cause:** On core (6, 8) the program places two data-movement kernels (DM0 and DM1). The runtime requires that when both run on the same core, one must use NOC0 and the other NOC1; here both end up using the same NOC.
+- **Where:** Check in `tt_metal/tt_metal.cpp` (Tensix DM kernel NOC validation). The op’s kernel placement for 7×9 leads to this violation.
+- **Action:** 7×9 is omitted from the grid list until the op (or kernel placement) assigns NOCs so that DM0/DM1 on the same core use different NOCs. Use 7×8 as the “max usable” Llama grid for now.
+
+---
+
 ## Baseline (older run, 4×8 core grid)
 
 Per-device kernel times from **teja/Allgather+matmul_fused_perf_results** prefill CSVs (FF2 layer). **Not** the current unit-test results — reference only.
@@ -15,6 +55,8 @@ Per-device kernel times from **teja/Allgather+matmul_fused_perf_results** prefil
 |-----|-----------|------------------------|-------------|
 | 8k | 4×8 | 1842 (AG 523.71 + MM 1318.09) | 2912.61 |
 | 128k | 4×8 | 27633 (AG 8010.90 + MM 19622.12) | 46013.96 |
+
+**Cores used in that baseline (separate path):** From **baseline_8k/8k/prefill.csv** (FF2 layer rows: AllGatherAsync 8192×896→3584, then Matmul 8192×3584×2048): **AllGather used 40 cores** per device and **Matmul used 56 cores** per device (column CORES). So in the separate path, AG and MM use **different** core sets/counts — not the same grid. Our unit-test comparison uses the **same** core grid for both (e.g. 8×8) so fused vs baseline is apples-to-apples.
 
 ---
 
@@ -71,7 +113,7 @@ _(Source: profiler “Device kernel duration perf summary (device=31)”. Per-de
 
 ## Baseline (Separate path)
 
-Baseline test (separate AllGather + MatMul) currently **fails** with Fabric Router Sync timeout. Fused ops are being run and recorded first.
+4k4k4k separate path (AG then MM) now runs after fixing persistent buffer to use full-K per device (ReplicateTensorToMesh for AG output). **PR reference** (unfused): 963 µs AG, 1785 µs MM. **Our run** (8×8 4 links, device 31 avg): 452 µs AG, 1779 µs MM → baseline **2231 µs**; fused same config **1858 µs** (~17% faster).
 
 ---
 
@@ -79,58 +121,54 @@ Baseline test (separate AllGather + MatMul) currently **fails** with Fabric Rout
 
 **Setup:** Test passes full input (1,1,M,K); runtime/mesh shards it (each device gets its K-shard). Kernel does AllGather + matmul.
 
+**Grids:** 8×8, 6×8, 4×8, 7×8. (7×7 removed; 7×8 works better. 7×9 excluded — NOC constraint.)
+
 **Prefix:** `python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and <GRID_LINKS> and <SIZE_ID>" -v'`
 
-Record **single-device avg** from profiler: `Device kernel duration perf summary (device=31): ... avg=...ns` → µs.
+Record **single-device avg** from profiler: `Device kernel duration perf summary (device=31): ... avg=...ns` → µs. **Baseline** = separate path (AG + MM) same config; sum AG + MM kernel µs from profiler CSV.
 
-| # | Size (M×K×N) | Size ID | Grid | Links | Status | Kernel (µs) | PCC | Run command `-k` fragment |
-|---|--------------|---------|------|-------|--------|------------|-----|---------------------------|
-| 1 | 4096×4096×4096 | wan2_4k4k4k | 8×8 | 4 | Done | 1858 | ✅ | `fused and 8x8_4links and wan2_4k4k4k` |
-| 2 | 4096×4096×4096 | wan2_4k4k4k | 8×8 | 2 | Done | 2156 | ✅ | `fused and 8x8_2links and wan2_4k4k4k` |
-| 3 | 4096×4096×4096 | wan2_4k4k4k | 6×8 | 3 | Done | 2531 | ✅ | `fused and 6x8_3links and wan2_4k4k4k` |
-| 4 | 4096×4096×4096 | wan2_4k4k4k | 6×8 | 2 | Done | 2761 | ✅ | `fused and 6x8_2links and wan2_4k4k4k` |
-| 5 | 4096×4096×4096 | wan2_4k4k4k | 4×8 | 4 | Skip (CoreRangeSet overlap) | — | — | `fused and 4x8_4links and wan2_4k4k4k` |
-| 6 | 4096×4096×4096 | wan2_4k4k4k | 4×8 | 2 | Done | 3401 | ✅ | `fused and 4x8_2links and wan2_4k4k4k` |
-| 7 | 4096×4096×4096 | wan2_4k4k4k | 7×7 | 1 | Done | 3764 | ✅ | `fused and 7x7_1link and wan2_4k4k4k` |
-| 8 | 4096×4096×4096 | wan2_4k4k4k | 7×8 | 1 | Done | 3327 | ✅ | `fused and 7x8_1link and wan2_4k4k4k` |
-| 9 | 8192×3584×2048 | llama_8k_ff2 | 8×8 | 4 | Done | 1827 | ⚠️ PCC 0.82 | `fused and 8x8_4links and llama_8k_ff2` |
-| 10 | 8192×3584×2048 | llama_8k_ff2 | 8×8 | 2 | Done | 2373 | ⚠️ PCC 0.88 | `fused and 8x8_2links and llama_8k_ff2` |
-| 11 | 8192×3584×2048 | llama_8k_ff2 | 6×8 | 3 | Done | 2450 | ⚠️ PCC 0.88 | `fused and 6x8_3links and llama_8k_ff2` |
-| 12 | 8192×3584×2048 | llama_8k_ff2 | 6×8 | 2 | Done | 2772 | ⚠️ PCC 0.88 | `fused and 6x8_2links and llama_8k_ff2` |
-| 13 | 8192×3584×2048 | llama_8k_ff2 | 4×8 | 4 | Skip (CoreRangeSet overlap) | — | — | `fused and 4x8_4links and llama_8k_ff2` |
-| 14 | 8192×3584×2048 | llama_8k_ff2 | 4×8 | 2 | Done | 3090 | ⚠️ PCC 0.88 | `fused and 4x8_2links and llama_8k_ff2` |
-| 15 | 8192×3584×2048 | llama_8k_ff2 | 7×7 | 1 | Done | 4318 | ⚠️ PCC 0.88 | `fused and 7x7_1link and llama_8k_ff2` |
-| 16 | 8192×3584×2048 | llama_8k_ff2 | 7×8 | 1 | Done | 3435 | ⚠️ PCC 0.88 | `fused and 7x8_1link and llama_8k_ff2` |
-| 17 | 131072×3584×2048 | llama_128k_ff2 | 8×8 | 4 | Done | 26406 | ⚠️ PCC 0.90 | `fused and 8x8_4links and llama_128k_ff2` |
-| 18 | 131072×3584×2048 | llama_128k_ff2 | 8×8 | 2 | Pending | | | `fused and 8x8_2links and llama_128k_ff2` |
-| 19 | 131072×3584×2048 | llama_128k_ff2 | 6×8 | 3 | Pending | | | `fused and 6x8_3links and llama_128k_ff2` |
-| 20 | 131072×3584×2048 | llama_128k_ff2 | 6×8 | 2 | Pending | | | `fused and 6x8_2links and llama_128k_ff2` |
-| 21 | 131072×3584×2048 | llama_128k_ff2 | 4×8 | 4 | Pending | | | `fused and 4x8_4links and llama_128k_ff2` |
-| 22 | 131072×3584×2048 | llama_128k_ff2 | 4×8 | 2 | Done | 48313 | ⚠️ PCC 0.90 | `fused and 4x8_2links and llama_128k_ff2` |
-| 23 | 131072×3584×2048 | llama_128k_ff2 | 7×7 | 1 | Pending | | | `fused and 7x7_1link and llama_128k_ff2` |
-| 24 | 131072×3584×2048 | llama_128k_ff2 | 7×8 | 1 | Done | 50359 | ⚠️ PCC 0.90 | `fused and 7x8_1link and llama_128k_ff2` |
+| # | Size (M×K×N) | Grid | Links | Status | Baseline (µs) | Fused (µs) | PCC | Run command `-k` fragment |
+|---|--------------|------|-------|--------|---------------|------------|-----|---------------------------|
+| 1 | 4096×4096×4096 | 8×8 | 4 | Done | 2231 | 1858 | ✅ | `8x8_4links and wan2_4k4k4k` |
+| 2 | 4096×4096×4096 | 8×8 | 2 | Done | 2574 | 2156 | ✅ | `8x8_2links and wan2_4k4k4k` |
+| 3 | 4096×4096×4096 | 7×8 | 1 | Done | 4043 | 3327 | ✅ | `7x8_1link and wan2_4k4k4k` |
+| 4 | 4096×4096×4096 | 6×8 | 3 | Done | 3011 | 2531 | ✅ | `6x8_3links and wan2_4k4k4k` |
+| 5 | 4096×4096×4096 | 6×8 | 2 | Done | 3261 | 2761 | ✅ | `6x8_2links and wan2_4k4k4k` |
+| 6 | 4096×4096×4096 | 4×8 | 2 | Done | 4169 | 3401 | ✅ | `4x8_2links and wan2_4k4k4k` |
+|  |  |  |  |  |  |  |  |  |
+| 7 | 8192×3584×2048 | 8×8 | 4 | Done | 2457 | 1827 | ⚠️ PCC 0.82 | `8x8_4links and llama_8k_ff2 and not K4096` |
+| 8 | 8192×3584×2048 | 8×8 | 2 | Done | 3073 | 2373 | ⚠️ PCC 0.88 | `8x8_2links and llama_8k_ff2 and not K4096` |
+| 9 | 8192×3584×2048 | 7×8 | 1 | Done | 4744 | 3435 | ⚠️ PCC 0.88 | `7x8_1link and llama_8k_ff2 and not K4096` |
+| 10 | 8192×3584×2048 | 6×8 | 3 | Done | 3213 | 2450 | ⚠️ PCC 0.88 | `6x8_3links and llama_8k_ff2 and not K4096` |
+| 11 | 8192×3584×2048 | 6×8 | 2 | Done | 3668 | 2772 | ⚠️ PCC 0.88 | `6x8_2links and llama_8k_ff2 and not K4096` |
+| 12 | 8192×3584×2048 | 4×8 | 2 | Done | 4498 | 3090 | ⚠️ PCC 0.88 | `4x8_2links and llama_8k_ff2 and not K4096` |
+|  |  |  |  |  |  |  |  |  |
+| 13 | 131072×3584×2048 | 8×8 | 4 | Done | 37773 | 26406 | ⚠️ PCC 0.90 | `8x8_4links and llama_128k_ff2 and not K4096` |
+| 14 | 131072×3584×2048 | 8×8 | 2 | Done | 47250 | 34300 | ⚠️ PCC ~0.9 | `8x8_2links and llama_128k_ff2 and not K4096` |
+| 15 | 131072×3584×2048 | 7×8 | 1 | Done | 72900 | 50359 | ⚠️ PCC 0.90 | `7x8_1link and llama_128k_ff2 and not K4096` |
+| 16 | 131072×3584×2048 | 6×8 | 2 | Done | 56056 | 40100 | ⚠️ PCC ~0.9 | `6x8_2links and llama_128k_ff2 and not K4096` |
+| 17 | 131072×3584×2048 | 4×8 | 2 | Done | 69100 | 48313 | ⚠️ PCC 0.90 | `4x8_2links and llama_128k_ff2 and not K4096` |
 
-**Full command for #2 (next):**
-```bash
-python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and 8x8_2links and wan2_4k4k4k" -v'
-```
+|  |  |  |  |  |  |  |  |  |
 
----
+**K padded to 4096 (PCC 0.999+)**
+| # | Size (M×K×N) | Grid | Links | Status | Baseline (µs) | Fused (µs) | PCC | Run command `-k` fragment |
+|---|--------------|------|-------|--------|---------------|------------|-----|---------------------------|
+| 1 | 8192×4096×2048 | 8×8 | 4 | Done | 2742 | 1955 | ✅ PCC 0.9998 | `8x8_4links and llama_8k_ff2_K4096` |
+| 2 | 8192×4096×2048 | 8×8 | 2 | Done | 3442 | 2668 | ✅ PCC 0.9998 | `8x8_2links and llama_8k_ff2_K4096` |
+|  |  |  |  |  |  |  |  |  |
+| 3 | 131072×4096×2048 | 8×8 | 4 | Done | 42150 | 29475 | ✅ PCC 1.0 | `8x8_4links and llama_128k_ff2_K4096` |
+| 4 | 131072×4096×2048 | 8×8 | 2 | Done | 52900 | 39015 | ✅ | `8x8_2links and llama_128k_ff2_K4096` |
+**Baseline commands (run separate path, then share profiler CSV; we fill Baseline column):**
+Always include **`separate`** in the `-k` so only the baseline (AG then MM) runs — one test. Without it, both `separate` and `fused` can match and the run executes twice. For **llama_8k_ff2** and **llama_128k_ff2** use **`and not K4096`** so only the original (K=3584) runs — otherwise two tests run (e.g. llama_128k_ff2 and llama_128k_ff2_K4096). 4×8 4 links rows removed (CoreRangeSet overlap). Run in table order (#15 next; #16 baseline filled, fused not run). 7×7 removed (7×8 works better). **Row 14 (128k 8×8 2 links):** baseline and fused are **projected** (see below), not measured. For any **llama_8k_ff2** row use **`and not K4096`** so only one test runs.
 
 ## Tried shapes (K padded to 4096 – PCC hypothesis)
 
-Same Llama M/N but **K padded to 4096** (power of 2) to test whether non–power-of-2 K (3584) is the culprit for low PCC. Run fused tests and record PCC / kernel time below.
-
-| Shape (M×K×N) | Size ID | Grid | Links | Status | Kernel (µs) | PCC | Run command `-k` fragment |
-|---------------|---------|------|-------|--------|------------|-----|---------------------------|
-| 8192×4096×2048 | llama_8k_ff2_K4096 | 8×8 | 4 | Done | 1955 | ✅ PCC 0.9998 | `fused and 8x8_4links and llama_8k_ff2_K4096` |
-| 8192×4096×2048 | llama_8k_ff2_K4096 | 8×8 | 2 | Done | 2668 | ✅ PCC 0.9998 | `fused and 8x8_2links and llama_8k_ff2_K4096` |
-| 131072×4096×2048 | llama_128k_ff2_K4096 | 8×8 | 4 | Done | 29475 | ✅ PCC 1.0 | `fused and 8x8_4links and llama_128k_ff2_K4096` |
-| 131072×4096×2048 | llama_128k_ff2_K4096 | 8×8 | 2 | Pending | | | `fused and 8x8_2links and llama_128k_ff2_K4096` |
+Same Llama M/N but **K padded to 4096** (power of 2) to test whether non–power-of-2 K (3584) is the culprit for low PCC. Results are in the **K padded to 4096** table above (with row gap after main table).
 
 Examples:
 ```bash
-# 8k K=4096 (done – PCC passed)
+# 8k with padded K=4096 (done – PCC passed)
 python tools/tracy/profile_this.py -c 'pytest tests/ttnn/unit_tests/operations/ccl/test_llama_ag_mm_comparison.py -k "fused and 8x8_4links and llama_8k_ff2_K4096" -v'
 
 # 128k K=4096 – check if PCC improves (same hypothesis)
@@ -204,6 +242,22 @@ Unit-test 128k comparison: 4×8 2 links gave **48,313 µs** (table above) — in
 - Possible driver or tiling edge cases when the inner dimension has a factor of 7.
 
 N=2048 is a power of 2 and is unlikely to be the primary cause. Worth checking in the fused op (and ConcatMesh2dToTensor) whether any logic assumes K or K_per_device to be a power of 2 or a multiple of a specific block.
+
+---
+
+## Conclusions
+
+1. **8×8 is where fused beats baseline.** Only the **8×8** core grid shows a clear fused-vs-baseline win; both paths use the **same config** (grid, links, M/K/N). Smaller or different grids (6×8, 4×8, 7×8) either don’t improve as much or aren’t the Llama deployment shape.
+
+2. **Earlier numbers used a restricted grid.** Previous baseline/fused numbers (e.g. from teja/Allgather+matmul_fused_perf_results) were with a **4×8** core grid. The branch was **updated recently** to use the **full grid** (8×8, 6×8, 7×8, 4×8) so comparisons are now apples-to-apples.
+
+3. **7×8 is bandwidth-limited for Llama.** The **7×8** grid is the max usable for the Llama 70B model (device layout), but it is **limited to num_links = 1** (7 is prime), so all-gather bandwidth is low and perf is limited. In the **separate** path, Llama’s matmul uses **56 cores** only; the fused op uses the same 7×8 grid, so it doesn’t get extra link parallelism there.
+
+4. **Max Llama grid (7×8) doesn’t show a win.** Because of the single-link constraint, the **maximum available grid for Llama (7×8)** does **not** show the same fused-vs-baseline improvement as 8×8.
+
+5. **Padded K (3584 → 4096) fixes PCC and adds ~100 µs.** Padding **K from 3584 to 4096** (power of 2) improves **PCC to 0.99+** and increases kernel duration by **~100 µs**; acceptable for correctness.
+
+6. **To get max perf on Llama:** Either the kernel needs **proper support for the 7×8 core grid** (e.g. higher **num_links** or different link/core mapping), or other runtime/op support, so that the fused op can leverage more bandwidth on the Llama deployment grid.
 
 ---
 
