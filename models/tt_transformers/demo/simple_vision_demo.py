@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 
@@ -555,7 +555,7 @@ def test_multimodal_demo_text(
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
             ("N300", "Llama-3.2-11B", 16): 18.3,
-            ("T3K", "Llama-3.2-90B", 1): 14.2,
+            ("T3K", "Llama-3.2-90B", 1): 14.02,
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
@@ -563,7 +563,7 @@ def test_multimodal_demo_text(
             # For T3K Llama-3.2-90B, the decode_t/s/u target used to be set to 3 with a wide tolerance (4.3, i.e. 330% increase) due to high variance observed across CI machines.
             # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
             # The slow CI machine seems to be out of circulation for now, so we can use a high target to avoid spurious test failures.
-            ("T3K", "Llama-3.2-90B", 1): (12, None),
+            ("T3K", "Llama-3.2-90B", 1): (10.5, None),
         }
 
         perf_targets = {}
@@ -595,5 +595,5 @@ def test_multimodal_demo_text(
             output_sequence_length=max_gen_len,
         )
 
-        # if perf_targets:
-        #     verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance)
+        if perf_targets:
+            verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance)
