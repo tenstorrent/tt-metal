@@ -137,49 +137,62 @@ def run_test_rotary_embedding_llama(
     if mode == "decode":
         max_seq_len = MAX_SEQ_LEN
 
-    inp = [
+    torch_inp = [
         (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1,
         (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1,
     ]
+    print(f"input_q shape [batch, q_heads, seq_len, head_dim] (base, without permute): {torch_inp[0].shape}")
+    print(f"input_k shape [batch, k_heads, seq_len, head_dim] (base, without permute): {torch_inp[1].shape}")
 
     # To test with different position ids, assume that batch
     # dimension is the seq len dimension when passing inputs to torch
     if mode == "decode":
-        inp = [x.permute(2, 1, 0, 3) for x in inp]
-        # inp: [seq_len, n_heads, batch, head_dim]
+        torch_inp = [x.permute(2, 1, 0, 3) for x in torch_inp]
+        # torch_inp: [seq_len, n_heads, batch, head_dim]
+        print(f"input_q shape after permute (decode): {torch_inp[0].shape}")
+        print(f"input_k shape after permute (decode): {torch_inp[1].shape}")
 
+    # PyTorch Ground Truth output --------------------------------------------------------------------
     freqs_cis = precompute_freqs_cis(
         # Note that self.params.max_seq_len is multiplied by 2 because the token limit for the Llama 2 generation of models is 4096.
         # Adding this multiplier instead of using 4096 directly allows for dynamism of token lengths while training or fine-tuning.
         head_dim,
         max_seq_len * 2,  # In decode, precompute for all positions
     )  # torch.Size([8192, 64])
+    print(f"freqs_cis shape after precompute_freqs_cis (expect: [max_seq_len*2, head_dim//2]): {freqs_cis.shape}")
 
     start_pos = 0  # Must pick non-zero start pos to get non-zero freqs_cis
-
     position_ids = torch.arange(batch) if mode == "decode" else slice(start_pos, start_pos + seq_len)
+    print(f"position_ids: {position_ids}")
 
     freqs_cis = freqs_cis[position_ids]
 
-    # PyTorch Ground Truth output --------------------------------------------------------------------
-    torch_xq = inp[0].transpose(1, 2)
-    torch_xk = inp[1].transpose(1, 2)
+    print(f"[torch] Beginning Torch/Llama `apply_rotary_emb` process")
+    print(f"[torch] input_q original shape:                {torch_inp[0].shape}")
+    print(f"[torch] input_k original shape:                {torch_inp[1].shape}")
+    torch_xq = torch_inp[0].transpose(1, 2)
+    torch_xk = torch_inp[1].transpose(1, 2)
+    print(f"[torch] input_q shape after transpose:         {torch_xq.shape}")
+    print(f"[torch] input_k shape after transpose:         {torch_xk.shape}")
+    print(f"[torch] freqs_cis shape after indexing:        {freqs_cis.shape}")
 
     torch_xq, torch_xk = apply_rotary_emb(torch_xq, torch_xk, freqs_cis=freqs_cis)
+    print(f"[torch] output_q shape after apply_rotary_emb: {torch_xq.shape}")
+    print(f"[torch] output_k shape after apply_rotary_emb: {torch_xk.shape}")
 
     torch_xq = torch_xq.transpose(1, 2)
     torch_xk = torch_xk.transpose(1, 2)
+    print(f"[torch] output_q shape after final transpose:  {torch_xq.shape}")
+    print(f"[torch] output_k shape after final transpose:  {torch_xk.shape}")
+    print(f"[torch] Ended Torch/Llama `apply_rotary_emb` process")
 
     pytorch_out = (torch_xq, torch_xk)
 
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
     tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk)
 
+    print(f"[ttnn] Beginning TTNN `rotary_embedding_llama` process")
     if mode == "decode":
-        # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
-        inp = [x.transpose(1, 2) for x in inp]
-        # inp: [seq_len, batch, n_heads, head_dim]
-
         if fuse_qk:
             # Set up rope with 2 * batch size (for fused qk) (no scaling)
             rope_setup_decode = RotarySetup(
@@ -237,32 +250,41 @@ def run_test_rotary_embedding_llama(
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
-                for _ in range(len(inp))
+                for _ in range(len(torch_inp))
             ]
 
-        tt_inp = [
-            ttnn.from_torch(
-                x, device=device, dtype=datatype, memory_config=input_mem_configs[i], layout=ttnn.TILE_LAYOUT
-            )
-            for i, x in enumerate(inp)
-        ]
+        tt_inp = [ttnn.from_torch(x, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for x in torch_inp]
+        # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
+        tt_inp = [ttnn.transpose(x, 1, 2, memory_config=input_mem_configs[i]) for i, x in enumerate(tt_inp)]
+        # tt_inp: [seq_len, batch, n_heads, head_dim]
         tt_inp += [cos, sin]  # Append cos and sin to the input list
+
     else:
         cos, sin = compute_gather_cos_sin(
             dhead=head_dim,
             end=max_seq_len * 2,
             position_ids=torch.arange(start_pos, start_pos + seq_len),
         )
-
-        tt_inp = [inp[0], inp[1], cos, sin]
+        tt_inp = [torch_inp[0], torch_inp[1], cos, sin]
         tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
 
+    print(f"[ttnn] input_q shape:            {tt_inp[0].shape}")
+    print(f"[ttnn] input_k shape:            {tt_inp[1].shape}")
+    print(f"[ttnn] cos shape:                {tt_inp[2].shape}")
+    print(f"[ttnn] sin shape:                {tt_inp[3].shape}")
+    print(f"[ttnn] transformation_mat shape: {tt_model.transformation_mat.shape}")
     tt_out = tt_model(*tt_inp)
-    tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
+    print(f"[ttnn] output_q shape:           {tt_out[0].shape}")
+    print(f"[ttnn] output_k shape:           {tt_out[1].shape}")
 
     if mode == "decode":
-        tt_out = [x.transpose(1, 2) for x in tt_out]
+        tt_out = [ttnn.transpose(ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG), 1, 2) for x in tt_out]
         # tt_out: [seq_len, n_heads, batch, head_dim]
+        print(f"[ttnn] output_q shape after final transpose (decode): {tt_out[0].shape}")
+        print(f"[ttnn] output_k shape after final transpose (decode): {tt_out[1].shape}")
+    print(f"[ttnn] Ended TTNN `rotary_embedding_llama` process")
+
+    tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
 
     # check outputs ----------------------------------------------------------------------
     assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
@@ -270,6 +292,7 @@ def run_test_rotary_embedding_llama(
     for i in range(len(pytorch_out)):
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
+        print(f"Comparing pytorch_out[{i}] shape: {pytorch_out[i].shape} with tt_out[{i}] shape: {tt_out[i].shape}")
         assert pytorch_out[i].shape == tt_out[i].shape
         logger.info(f"PCC value: {output_pcc}")
         does_pass = does_pass and out_pass
@@ -464,6 +487,7 @@ def run_test_row_major_rotary_embedding_llama(
         (71, 32, 64),
         (8, 1, 96),
         (8, 1, 256),
+        (16, 1, 64),  # Deepseek_v3 config
     ),
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
