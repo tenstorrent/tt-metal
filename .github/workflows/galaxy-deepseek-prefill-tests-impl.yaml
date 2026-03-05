@@ -36,8 +36,7 @@ jobs:
         id: generate
         run: |
           all_tests=$(jq -n '[
-            { "name": "(Galaxy) DeepSeek Prefill unit tests", "arch": "blackhole", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U08RL15T4N8" },
-            { "name": "(Galaxy) DeepSeek Prefill module tests", "arch": "blackhole", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U08RL15T4N8" },
+            { "name": "(Galaxy) DeepSeek Prefill module tests", "arch": "blackhole", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U08RL15T4N8" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -96,9 +95,9 @@ jobs:
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
-        # with:
-          # build-artifact-name: ${{ inputs.build-artifact-name }}
-          # wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       # - name: Run DeepSeek Prefill unit tests
         # if: ${{ matrix.test-group.test-type == 'unit' }}
         # timeout-minutes: ${{ matrix.test-group.timeout }}
