@@ -149,7 +149,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const auto& logical_shape = a.logical_shape();
     const auto& padded_shape = a.padded_shape();
     uint32_t W = logical_shape[-1];
-    const bool input_is_row_major = operation_attributes.allow_row_major_input && (a.layout() == Layout::ROW_MAJOR);
+    const bool input_is_row_major = a.layout() == Layout::ROW_MAJOR;
     uint32_t Wp = padded_shape[-1], Hp = padded_shape[-2];
     uint32_t HWp = Hp * Wp;
     uint32_t NC = a.physical_volume() / HWp;

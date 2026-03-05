@@ -29,7 +29,6 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
         init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc));
 
     kernel_config_val.fp32_dest_acc_en = input_tensor.dtype() == DataType::FLOAT32;
-    const bool input_is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
     return ttnn::prim::layer_norm(
         input_tensor,
@@ -45,8 +44,7 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
         ttnn::prim::DistributedLayerNormStage::NOT_DISTRIBUTED,
         std::nullopt,  // stats
         std::nullopt,  // recip_tensor
-        activation,
-        input_is_row_major);
+        activation);
 }
 
 }  // namespace ttnn::operations::experimental::transformer
