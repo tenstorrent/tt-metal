@@ -31,7 +31,6 @@ def _create_eye_matrix_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn
     Returns:
         TTNN tensor of shape [size, size] with identity matrix
     """
-    # Create ones matrix and apply both tril and triu to get identity
     ones = ttnn.ones(
         shape=(size, size),
         dtype=dtype,
@@ -39,7 +38,6 @@ def _create_eye_matrix_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn
         device=device,
         memory_config=memory_config,
     )
-    # Identity = tril(triu(ones)) where both use diagonal=0
     eye = ttnn.tril(ttnn.triu(ones, diagonal=0), diagonal=0, memory_config=memory_config)
     return eye
 
@@ -128,7 +126,6 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
     """
     TILE_SIZE = 32
 
-    # For very small matmuls, let ttnn auto-select
     if m < 32 or n < 32 or k < 32:
         return None
 
@@ -136,116 +133,77 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
     n_tiles = math.ceil(n / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
 
-    # Calculate per-core dimensions
     if grid_size is None:
-        # Smart grid size selection based on shape
-        # Consider total work (m * n * k) to determine optimal core count
         total_work = m * n * k
 
-        # For very small matmuls (< 32K elements), let auto-config handle it
         if total_work < 32768:
             return None
 
-        # For smaller matmuls, let ttnn auto-select - it often performs better
-        # Only use manual configs for larger matmuls where we're confident they help
         if m_tiles == 2 and n_tiles == 2:
-            # 64x64 matmuls - let auto-config handle it (performs better)
-            # grid_size = (2, 2)
             return None
         elif m_tiles == 2 and n_tiles == 4:
-            # 64x128 matmuls - let auto-config handle it (may perform better)
             return None
         elif m_tiles == 2 and n_tiles == 8:
-            # 64x256 matmuls - try auto-config first, manual configs may not help
-            # If needed, can use: grid_size = (8, 2)  # 16 cores
             return None
         elif m_tiles == 4 and n_tiles == 2:
-            # 128x64 matmuls - let auto-config handle it
             return None
         elif m_tiles == 4 and n_tiles == 8:
-            # 128x256 matmuls - use 32 cores (4x8 grid) for maximum parallelism
-            # This is large enough that manual config likely helps
-            grid_size = (8, 4)  # 32 cores
+            grid_size = (8, 4)
         elif m_tiles <= 4 and n_tiles <= 4:
-            # Small-medium: use 2-4 cores
             if n_tiles >= 4:
-                grid_size = (2, 1)  # 1D grid along N
+                grid_size = (2, 1)
             elif m_tiles >= 4:
-                grid_size = (1, 2)  # 1D grid along M
+                grid_size = (1, 2)
             else:
-                # 2x2 to 4x4 tiles, use 2-4 cores
-                if total_work >= 262144:  # >= 64K elements
-                    grid_size = (2, 2)  # 4 cores
+                if total_work >= 262144:
+                    grid_size = (2, 2)
                 else:
-                    grid_size = (2, 1)  # 2 cores
+                    grid_size = (2, 1)
         elif m_tiles >= 4 and n_tiles >= 8:
-            # Large: use 2D grid
             cores_y = min(4, m_tiles)
             cores_x = min(8, n_tiles)
             grid_size = (cores_x, cores_y)
         else:
-            # Medium: use 1D or 2D grid based on aspect ratio
             if n_tiles >= 4:
-                # Wider than tall, use cores along N
                 total_cores = min(8, max(2, n_tiles))
                 grid_size = (total_cores, 1)
             elif m_tiles >= 4:
-                # Taller than wide, use cores along M
                 total_cores = min(8, max(2, m_tiles))
                 grid_size = (1, total_cores)
             else:
-                # Let auto-config handle it
                 return None
 
     cores_x, cores_y = grid_size
 
-    # Calculate per-core M and N
     per_core_M = math.ceil(m_tiles / cores_y)
     per_core_N = math.ceil(n_tiles / cores_x)
-
-    # Ensure minimum values
     per_core_M = max(1, per_core_M)
     per_core_N = max(1, per_core_N)
 
-    # Auto-select in0_block_w if not provided
     if in0_block_w is None:
-        # Try to maximize in0_block_w (better for performance)
-        # in0_block_w divides K dimension across cores
         k_per_core = math.ceil(k_tiles / cores_x) if cores_x > 1 else k_tiles
-        # Start with a reasonable value
         in0_block_w = min(4, max(1, k_per_core))
-        # Ensure it divides evenly into k_tiles
         while k_tiles % (in0_block_w * cores_x) != 0 and in0_block_w > 1:
             in0_block_w -= 1
         if in0_block_w < 1:
             in0_block_w = 1
 
-    # Calculate output subblock sizes - optimize for performance
-    # For FP32 accumulation, DST has 4 tiles; for BF16, 8 tiles
-    # Try to maximize subblock size for better performance
-    max_subblock_size = 4  # Conservative for FP32
-
-    # Try larger subblocks first (better performance)
+    max_subblock_size = 4
     out_subblock_h = min(per_core_M, max_subblock_size)
     out_subblock_w = min(per_core_N, max_subblock_size)
 
-    # Ensure subblock product fits in DST (4 tiles for FP32)
     if out_subblock_h * out_subblock_w > max_subblock_size:
-        # Reduce to fit
         if out_subblock_h > out_subblock_w:
             out_subblock_h = max_subblock_size // out_subblock_w
         else:
             out_subblock_w = max_subblock_size // out_subblock_h
 
-    # Ensure subblock divides evenly
     while per_core_M % out_subblock_h != 0 and out_subblock_h > 1:
         out_subblock_h -= 1
     while per_core_N % out_subblock_w != 0 and out_subblock_w > 1:
         out_subblock_w -= 1
 
-    # Ensure we have valid subblock sizes
     if out_subblock_h < 1 or out_subblock_w < 1 or out_subblock_h * out_subblock_w > max_subblock_size:
-        # Fallback to smaller subblocks
         out_subblock_h = min(per_core_M, 2)
         out_subblock_w = min(per_core_N, 2)
         while per_core_M % out_subblock_h != 0 and out_subblock_h > 1:
@@ -269,7 +227,6 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
             fuse_batch=False,
         )
     except Exception:
-        # If config creation fails, return None to use auto-config
         return None
 
 
@@ -314,31 +271,26 @@ def recurrent_delta_rule_step_ttnn(
     K = q_t.shape[2]
     V = v_t.shape[2]
 
-    # 1. Decay the state: h = h * exp(g_t)
-    decay = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H]
-    decay = ttnn.reshape(decay, [B, H, 1, 1])  # [B, H, 1, 1]
+    decay = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
+    decay = ttnn.reshape(decay, [B, H, 1, 1])
     h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # 2. Read from state via matmul: v_read = k^T @ h
-    k_row = ttnn.reshape(k_t, [B, H, 1, K])  # [B, H, 1, K]
-    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
-    v_read = ttnn.reshape(v_read, [B, H, V])  # [B, H, V]
+    k_row = ttnn.reshape(k_t, [B, H, 1, K])
+    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
+    v_read = ttnn.reshape(v_read, [B, H, V])
 
-    # 3. Compute delta: delta = (v_t - v_read) * beta_t
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1])  # [B, H, 1]
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1])
     delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # 4. Write to state via matmul outer product: h += k @ delta^T
-    k_col = ttnn.reshape(k_t, [B, H, K, 1])  # [B, H, K, 1]
-    d_row = ttnn.reshape(delta, [B, H, 1, V])  # [B, H, 1, V]
-    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, K, V]
+    k_col = ttnn.reshape(k_t, [B, H, K, 1])
+    d_row = ttnn.reshape(delta, [B, H, 1, V])
+    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # 5. Query state via matmul: o_t = q^T @ h
-    q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
-    o_t = ttnn.matmul(q_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, 1, V]
-    o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
+    q_row = ttnn.reshape(q_t, [B, H, 1, K])
+    o_t = ttnn.matmul(q_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
+    o_t = ttnn.reshape(o_t, [B, H, V])
 
     return o_t, h
 
@@ -392,21 +344,18 @@ def recurrent_gated_delta_rule_ttnn(
 
     q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Transpose to [B, H, T, D] for head-first processing
     q = ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
-    g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
+    beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Cast to float32 for recurrent precision (matches torch reference)
     q = ttnn.typecast(q, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.typecast(k, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     v = ttnn.typecast(v, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     beta = ttnn.typecast(beta, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     g = ttnn.typecast(g, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Initialize state in float32
     if initial_state is not None:
         h = ttnn.typecast(initial_state, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
@@ -423,14 +372,9 @@ def recurrent_gated_delta_rule_ttnn(
         o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h)
         outputs.append(o_t)
 
-    # Concat outputs: reshape each [B, H, V] -> [B, H, 1, V] then concat
     outputs_4d = [ttnn.reshape(o, [B, H, 1, V]) for o in outputs]
-    o = ttnn.concat(outputs_4d, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T, V]
-
-    # Transpose back to [B, T, H, V]
+    o = ttnn.concat(outputs_4d, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    # Cast back to bfloat16
     o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return o, h
@@ -486,7 +430,6 @@ def chunk_gated_delta_rule_ttnn(
     if scale is None:
         scale = K**-0.5
 
-    # Transpose to [B, H, T, D], cast to float32
     q = ttnn.typecast(
         ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG), ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
@@ -596,12 +539,9 @@ def chunk_gated_delta_rule_ttnn(
     else:
         beta_flat = ttnn.reshape(beta_flat, [BH, L, 1])
 
-    # v_beta = v * beta, k_beta = k * beta
     v_beta = ttnn.multiply(v, beta_flat, memory_config=ttnn.L1_MEMORY_CONFIG)
     k_beta = ttnn.multiply(k, beta_flat, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Reshape into chunks: [BH*nc, cs, D]
-    # Use L1 memory config for reshapes to minimize transfer overhead
     q_c = ttnn.reshape(q, [batch, chunk_size, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     k_c = ttnn.reshape(k, [batch, chunk_size, K], memory_config=ttnn.L1_MEMORY_CONFIG)
     v_c = ttnn.reshape(v, [batch, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -609,8 +549,6 @@ def chunk_gated_delta_rule_ttnn(
     v_beta_c = ttnn.reshape(v_beta, [batch, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     g_c = ttnn.reshape(g, [batch, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # --- Cumsum via matmul with upper-triangular ones ---
-    # Create upper triangular ones directly on device (no host transfer overhead)
     triu_ones = _create_triu_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -621,19 +559,16 @@ def chunk_gated_delta_rule_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # decay_exp for weighting k_beta: [batch, cs, 1]
     decay_exp = ttnn.reshape(
         ttnn.exp(decay, memory_config=ttnn.L1_MEMORY_CONFIG),
         [batch, chunk_size, 1],
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # --- L_mask: exp(decay_i - decay_j) for j <= i ---
     decay_col = ttnn.reshape(decay, [batch, chunk_size, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
     L_diff = ttnn.subtract(decay_col, decay_row, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Create lower triangular ones directly on device (no host transfer overhead)
     tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -642,9 +577,6 @@ def chunk_gated_delta_rule_ttnn(
         ttnn.exp(L_diff_masked, memory_config=ttnn.L1_MEMORY_CONFIG), tril_mask, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    # --- Intra-chunk interaction matrix M ---
-    # Optimize: (batch, chunk_size, K) @ (batch, K, chunk_size) -> (batch, chunk_size, chunk_size)
-    # Shape: chunk_size x K x chunk_size (e.g., 64 x 64 x 64)
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     prog_config_kk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
     if prog_config_kk:
@@ -653,31 +585,33 @@ def chunk_gated_delta_rule_ttnn(
         kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     M = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
-    # Create strict lower triangular ones directly on device (no host transfer overhead)
     strict_lower = _create_strict_lower_tril_ttnn(
         chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
     M = ttnn.multiply(M, strict_lower, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # --- Woodbury via repeated-squaring Neumann series ---
-    # Compute (I - M)^{-1} = I + M + M^2 + ... for nilpotent M
-    # Create identity matrix directly on device (no host transfer overhead)
     eye = _create_eye_matrix_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
     eye = ttnn.reshape(eye, [1, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     R = ttnn.add(M, eye, memory_config=ttnn.L1_MEMORY_CONFIG)
     P = ttnn.matmul(M, M, memory_config=ttnn.L1_MEMORY_CONFIG)
     num_steps = max(int(math.ceil(math.log2(max(chunk_size, 2)))) - 1, 0)
+    prog_config_woodbury = _get_matmul_program_config(chunk_size, chunk_size, chunk_size, grid_size=None)
     for _ in range(num_steps):
-        R = ttnn.add(R, ttnn.matmul(R, P, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
-        P = ttnn.matmul(P, P, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if prog_config_woodbury:
+            R = ttnn.add(
+                R,
+                ttnn.matmul(R, P, program_config=prog_config_woodbury, memory_config=ttnn.L1_MEMORY_CONFIG),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            P = ttnn.matmul(P, P, program_config=prog_config_woodbury, memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            R = ttnn.add(R, ttnn.matmul(R, P, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG)
+            P = ttnn.matmul(P, P, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     attn = R
 
-    # --- Corrected values and keys ---
-    # Optimize: (batch, chunk_size, chunk_size) @ (batch, chunk_size, V) -> (batch, chunk_size, V)
-    # Shape: chunk_size x chunk_size x V (e.g., 64 x 64 x 256)
     prog_config_vcorr = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     if prog_config_vcorr:
         v_corrected = ttnn.matmul(attn, v_beta_c, program_config=prog_config_vcorr, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -692,23 +626,24 @@ def chunk_gated_delta_rule_ttnn(
     else:
         k_cumdecay = ttnn.matmul(attn, k_beta_decay, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # --- Cross-chunk recurrence ---
-    # Use L1 memory config for reshapes to minimize transfer overhead
     q_c_4d = ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_c_4d = ttnn.to_layout(q_c_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     k_c_4d = ttnn.reshape(k_c, [BH, num_chunks, chunk_size, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_c_4d = ttnn.to_layout(k_c_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     v_cor_4d = ttnn.reshape(v_corrected, [BH, num_chunks, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+    v_cor_4d = ttnn.to_layout(v_cor_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     k_cum_4d = ttnn.reshape(k_cumdecay, [BH, num_chunks, chunk_size, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_cum_4d = ttnn.to_layout(k_cum_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     L_mask_4d = ttnn.reshape(L_mask, [BH, num_chunks, chunk_size, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
+    L_mask_4d = ttnn.to_layout(L_mask_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     decay_3d = ttnn.reshape(decay, [BH, num_chunks, chunk_size], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Precompute total decay per chunk (= cumsum at last position)
     decay_last = ttnn.reshape(
         ttnn.sum(g_c, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG),
         [BH, num_chunks, 1],
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Create lower triangular ones directly on device (no host transfer overhead)
     lower_causal = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     S = ttnn.zeros(
@@ -721,46 +656,29 @@ def chunk_gated_delta_rule_ttnn(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    # Pre-compute program_configs outside the loop to avoid recreation overhead
-    # This reduces op-to-op gaps caused by program_config creation
     prog_config_qk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
     prog_config_vprime = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
     prog_config_o_inter = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
     prog_config_intra = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
     prog_config_state = _get_matmul_program_config(K, chunk_size, V, grid_size=None)
 
-    # Optional: Pre-compute core grids for binary operations
-    # Note: Binary operations typically work well with auto-config, but manual grids
-    # can be specified for consistency or experimentation. For element-wise ops,
     outputs = []
     for i in range(num_chunks):
-        # Slice and re-tilize (slicing from 4D may lose TILE_LAYOUT)
-        # Using L1_MEMORY_CONFIG to minimize transfer overhead
-        q_i = ttnn.to_layout(q_c_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k_i = ttnn.to_layout(k_c_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_i = ttnn.to_layout(v_cor_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k_cum_i = ttnn.to_layout(k_cum_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        L_mask_i = ttnn.to_layout(L_mask_4d[:, i], ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q_i = q_c_4d[:, i]
+        k_i = k_c_4d[:, i]
+        v_i = v_cor_4d[:, i]
+        k_cum_i = k_cum_4d[:, i]
+        L_mask_i = L_mask_4d[:, i]
         decay_i = decay_3d[:, i]
 
-        # Intra-chunk attention: (q @ k^T) * L_mask, lower-triangular
-        # Optimize: (BH, chunk_size, K) @ (BH, K, chunk_size) -> (BH, chunk_size, chunk_size)
-        # Shape: chunk_size x K x chunk_size (e.g., 64 x 64 x 64)
         k_i_t = ttnn.transpose(k_i, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # Use pre-computed program_config to avoid recreation overhead
         if prog_config_qk:
             qk = ttnn.matmul(q_i, k_i_t, program_config=prog_config_qk, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             qk = ttnn.matmul(q_i, k_i_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # Combine two multiplies into one by pre-multiplying masks
-        # This reduces one BinaryNgDeviceOperation (reduces from 46 to fewer ops)
         combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=ttnn.L1_MEMORY_CONFIG)
         intra_attn = ttnn.multiply(qk, combined_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Cross-chunk: read from state
-        # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)
-        # Shape: chunk_size x K x V (e.g., 64 x 64 x 256)
-        # Use pre-computed program_config to avoid recreation overhead
         if prog_config_vprime:
             v_prime = ttnn.matmul(k_cum_i, S, program_config=prog_config_vprime, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
@@ -772,18 +690,12 @@ def chunk_gated_delta_rule_ttnn(
             [BH, chunk_size, 1],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # Optimize: (BH, chunk_size, K) @ (BH, K, V) -> (BH, chunk_size, V)
-        # Shape: chunk_size x K x V (e.g., 64 x 64 x 256)
         q_decay = ttnn.multiply(q_i, decay_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # Use pre-computed program_config to avoid recreation overhead
         if prog_config_o_inter:
             o_inter = ttnn.matmul(q_decay, S, program_config=prog_config_o_inter, memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             o_inter = ttnn.matmul(q_decay, S, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Optimize: (BH, chunk_size, chunk_size) @ (BH, chunk_size, V) -> (BH, chunk_size, V)
-        # Shape: chunk_size x chunk_size x V (e.g., 64 x 64 x 256)
-        # Use pre-computed program_config to avoid recreation overhead
         if prog_config_intra:
             intra_v = ttnn.matmul(
                 intra_attn, v_new, program_config=prog_config_intra, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -794,28 +706,26 @@ def chunk_gated_delta_rule_ttnn(
         o_i = ttnn.add(o_inter, intra_v, memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG))
 
-        # Update state
         dl_i = decay_last[:, i]
-        dl_i_exp = ttnn.reshape(
-            ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG), [BH, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG
+        dl_i_exp = ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG)
+        S = ttnn.multiply(
+            S,
+            ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        S = ttnn.multiply(S, dl_i_exp, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        dl_i_2d = ttnn.reshape(dl_i, [BH, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        decay_diff = ttnn.subtract(dl_i_2d, decay_i, memory_config=ttnn.L1_MEMORY_CONFIG)
+        decay_diff = ttnn.subtract(
+            ttnn.reshape(dl_i, [BH, 1], memory_config=ttnn.L1_MEMORY_CONFIG),
+            decay_i,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        decay_diff_exp = ttnn.exp(decay_diff, memory_config=ttnn.L1_MEMORY_CONFIG)
         k_decay = ttnn.multiply(
             k_i,
-            ttnn.reshape(
-                ttnn.exp(decay_diff, memory_config=ttnn.L1_MEMORY_CONFIG),
-                [BH, chunk_size, 1],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            ),
+            ttnn.reshape(decay_diff_exp, [BH, chunk_size, 1], memory_config=ttnn.L1_MEMORY_CONFIG),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # Optimize: (BH, K, chunk_size) @ (BH, chunk_size, V) -> (BH, K, V)
-        # Shape: K x chunk_size x V (e.g., 64 x 64 x 256)
-        # Use pre-computed program_config to avoid recreation overhead
         if prog_config_state:
             state_update = ttnn.matmul(
                 k_decay_t, v_new, program_config=prog_config_state, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -825,10 +735,12 @@ def chunk_gated_delta_rule_ttnn(
         S = ttnn.add(S, state_update, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     o = ttnn.concat(outputs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o = ttnn.reshape(o, [BH, L, V], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if pad_len > 0:
         o = o[:, :T]
+        o = ttnn.reshape(o, [BH, T, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+    else:
+        o = ttnn.reshape(o, [BH, L, V], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     o = ttnn.reshape(o, [B, H, T, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
