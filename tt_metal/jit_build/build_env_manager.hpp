@@ -39,6 +39,8 @@ struct BuildEnvInfo {
 // Singleton class to generate and hold build environments, build keys, and build states.
 class BuildEnvManager {
 public:
+    explicit BuildEnvManager(const Hal& hal);
+    ~BuildEnvManager() = default;
     BuildEnvManager(const BuildEnvManager&) = delete;
     BuildEnvManager& operator=(const BuildEnvManager&) = delete;
     static BuildEnvManager& get_instance();
@@ -46,6 +48,12 @@ public:
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.
     void add_build_env(ChipId device_id, uint8_t num_hw_cqs);
+
+    void add_build_env(
+        ChipId device_id,
+        const JitDeviceConfig& dev_config,
+        const llrt::RunTimeOptions& rtoptions,
+        bool use_precompiled_firmware = false);
 
     // Getter functions for build envs/keys/states
     const DeviceBuildEnv& get_device_build_env(ChipId device_id);
@@ -72,9 +80,6 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    explicit BuildEnvManager(const Hal& hal);
-    ~BuildEnvManager() = default;
-
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.

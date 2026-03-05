@@ -492,9 +492,7 @@ public:
     std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
             case RunTimeDebugFeatureDprint: {
-                std::string hash_str = std::to_string(get_feature_enabled(feature));
-                hash_str += std::to_string(get_feature_all_chips(feature));
-                return hash_str;
+                return std::to_string(get_feature_enabled(feature));
             }
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:

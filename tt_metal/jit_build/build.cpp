@@ -289,6 +289,7 @@ void JitBuildEnv::init(
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::FNV1a hasher;
+    log_info(tt::LogBuildKernels, "Build key (in): {}", build_key);
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
     hasher.update(cflags_);
@@ -296,6 +297,12 @@ void JitBuildEnv::init(
     hasher.update(defines_);
     hasher.update(sfpi_version_contents);
     build_key_ = hasher.digest();
+    log_info(tt::LogBuildKernels, "Arch: {}", enchantum::to_underlying(this->arch_));
+    log_info(tt::LogBuildKernels, "Cflags: {}", cflags_);
+    log_info(tt::LogBuildKernels, "Lflags: {}", lflags_);
+    log_info(tt::LogBuildKernels, "Defines: {}", defines_);
+    log_info(tt::LogBuildKernels, "SFPI version contents: {}", sfpi_version_contents);
+    log_info(tt::LogBuildKernels, "Build key (out): {}", build_key_);
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
@@ -535,7 +542,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
@@ -615,7 +622,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
@@ -661,7 +668,8 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
         }
 
         auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
-        tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+        tt::jit_build::utils::run_command(
+            cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, env_.get_rtoptions().get_dump_build_commands());
     }
 }
 
