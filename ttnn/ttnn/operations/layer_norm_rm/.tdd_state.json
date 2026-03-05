@@ -1,0 +1,100 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "mean_subtract",
+      "description": "Tilize RM input, compute row mean via reduce SUM with 1/W scaler, subtract mean from each element, untilize back to RM. Tests x - mean(x) pipeline.",
+      "kernel_files": [],
+      "test_file": "test_stage_mean_subtract.py",
+      "reference_body": "x - x.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.05
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "variance_normalize",
+      "description": "Full standardization: square centered values, reduce for variance, add epsilon, rsqrt for inv_std, multiply to normalize. Tests (x - mean) / sqrt(var + eps).",
+      "kernel_files": [],
+      "test_file": "test_stage_variance_normalize.py",
+      "reference_body": "(x - x.mean(dim=-1, keepdim=True)) / torch.sqrt(x.var(dim=-1, keepdim=True, correction=0) + 1e-6)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "affine_transform",
+      "description": "Full layer normalization with affine transform: gamma * x_norm + beta. Reader provides gamma/beta tiles, compute applies mul and add.",
+      "kernel_files": [],
+      "test_file": "test_stage_affine_transform.py",
+      "reference_body": "torch.nn.functional.layer_norm(x, [x.shape[-1]], weight=gamma.squeeze(), bias=beta.squeeze(), eps=1e-6)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": ", gamma_tt, beta_tt",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, x.shape[-1])\nbeta = torch.randn(1, 1, 1, x.shape[-1])",
+      "extra_ttnn_setup": "gamma_tt = ttnn.from_torch(gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)\nbeta_tt = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)",
+      "output_shape_expr": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
