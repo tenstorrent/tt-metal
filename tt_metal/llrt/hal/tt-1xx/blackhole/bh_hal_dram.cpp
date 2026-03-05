@@ -18,7 +18,7 @@ using namespace tt::tt_metal::blackhole::dram;
 #include "llrt/hal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
-#define GET_DRISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t) & (((mailboxes_t*)MEM_DRISC_MAILBOX_BASE)->x))
+#define GET_DRISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_DRISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::blackhole {
 

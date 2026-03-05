@@ -339,8 +339,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
-            (addr == DRISC_RESET_PC));  // used to program start addr for DRAM FW
+            (addr == IERISC_RESET_PC ||
+             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
+            (addr == DRISC_RESET_PC));                // used to program start addr for DRAM FW
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
