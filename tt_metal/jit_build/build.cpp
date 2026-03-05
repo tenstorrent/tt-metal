@@ -295,6 +295,7 @@ void JitBuildEnv::init(
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::FNV1a hasher;
+    log_info(tt::LogBuildKernels, "Build key (in): {}", build_key);
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
     hasher.update(cflags_);
@@ -302,6 +303,12 @@ void JitBuildEnv::init(
     hasher.update(defines_);
     hasher.update(sfpi_version_contents);
     build_key_ = hasher.digest();
+    log_info(tt::LogBuildKernels, "Arch: {}", enchantum::to_underlying(this->arch_));
+    log_info(tt::LogBuildKernels, "Cflags: {}", cflags_);
+    log_info(tt::LogBuildKernels, "Lflags: {}", lflags_);
+    log_info(tt::LogBuildKernels, "Defines: {}", defines_);
+    log_info(tt::LogBuildKernels, "SFPI version contents: {}", sfpi_version_contents);
+    log_info(tt::LogBuildKernels, "Build key (out): {}", build_key_);
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
