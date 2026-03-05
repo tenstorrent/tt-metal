@@ -37,9 +37,15 @@ namespace ckernel {
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  */
 // clang-format on
 template <uint32_t block_ct_dim, bool respect_trigger = false>
@@ -67,9 +73,15 @@ ALWI void reduce_block_max_row_init() {
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
  * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
  * | Function   | row_start_index           | The starting tile index for the row being processed                                     | uint32_t  | Must be less than the size of the CB           | True     |
@@ -83,10 +95,22 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 }
 
 #ifdef ARCH_BLACKHOLE
+// clang-format off
 /**
  * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
  * Reprograms reduce MOP and restores only the reduce addrmods.
+ *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  */
+// clang-format on
 template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
@@ -111,9 +135,15 @@ ALWI void reduce_block_max_row_reinit_short() {
  * This function should NOT be used as a substitute for the native reduce_uninit API.
  * Use the standard reduce_uninit() for general-purpose reduction cleanup.
  *
+ * The respect_trigger parameter enables a Blackhole-specific optimization used in SDPA (Scaled Dot-Product Attention)
+ * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation Program) into two halves
+ * with hardware semaphore synchronization, allowing better pipelining with other operations. This optimization is
+ * unused on other architectures.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | clear_fp32_accumulation   | Whether to clear FP32 accumulation state                                                | bool      | {true, false}                                  | True     |
+ * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A. Required when clear_fp32_accumulation=true | uint32_t  | 0 to 31 | Conditional |
  */
 // clang-format on
