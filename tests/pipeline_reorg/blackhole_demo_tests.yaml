@@ -308,3 +308,16 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
+
+- name: stable_diffusion_xl demos
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/experimental/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  skus:
+    bh_p150:
+      timeout: 30
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: models
+  model-name: stable_diffusion_xl
