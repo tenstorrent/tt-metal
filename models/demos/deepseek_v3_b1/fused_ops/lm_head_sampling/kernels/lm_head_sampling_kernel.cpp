@@ -209,6 +209,33 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
     }
 
+    // [MTP] Second mcast CTArgs + args (NCRISC receiver)
+    using McastEhCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast_eh_args{
+        get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore")),
+        get_named_compile_time_arg_val("mcast_eh_dst_cb"),
+        get_named_compile_time_arg_val("mcast_eh_dst_num_pages"),
+    };
+
+    // [MTP] EH DRAM streaming matmul CTArgs (NCRISC reader)
+    constexpr uint32_t eh_in1_cb = get_named_compile_time_arg_val("matmul_eh_in1");
+    constexpr uint32_t eh_out_cb = get_named_compile_time_arg_val("matmul_eh_out");
+    constexpr uint32_t eh_out_w = get_named_compile_time_arg_val("matmul_eh_out_w");
+    constexpr uint32_t eh_cb_in1_buf_addr = get_named_compile_time_arg_val("eh_matmul_cb_in1_buf_addr");
+    using EHDRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+        eh_in1_cb,
+        eh_out_cb,
+        get_named_compile_time_arg_val("matmul_eh_dram_in1_tensor_addr"),
+        get_named_compile_time_arg_val("matmul_eh_dram_in1_page_size"),
+        get_named_compile_time_arg_val("matmul_eh_dram_in1_num_pages"),
+        get_named_compile_time_arg_val("matmul_eh_subblock_k"),
+        eh_out_w,
+        get_named_compile_time_arg_val("matmul_eh_dram_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("matmul_eh_out_num_tiles"),
+        get_named_compile_time_arg_val("matmul_eh_num_subblocks_k"),
+        get_named_compile_time_arg_val("matmul_eh_bank_id"),
+        get_named_compile_time_arg_val("matmul_eh_vc")>;
+
 #elif defined(COMPILE_FOR_BRISC)
     uint32_t brisc_rt_arg_idx = 0;
     // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
@@ -277,6 +304,27 @@ void kernel_main() {
     };
     const uint32_t persistent_next_iter_global_sem_addr = get_common_arg_val<uint32_t>(12);
 
+    // [MTP] Second mcast CTArgs + args (BRISC sender)
+    using McastEhCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast_eh_num_cores"),
+        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
+        false>;
+    constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
+    constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
+    deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
+        get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_eh_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_eh_dest_noc_end_y"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore")),
+        get_named_compile_time_arg_val("mcast_eh_data_size_bytes"),
+        mcast_eh_src_cb,
+        get_named_compile_time_arg_val("mcast_eh_src_num_pages"),
+        Core::is_input_core ? get_read_ptr(mcast_eh_src_cb) : 0,
+        get_write_ptr(mcast_eh_dst_cb),
+    };
+
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
     // CCL Broadcast CTArgs (no-op for TRISC)
@@ -335,6 +383,28 @@ void kernel_main() {
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ComputeCTArgs;
     deepseek_b1_ops::Sampling::ComputeArgs sampling_args{};
 
+    // [MTP] Second mcast is a no-op on TRISC
+    using McastEhCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+    deepseek_b1_ops::Mcast::ComputeArgs mcast_eh_args{};
+
+    // [MTP] EH DRAM streaming matmul CTArgs (TRISC compute)
+    constexpr uint32_t eh_in0_cb = get_named_compile_time_arg_val("matmul_eh_in0");
+    constexpr uint32_t eh_in1_cb = get_named_compile_time_arg_val("matmul_eh_in1");
+    constexpr uint32_t eh_out_cb = get_named_compile_time_arg_val("matmul_eh_out");
+    constexpr uint32_t eh_out_w = get_named_compile_time_arg_val("matmul_eh_out_w");
+    constexpr uint32_t eh_cb_in1_buf_addr = get_named_compile_time_arg_val("eh_matmul_cb_in1_buf_addr");
+    using EHDRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+        eh_in0_cb,
+        eh_in1_cb,
+        eh_out_cb,
+        get_named_compile_time_arg_val("matmul_eh_subblock_k"),
+        eh_out_w,
+        get_named_compile_time_arg_val("matmul_eh_subblock_w"),
+        get_named_compile_time_arg_val("matmul_eh_num_subblocks_k"),
+        1,
+        0,
+        0>;
+
     // Full init, CBs don't matter
     compute_kernel_hw_startup(0, 0, 0);
 #endif
@@ -342,6 +412,13 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
             mcast;
+    deepseek_b1_ops::Mcast::Op<
+        McastEhCTArgs,
+        Core::enable_mtp && Core::is_input_core,
+        Core::enable_mtp && Core::is_mcast_receiver_core,
+        Core::enable_mtp && Core::is_mcast_receiver_core,
+        true>
+        mcast_eh;
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
     deepseek_b1_ops::Sampling::
         Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
@@ -349,6 +426,7 @@ void kernel_main() {
 
     uint32_t iteration_count = 0;
     mcast.init(mcast_args);
+    mcast_eh.init(mcast_eh_args);
     while (true) {
         iteration_count++;
         // ====================================================================
@@ -502,72 +580,13 @@ void kernel_main() {
             cb_push_back(emb_cb, e_num_tiles);
         }
 #endif
-
         // ====================================================================
-        // [MTP] Second mcast receiver (NCRISC on non-sender cores)
+        // [MTP] Second mcast — multicast [h_norm|e_norm] from sender to all cores
         // ====================================================================
-#if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::enable_mtp && !Core::is_input_core && Core::is_mcast_receiver_core) {
-            using McastEhReceiverCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-            deepseek_b1_ops::Mcast::ReceiverArgs mcast_eh_recv_args{
-                get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore")),
-                get_named_compile_time_arg_val("mcast_eh_dst_cb"),
-                get_named_compile_time_arg_val("mcast_eh_dst_num_pages"),
-            };
-            deepseek_b1_ops::Mcast::
-                Op<McastEhReceiverCTArgs, false, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, false>
-                    mcast_eh_receiver;
-            mcast_eh_receiver(mcast_eh_recv_args);
+        {
+            DeviceZoneScopedN("MTP_EH_MCAST");
+            mcast_eh(mcast_eh_args);
         }
-#endif
-
-        // ====================================================================
-        // [MTP] Wait for concat [h_norm|e_norm] (NCRISC on input_core)
-        // Both h_rmsnorm and e_rmsnorm write directly to eh_src_cb, so no copy needed.
-        // ====================================================================
-#if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::enable_mtp && Core::is_input_core) {
-            constexpr uint32_t eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
-            constexpr uint32_t h_tiles = get_named_compile_time_arg_val("rmsnorm_h_num_tiles");
-            constexpr uint32_t e_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
-            constexpr uint32_t total_num_tiles = h_tiles + e_tiles;
-
-            cb_wait_front(eh_src_cb, total_num_tiles);
-        }
-#endif
-
-        // ====================================================================
-        // [MTP] Second mcast sender (BRISC on input_core)
-        // ====================================================================
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::enable_mtp && Core::is_input_core) {
-            using McastEhSenderCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-                get_named_compile_time_arg_val("mcast_eh_num_cores"),
-                get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
-                false>;
-            constexpr uint32_t eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
-            constexpr uint32_t eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-            deepseek_b1_ops::Mcast::SenderArgs mcast_eh_send_args{
-                get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
-                get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
-                get_named_compile_time_arg_val("mcast_eh_dest_noc_end_x"),
-                get_named_compile_time_arg_val("mcast_eh_dest_noc_end_y"),
-                get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_sender_semaphore")),
-                get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore")),
-                get_named_compile_time_arg_val("mcast_eh_data_size_bytes"),
-                eh_src_cb,
-                get_named_compile_time_arg_val("mcast_eh_src_num_pages"),
-                Core::is_input_core ? get_read_ptr(eh_src_cb) : 0,
-                get_write_ptr(eh_dst_cb),
-            };
-            deepseek_b1_ops::Mcast::
-                Op<McastEhSenderCTArgs, true, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
-                    mcast_eh_sender;
-            mcast_eh_sender.init(mcast_eh_send_args);
-            mcast_eh_sender(mcast_eh_send_args);
-            mcast_eh_sender.teardown();
-        }
-#endif
 
         // ====================================================================
         // [MTP] e_rmsnorm on TRISC (after embedding arrives in CB)
@@ -588,41 +607,6 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::enable_mtp && Core::is_eh_matmul_core) {
-            constexpr uint32_t eh_in0_cb = get_named_compile_time_arg_val("matmul_eh_in0");
-            constexpr uint32_t eh_in1_cb = get_named_compile_time_arg_val("matmul_eh_in1");
-            constexpr uint32_t eh_out_cb = get_named_compile_time_arg_val("matmul_eh_out");
-            constexpr uint32_t eh_num_tiles_k = get_named_compile_time_arg_val("matmul_eh_k_num_tiles");
-            constexpr uint32_t eh_out_w = get_named_compile_time_arg_val("matmul_eh_out_w");
-            constexpr uint32_t eh_cb_in1_buf_addr = get_named_compile_time_arg_val("eh_matmul_cb_in1_buf_addr");
-
-#if defined(COMPILE_FOR_TRISC)
-            using EHDRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
-                eh_in0_cb,
-                eh_in1_cb,
-                eh_out_cb,
-                get_named_compile_time_arg_val("matmul_eh_subblock_k"),
-                eh_out_w,
-                get_named_compile_time_arg_val("matmul_eh_subblock_w"),
-                get_named_compile_time_arg_val("matmul_eh_num_subblocks_k"),
-                1,
-                0,
-                0>;
-#elif defined(COMPILE_FOR_NCRISC)
-            using EHDRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
-                eh_in1_cb,
-                eh_out_cb,
-                get_named_compile_time_arg_val("matmul_eh_dram_in1_tensor_addr"),
-                get_named_compile_time_arg_val("matmul_eh_dram_in1_page_size"),
-                get_named_compile_time_arg_val("matmul_eh_dram_in1_num_pages"),
-                get_named_compile_time_arg_val("matmul_eh_subblock_k"),
-                eh_out_w,
-                get_named_compile_time_arg_val("matmul_eh_dram_in1_block_size_bytes"),
-                get_named_compile_time_arg_val("matmul_eh_out_num_tiles"),
-                get_named_compile_time_arg_val("matmul_eh_num_subblocks_k"),
-                get_named_compile_time_arg_val("matmul_eh_bank_id"),
-                get_named_compile_time_arg_val("matmul_eh_vc")>;
-#endif
-
             deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, eh_cb_in1_buf_addr> eh_matmul;
             {
                 DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
@@ -636,4 +620,5 @@ void kernel_main() {
         }
     }
     mcast.teardown();
+    mcast_eh.teardown();
 }
