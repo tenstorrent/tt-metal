@@ -97,12 +97,12 @@ def collect_debug_bus_signals(
     original_data = read_words_from_device(location, l1_address, word_count=4)
     try:
         # Collect all debug bus groups as group_name -> 128-bit hex value
-        debug_bus_data: dict[str, dict[str, int]] = defaultdict(dict)
+        debug_bus_data: dict[str, str] = {}
         for group_name in sorted(all_groups):
             # Read the signal group (this writes the 128-bit value to l1_address)
             group_sample = debug_bus.read_signal_group(group_name, l1_address)
-            # Read the raw 128-bit value from l1_address and convert to dict of signal_name -> value
-            debug_bus_data[group_name] = {signal_name: value for signal_name, value in group_sample.items()}
+            # Read the raw 128-bit value from l1_address
+            debug_bus_data[group_name] = f"0x{group_sample.raw_data}"
 
         # Return only the core data - location/device info comes from PerBlockCheckResult
         return {
@@ -144,9 +144,14 @@ def run(args, context: Context):
             device = r.device_description.device
             location = r.location
             block_type = run_checks.get_block_type(location)
-            if block_type not in all_debug_bus_data[f"Device {device.id}"]:
-                all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
-            all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = {
+            if f"Device {device.id}" not in all_debug_bus_data:
+                all_debug_bus_data[f"Device {device.id}"]["arch"] = str(device._arch)
+                all_debug_bus_data[f"Device {device.id}"]["block_types"] = defaultdict(dict)
+            if block_type not in all_debug_bus_data[f"Device {device.id}"]["block_types"]:
+                all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type] = defaultdict(dict)
+            all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type][
+                f"location: {location.to_user_str()}"
+            ] = {
                 "failed_riscs": r.result["failed_riscs"],
                 "debug_bus_signal_groups": r.result["debug_bus_signal_groups"],
             }
