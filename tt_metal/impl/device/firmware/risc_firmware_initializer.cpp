@@ -1137,8 +1137,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     std::unordered_set<CoreCoord> dram_not_done_cores;
-    bool has_dram_fw = hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) <
-                       hal_.get_programmable_core_type_count();
+    bool has_dram_fw =
+        hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
     if (has_dram_fw) {
         log_debug(tt::LogMetal, "Initializing DRAM cores");
         constexpr uint64_t dram_l1_noc_offset = 0x2000000000ULL;
