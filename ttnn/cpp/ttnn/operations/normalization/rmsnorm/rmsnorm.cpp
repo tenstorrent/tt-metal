@@ -57,7 +57,6 @@ Tensor rms_norm(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
-
     return ttnn::prim::layer_norm(
         input_tensor,
         epsilon,
