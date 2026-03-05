@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 
@@ -18,6 +18,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @torch.no_grad()
+@run_for_wormhole_b0_or_blackhole
 @pytest.mark.parametrize(
     "mesh_device",
     [

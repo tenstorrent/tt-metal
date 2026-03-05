@@ -14,7 +14,7 @@ import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 
 def get_image_features(vision_tower, projector, input_tensor, image_sizes):
@@ -26,6 +26,7 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     return image_features
 
 
+@run_for_wormhole_b0_or_blackhole
 @pytest.mark.parametrize(
     "mesh_device",
     [
