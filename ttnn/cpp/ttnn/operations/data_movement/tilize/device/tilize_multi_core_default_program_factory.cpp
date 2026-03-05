@@ -32,7 +32,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
