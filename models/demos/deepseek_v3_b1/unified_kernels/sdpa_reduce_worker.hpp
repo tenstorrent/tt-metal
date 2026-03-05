@@ -829,11 +829,9 @@ struct SdpaReduceWorker {
 
             // Pop R1 input MS CBs — TRISC-owned, no BRISC race.
             // cb_r1_neighbor_ms: incoming from neighbor, consumed only by TRISC
-            // cb_local_ms: BRISC reads via send_all() (L1 address, no cb_wait/pop)
             // No cb_wait_front needed: NCRISC always pushes all MS CBs unconditionally
             // (even for invalid neighbors with dummy data), so tiles are guaranteed present.
             cb_pop_front(CTArgs::cb_neighbor_ms, 1);
-            cb_pop_front(CTArgs::cb_local_ms, 1);
             cb_pop_front(CTArgs::cb_neighbor_l, CTArgs::num_l_chunks * CTArgs::block_size);
 
             UNPACK(({
