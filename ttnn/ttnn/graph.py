@@ -54,9 +54,16 @@ from ttnn.graph_report import (
 _python_io_data: list = []
 _python_stack_traces_enabled: bool = True
 
-# Frames originating from these files are decorator/infrastructure noise
-# and are stripped from Python stack traces to keep them concise.
-_STACK_TRACE_INTERNAL_FILES = frozenset({"decorators.py", "graph.py"})
+# Glob patterns for frames to strip from stack traces (pathlib-style).
+# Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
+_STACK_TRACE_INTERNAL_PATTERNS = (
+    "**/ttnn/**/decorators.py",
+    "**/ttnn/**/graph.py",
+    "**/_pytest/**",
+    "**/_pytest/config/__init__.py",
+    "**/pluggy/**",
+    "**/bin/pytest",
+)
 
 
 def enable_python_stack_traces():
@@ -85,8 +92,13 @@ def _capture_python_stack_trace() -> list[str]:
     frames = traceback.extract_stack()
     result = []
     for frame in frames:
-        basename = frame.filename.rsplit("/", 1)[-1] if "/" in frame.filename else frame.filename
-        if basename in _STACK_TRACE_INTERNAL_FILES:
+        path = pathlib.Path(frame.filename).resolve()
+        # Match against path relative to root so globs like **/_pytest/** work on absolute paths
+        try:
+            path_for_match = path.relative_to(path.anchor)
+        except ValueError:
+            path_for_match = path
+        if any(path_for_match.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
             continue
         result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}')
     return result
