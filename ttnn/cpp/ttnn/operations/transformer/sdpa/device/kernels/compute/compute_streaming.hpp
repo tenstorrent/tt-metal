@@ -117,13 +117,20 @@ void blocked_matmul_and_pack(
  * Per-row-group max reduction with optional eltwise_max against prev values.
  * Reads from in0_cb at row group offset, writes to out_cb sequentially.
  */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t SBH>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t scale_cb,
+    uint32_t cols,
+    uint32_t SBH,
+    uint32_t ROW_STRIDE = cols>
 void reduce_c_row_group(
     uint32_t in0_cb, uint32_t out_cb, uint32_t prev_cb, uint32_t row_group_index, bool do_eltwise_max = false) {
     constexpr uint32_t GROUP_SIZE = SBH;
     const uint32_t row_start = row_group_index * GROUP_SIZE;
 
-    const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * cols;
+    // ROW_STRIDE: physical row width in the CB (may exceed cols on the reduced path).
+    const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * ROW_STRIDE;
     const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
 
     // scale_cb assumed ready (waited once at kernel init)
@@ -146,7 +153,7 @@ void reduce_c_row_group(
 
     reduce_block_max_row_init<cols>();
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t input_tile_start = (row_start + i) * cols;
+        const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
         reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
     }
     reduce_block_max_row_uninit(in0_cb);
@@ -407,48 +414,6 @@ void mul_block_bcast_cols_acc(
 }
 
 /**
- * Lightweight padded-K mask: L1-accumulate a single permanently-fronted -inf tile onto padded
- * tile positions in cb_qkt_im. No full mask matrix needed — just 1 tile in neginf_cb.
- *
- * Ported from sdpa_benchmark branch's apply_padded_mask.
- *
- * @tparam num_padded  Number of padded K tiles per row (must be > 0)
- * @tparam num_cols    Total K tiles per row (Sk_chunk_t)
- * @tparam SBH         Sub-rows per row group (subblock_h)
- * @tparam DST_BATCH   Max tiles per DST batch (8 for fp16b half-sync)
- */
-template <bool PROFILING_ENABLED, uint32_t num_padded, uint32_t num_cols, uint32_t SBH = 1, uint32_t DST_BATCH = 8>
-static void apply_padded_mask_lightweight(uint32_t neginf_cb, uint32_t out_cb, uint32_t q_subblock = 0) {
-    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PAD_MASK");
-    static_assert(num_padded > 0, "num_padded must be > 0");
-    static_assert(num_padded < num_cols, "num_padded must be less than num_cols");
-    constexpr uint32_t start = num_cols - num_padded;
-
-    copy_tile_to_dst_init_short(neginf_cb);
-    // neginf_cb tile is permanently fronted — cb_wait_front hoisted to op-level entry point.
-    PACK((llk_pack_reconfig_l1_acc(1)));
-
-    for (uint32_t row = 0; row < SBH; row++) {
-        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
-        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
-            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < batch; i++) {
-                copy_tile(neginf_cb, 0, i);  // Always tile 0 — single -inf tile
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, out_cb, row_offset + base + i);
-            }
-            tile_regs_release();
-        }
-    }
-
-    PACK((llk_pack_reconfig_l1_acc(0)));
-}
-
-/**
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
@@ -623,8 +588,7 @@ template <
     uint32_t cb_recip_scratch = 0,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0,
-    uint32_t KT_stride = Sk_chunk_t,
-    uint32_t padded_k_tiles = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t>
+    uint32_t KT_stride = Sk_chunk_t>
 static void sdpa_inner_loop_step(
     const uint32_t prev_max,
     const uint32_t cur_max,
@@ -802,18 +766,6 @@ static void sdpa_inner_loop_step(
             reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
         }
 
-        // Apply mask on last K chunk: L1-accumulate single -inf tile onto padded K positions.
-        // In ring_mode, is_last_iter is always false — skip entirely.
-        if constexpr (padded_k_tiles > 0 && !ring_mode) {
-            if (is_last_iter) {
-#ifdef ARCH_BLACKHOLE
-                PACK((llk_pack_mop_config<false, false, false>(cb_mask_in, 1)));
-#endif
-                apply_padded_mask_lightweight<PROFILING_ENABLED, padded_k_tiles, KT_stride, sbh>(
-                    cb_mask_in, cb_qkt_im, q_subblock);
-            }
-        }
-
         // Ring mask: L1-accumulate lightweight mask tiles onto cb_qkt_im for this row group.
         if constexpr (use_ring_mask) {
             if (apply_mask && (lw_partial_tile_idx > 0 || lw_num_padded > 0)) {
@@ -835,7 +787,7 @@ static void sdpa_inner_loop_step(
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur_max, 1)));
 #endif
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, KT_stride, sbh>(
+            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh, KT_stride>(
                 cb_qkt_im, cur_max, prev_max, q_subblock, !is_first_iter /*do_eltwise_max*/);
             cb_push_back(cur_max, sbh);
 #ifdef ARCH_BLACKHOLE
@@ -1235,9 +1187,7 @@ void sdpa_standard_v2(
                 cb_recip_scratch,
                 cb_normalized_out,
                 cb_mask_in,
-                Sk_chunk_t,           // KT_stride = original Sk for KT CB indexing
-                padded_k_tiles_inner  // Explicit: masking still needed for KT_stride-wide layout
-                >(
+                Sk_chunk_t>(  // KT_stride = original Sk for KT CB indexing
                 alias_prev_max,
                 alias_cur_max,
                 alias_prev_sum,
