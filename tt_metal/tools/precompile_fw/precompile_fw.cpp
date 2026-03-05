@@ -51,29 +51,36 @@ void copy_firmware_to_precompiled_dir(
 
 void enumerate_jit_device_configs(
     tt::ARCH arch, std::string& core_descriptor_path, const std::function<void(const JitDeviceConfig&)>& callback) {
-    /* FIXME: need to figure out these values for each product type */
-    constexpr bool is_base_routing_fw_enabled = false;
-    constexpr bool enable_2_erisc_mode = false;
+    // FIXME: hardcoded values
     constexpr uint32_t profiler_dram_bank_size_per_risc_bytes = 0;
+    // Only support compiling 2-ERISC mode for Blackhole.
+    const bool enable_2_erisc_mode = (arch == tt::ARCH::BLACKHOLE);
 
-    /* FIXME: need to account for dram harvesting */
+    // FIXME: hardcoded based on UMD values
     static const std::unordered_map<tt::ARCH, uint32_t> num_dram_banks_map = {
         {tt::ARCH::WORMHOLE_B0, 12},
         {tt::ARCH::BLACKHOLE, 8},
     };
-    const uint32_t num_dram_banks = num_dram_banks_map.at(arch);
-
     static const std::unordered_map<tt::ARCH, CoreCoord> pcie_core_map = {
         {tt::ARCH::WORMHOLE_B0, {0, 3}},
         {tt::ARCH::BLACKHOLE, {19, 24}},
     };
     const CoreCoord pcie_core = pcie_core_map.at(arch);
 
-    tt::tt_metal::Hal hal(
-        arch, is_base_routing_fw_enabled, enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes);
     YAML::Node core_descriptor_yaml = YAML::LoadFile(core_descriptor_path);
     for (const auto& product : core_descriptor_yaml) {
         const std::string product_name = product.first.as<std::string>();
+        std::vector<bool> routing_fw_enabled_cfgs = {false};
+        std::vector<uint32_t> dram_harvesting_cfgs = {0};
+        // FIXME: hardcoded logic adopted from core_descriptor.cpp
+        // Note: routing_fw_enabled has effect only for Wormhole.
+        if (arch == tt::ARCH::WORMHOLE_B0 && (product_name == "galaxy" || product_name == "nebula_x1")) {
+            routing_fw_enabled_cfgs.push_back(true);
+        }
+        // FIXME: hardcoded values adopted from expected_dram_harvested_units_map in UMD
+        if (arch == tt::ARCH::BLACKHOLE && product_name == "2xharvested") {
+            dram_harvesting_cfgs.push_back(1);
+        }
         for (const auto& axis_config : product.second) {
             std::string dispatch_core_axis_str = axis_config.first.as<std::string>();
             tt_metal::DispatchCoreAxis dispatch_core_axis;
@@ -88,9 +95,8 @@ void enumerate_jit_device_configs(
                 auto num_hw_cqs = config_node.first.as<uint8_t>();
                 const auto& config = config_node.second;
 
-                // TODO: handle tg_compute_with_storage_grid_range
-
-                // Excerpt from core_descriptor.cpp
+                // FIXME: hardcoded logic adopted from core_descriptor.cpp
+                // tg_compute_with_storage_grid_range is not to be supported.
                 auto compute_with_storage_start = config["compute_with_storage_grid_range"]["start"];
                 auto compute_with_storage_end = config["compute_with_storage_grid_range"]["end"];
                 size_t end_x = compute_with_storage_end[0].as<size_t>();
@@ -110,33 +116,34 @@ void enumerate_jit_device_configs(
                     TT_THROW("Invalid dispatch core type: {}", dispatch_core_type_str);
                 }
 
-                JitDeviceConfig jit_device_config = {
-                    .hal = &hal,
-                    .arch = arch,
-                    .num_dram_banks = num_dram_banks,
-                    .num_l1_banks = num_l1_banks,
-                    .pcie_core = pcie_core,
-                    // We only precompile for coordinate_virtualization_enabled = true, so harvesting_mask has no effect
-                    // on compilation
-                    .harvesting_mask = 0,
-                    .dispatch_core_type = dispatch_core_type,
-                    .dispatch_core_axis = dispatch_core_axis,
-                    .coordinate_virtualization_enabled = true,
-                    .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),
-                    .max_cbs = hal.get_arch_num_circular_buffers(),
-                    .num_hw_cqs = num_hw_cqs,
-                    .routing_fw_enabled = false,  // will enumerate
-                    // We only precompile for profiler disabled, so profiler_dram_bank_size_per_risc_bytes has no effect
-                    // on compilation
-                    .profiler_dram_bank_size_per_risc_bytes = profiler_dram_bank_size_per_risc_bytes};
-                callback(jit_device_config);
-                // routing_fw_enabled is set when is_galaxy_cluster() is true, but this
-                // symbol has effect only for Wormhole.
-                // See get_core_descriptor_config in core_descriptor.cpp: galaxy_cluster could
-                // also end up with product name "nebula_x1".
-                if (product_name == "galaxy" || product_name == "nebula_x1") {
-                    jit_device_config.routing_fw_enabled = true;
-                    callback(jit_device_config);
+                // now enumerate all possible combinations of routing_fw_enabled and dram_harvesting_cfg
+                for (const auto& routing_fw_enabled : routing_fw_enabled_cfgs) {
+                    for (const auto& dram_harvesting_count : dram_harvesting_cfgs) {
+                        const uint32_t num_dram_banks = num_dram_banks_map.at(arch) - dram_harvesting_count;
+                        tt::tt_metal::Hal hal(
+                            arch, routing_fw_enabled, enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes);
+                        JitDeviceConfig jit_device_config = {
+                            .hal = &hal,
+                            .arch = arch,
+                            .num_dram_banks = num_dram_banks,
+                            .num_l1_banks = num_l1_banks,
+                            .pcie_core = pcie_core,
+                            // We only precompile for coordinate_virtualization_enabled = true, so harvesting_mask
+                            // has no effect on compilation
+                            .harvesting_mask = 0,
+                            .dispatch_core_type = dispatch_core_type,
+                            .dispatch_core_axis = dispatch_core_axis,
+                            .coordinate_virtualization_enabled = true,
+                            .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),
+                            .max_cbs = hal.get_arch_num_circular_buffers(),
+                            .num_hw_cqs = num_hw_cqs,
+                            .routing_fw_enabled = routing_fw_enabled,
+                            // We only precompile for profiler disabled, so profiler_dram_bank_size_per_risc_bytes
+                            // has no effect on compilation
+                            .profiler_dram_bank_size_per_risc_bytes = profiler_dram_bank_size_per_risc_bytes,
+                        };
+                        callback(jit_device_config);
+                    }
                 }
             }
         }
