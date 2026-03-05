@@ -551,8 +551,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
         [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    mesh_cq.enqueue_read(
-        storage.get_mesh_buffer_leak_ownership(), distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    mesh_cq.enqueue_read(storage.get_mesh_buffer(), distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     HostStorage host_storage(std::move(distributed_host_buffer));
     return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
@@ -671,7 +670,7 @@ void copy_to_host(
         "Host tensor has different page config");
 
     const auto& device_storage = device_tensor.device_storage();
-    const auto& mesh_buffer = device_storage.get_mesh_buffer_leak_ownership();
+    const auto& mesh_buffer = device_tensor.mesh_buffer();
     distributed::MeshDevice* device = device_storage.get_device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -726,8 +725,7 @@ void copy_to_host(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(
-        shard_data_transfers, device_tensor.device_storage().get_mesh_buffer_leak_ownership(), blocking);
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
@@ -760,8 +758,7 @@ void copy_to_device(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(
-        device_tensor.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
+    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
 }
 
 // ======================================================================================
