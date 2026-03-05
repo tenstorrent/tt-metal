@@ -21,6 +21,8 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -90,23 +92,26 @@ void kernel_main() {
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0, cb_in0, cb_in);
-// tilize in0 -> in
+// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm,
+        cb_in,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm,
+        cb_in,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,  // should have unninit also
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    tilize_init(cb_in_rm, per_core_N, cb_in);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-#ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
-#endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_in0, cb_in0);
@@ -442,15 +447,13 @@ void kernel_main() {
     }
 
 #ifdef UNTILIZE_OUT
-    // untilize
-    untilize_init(cb_untilize_in);
-    cb_wait_front(cb_untilize_in, per_core_MN);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_reserve_back(cb_untilize_out, per_core_N);
-        untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-        cb_push_back(cb_untilize_out, per_core_N);
-        cb_pop_front(cb_untilize_in, per_core_N);
-    }
-    untilize_uninit(cb_untilize_in);
+    // untilize - DEST capacity auto-detected
+    compute_kernel_lib::untilize<
+        per_core_N,
+        cb_untilize_in,
+        cb_untilize_out,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }
