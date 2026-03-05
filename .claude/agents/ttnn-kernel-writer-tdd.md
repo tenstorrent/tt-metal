@@ -353,6 +353,7 @@ TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=BR,TR0 scripts/tt-test.sh --dev
 
 | Anti-Pattern | Why It Causes Bugs | Correct Approach |
 |---|---|---|
+| Using `InterleavedAddrGen` | Deprecated legacy API; doesn't support sharding, requires manual index math, not forwards-compatible | Use **TensorAccessor** — see section below |
 | Skipping a TDD stage | Untested code hides bugs until later, making debugging impossible | Implement and test every stage in order |
 | Implementing future stages | Untested code that may break in subtle ways | Each stage implements ONLY its scope |
 | Wrapping helpers with CB ops | Double wait/pop causes deadlock | Helpers handle their own CB ops |
@@ -362,6 +363,12 @@ TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=BR,TR0 scripts/tt-test.sh --dev
 | Skipping `advance` after pass | Gate marker not cleared, breaks next stage | Always advance before implementing next stage |
 | Wrong `post_reduce_op` signature | `[]() { recip_tile(0); }` won't compile | `[](uint32_t dst_idx) { recip_tile(dst_idx); }` |
 | Missing `post_reduce_op` init | `recip_tile` (or similar) called without prior init | Call the corresponding init function (e.g., `recip_tile_init()`) before the reduce loop |
+
+### TensorAccessor (MANDATORY for DRAM/L1 reads and writes)
+
+**Never use `InterleavedAddrGen`.** Use `TensorAccessor` instead. If upstream code uses `InterleavedAddrGen`, fix it — this is within your integration authority.
+
+Docs: `tech_reports/tensor_accessor/tensor_accessor.md` and `.claude/references/ttnn-cb-memory-fundamentals.md` (section "TensorAccessor Pattern"). The `TensorAccessorArgs<N>()` index must match the compile-time arg position in the program descriptor.
 
 ---
 
