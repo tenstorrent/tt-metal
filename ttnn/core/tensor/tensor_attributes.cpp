@@ -2,24 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt::tt_metal {
 
-TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    storage_(std::move(storage)), tensor_spec_(std::move(tensor_spec)), tensor_topology_(std::move(tensor_topology)) {}
+TensorAttributes::TensorAttributes(HostTensor host_tensor) : tensor_attributes(std::move(host_tensor)) {}
 
-const Storage& TensorAttributes::get_storage() const { return storage_; }
-Storage& TensorAttributes::get_storage() { return storage_; }
-const TensorSpec& TensorAttributes::get_tensor_spec() const { return tensor_spec_; }
-const TensorTopology& TensorAttributes::get_tensor_topology() const { return tensor_topology_; }
+TensorAttributes::TensorAttributes(MeshTensor mesh_tensor) : tensor_attributes(std::move(mesh_tensor)) {}
 
-TensorAttributes TensorAttributes::with_tensor_topology(TensorTopology tensor_topology) const {
-    TensorAttributes result = *this;
-    result.tensor_topology_ = std::move(tensor_topology);
-    return result;
+StorageType TensorAttributes::storage_type() const {
+    return std::visit(
+        tt::stl::overloaded{
+            [](const HostTensor&) { return StorageType::HOST; },
+            [](const MeshTensor&) { return StorageType::DEVICE; },
+        },
+        tensor_attributes);
+}
+
+HostTensor& TensorAttributes::host_tensor() {
+    TT_FATAL(storage_type() == StorageType::HOST, "Tensor is not on host");
+    return std::get<HostTensor>(tensor_attributes);
+}
+
+const HostTensor& TensorAttributes::host_tensor() const {
+    TT_FATAL(storage_type() == StorageType::HOST, "Tensor is not on host");
+    return std::get<HostTensor>(tensor_attributes);
+}
+
+MeshTensor& TensorAttributes::mesh_tensor() {
+    TT_FATAL(storage_type() == StorageType::DEVICE, "Tensor is not on device");
+    return std::get<MeshTensor>(tensor_attributes);
+}
+
+const MeshTensor& TensorAttributes::mesh_tensor() const {
+    TT_FATAL(storage_type() == StorageType::DEVICE, "Tensor is not on device");
+    return std::get<MeshTensor>(tensor_attributes);
 }
 
 }  // namespace tt::tt_metal

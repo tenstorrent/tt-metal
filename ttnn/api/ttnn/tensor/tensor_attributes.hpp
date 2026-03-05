@@ -4,34 +4,31 @@
 
 #pragma once
 
-#include <memory>
+#include <variant>
 
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include "ttnn/tensor/types.hpp"
+
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal {
 
-class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
+class TensorAttributes {
 public:
-    TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
-    TensorAttributes(const TensorAttributes&) = default;
-    TensorAttributes(TensorAttributes&&) = default;
-    TensorAttributes& operator=(const TensorAttributes&) = default;
-    TensorAttributes& operator=(TensorAttributes&&) = default;
+    TensorAttributes() = default;
+    TensorAttributes(HostTensor host_tensor);
+    TensorAttributes(MeshTensor mesh_tensor);
 
-    // Getters and setters.
-    const Storage& get_storage() const;
-    Storage& get_storage();
-    const TensorSpec& get_tensor_spec() const;
-    const TensorTopology& get_tensor_topology() const;
+    StorageType storage_type() const;
 
-    TensorAttributes with_tensor_topology(TensorTopology tensor_topology) const;
+    HostTensor& host_tensor();
+    const HostTensor& host_tensor() const;
+
+    MeshTensor& mesh_tensor();
+    const MeshTensor& mesh_tensor() const;
 
 private:
-    Storage storage_;
-    TensorSpec tensor_spec_;
-    TensorTopology tensor_topology_;
+    std::variant<HostTensor, MeshTensor> tensor_attributes;
 };
 
 }  // namespace tt::tt_metal

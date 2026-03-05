@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,8 @@
 
 namespace tt::tt_metal::host_buffer {
 
-HostBuffer get_host_buffer(const Tensor& tensor) {
-    TT_FATAL(is_cpu_tensor(tensor), "Tensor must have HostStorage");
-    const auto& storage = tensor.host_storage();
+HostBuffer get_host_buffer(const HostTensor& tensor) {
+    const auto& storage = tensor.get_legacy_host_storage();
     std::vector<HostBuffer> buffers;
     storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
     TT_FATAL(
@@ -22,4 +21,10 @@ HostBuffer get_host_buffer(const Tensor& tensor) {
         storage.buffer().shape());
     return buffers.front();
 }
+
+HostBuffer get_host_buffer(const Tensor& tensor) {
+    TT_FATAL(is_cpu_tensor(tensor), "Tensor must have HostStorage");
+    return get_host_buffer(tensor.host_tensor());
+}
+
 }  // namespace tt::tt_metal::host_buffer

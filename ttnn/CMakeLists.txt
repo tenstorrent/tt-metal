@@ -151,7 +151,6 @@ target_sources(
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
         core/tensor/serialization.cpp
-        core/tensor/storage.cpp
         core/tensor/tensor.cpp
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
