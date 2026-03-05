@@ -67,16 +67,20 @@ def create_torch_w2_tensors(L, E, N, H):
     return torch_w2_tensors
 
 
-def gen_torch_expert_mapping_tensor(scheme, devices, experts, experts_per_device, dtype):
-    if scheme == "random":
-        perm = torch.randperm(experts)
-        assignment = torch.empty(experts, dtype=tt_to_torch_dtype(dtype))
-        for d in range(devices):
-            assignment[perm[d * experts_per_device : (d + 1) * experts_per_device]] = d
-    else:
-        assignment = torch.arange(experts) // experts_per_device
+def gen_torch_expert_mapping_tensor(experts_per_cluster, dispatch_devices, devices, experts, experts_per_device, dtype):
+    replicated_devices = devices // dispatch_devices
 
-    return assignment.unsqueeze(0).repeat(devices, 1)
+    torch_expert_mapping_tensor = torch.empty(experts, dtype=tt_to_torch_dtype(dtype))
+    for e in range(experts):
+        cluster = e // experts_per_cluster
+        expert_id_within_cluster = e % experts_per_cluster
+        device_id_within_cluster = expert_id_within_cluster // experts_per_device
+
+        linearized_mesh_coord = device_id_within_cluster * replicated_devices + cluster
+        torch_expert_mapping_tensor[e] = linearized_mesh_coord
+
+    torch_expert_mapping_tensor = torch_expert_mapping_tensor.unsqueeze(0).repeat(devices, 1)
+    return torch_expert_mapping_tensor
 
 
 def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
@@ -403,6 +407,8 @@ def gen_combine_golden(
         # sci_mode=False,          # Disable scientific notation
     )
 
+    # print(torch_dispatch_input_tensor[:, :, :, 0:4])
+
     # 8, 16, 128
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
@@ -443,6 +449,14 @@ def verify_combine(iteration, mesh_device, tt_combine_tensor, torch_combine_gold
         precision=10,  # Decimal places for floats
         # sci_mode=False,          # Disable scientific notation
     )
+
+    print("REFERENCE")
+    # print(torch_combine_golden[0, 0:64, 0:4])
+
+    ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+
+    print("TT")
+    # print(torch_combine_output[0, 0:512, 0:4])
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
@@ -618,7 +632,7 @@ def test_optimized_moe_decode_block(
 
     expert_mapping_dtype = ttnn.uint16
     torch_expert_mapping = gen_torch_expert_mapping_tensor(
-        scheme, devices, experts, experts_per_device, expert_mapping_dtype
+        experts_per_cluster, dispatch_devices, devices, experts, experts_per_device, expert_mapping_dtype
     )
     tt_expert_mapping = ttnn.from_torch(
         torch_expert_mapping,
@@ -628,6 +642,14 @@ def test_optimized_moe_decode_block(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
     )
+
+    torch.set_printoptions(
+        threshold=float("inf"),  # Print all elements (no truncation)
+        linewidth=200,  # Wider lines before wrapping
+        precision=10,  # Decimal places for floats
+        # sci_mode=False,          # Disable scientific notation
+    )
+    print(torch_expert_mapping[0, :])
 
     # ------------------------------------------------------------------------
     # Matmul weights
@@ -1194,8 +1216,9 @@ def test_optimized_moe_decode_block(
             tt_output_tensors.append(tt_output)
             tt_combine_tensors.append(tt_combine_output)
 
+            # (128, 512, 7168)
             torch_temp = ttnn.to_torch(
-                temp, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(0, 1))
+                temp, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
             )
 
             torch.set_printoptions(
@@ -1205,7 +1228,9 @@ def test_optimized_moe_decode_block(
                 # sci_mode=False,          # Disable scientific notation
             )
 
-            torch_temp = torch_temp[:1, :512, :4]
+            ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+
+            torch_temp = torch_temp[1, :, :4]
             # print(torch_temp.shape)
             # print(torch_temp)
 

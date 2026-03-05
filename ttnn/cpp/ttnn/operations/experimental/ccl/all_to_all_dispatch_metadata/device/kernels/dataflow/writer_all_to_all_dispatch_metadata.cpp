@@ -534,8 +534,14 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
             // Remote device on our axis - calculate distance in both directions
             // pos_distance: going EAST/SOUTH (ascending, with wrap)
             // neg_distance: going WEST/NORTH (descending, with wrap)
-            uint32_t pos_distance = (target_device - LinearizedSrcMeshCoord + NumDevices) % NumDevices;
-            uint32_t neg_distance = (LinearizedSrcMeshCoord - target_device + NumDevices) % NumDevices;
+
+            // TODO: (GR) cleanup
+            uint16_t normalized_target = target_device / 8;
+            uint16_t nromalized_src = LinearizedSrcMeshCoord / 8;
+            uint32_t dispatch_devices = 16;
+
+            uint32_t pos_distance = (normalized_target - nromalized_src + dispatch_devices) % dispatch_devices;
+            uint32_t neg_distance = (nromalized_src - normalized_target + dispatch_devices) % dispatch_devices;
             // Determine shortest path direction
             if (pos_distance < neg_distance) {
                 // Shorter via positive direction (EAST/SOUTH)
