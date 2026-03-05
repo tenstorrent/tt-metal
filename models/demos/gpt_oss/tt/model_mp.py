@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import comp_pcc, nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
@@ -16,6 +18,19 @@ from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+
+base_path = "/localdev/smanoj/gptoss_layer_dumps/"
+
+
+def compare_gptoss_tensor(tt_tensor, ref_path, pcc_threshold=0.95):
+    tt_tensor_host = ttnn.to_torch(tt_tensor).to(torch.bfloat16)
+    file_path = os.path.join(base_path + ref_path)
+    ref_tensor = torch.load(file_path)["output"]
+    ref_tensor = ref_tensor.to(torch.bfloat16)
+    # Compute Pearson correlation coefficient
+    passing, pcc = comp_pcc(tt_tensor_host, ref_tensor, pcc_threshold)
+    logger.info(f"Comparing reference tensor from: {file_path}. PCC = {pcc}")
+    assert passing, f"PCC {pcc} is below threshold {pcc_threshold}"
 
 
 def create_rope_setup(
@@ -135,21 +150,10 @@ class ModelWithMP:
             decode=ModeConfig(mp=self.mesh_shape[1], ep=self.mesh_shape[0], sp=1, tp=1),
             mp_enabled=True,
         )
-        print("Initialized ModelWithMP with mesh_config: ", self.mesh_config)
         self.mp_submeshes = self.ccl_manager.mp_submeshes
 
-        print("Submeshes = ", self.mp_submeshes, "model_config = ", self.mesh_config)
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
-
-        num_layers_per_submesh = hf_config.num_hidden_layers // self.mesh_shape[1]
-        num_layers_per_submesh_rem = hf_config.num_hidden_layers % self.mesh_shape[1]
-        print(
-            "num_layers_per_submesh = ",
-            num_layers_per_submesh,
-            "num_layers_per_submesh_rem = ",
-            num_layers_per_submesh_rem,
-        )
 
         self.rope_setup = create_rope_setup(
             mesh_devices=self.mp_submeshes,  # Run on first submesh
@@ -184,7 +188,6 @@ class ModelWithMP:
         for layer_idx in range(hf_config.num_hidden_layers):
             submesh_id = worker_for_task(layer_idx, hf_config.num_hidden_layers, self.mesh_shape[1])
             self.last_submesh_id = submesh_id
-            print("Assigning layer ", layer_idx, " to submesh ", submesh_id)
             self.layers.append(
                 DecoderLayer(
                     self.mp_submeshes[submesh_id],
@@ -204,7 +207,6 @@ class ModelWithMP:
                 )
             )
 
-        logger.info(f"Last Submesh ID is {self.last_submesh_id}, placing norm and lm_head on this submesh")
         self.norm = RMSNorm(
             self.mp_submeshes[self.last_submesh_id],
             hf_config,
@@ -558,7 +560,13 @@ class ModelWithMP:
             rope_mats = rot_mats_global
         else:
             # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
-            rope_mats = self.rope_setup
+            rope_mats = [
+                [
+                    x.cos_matrix_prefill[:, :, :seq_len, :],
+                    x.sin_matrix_prefill[:, :, :seq_len, :],
+                ]
+                for x in self.rope_setup
+            ]
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
