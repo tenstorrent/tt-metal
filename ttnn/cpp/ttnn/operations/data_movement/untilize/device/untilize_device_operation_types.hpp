@@ -24,7 +24,6 @@ struct UntilizeTensorArgs {
 struct UntilizeOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore{};
-    bool use_pack_untilize{};
     bool fp32_dest_acc_en{};
     std::optional<CoreRangeSet> sub_core_grids;
     bool enough_space_width{};
