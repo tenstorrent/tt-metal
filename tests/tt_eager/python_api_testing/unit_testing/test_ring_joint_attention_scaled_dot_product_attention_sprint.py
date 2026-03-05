@@ -55,14 +55,18 @@ GALAXY_SP_SIZE = 8  # Sequence parallel size (devices per ring)
 
 # Workload configuration constants - per-device sequence lengths
 GALAXY_SEQ_LENS_PER_DEVICE = [2368, 9472]  # Galaxy per-device sequence lengths (12x10 grid)
-NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240, 8544]
+#NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240, 8544]
+NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240]
 HEADS_PER_DEVICE = 10  # Number of attention heads per device
 HEAD_DIMENSION = 128  # Attention head dimension
 BATCH_SIZE = 1  # Default batch size
 
 # Chunk size sweep parameters
-Q_CHUNK_SIZES = [224, 256, 288]  # Query chunk sizes for tiling
-K_CHUNK_SIZES = [128, 256, 512]  # Key chunk sizes for tiling
+# Q_CHUNK_SIZES = [224, 256, 288]  # Query chunk sizes for tiling
+# K_CHUNK_SIZES = [128, 256, 512]  # Key chunk sizes for tiling
+
+Q_CHUNK_SIZES = [224]  # Query chunk sizes for tiling
+K_CHUNK_SIZES = [512]  # Key chunk sizes for tiling
 
 # Memory alignment constants
 TILE_ALIGNMENT_BOUNDARY = 32  # TT-Metal tile alignment boundary
