@@ -502,6 +502,10 @@ bool IsEnabled() {
     return Inspector::is_enabled();
 }
 
+bool CaptureRuntimeEntries() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_runtime_entries();
+}
+
 void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,

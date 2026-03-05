@@ -194,7 +194,8 @@ void enqueue_mesh_workload(
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
     // Inspector: emit debug entry with tensor parameters
-    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
+    if (tt::tt_metal::experimental::inspector::IsEnabled() &&
+        tt::tt_metal::experimental::inspector::CaptureRuntimeEntries()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
         std::vector<TensorSpec> spec_copies;

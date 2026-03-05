@@ -16,6 +16,9 @@ namespace tt::tt_metal::experimental::inspector {
 // Inspector feature flag
 bool IsEnabled();
 
+// Whether runtime entry capture is enabled (checks rtoptions).
+bool CaptureRuntimeEntries();
+
 // Emit a debug entry for a mesh workload execution, capturing the operation name and tensor specs.
 void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,

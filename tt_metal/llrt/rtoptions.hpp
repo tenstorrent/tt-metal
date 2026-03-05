@@ -100,8 +100,8 @@ struct InspectorSettings {
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
     bool serialize_on_dispatch_timeout = true;
+    bool capture_runtime_entries = true;
     bool log_runtime_entries = false;
-    size_t max_runtime_entries = 10000;
     std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
@@ -414,6 +414,8 @@ public:
         return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
     }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
+    bool get_inspector_capture_runtime_entries() const { return inspector_settings.capture_runtime_entries; }
+    void set_inspector_capture_runtime_entries(bool enabled) { inspector_settings.capture_runtime_entries = enabled; }
     bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
     size_t get_inspector_max_runtime_entries() const { return inspector_settings.max_runtime_entries; }
