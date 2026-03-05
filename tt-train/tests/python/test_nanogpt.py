@@ -198,8 +198,8 @@ class TestGPTMLP:
 
         mlp = GPTMLP(embedding_dim, dropout=0.0)
 
-        fc1_np = mlp.fc1.get_weight().to_numpy(ttnn.DataType.FLOAT32)
-        fc2_np = mlp.fc2.get_weight().to_numpy(ttnn.DataType.FLOAT32)
+        fc1_np = mlp.fc1.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
+        fc2_np = mlp.fc2.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
 
         # fc1: embedding_dim -> embedding_dim * 4
         assert fc1_np.shape == (1, 1, embedding_dim * 4, embedding_dim)
@@ -255,8 +255,8 @@ class TestGPTMLP:
         loss.backward(False)
 
         # Check gradients exist
-        assert mlp.fc1.get_weight().is_grad_initialized(), "fc1 should have gradient"
-        assert mlp.fc2.get_weight().is_grad_initialized(), "fc2 should have gradient"
+        assert mlp.fc1.weight.tensor.is_grad_initialized(), "fc1 should have gradient"
+        assert mlp.fc2.weight.tensor.is_grad_initialized(), "fc2 should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -302,8 +302,8 @@ class TestMultiHeadAttention:
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
 
-        qkv_np = attention.qkv_linear.get_weight_numpy()
-        out_np = attention.out_linear.get_weight_numpy()
+        qkv_np = attention.qkv_linear.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
+        out_np = attention.out_linear.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
 
         # QKV projection: embedding_dim -> embedding_dim * 3
         assert qkv_np.shape == (1, 1, embedding_dim * 3, embedding_dim)
@@ -366,10 +366,10 @@ class TestMultiHeadAttention:
 
         # Check gradients exist
         assert (
-            attention.qkv_linear.get_weight().is_grad_initialized()
+            attention.qkv_linear.weight.tensor.is_grad_initialized()
         ), "qkv should have gradient"
         assert (
-            attention.out_linear.get_weight().is_grad_initialized()
+            attention.out_linear.weight.tensor.is_grad_initialized()
         ), "out_proj should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
@@ -565,17 +565,17 @@ class TestNanoGPT:
         tok_emb_before = model.tok_emb.weight.tensor.to_numpy(
             ttnn.DataType.FLOAT32
         ).copy()
-        fc_before = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_before = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # Set fc weights to a random value
-        model.fc.get_weight().set_value(
-            ttml.core.ones_like(model.fc.get_weight().get_value()) * np.random.rand()
+        model.fc.weight.tensor.set_value(
+            ttml.core.ones_like(model.fc.weight.tensor.get_value()) * np.random.rand()
         )
 
         tok_emb_after = model.tok_emb.weight.tensor.to_numpy(
             ttnn.DataType.FLOAT32
         ).copy()
-        fc_after = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_after = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # fc weight got updated
         assert not np.allclose(fc_before, fc_after)
@@ -593,20 +593,20 @@ class TestNanoGPT:
         tok_emb_before = model.tok_emb.weight.tensor.to_numpy(
             ttnn.DataType.FLOAT32
         ).copy()
-        fc_before = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_before = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # tok_emb and fc have the same initial value
         assert np.allclose(tok_emb_before, fc_before)
 
         # Set weights to a random value
-        model.fc.get_weight().set_value(
-            ttml.core.ones_like(model.fc.get_weight().get_value()) * np.random.rand()
+        model.fc.weight.tensor.set_value(
+            ttml.core.ones_like(model.fc.weight.tensor.get_value()) * np.random.rand()
         )
 
         tok_emb_after = model.tok_emb.weight.tensor.to_numpy(
             ttnn.DataType.FLOAT32
         ).copy()
-        fc_after = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_after = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # fc weight got updated
         assert not np.allclose(fc_before, fc_after)
