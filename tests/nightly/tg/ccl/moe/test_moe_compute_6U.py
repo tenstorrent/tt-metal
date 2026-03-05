@@ -11,6 +11,9 @@ import random
 import torch
 import ttnn
 
+from tests.nightly.tg.ccl.test_selective_combine import device_mesh_iterator, check_ref as validate_combine
+from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr
+
 from models.common.utility_functions import comp_pcc
 
 MESH_GRAPH_DESC_1x16 = (
@@ -880,6 +883,36 @@ def compute_matmul_golden(
     return torch_output_ref.reshape(layers, devices, experts // devices, tokens, hidden)
 
 
+def compute_combine_golden(
+    layers, tokens, hidden_size, select_experts_k, mesh_shape, matmul_goldens, dense_token_activations, cluster_axis
+):
+    cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
+    output_ref_tensor = torch.zeros(layers, select_experts_k, tokens * cluster_factor, hidden_size).bfloat16()
+    output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
+
+    batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
+
+    for l in range(layers):
+        activations = dense_token_activations[l]
+        for m0, m1, d in device_mesh_iterator(mesh_shape):
+            dense_token_index = 0
+            for e in range(experts_per_device):
+                for a in activations:
+                    if a[1 + e] == -1:
+                        continue
+                    st = a[0]
+                    k = a[1 + e]
+
+                    gt = batch_rep_idxr(m0, m1, st)
+
+                    contrib = matmul_goldens[l, d, e, dense_token_index]
+                    output_ref_tensor[l, k, gt] = contrib
+                    output_data_map[l, k, gt] = 1
+
+                    dense_token_index += 1
+    return output_ref_tensor, output_data_map
+
+
 def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     """
     Create an L1 sharded memory config for a tensor to be completely on specified cores.
@@ -1184,6 +1217,11 @@ def test_moe_compute(
         num_devices,
         tokens_per_device,
         hidden_size,
+    )
+
+    # compute goldens for combine
+    combine_goldens = compute_combine_golden(
+        layers, total_tokens, hidden, select_experts_k, mesh_shape, matmul_goldens, activation_goldens, cluster_axis
     )
 
     # ------------------------------------------------------------------------
