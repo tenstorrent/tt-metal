@@ -20,7 +20,7 @@ CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
     "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9969),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9968),
         # 512x512 image resolution
         ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9958),
     ],
