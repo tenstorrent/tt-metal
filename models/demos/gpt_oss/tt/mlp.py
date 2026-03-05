@@ -96,12 +96,7 @@ class MLP:
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
-        result = self.router(hidden_states, self.use_throughput_experts)
-        if len(result) == 3:
-            expert_indices, expert_weights, hidden_rm = result
-        else:
-            expert_indices, expert_weights = result
-            hidden_rm = None
+        expert_indices, expert_weights, hidden_rm = self.router(hidden_states, self.use_throughput_experts)
         # When fused op provides RM hidden_states, pass it directly
         # (experts will detect RM layout and skip to_layout conversion)
         expert_output = self.experts(

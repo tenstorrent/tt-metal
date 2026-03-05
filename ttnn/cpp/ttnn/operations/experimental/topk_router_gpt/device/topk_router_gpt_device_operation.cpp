@@ -28,10 +28,7 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
         auto B = input_shape[0];
         auto dram_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
-        // Slot 1: hidden_rm [B, hidden_dim] bf16 RM
-        auto rm_spec =
-            TensorSpec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
-
+        // Slot 1: unused (output_tensor placeholder)
         // Slot 2: indices_rm [B, k_padded] uint16 RM
         uint32_t k_padded = ((attrs.k + 7) / 8) * 8;
         auto idx_spec = TensorSpec(
@@ -41,7 +38,7 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
         auto wgt_spec = TensorSpec(
             ttnn::Shape({B, k_padded}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
 
-        return {main_spec, rm_spec, idx_spec, wgt_spec};
+        return {main_spec, main_spec, idx_spec, wgt_spec};
     }
     return {main_spec, main_spec, main_spec, main_spec};
 }
@@ -51,10 +48,9 @@ tensor_return_value_t TopkRouterGptDeviceOperation::create_output_tensors(
     if (attrs.produce_hidden_rm) {
         auto specs = compute_output_specs(attrs, tensor_args);
         auto device = tensor_args.input_tensor.device();
-        auto rm_tensor = create_device_tensor(std::get<1>(specs), device);
         auto idx_tensor = create_device_tensor(std::get<2>(specs), device);
         auto wgt_tensor = create_device_tensor(std::get<3>(specs), device);
-        return {tensor_args.output_tensor, rm_tensor, idx_tensor, wgt_tensor};
+        return {tensor_args.output_tensor, tensor_args.output_tensor, idx_tensor, wgt_tensor};
     }
     // Return the pre-allocated output tensor in all slots.
     // Slots 1-3 are unused when produce_hidden_rm is false,

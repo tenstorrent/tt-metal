@@ -15,7 +15,7 @@ struct operation_attributes_t {
     uint32_t k;              // Number of top experts per token (4)
     uint32_t num_experts;    // Total number of experts (128)
     bool untilize_output;    // If true, write output in ROW_MAJOR format
-    bool produce_hidden_rm;  // If true, allocate and write input in RM as second output
+    bool produce_hidden_rm;  // If true, produce dispatch outputs (indices uint16 RM, weights bf16 RM)
 };
 
 struct tensor_args_t {
@@ -25,7 +25,7 @@ struct tensor_args_t {
     const Tensor& output_tensor;  // [B, num_experts] bf16 pre-allocated
 };
 
-// Four outputs: (main_output, hidden_rm, indices_rm_u16, weights_rm)
+// Four outputs: (main_output, unused, indices_rm_u16, weights_rm)
 // When produce_hidden_rm=false, slots 1-3 are dummies (copies of output_tensor).
 using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor, Tensor>;
 using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec, TensorSpec>;

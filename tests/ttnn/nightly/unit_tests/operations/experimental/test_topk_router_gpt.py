@@ -244,10 +244,10 @@ def main():
         logger.info(f"  Weight PCC (typecast vs TILE): {tc_weight_pcc:.6f}")
 
         # ================================================================
-        # Test 6: produce_hidden_rm — verify op allocates and untilizes input to RM
+        # Test 6: produce_hidden_rm — verify dispatch outputs (indices uint16 RM, weights bf16 RM)
         # ================================================================
         logger.info("=" * 60)
-        logger.info("TEST 6: produce_hidden_rm (op-allocated input untilize)")
+        logger.info("TEST 6: produce_hidden_rm (dispatch outputs: indices + weights)")
         torch.manual_seed(42)
         torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
         torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
@@ -264,7 +264,7 @@ def main():
             layout=ttnn.TILE_LAYOUT,
         )
 
-        result, hidden_rm, indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
+        result, _, indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
             tt_input,
             weight_tensor=tt_weight,
             bias_tensor=tt_bias,
@@ -273,17 +273,6 @@ def main():
             num_experts=N,
             produce_hidden_rm=True,
         )
-
-        # Read back the op-allocated RM tensor and compare to original input
-        hidden_rm_torch = ttnn.to_torch(hidden_rm)[:B, :K].float()
-        input_ref = torch_input.float()
-
-        hidden_rm_pcc = compute_pcc(input_ref, hidden_rm_torch)
-        hidden_rm_match = torch.allclose(input_ref, hidden_rm_torch, atol=1e-3)
-        logger.info(f"  hidden_rm PCC vs input: {hidden_rm_pcc:.6f}")
-        logger.info(f"  hidden_rm exact match: {hidden_rm_match}")
-        logger.info(f"  Input row 0 first 8: {input_ref[0, :8].tolist()}")
-        logger.info(f"  RM    row 0 first 8: {hidden_rm_torch[0, :8].tolist()}")
 
         # Verify dispatch outputs: indices_rm (uint16) and weights_rm (bf16)
         indices_rm_torch = ttnn.to_torch(indices_rm)[:B, :k].long()
@@ -302,7 +291,7 @@ def main():
         logger.info(f"  Dispatch indices match: {dispatch_idx_match}")
         logger.info(f"  Dispatch weights PCC: {dispatch_wgt_pcc:.6f}")
 
-        hrm_pass = hidden_rm_pcc >= 0.999 and hidden_rm_match and dispatch_idx_match and dispatch_wgt_pcc >= 0.999
+        hrm_pass = dispatch_idx_match and dispatch_wgt_pcc >= 0.999
 
         # ================================================================
         # Summary
@@ -317,7 +306,7 @@ def main():
                 f"FAILED: weight_pcc={weight_pcc:.4f}, idx_match={idx_match_pct:.1f}%, "
                 f"rm_idx_match={rm_idx_match}, rm_weight_pcc={rm_weight_pcc:.4f}, "
                 f"tc_idx_match={tc_idx_match}, tc_weight_pcc={tc_weight_pcc:.4f}, "
-                f"hrm_pcc={hidden_rm_pcc:.4f}, hrm_match={hidden_rm_match}"
+                f"dispatch_idx_match={dispatch_idx_match}, dispatch_wgt_pcc={dispatch_wgt_pcc:.4f}"
             )
 
     finally:

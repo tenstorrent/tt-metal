@@ -305,6 +305,12 @@ void kernel_main() {
         uint32_t indices_rm_addr = get_arg_val<uint32_t>(19);
         uint32_t weights_rm_addr = get_arg_val<uint32_t>(20);
         uint32_t k_padded = get_arg_val<uint32_t>(21);
+        // DRAM-aligned page size from buffer allocation — the allocator pads
+        // pages to DRAM_ALIGNMENT (32 bytes on WH), so InterleavedAddrGen must
+        // use this stride, not the raw data size (k_padded * 2).
+        uint32_t aligned_page_size = get_arg_val<uint32_t>(22);
+
+        uint32_t data_size = k_padded * 2;  // actual data bytes per page (16 for k_padded=8)
 
         constexpr uint32_t CB_DISPATCH = tt::CBIndex::c_19;
         cb_reserve_back(CB_DISPATCH, 1);
@@ -331,12 +337,11 @@ void kernel_main() {
             }
         }
 
-        uint32_t page_size = k_padded * 2;  // 16 bytes for k_padded=8
-        const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = page_size};
-        const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = page_size};
+        const InterleavedAddrGen<true> idx_ag = {.bank_base_address = indices_rm_addr, .page_size = aligned_page_size};
+        const InterleavedAddrGen<true> wgt_ag = {.bank_base_address = weights_rm_addr, .page_size = aligned_page_size};
         for (uint32_t p = 0; p < 32; p++) {
-            noc_async_write(idx_base + p * page_size, get_noc_addr(p, idx_ag), page_size);
-            noc_async_write(wgt_base + p * page_size, get_noc_addr(p, wgt_ag), page_size);
+            noc_async_write(idx_base + p * data_size, get_noc_addr(p, idx_ag), data_size);
+            noc_async_write(wgt_base + p * data_size, get_noc_addr(p, wgt_ag), data_size);
         }
         noc_async_write_barrier();
     }
