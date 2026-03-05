@@ -531,10 +531,10 @@ class Transformer(LightweightModule):
             device=None,
             dtype=ttnn.int32,
         )
-        if self.bitmask is not None:
-            copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=[self.bitmask])
-        else:
-            self.bitmask = copy_host_to_device(host_tensors=[bitmask_tt], mesh_device=self.mesh_device)[0]
+        # if self.bitmask is not None:
+        #     copy_host_to_device(host_tensors=[bitmask_tt], device_tensors=[self.bitmask])
+        # else:
+        self.bitmask = copy_host_to_device(host_tensors=[bitmask_tt], mesh_device=self.mesh_device)[0]
 
     def apply_bitmask_to_logits(self, tt_logits):
         """Apply bitmask to logits tensor in-place. Must be called OUTSIDE of traces."""

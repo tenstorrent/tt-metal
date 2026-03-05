@@ -356,10 +356,6 @@ class Generator(WarmupForwardMixin):
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
 
-            if sampling_enabled and bitmask is not None:
-                bitmask_user = bitmask[idx : idx + 1]
-                self.model[model_id].bitmask_to_device(bitmask_user)
-
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
             # Extracting data for the current user
@@ -479,7 +475,13 @@ class Generator(WarmupForwardMixin):
 
             if sampling_enabled:
                 # applying only in the sampling case
-                logits = self.model[model_id].apply_bitmask_to_logits(logits)
+                if sampling_enabled and bitmask is not None:
+                    print(f"Logits shape before applying bitmask: {logits.shape}")
+                    print(f"Bitmask slice shape: {bitmask[idx : idx + 1].shape}")
+                    bitmask_user = bitmask[idx : idx + 1]
+                    self.model[model_id].bitmask_to_device(bitmask_user)
+                    logits = self.model[model_id].apply_bitmask_to_logits(logits)
+
                 tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
                     logits,
                     enable_trace=False,
@@ -713,13 +715,6 @@ class Generator(WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
-        # Transfer bitmask to device for structured outputs
-        # TODO this means we transfer even if this dp rank doesnt have a structured output request
-        if bitmask is not None:
-            bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
-            for i in range(self.data_parallel):
-                self.model[i].bitmask_to_device(bitmasks[i])
-
         sampling_params_list = None
         if sampling_params is not None:
             # sampling_dp may differ from data_parallel for models that internally
@@ -782,7 +777,9 @@ class Generator(WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs, reset_batch=mode_switched, bitmask=bitmask
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -924,7 +921,14 @@ class Generator(WarmupForwardMixin):
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
+        self,
+        tokens,
+        current_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        reset_batch=False,
+        bitmask=None,
     ):
         """
         Run decode forward text with tracing
@@ -964,11 +968,17 @@ class Generator(WarmupForwardMixin):
         # Apply bitmask to logits AFTER trace execution but BEFORE sampling
         # This avoids baking the bitmask conditional into the trace
         if sampling_on_device:
-            # Apply bitmask to logits before sampling
-            for i in range(self.data_parallel):
-                outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
-                ttnn.synchronize_device(self.model_args[i].mesh_device)
-                print(f"Synchronized device after applying bitmask to logits for model {i}")
+            # Transfer bitmask to device for structured outputs
+            # TODO this means we transfer even if this dp rank doesnt have a structured output request
+            if bitmask is not None:
+                bitmasks = torch.chunk(bitmask, self.data_parallel, 0)
+                for i in range(self.data_parallel):
+                    self.model[i].bitmask_to_device(bitmasks[i])
+                # Apply bitmask to logits before sampling
+                for i in range(self.data_parallel):
+                    outputs[i] = self.model[i].apply_bitmask_to_logits(outputs[i])
+                    ttnn.synchronize_device(self.model_args[i].mesh_device)
+                    print(f"Synchronized device after applying bitmask to logits for model {i}")
 
             new_outputs = []
             for i in range(self.data_parallel):
