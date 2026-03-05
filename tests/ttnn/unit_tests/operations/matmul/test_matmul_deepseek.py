@@ -883,13 +883,8 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         in0_orig = torch.randn([1, batch, seq_len, k], dtype=torch.bfloat16)
         in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
 
-        in0 = torch.zeros([1, batch_padded, seq_len, k_padded], dtype=torch.bfloat16)
-        in0[:, :batch, :seq_len, :k] = in0_orig
-        in1 = torch.zeros([1, batch_padded, k_padded, n_padded], dtype=torch.bfloat16)
-        in1[:, :batch, :k, :n] = in1_orig
-
         in0_t = ttnn.from_torch(
-            in0,
+            in0_orig,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -905,7 +900,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
         )
         in1_t = ttnn.from_torch(
-            in1,
+            in1_orig,
             dtype=in1_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,

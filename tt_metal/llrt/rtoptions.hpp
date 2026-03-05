@@ -26,6 +26,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
 namespace tt::tt_fabric {
@@ -273,6 +274,9 @@ class RunTimeOptions {
     // Path to channel trimming profile YAML for import-driven router construction
     std::string fabric_trimming_profile_path;
 
+    // Path to channel trimming global override YAML
+    std::string fabric_trimming_override_path;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -304,6 +308,10 @@ class RunTimeOptions {
     // Fabric router sync timeout configuration (in milliseconds)
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+
+    // User override for fabric kernel compiler optimization level
+    // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
+    std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
 
     // Disable XIP dump
     bool disable_xip_dump = false;
@@ -663,6 +671,11 @@ public:
     const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
     void set_fabric_trimming_profile_path(const std::string& path) { fabric_trimming_profile_path = path; }
 
+    // Channel trimming global override path
+    bool has_fabric_trimming_override() const { return !fabric_trimming_override_path.empty(); }
+    const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
+    void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
@@ -706,6 +719,11 @@ public:
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
+
+    std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
+    void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
+        fabric_kernel_opt_level = opt_level;
+    }
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 

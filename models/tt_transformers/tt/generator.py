@@ -85,6 +85,23 @@ class Generator(WarmupForwardMixin):
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
+    def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
+        ret = dict()
+        ret["tokens"] = torch.zeros(batch_size, seq_len, dtype=torch.long)
+        ret["prompt_lens"] = torch.tensor([seq_len] * batch_size, dtype=torch.long)
+        ret["empty_slots"] = list(range(batch_size))
+
+        page_table_warmup = None
+        # second check is some tests set the kv_cache to [None] instead of None
+        if kv_cache is not None and kv_cache[model_id] is not None:
+            block_size = get_block_size(kv_cache[model_id])
+            num_blocks = num_blocks_in_seq(seq_len, block_size)
+            page_table_warmup = torch.zeros(batch_size, num_blocks, dtype=torch.int32)
+
+        ret["page_table"] = page_table_warmup
+
+        return ret
+
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
         if self.already_warmed_up_prefill:
             return
@@ -114,19 +131,10 @@ class Generator(WarmupForwardMixin):
                         # TODO: Remove continue when batched prefill is supported
                         continue
 
-                    warmup_tokens = torch.zeros(batch_size, supported_length, dtype=torch.long)
-                    warmup_prompt_lens = torch.tensor([supported_length] * batch_size, dtype=torch.long)
-                    warmup_empty_slots = list(range(batch_size))
-
-                    page_table_warmup = None
-                    # second check is some tests set the kv_cache to [None] instead of None
-                    if kv_cache is not None and kv_cache[model_id] is not None:
-                        block_size = get_block_size(kv_cache[model_id])
-                        num_blocks = num_blocks_in_seq(supported_length, block_size)
-                        page_table_warmup = torch.zeros(batch_size, num_blocks, dtype=torch.int32)
+                    warmup_args = self._mock_tokens(batch_size, supported_length, kv_cache, model_id)
 
                     # chunked prefill not supported without paged attention
-                    if page_table_warmup is None and max_prefill_chunk_size_cutoff(
+                    if warmup_args["page_table"] is None and max_prefill_chunk_size_cutoff(
                         supported_length, self.model_args[0].max_prefill_chunk_size
                     ):
                         logger.warning(
@@ -149,20 +157,43 @@ class Generator(WarmupForwardMixin):
                             f"Warming up prefill for sequence length: {supported_length} for batch size: {batch_size} with sampling params: {param}"
                         )
                         self.prefill_forward_text(
-                            warmup_tokens,
-                            page_table_warmup,
-                            kv_cache,
-                            warmup_prompt_lens,
-                            warmup_empty_slots,
-                            enable_trace,
-                            model_id,
-                            param,
+                            **warmup_args,
+                            kv_cache=kv_cache,
+                            enable_trace=enable_trace,
+                            model_id_warmup=model_id,
+                            sampling_params=param,
                         )
 
                     sampling_parameters_sweeped = True
 
                 if skip_sequence_lengths:
                     break
+
+        # Vision compile for multimodal models
+        if getattr(self.model_args[0], "is_multimodal", False):
+            vision_chunk_size = getattr(self.model_args[0], "vision_chunk_size", 896)
+            vision_channels = getattr(self.model_args[0], "vision_in_channels", 3)
+            model_id = 0
+
+            # Create synthetic image for vision warmup
+            # pixel_values is a list (one per user), each element is (num_images, C, H, W)
+            warmup_pixel_values = [torch.zeros((1, vision_channels, vision_chunk_size, vision_chunk_size))]
+
+            # Minimal text tokens for vision warmup pass, prefill expects non-empty tokens
+            batch_size = 1  # VLMs support only batch=1 for now
+            prefill_forward_args = self._mock_tokens(batch_size, 128, kv_cache, model_id)
+
+            logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
+
+            self.prefill_forward_text(
+                **prefill_forward_args,
+                kv_cache=kv_cache,
+                enable_trace=False,  # Vision encoder warmup doesn't support trace
+                model_id_warmup=model_id,
+                sampling_params=None,
+                pixel_values=warmup_pixel_values,
+            )
+            logger.info("Vision encoder warmup completed")
 
     def _capture_trace_prefill(
         self,
@@ -1270,7 +1301,10 @@ class Generator(WarmupForwardMixin):
         read_events = []
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
-                outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
+                outputs = (
+                    tt_out[i][0].cpu(blocking=False),
+                    tt_out[i][1].cpu(blocking=False) if tt_out[i][1] is not None else None,
+                )  # logits  # log-probs
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
                 outputs = tt_out[i].cpu(blocking=False)
