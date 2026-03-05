@@ -79,9 +79,9 @@ Note: Inpainting uses a separate fine-tuned model (`diffusers/stable-diffusion-x
 
 ##  Advanced settings
 
-### Core Grid setting for Galaxy and Blackhole
+### Core Grid setting for Galaxy
 
-For Whormhole Galaxy, BlackHole P150/P300/T3K/Galaxy additional ENV variable is needed:
+For Whormhole Galaxy additional ENV variable is needed:
 ```
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=7,7
 ```
@@ -96,7 +96,7 @@ pytest models/demos/stable_diffusion_xl_base/demo/demo.py \
 -k "device_vae and device_encoders and with_trace and use_cfg_parallel"
 ```
 
-**Not possible for N150, P100/P150 and Galaxy**
+**Not possible for N150 and Galaxy**
 
 ## Performance per component
 
