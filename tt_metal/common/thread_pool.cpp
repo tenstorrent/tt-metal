@@ -164,7 +164,7 @@ private:
 // Contains:
 //  1. A TaskQueue where tasks can be submitted by the user, to be asynchronously executed
 //  2. A worker thread to asynchronously execute tasks
-//  3. Primitves to synchronize the application and worker thread
+//  3. Primitives to synchronize the application and worker thread
 // Usage:
 // This executor should only be used to asynchronously process tasks for a specific TT-Device
 // (specified through the physical_device_id constructor argument).
@@ -279,7 +279,7 @@ using threading_primitives::NumaAwareExecutor;
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
 public:
-    // Constuctor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
+    // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
         num_workers_(physical_devices.size()) {

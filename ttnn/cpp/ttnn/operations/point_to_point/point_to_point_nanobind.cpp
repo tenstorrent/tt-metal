@@ -49,7 +49,7 @@ void bind_point_to_point(nb::module_& mod) {
             Example:
 
                 >>> input_tensor_torch = torch.zeros((2,1,1,16), dtype=dtype)
-                >>> input_tensor_torch[0, :, :, :] = data # arbitary data in one shard
+                >>> input_tensor_torch[0, :, :, :] = data # arbitrary data in one shard
 
                 >>> input_tensor = ttnn.from_torch(
                 >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)

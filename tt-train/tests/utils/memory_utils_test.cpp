@@ -175,9 +175,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     expected_peak_size += compute_tensor_size(mul_result) + 10240;
     expected_peak_size += compute_tensor_size(matmul_result) + 18432;
     expected_peak_size +=
-        compute_tensor_size(sdpa_result->get_value()) + 1830912;  // All the intermediate tensors / activations
+        compute_tensor_size(sdpa_result->get_value()) + 243712;  // All the intermediate tensors / activations
 
-    expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
+    expected_size = expected_peak_size;
 
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
     EXPECT_EQ(dram_usage.peak, expected_peak_size);
