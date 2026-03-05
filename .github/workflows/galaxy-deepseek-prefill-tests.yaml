@@ -54,7 +54,7 @@ jobs:
   Galaxy-DeepSeek-Prefill-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
