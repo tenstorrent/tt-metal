@@ -31,7 +31,7 @@ DPrintParser::DPrintParser(std::string line_prefix) : line_prefix_(std::move(lin
 
 // Helper function implementations (from dprint_server.cpp anonymous namespace)
 
-inline float DPrintParser::bfloat16_to_float(uint16_t bfloat_val) {
+inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
     float f;
     std::memcpy(&f, &uint32_data, sizeof(f));
@@ -711,6 +711,9 @@ std::string DevicePrintParser::format_message(ParsedStringInfo& string_info, std
                     result << fmt::format(format, std::get<uint64_t>(argument_values[placeholder->arg_id]));
                     break;
                 case 'f':  // float
+                case 'e':  // bf4_t, but stored as float
+                case 'E':  // bf8_t, but stored as float
+                case 'w':  // bf16_t, but stored as float
                     result << fmt::format(format, std::get<float>(argument_values[placeholder->arg_id]));
                     break;
                 case 'd':  // double
@@ -719,7 +722,8 @@ std::string DevicePrintParser::format_message(ParsedStringInfo& string_info, std
                 case '?':  // bool
                     result << fmt::format(format, std::get<bool>(argument_values[placeholder->arg_id]));
                     break;
-                default: TT_THROW("Unsupported type_id in format placeholder: {}", placeholder->type_id);
+                default:
+                    TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder->type_id);
             }
         } else {
             // Regular character, add it to the result.
@@ -754,7 +758,29 @@ DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
             return read_value_from_payload<double>(payload_bytes, offset);
         case '?':  // bool
             return read_value_from_payload<bool>(payload_bytes, offset);
-        default: TT_THROW("Unsupported type_id in format placeholder: {}", type_id);
+        case 'e':  // bf4_t, but stored as float
+        {
+            uint16_t data = read_value_from_payload<uint16_t>(payload_bytes, offset);
+            uint8_t val = (data >> 8) & 0xFF;
+            uint8_t exponent = data & 0xFF;
+            uint32_t bit_val = convert_bfp_to_u32(tt::DataFormat::Bfp4_b, val, exponent, false);
+            return *reinterpret_cast<float*>(&bit_val);
+        }
+        case 'E':  // bf8`_t, but stored as float
+        {
+            uint16_t data = read_value_from_payload<uint16_t>(payload_bytes, offset);
+            uint8_t val = (data >> 8) & 0xFF;
+            uint8_t exponent = data & 0xFF;
+            uint32_t bit_val = convert_bfp_to_u32(tt::DataFormat::Bfp8_b, val, exponent, false);
+            return *reinterpret_cast<float*>(&bit_val);
+        }
+        case 'w':  // bf16_t, but stored as float
+        {
+            auto value = bfloat16_to_float(read_value_from_payload<uint16_t>(payload_bytes, offset));
+            std::cout << "Read bf16 value converted to float=" << value << std::endl;
+            return value;
+        }
+        default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }
 }
 

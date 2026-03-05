@@ -31,6 +31,12 @@ void kernel_main() {
     DEVICE_PRINT("double: {}\n", f64);
     bool b = true;
     DEVICE_PRINT("bool: {}\n", b);
+    auto bf4 = bf4_t(128, 1);
+    DEVICE_PRINT("bf4_t: {}\n", bf4);
+    auto bf8 = bf8_t(130, 3);
+    DEVICE_PRINT("bf8_t: {}\n", bf8);
+    auto bf16 = bf16_t(0x3dfb);
+    DEVICE_PRINT("bf16_t: {}\n", bf16);
 
     // Here we are testing how compile-time code generation in kernels handles argument reordering.
     // Arguments are reordered by size when sent to the host to guarantee proper alignment during serialization.

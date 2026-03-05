@@ -40,7 +40,6 @@ private:
     char most_recent_setw_{0};
 
     // Helper methods (from dprint_server.cpp anonymous namespace)
-    static float bfloat16_to_float(uint16_t bfloat_val);
     static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data);
     static void AssertSize(uint8_t sz, uint8_t expected_sz);
     static bool StreamEndsWithNewlineChar(const std::ostringstream* stream);

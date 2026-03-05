@@ -21,6 +21,35 @@
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
+struct bf4_t {
+    union {
+        struct {
+            uint8_t exponent;
+            uint8_t mantissa;
+        };
+        uint16_t val;
+    };
+    bf4_t(uint16_t val) : val(val) {}
+    bf4_t(uint8_t exponent, uint8_t mantissa) : exponent(exponent), mantissa(mantissa) {}
+};
+
+struct bf8_t {
+    union {
+        struct {
+            uint8_t exponent;
+            uint8_t mantissa;
+        };
+        uint16_t val;
+    };
+    bf8_t(uint16_t val) : val(val) {}
+    bf8_t(uint8_t exponent, uint8_t mantissa) : exponent(exponent), mantissa(mantissa) {}
+};
+
+struct bf16_t {
+    uint16_t val;
+    bf16_t(uint16_t val) : val(val) {}
+};
+
 #ifdef UCK_CHLKC_UNPACK
 #define DEVICE_PRINT_UNPACK(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
 #else
@@ -638,6 +667,33 @@ struct device_print_type<bool> {
     static constexpr device_print_type_info value = {'?', 1};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bool argument) {
         *(device_print_buffer + offset) = static_cast<uint8_t>(argument);
+    }
+};
+template <>
+struct device_print_type<bf4_t> {
+    static constexpr device_print_type_info value = {'e', sizeof(uint16_t)};
+    static_assert(sizeof(bf4_t) == sizeof(uint16_t), "bf4_t must be 16 bits");
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bf4_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint16_t>>(device_print_buffer + offset) =
+            static_cast<uint16_t>(argument.val);
+    }
+};
+template <>
+struct device_print_type<bf8_t> {
+    static constexpr device_print_type_info value = {'E', sizeof(uint16_t)};
+    static_assert(sizeof(bf8_t) == sizeof(uint16_t), "bf8_t must be 16 bits");
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bf8_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint16_t>>(device_print_buffer + offset) =
+            static_cast<uint16_t>(argument.val);
+    }
+};
+template <>
+struct device_print_type<bf16_t> {
+    static constexpr device_print_type_info value = {'w', sizeof(uint16_t)};
+    static_assert(sizeof(bf16_t) == sizeof(uint16_t), "bf16_t must be 16 bits");
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bf16_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint16_t>>(device_print_buffer + offset) =
+            static_cast<uint16_t>(argument.val);
     }
 };
 

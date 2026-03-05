@@ -87,6 +87,9 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintBasicTypes) {
         "float: {0,f}\n"sv,
         "double: {0,d}\n"sv,
         "bool: {0,?}\n"sv,
+        "bf4_t: {0,e}\n"sv,
+        "bf8_t: {0,E}\n"sv,
+        "bf16_t: {0,w}\n"sv,
         "Reordered args: {3,?} {2,h} {1,i} {0,q}\n"sv,
         "Reordered args: {3,?} {2,h} {1,i} {0,q}\n"sv,
     };

@@ -43,6 +43,9 @@ TEST_F(DevicePrintOutputFixture, PrintBasicTypes) {
         "float: 3.14",
         "double: 6.28",
         "bool: true",
+        "bf4_t: 0.5",
+        "bf8_t: 0.375",
+        "bf16_t: 0.122558594",
         "Reordered args: true -16 -32 -64",
         "Reordered args: true -16 -32 -64",
     };
