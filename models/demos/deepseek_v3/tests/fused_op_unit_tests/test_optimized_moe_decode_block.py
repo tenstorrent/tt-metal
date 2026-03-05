@@ -20,7 +20,11 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     prepare_w2_tensor,
 )
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import _device_mesh_iterator  # TODO (AM) bad form
-from tests.nightly.tg.ccl.test_all_to_all_dispatch_metadata_6U import MESH_GRAPH_DESC_1x16, is_mesh_graph_descriptor_set
+from tests.nightly.tg.ccl.test_all_to_all_dispatch_metadata_6U import (
+    MESH_GRAPH_DESC_1x16,
+    MESH_GRAPH_DESC_16x1,
+    is_mesh_graph_descriptor_set,
+)
 
 os.environ.setdefault("MESH_DEVICE", "QUAD")
 
@@ -548,6 +552,7 @@ def verify_compute(
     hidden_size,
 ):
     if cluster_axis == 0:
+        mesh_shape = tuple(mesh_device.shape)
         device_shards = [
             ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_compute_tensor)
         ]
@@ -612,6 +617,7 @@ def verify_compute(
 
 def verify_dispatch(iteration, mesh_device, cluster_axis, tt_dispatch_tensor, torch_dispatch_golden):
     if cluster_axis == 0:
+        mesh_shape = tuple(mesh_device.shape)
         device_shards = [
             ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_dispatch_tensor)
         ]
@@ -652,6 +658,7 @@ def verify_dispatch(iteration, mesh_device, cluster_axis, tt_dispatch_tensor, to
 
 def verify_combine(iteration, mesh_device, cluster_axis, tt_combine_tensor, torch_combine_golden):
     if cluster_axis == 0:
+        mesh_shape = tuple(mesh_device.shape)
         device_shards = [
             ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_combine_tensor)
         ]
@@ -659,11 +666,11 @@ def verify_combine(iteration, mesh_device, cluster_axis, tt_combine_tensor, torc
         for ir in range(mesh_shape[1]):
             for ic in range(mesh_shape[0]):
                 ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
-        torch_combine_output = torch.cat(ordered_shards, dim=0)
+        torch_combine_output = torch.cat(ordered_shards, dim=1)
 
     else:
         torch_combine_output = ttnn.to_torch(
-            tt_combine_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+            tt_combine_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
         )
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
@@ -746,6 +753,7 @@ def verify_output(iteration, mesh_device, mesh_shape, cluster_axis, tt_output_te
     [
         # pytest.param((16, 8), (16, 8), id="16x8_grid"),
         pytest.param((1, 16), (1, 16), id="1x16_grid"),
+        pytest.param((16, 1), (16, 1), id="16x1_grid"),
     ],
     indirect=["root_mesh_device"],
 )
@@ -810,8 +818,14 @@ def test_optimized_moe_decode_block(
     if mesh_shape == (1, 16) and not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16):
         pytest.skip("1x16 test config requires 1x16 MGD")
 
+    if mesh_shape == (16, 1) and not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1):
+        pytest.skip("16x1 test config requires 16x1 MGD")
+
     if mesh_shape == (1, 16) and cluster_axis == 0:
         pytest.skip("Invalid cluster axis for 1x16")
+
+    if mesh_shape == (16, 1) and cluster_axis == 1:
+        pytest.skip("Invalid cluster axis for 16x1")
 
     if mesh_shape == (16, 8) and cluster_axis == 1:
         pytest.skip("Invalid cluster axis for 16x8")
