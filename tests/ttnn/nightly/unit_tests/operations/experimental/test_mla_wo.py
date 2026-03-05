@@ -172,7 +172,6 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
     # Shard grid for output
     # --------------------------------------------------------------------------
     all_cores = device.compute_with_storage_grid_size()
-    num_all_cores = all_cores.x * all_cores.y
 
     # Get the in0 cores as a tuple of (x, y) coordinates.
     in0_raw_coords = [(in0_core_coord.x, in0_core_coord.y) for in0_core_coord in in0_core_coords]
