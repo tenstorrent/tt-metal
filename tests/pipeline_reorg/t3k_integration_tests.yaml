@@ -186,7 +186,7 @@
       --durations=0
   skus:
     wh_llmbox:
-      timeout: 45
+      timeout: 30
   owner_id: U04N3GWH8F9 # Kartik Paigwar
   team: models
   model-name: deepseek-modules
