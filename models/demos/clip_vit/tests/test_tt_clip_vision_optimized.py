@@ -1,7 +1,7 @@
 import torch
 
 import ttnn
-from models.demos.clip_vit.tt.tt_clip_vision import (
+from models.demos.clip_vit.tt.tt_clip_vision_optimized import (
     TtCLIPVisionAttention,
     TtCLIPVisionEmbeddings,
     TtCLIPVisionEncoderLayer,

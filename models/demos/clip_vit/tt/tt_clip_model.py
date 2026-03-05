@@ -1,8 +1,8 @@
 from typing import Optional, Tuple
 
 import ttnn
-from models.demos.clip_vit.tt.tt_clip_text import TtCLIPTextModel
-from models.demos.clip_vit.tt.tt_clip_vision import TtCLIPVisionModel
+from models.demos.clip_vit.tt.tt_clip_text_optimized import TtCLIPTextModelOptimized
+from models.demos.clip_vit.tt.tt_clip_vision_optimized import TtCLIPVisionModel
 
 
 def l2_normalize(tensor: ttnn.Tensor, dim: int = -1, epsilon: float = 1e-12):
@@ -22,7 +22,7 @@ class TtCLIPModel:
         text_config = config.text_config
         vision_config = config.vision_config
 
-        self.text_model = TtCLIPTextModel(text_config, parameters.text_model, device)
+        self.text_model = TtCLIPTextModelOptimized(text_config, parameters.text_model, device)
         self.vision_model = TtCLIPVisionModel(vision_config, parameters.vision_model, device)
 
         self.projection_dim = config.projection_dim
