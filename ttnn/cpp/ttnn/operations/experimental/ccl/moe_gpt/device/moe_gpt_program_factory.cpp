@@ -218,7 +218,7 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"num_experts", operation_attributes.num_experts},
-        {"layer_id", operation_attributes.layer_id},
+        {"layer_id", 0u},
         {"num_cores", static_cast<uint32_t>(num_cores)},
         {"enable_dram_output", operation_attributes.enable_dram_output ? 1u : 0u},
     };

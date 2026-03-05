@@ -36,7 +36,6 @@ struct MoEGPTDeviceOperation {
         const Tensor& w2_tensor,
         const Tensor& output_tensor,
         const uint32_t num_experts,
-        const uint32_t layer_id,
         bool enable_dram_output = false,
         std::optional<Tensor> dram_output_tensor = std::nullopt,
         std::optional<Tensor> sparse_buffer = std::nullopt,

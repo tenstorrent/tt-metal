@@ -8,7 +8,6 @@
 
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // Run-time arguments

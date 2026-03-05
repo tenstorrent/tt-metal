@@ -18,7 +18,6 @@ struct ExecuteMoEGPTFused {
         const ttnn::Tensor& w0_w1_tensor,
         const ttnn::Tensor& w2_tensor,
         uint32_t num_experts,
-        uint32_t layer_id,
         uint32_t experts_per_device);
 };
 

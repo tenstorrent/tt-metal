@@ -18,7 +18,6 @@ struct ExecuteMoEGPT {
         const ttnn::Tensor& w2_tensor,
         const ttnn::Tensor& output_tensor,
         const uint32_t num_experts,
-        const uint32_t layer_id,
         bool enable_dram_output = false,
         std::optional<ttnn::Tensor> dram_output_tensor = std::nullopt,
         std::optional<ttnn::Tensor> sparse_buffer = std::nullopt,

@@ -26,7 +26,6 @@ void bind_moe_gpt_fused(nb::module_& mod) {
             w0_w1_tensor: Interleaved W0/W1 weight tensor (Bfp4_b, DRAM-sharded)
             w2_tensor: W2 weight tensor (Bfp4_b, DRAM-sharded)
             num_experts: Total number of experts
-            layer_id: Layer index for weight offset calculation
             experts_per_device: Number of experts assigned to this device
         )doc",
         ttnn::nanobind_arguments_t{
@@ -37,7 +36,6 @@ void bind_moe_gpt_fused(nb::module_& mod) {
             nb::arg("w0_w1_tensor"),
             nb::arg("w2_tensor"),
             nb::arg("num_experts"),
-            nb::arg("layer_id"),
             nb::arg("experts_per_device") = 4,
         });
 }

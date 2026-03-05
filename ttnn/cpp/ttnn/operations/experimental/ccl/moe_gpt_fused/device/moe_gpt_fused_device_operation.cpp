@@ -84,11 +84,9 @@ MoEGPTFusedDeviceOperation::invoke(
     const Tensor& w0_w1_tensor,
     const Tensor& w2_tensor,
     uint32_t num_experts,
-    uint32_t layer_id,
     uint32_t experts_per_device) {
     return {
-        operation_attributes_t{
-            .num_experts = num_experts, .layer_id = layer_id, .experts_per_device = experts_per_device},
+        operation_attributes_t{.num_experts = num_experts, .experts_per_device = experts_per_device},
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices = expert_indices,

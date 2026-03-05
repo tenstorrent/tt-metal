@@ -9,7 +9,6 @@
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t enable_dram_output = get_named_compile_time_arg_val("enable_dram_output");
 

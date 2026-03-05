@@ -48,7 +48,6 @@ MoEGPTDeviceOperation::invoke(
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
     const uint32_t num_experts,
-    const uint32_t layer_id,
     bool enable_dram_output,
     std::optional<Tensor> dram_output_tensor,
     std::optional<Tensor> sparse_buffer,
@@ -59,10 +58,7 @@ MoEGPTDeviceOperation::invoke(
     std::optional<uint32_t> cluster_axis) {
     return {
         operation_attributes_t{
-            .num_experts = num_experts,
-            .layer_id = layer_id,
-            .enable_dram_output = enable_dram_output,
-            .cluster_axis = cluster_axis},
+            .num_experts = num_experts, .enable_dram_output = enable_dram_output, .cluster_axis = cluster_axis},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,

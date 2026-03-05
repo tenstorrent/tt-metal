@@ -184,7 +184,6 @@ def run_test_moe_gpt_fused(device, total_tokens, H, N, E, check_accuracy):
         w0_w1_tensor=tt_w0_w1,
         w2_tensor=tt_w2,
         num_experts=E,
-        layer_id=0,
         experts_per_device=E,
     )
 
