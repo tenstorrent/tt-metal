@@ -139,17 +139,24 @@ constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 
 template <uint8_t NUM_BUFFERS>
-void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
-    while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
+__attribute__((optimize("Os"))) void wait_for_static_connection_to_ready(
+    tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    while (!connect_is_requested(*worker_interface.connection_live_semaphore) &&
+           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         invalidate_l1_cache();
+        run_routing();
     }
 
     worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
-FORCE_INLINE void wait_for_mux_endpoint_ready(
-    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address) {
+__attribute__((optimize("Os"))) FORCE_INLINE void wait_for_mux_endpoint_ready(
+    uint8_t mux_noc_x,
+    uint8_t mux_noc_y,
+    size_t mux_status_address,
+    uint32_t mux_status_readback_address,
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     uint64_t noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address);
     auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_readback_address);
 
@@ -158,11 +165,12 @@ FORCE_INLINE void wait_for_mux_endpoint_ready(
         noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC);
+    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC &&
+             !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr));
 }
 
 template <uint8_t NUM_BUFFERS>
-void setup_channel(
+__attribute__((optimize("Os"))) void setup_channel(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
@@ -534,7 +542,8 @@ void kernel_main() {
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
     volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_address);
-    while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+    while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC &&
+           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         invalidate_l1_cache();
     }
 
@@ -545,7 +554,8 @@ void kernel_main() {
                 mux_connections[i].edm_noc_x,
                 mux_connections[i].edm_noc_y,
                 mux_status_address,
-                downstream_mux_status_readback_address);
+                downstream_mux_status_readback_address,
+                termination_signal_ptr);
         }
     }
 
@@ -560,7 +570,7 @@ void kernel_main() {
     auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
     noc_semaphore_inc(noc_addr, 1);
 
-    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface);
+    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface, termination_signal_ptr);
 
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 
