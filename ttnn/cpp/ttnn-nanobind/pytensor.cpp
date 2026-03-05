@@ -45,7 +45,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
@@ -728,7 +728,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, bool force) { self.deallocate(force); },
             nb::arg("force") = false,
             R"doc(
-                Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
+                Deallocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
             )doc")
         .def(
             "to",

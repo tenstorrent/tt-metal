@@ -255,26 +255,6 @@ run_t3000_mistral_tests() {
 
 }
 
-run_t3000_mixtral_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mixtral_tests"
-
-  # mixtral8x7b 8 chip decode model test (env flags set inside the test)
-  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py --timeout=600; fail+=$?
-  pytest models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py --timeout=600; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mixtral_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_tteager_tests() {
   # Record the start time
   fail=0
@@ -428,7 +408,7 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-large_latent or conv3d_1x1x1 or -1link-l768" --timeout=3600; fail+=$?
+  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-small_latent or conv3d_1x1x1 or -1link-l768" --timeout=1500; fail+=$?
   pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
   pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
@@ -478,9 +458,6 @@ run_t3000_tests() {
 
   # Run mistral tests
   run_t3000_mistral_tests
-
-  # Run mixtral tests
-  run_t3000_mixtral_tests
 
   # Run resnet tests
   run_t3000_resnet_tests

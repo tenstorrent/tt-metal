@@ -23,6 +23,8 @@ constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 4;
 
+constexpr uint16_t TENSIX_RISC_OFFSET = 0x100;
+
 using PackedTileCounter = uint8_t;  // bits 5-6: tensix_id (2 bits), bits 0-4: counter_id (5 bits)
 
 // PackedTileCounter bit layout constants
@@ -69,7 +71,7 @@ struct dfb_initializer_t {  // 24 bytes
     struct {
         uint16_t dm_mask : 8;         // bits 0-7: DM RISC mask
         uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
-        uint16_t reserved : 4;        // bits 12-15: reserved
+        uint16_t tensix_trisc_mask : 4;        // bits 12-15: indicates which triscs use the DFB (tensix producer uses trisc2 and tensix consumer can use trisc0 or trisc3)
     } risc_mask_bits;
     uint8_t num_producers;
     uint8_t num_txn_ids;
@@ -111,46 +113,43 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
+// Per–tile-counter slot
+struct DFBTCSlot {
+    uint32_t rd_ptr;
+    uint32_t wr_ptr;
+    uint32_t base_addr;
+    uint32_t limit;
+    PackedTileCounter packed_tile_counter;
+} __attribute__((packed));
+
 // on WH/BH arrays will be sized to 1
 struct LocalDFBInterface {
-    uint32_t rd_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t wr_ptr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t base_addr[MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint32_t limit[MAX_NUM_TILE_COUNTERS_TO_RR];
+    DFBTCSlot tc_slots[MAX_NUM_TILE_COUNTERS_TO_RR];
 
     uint32_t entry_size;   // shared across riscs so can be factored out and put into sep initialization struct
     uint32_t stride_size;  // shared across riscs so can be factored out and put into sep initialization struct
 
-    PackedTileCounter packed_tile_counter[MAX_NUM_TILE_COUNTERS_TO_RR];
+    // Entry indices tracking how many entries from DFB base the rd/wr pointers are
+    uint32_t rd_entry_idx;
+    uint32_t wr_entry_idx;
+    uint32_t wr_entry_ptr;
+
     uint8_t txn_ids[NUM_TXN_IDS];  // shared across riscs so can be factored out and put into sep initialization struct
     uint8_t
         num_entries_per_txn_id;  // shared across riscs so can be factored out and put into sep initialization struct
     uint8_t num_entries_per_txn_id_per_tc;  // shared across riscs so can be factored out and put into sep
                                             // initialization struct
-    uint8_t remapper_pair_index;
     uint8_t num_tcs_to_rr;
     uint8_t num_txn_ids;  // shared across riscs so can be factored out and put into sep initialization struct
+    uint8_t tc_idx;
+    uint8_t tensix_trisc_mask;  // which TRISC(s) use this DFB (bit N = trisc N); for runtime gate on TRISC
 
-    uint8_t padding[3];
-
-    // #ifndef ARCH_QUASAR
-    //     // used by packer for in-order packing ... is this still needed on Quasar?
-    //     uint32_t wr_tile_ptr;
-
-    //     // Save a cycle during init by writing 0 to the uint32 below
-    //     union {
-    //         uint32_t tiles_acked_received_init;
-    //         struct {
-    //             uint16_t tiles_acked;
-    //             uint16_t tiles_received;
-    //         };
-    //     };
-    // #endif
 } __attribute__((packed));
 
+static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 24, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 98, "LocalDFBInterface size is incorrect");
 
 }  // namespace experimental
