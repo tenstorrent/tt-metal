@@ -85,16 +85,39 @@ def get_accuracy_metrics(torch_output, tt_output):
 # ---------------------------------------------------------------------------
 
 
-def gen_expert_mapping(experts_total, num_devices):
+def gen_expert_mapping(experts_total, num_devices, mesh_cols=1):
     """
-    Expert-to-device ownership: mapping[d, e] = e // experts_per_device.
-    Shape: [num_devices, experts_total], dtype int32.
+    Expert-to-device ownership mapping.
+
+    The kernel uses row-major linearization: linearized_coord = row * mesh_cols + col.
+    Python get_device_tensors uses the same row-major ordering.
+
+    For cluster_axis=0 (ring along rows), source_device values seen by the kernel are:
+        source_device = device_in_group * mesh_cols + col
+    where device_in_group ranges 0..num_devices-1 and col ranges 0..mesh_cols-1.
+    Max source_device = (num_devices - 1) * mesh_cols + (mesh_cols - 1) = num_devices * mesh_cols - 1.
+    So the mapping must have num_devices * mesh_cols rows.
+
+    For device d (linearized row-major) and expert e:
+        mapping[d, e] = (e // experts_per_device) * mesh_cols + (d % mesh_cols)
+
+    This gives the linearized_mesh_coord of the device that owns expert e in the
+    same ring (column) as device d.
+
+    For 1x1 mesh (mesh_cols=1): 4 rows, mapping[d, e] = e // E (ring position, same for all rows)
+    For 4x8 mesh (mesh_cols=8): 32 rows, mapping[d, e] = (e // E) * 8 + col
+        where col = d % 8.
+
+    Expert ownership check: mapping[d, e] == d is true when e // E == row (ring position).
     """
+    mapping_rows = num_devices * mesh_cols
     experts_per_device = experts_total // num_devices
-    row = torch.zeros(experts_total, dtype=torch.int32)
-    for e in range(experts_total):
-        row[e] = e // experts_per_device
-    return row.unsqueeze(0).repeat(num_devices, 1)
+    result = torch.zeros(mapping_rows, experts_total, dtype=torch.int32)
+    for d in range(mapping_rows):
+        col = d % mesh_cols
+        for e in range(experts_total):
+            result[d, e] = (e // experts_per_device) * mesh_cols + col
+    return result
 
 
 def gen_controlled_sparse_buffer(
@@ -336,9 +359,10 @@ def run_test_moe_gpt_tilize_matmul(
     torch.manual_seed(42)
     random.seed(42)
 
-    num_devices = experts_total // E
+    num_devices = experts_total // E  # logical ring size = mesh_device.shape[cluster_axis]
     total_tokens = M * num_devices
     num_mesh_devices = mesh_device.get_num_devices()
+    mesh_cols = mesh_device.shape[1]  # number of columns (independent rings)
 
     logger.info(f"Tilize-matmul integration test configuration:")
     logger.info(f"  num_devices (simulated): {num_devices}")
@@ -418,7 +442,7 @@ def run_test_moe_gpt_tilize_matmul(
     # Tilize inputs (routing distributed across all devices)
     # All devices get the same replicated inputs; each processes its own local experts.
     # ------------------------------------------------------------------
-    expert_mapping_torch = gen_expert_mapping(experts_total, num_devices)
+    expert_mapping_torch = gen_expert_mapping(experts_total, num_devices, mesh_cols)
     sparse_torch, indices_torch, scores_torch = gen_controlled_sparse_buffer(
         total_tokens,
         K,
@@ -489,14 +513,22 @@ def run_test_moe_gpt_tilize_matmul(
     device_tensors = ttnn.get_device_tensors(tt_output)
     all_passing = True
 
+    # Python get_device_tensors uses row-major ordering matching the kernel's
+    # get_linearized_index: linearized = row * mesh_cols + col.
+    # For cluster_axis=0, the ring goes along rows, so ring_pos = row = dev_idx // mesh_cols.
+    # logical_dev_idx = dev_idx (Python index = kernel linearized_mesh_coord).
+
     for dev_idx in range(len(device_tensors)):
+        ring_pos = dev_idx // mesh_cols  # row index = ring position
+        col = dev_idx % mesh_cols
+
         tt_output_result = ttnn.to_torch(device_tensors[dev_idx])
         # Reshape from sharded to flat: [E * M, K]
         tt_output_result = tt_output_result.reshape(-1, K)[: E * M, :]
 
         passing, per_expert_counts = verify_device_output(
             tt_output_result,
-            dev_idx,
+            dev_idx,  # logical_dev_idx = kernel linearized_mesh_coord = Python dev_idx
             sparse_torch,
             indices_torch,
             expert_mapping_torch,
@@ -510,7 +542,7 @@ def run_test_moe_gpt_tilize_matmul(
             tokens_per_chunk,
         )
 
-        logger.info(f"  Device {dev_idx} per-expert token counts: {per_expert_counts}")
+        logger.info(f"  Device {dev_idx} (ring_pos={ring_pos}, col={col}) per-expert token counts: {per_expert_counts}")
         if not passing:
             all_passing = False
 
@@ -533,7 +565,10 @@ def run_test_moe_gpt_tilize_matmul(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [pytest.param((1, 1), id="1x1")],
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param((4, 8), id="4x8"),
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("M", [32])
