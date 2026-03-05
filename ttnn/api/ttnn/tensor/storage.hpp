@@ -74,6 +74,15 @@ public:
 
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
+
+    // These are internal functions and should be treated as a public API.
+    // They are here to support distributed API.
+    DeviceStorage reduce_to_single_device_storage(const distributed::MeshCoordinate& coord) const;
+    static DeviceStorage combine_to_multi_device_storage(
+        std::span<std::reference_wrapper<const DeviceStorage>> storages);
+
+    // Low level function, strickly internal:
+    DeviceStorage with_coords(std::vector<distributed::MeshCoordinate> new_coords) const;
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage>;
