@@ -50,6 +50,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_tt_train_cpp_model_tests:
+        description: 'Run tt-train-cpp-models'
+        required: false
+        type: boolean
+        default: false
       run_models_unit_tests:
         description: 'Run models-unit-tests'
         required: false
@@ -427,6 +432,22 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       gtest_filter: "*"
+  tt-train-cpp-models:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
+    uses: ./.github/workflows/tt-train-run-models.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   # FD Model Tests
   models-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
