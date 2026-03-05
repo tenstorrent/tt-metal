@@ -418,8 +418,6 @@ public:
     void set_inspector_capture_runtime_entries(bool enabled) { inspector_settings.capture_runtime_entries = enabled; }
     bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
-    size_t get_inspector_max_runtime_entries() const { return inspector_settings.max_runtime_entries; }
-    void set_inspector_max_runtime_entries(size_t max) { inspector_settings.max_runtime_entries = max; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
