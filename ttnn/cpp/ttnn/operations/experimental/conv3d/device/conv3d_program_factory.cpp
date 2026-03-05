@@ -720,26 +720,25 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         // Get is_reducer value from the stored arguments
         [[maybe_unused]] bool is_reducer = (writer_args[13] == 1);
 
-        // Add reducer core coordinates
-        if (reducer_core_ids[reduction_group_id] != UINT32_MAX) {
-            writer_args.push_back(reducer_core_physical_xs[reduction_group_id]);
-            writer_args.push_back(reducer_core_physical_ys[reduction_group_id]);
-        }
-
-        // Add worker cores count
+        // Add worker cores count first so the kernel can use it to conditionally read reduction args
         uint32_t num_workers = worker_core_ids[reduction_group_id].size();
         compute_args.push_back(num_workers);
         writer_args.push_back(num_workers);
 
-        // Add all worker core coordinates to runtime args
-        writer_args.insert(
-            writer_args.end(),
-            worker_core_physical_xs[reduction_group_id].begin(),
-            worker_core_physical_xs[reduction_group_id].end());
-        writer_args.insert(
-            writer_args.end(),
-            worker_core_physical_ys[reduction_group_id].begin(),
-            worker_core_physical_ys[reduction_group_id].end());
+        // Add reducer core coordinates and worker core coordinates only when there are workers
+        if (num_workers > 0) {
+            writer_args.push_back(reducer_core_physical_xs[reduction_group_id]);
+            writer_args.push_back(reducer_core_physical_ys[reduction_group_id]);
+
+            writer_args.insert(
+                writer_args.end(),
+                worker_core_physical_xs[reduction_group_id].begin(),
+                worker_core_physical_xs[reduction_group_id].end());
+            writer_args.insert(
+                writer_args.end(),
+                worker_core_physical_ys[reduction_group_id].begin(),
+                worker_core_physical_ys[reduction_group_id].end());
+        }
 
         // Prepare worker cores string for logging
         std::string worker_cores_str;
