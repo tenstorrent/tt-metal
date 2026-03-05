@@ -397,6 +397,166 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
             ), f"Host-iter {host_iter}: device {device_idx} received stale/incorrect chunked broadcast data"
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 1, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("chunk_size_bytes", [4352])
+def test_ccl_broadcast_remainder_chunk(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    num_links,
+    chunk_size_bytes,
+):
+    """
+    Explicit chunk-size remainder-path smoke test.
+    Uses num_iterations=1 intentionally; multi-iteration behavior is already covered elsewhere.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    bcast_core = ttnn.CoreCoord(0, 0)
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
+        layout=layout,
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+    )
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
+
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        semaphores=semaphores,
+        chunk_size_bytes=chunk_size_bytes,
+        num_links=num_links,
+    )
+    ttnn.synchronize_device(submesh)
+
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(
+            received, torch_expected, rtol=1e-3, atol=1e-3
+        ), f"Explicit remainder-path mismatch at device {device_idx}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(7168)}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_rows, mesh_cols, sender_row, sender_col, output_shape, input_shard_shape, tensor_mem_layout",
+    [
+        (4, 2, 1, 0, [1, 7168], (1, 7168), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_links", [1])
+def test_ccl_broadcast_auto_chunk(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    num_links,
+):
+    """
+    Auto-chunk resolver smoke test on standard 4x2 submesh with FABRIC_2D.
+    """
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    bcast_core = ttnn.CoreCoord(0, 0)
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    test_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
+        layout=layout,
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+    )
+    sender_tensor = test_inputs.input_tensor_torch
+    input_tensor_mesh = test_inputs.input_tensor_mesh
+    output_tensor = test_inputs.output_tensor_mesh
+    semaphores = test_inputs.semaphores
+
+    ttnn_result = DeepseekMinimalBroadcast.op(
+        input_tensor_mesh,
+        output_tensor,
+        sender_coord,
+        semaphores=semaphores,
+        num_links=num_links,
+    )
+    ttnn.synchronize_device(submesh)
+
+    torch_expected = DeepseekMinimalBroadcast.golden(sender_tensor)
+    output_tensor_torch = ttnn.to_torch(ttnn_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    slice_size = output_shape[0]
+    for device_idx in range(num_devices):
+        start = device_idx * slice_size
+        end = start + slice_size
+        received = output_tensor_torch[start:end, :]
+        assert torch.allclose(
+            received, torch_expected, rtol=1e-3, atol=1e-3
+        ), f"Auto-chunk mismatch at device {device_idx}"
+
+
 def _run_ccl_broadcast_torus_8x4_functional_case(
     mesh_device,
     sender_row,
