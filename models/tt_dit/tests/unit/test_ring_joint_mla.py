@@ -5,8 +5,10 @@
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
@@ -115,6 +117,8 @@ def run_ring_joint_sdpa(
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+    logger.debug(f"Full compute grid: {full_compute_grid}")
+    logger.debug(f"SDPA compute grid: {sdpa_compute_grid}")
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -143,8 +147,6 @@ def run_ring_joint_sdpa(
     # Check sharding on these
     ag_output_shape_k = (b, nhk, padded_seq_len, head_dim_k)
     ag_output_shape_v = (b, nhv, padded_seq_len, head_dim_v)
-    print("ag_output_shape_k = ", ag_output_shape_k)
-    print("ag_output_shape_v = ", ag_output_shape_v)
 
     persistent_k_output_shard_dims = [None, None]
     persistent_k_output_shard_dims[up_axis] == 1 if nhk != 1 else None
@@ -173,9 +175,6 @@ def run_ring_joint_sdpa(
         for _ in range(n_iters)
     ]
 
-    print("Persistent output buffer[0] shape = ", persistent_output_buffers[0][0].shape)
-    print("Persistent output buffer[1] shape = ", persistent_output_buffers[0][1].shape)
-
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size,
@@ -187,7 +186,7 @@ def run_ring_joint_sdpa(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        packer_l1_acc=True,
     )
 
     Q = fa_rand(b, nhq, base_seq_len, head_dim_q)
@@ -200,7 +199,8 @@ def run_ring_joint_sdpa(
 
     # Apply balanced reordering if requested
     chunk_order = None
-    if is_balanced:
+    if is_balanced and skip_check == False:
+        # Do not reorder if skipping pcc check
         rp_factor = submesh.shape[rp_axis]
         chunk_order = create_balanced_chunk_order(rp_factor)
         logger.info(f"Balanced reordering: rp_factor={rp_factor}, num_chunks={2*rp_factor}, order={chunk_order}")
@@ -238,6 +238,7 @@ def run_ring_joint_sdpa(
     else:
         sdpa_k_input_shard_dims[up_axis] = 1  # head dim
 
+    logger.debug("Creating tt_Q")
     tt_Q = ttnn.from_torch(
         padded_Q,
         dtype=q_dtype,
@@ -245,6 +246,7 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
+    logger.debug("Creating tt_K")
     tt_K = ttnn.from_torch(
         padded_K,
         dtype=kv_dtype,
@@ -252,6 +254,7 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_k_input_shard_dims),
     )
+    logger.debug("Creating tt_V")
     tt_V = ttnn.from_torch(
         padded_V,
         dtype=kv_dtype,
@@ -259,6 +262,7 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
+    logger.debug("Creating tt_joint_Q")
     tt_joint_Q = ttnn.from_torch(
         joint_Q,
         dtype=q_dtype,
@@ -272,6 +276,7 @@ def run_ring_joint_sdpa(
         if nhk > 1
         else ttnn.ReplicateTensorToMesh(submesh)
     )
+    logger.debug("Creating tt_joint_K")
     tt_joint_K = ttnn.from_torch(
         joint_K,
         dtype=kv_dtype,
@@ -279,7 +284,7 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=joint_k_mesh_mapper,
     )
-    print("tt_joint_K shape = ", tt_joint_K.shape)
+    logger.debug("Creating tt_joint_V")
     tt_joint_V = ttnn.from_torch(
         joint_V,
         dtype=kv_dtype,
@@ -287,7 +292,6 @@ def run_ring_joint_sdpa(
         device=submesh,
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
-    print("tt_joint_V shape = ", tt_joint_V.shape)
 
     logger.debug(f"tt_Q: {tt_Q.shape}")
     logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
@@ -296,15 +300,7 @@ def run_ring_joint_sdpa(
 
     def run_iters(tt_out_list):
         for i in range(n_iters):
-            print("Running ring-joint sdpa with the following shapes:")
-            print("tt_Q: ", tt_Q.shape)
-            print("tt_K: ", tt_K.shape)
-            print("tt_V: ", tt_V.shape)
-            print("tt_joint_Q: ", tt_joint_Q.shape)
-            print("tt_joint_K: ", tt_joint_K.shape)
-            print("tt_joint_V: ", tt_joint_V.shape)
-            print("base seq_len is: ", base_seq_len)
-            print("cluster axis is: ", rp_axis)
+            signpost("Running ring-mla")
             tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
@@ -329,6 +325,7 @@ def run_ring_joint_sdpa(
                 is_causal=is_causal,
                 is_balanced=is_balanced,
             )
+            signpost("Done running ring-mla")
             tt_out_list.append(tt_out)
 
     if trace_enabled:
@@ -350,23 +347,19 @@ def run_ring_joint_sdpa(
 
     if not skip_check:
         # Only use main tensors for host reference (no joint tensors since joint_seq_len=0)
-        print("Running on host...")
+        logger.debug("Running on host...")
         gt_out = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
-        print("Done running on host...")
-        print("Host output shape: ", gt_out.shape)
 
         for i in range(n_iters):
-            print("Synchronize call...")
+            logger.debug("Synchronize call...")
             ttnn.synchronize_device(submesh)
-            print("Done synchronizing...")
+            logger.debug("Done synchronizing...")
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
                 ),
             )
-            print("Started doing to_torch stuff...")
-            print("Done to torch stuff...")
 
             # Reverse reordering for TT output if balanced reordering was applied
             if is_balanced and chunk_order is not None:
@@ -392,6 +385,10 @@ def run_ring_joint_sdpa(
             passing = passing and out_pass
 
             assert passing
+    else:
+        logger.debug("Skipping check, calling synchronize_device")
+        ttnn.synchronize_device(submesh)
+        logger.debug("Done synchronizing...")
 
 
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
@@ -469,6 +466,119 @@ def test_mla_sdpa(
     is_balanced,
     reset_seeds,
 ):
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
+
+    joint_seq_len = 0  # causality is enabled only for non-joint cases
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nhq,
+        nhk,
+        nhv,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        head_dim_q,
+        head_dim_k,
+        head_dim_v,
+        q_chunk_size,
+        k_chunk_size,
+        q_dtype,
+        kv_dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        0.999,
+        is_causal=True,
+        is_balanced=is_balanced,
+    )
+
+
+@pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
+@pytest.mark.parametrize(
+    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size",
+    [
+        # (1, 128, 1, 128, 4 * 1024, 576, 576, 128, False, 256, 256),
+        (1, 128, 1, 128, 32 * 1024, 576, 576, 128, True, 192, 256),
+    ],
+)
+@pytest.mark.parametrize(
+    "n_iters, trace_enabled, skip_check",
+    [
+        (1, False, True),
+    ],
+    ids=["no_trace"],
+)
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 8)],
+    ids=["4x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [1, 8, 0, 4],
+    ],
+    ids=[
+        "8rpx4up",
+    ],
+)
+def test_mla_sdpa_bh_galaxy(
+    mesh_device,
+    b,
+    nhq,
+    nhk,
+    nhv,
+    base_seq_len,
+    head_dim_q,
+    head_dim_k,
+    head_dim_v,
+    q_chunk_size,
+    k_chunk_size,
+    q_dtype,
+    kv_dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    all_gather_topology,
+    skip_check,
+    is_balanced,
+    reset_seeds,
+):
+    if is_blackhole() == False:
+        pytest.skip("This test only runs on Blackhole galaxy todo add galaxy")
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
 
