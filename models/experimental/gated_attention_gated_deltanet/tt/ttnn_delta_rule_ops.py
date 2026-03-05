@@ -82,7 +82,6 @@ def recurrent_delta_rule_step_ttnn(
 
     # 5. Query state via matmul: o_t = q^T @ h
     q_row = ttnn.reshape(q_t, [B, H, 1, K])  # [B, H, 1, K]
-    print("*****************")
 
     o_t = ttnn.matmul(q_row, h)  # [B, H, 1, V]
     o_t = ttnn.reshape(o_t, [B, H, V])  # [B, H, V]
