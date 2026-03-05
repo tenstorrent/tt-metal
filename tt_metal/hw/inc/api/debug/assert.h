@@ -10,7 +10,7 @@
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
 inline void assert_and_hang(
-    uint32_t line_num, uint16_t file_id, uint8_t extra_info, debug_assert_type_t assert_type = DebugAssertTripped) {
+    uint32_t line_num, uint16_t file_id, uint16_t extra_info, debug_assert_type_t assert_type = DebugAssertTripped) {
     // Write the assert info into the memory mailbox for host to read.
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
     if (v->tripped == DebugAssertOK) {
