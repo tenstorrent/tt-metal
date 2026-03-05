@@ -12,6 +12,7 @@ ct_dim=1 (N=32 only). kt_dim must be even.
 """
 
 import numpy as np
+import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
@@ -128,8 +129,6 @@ class MatmulCustomCompressed:
         # CB2: output — standard
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
 
-        fmt_cta_base = 0  # positional CTAs start at index 0
-
         named_compile_time_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
@@ -138,26 +137,51 @@ class MatmulCustomCompressed:
             ("out_w", out_w),
             ("cb_in0_num_pages", num_tiles_k),
             ("cb_in1_num_pages", 1),
-            ("fmt_cta_base", fmt_cta_base),
         ]
 
         defines = []
+        per_core_pos_cta = None
+        fmt_tensor = None
+
         if use_constexpr_unroll:
             defines.append(("USE_CONSTEXPR_UNROLL", "1"))
+            named_compile_time_args.append(("fmt_cta_base", 0))
 
-        # Build per-core positional CTAs
-        all_cores = ttnn.corerange_to_cores(core_grid)
-        core_values = []
-        for core_coord in all_cores:
-            shard_assignment = ct.get_assignment_per_shard(core_coord)
-            if use_constexpr_unroll:
-                # Packed: multiple formats per uint32 (for template-unrolled path)
+            # Build per-core positional CTAs for constexpr path
+            all_cores = ttnn.corerange_to_cores(core_grid)
+            core_values = []
+            for core_coord in all_cores:
+                shard_assignment = ct.get_assignment_per_shard(core_coord)
                 ctas = pack_formats_as_ctas(shard_assignment)
-            else:
-                # Packed pairs: [sz1:sz0:fmt1:fmt0] per pair (for runtime loop path)
-                ctas = pack_pairs_as_ctas(shard_assignment)
-            core_values.append((core_coord, ctas))
-        per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
+                core_values.append((core_coord, ctas))
+            per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
+        else:
+            # Runtime path: create packed pairs tensor in L1
+            # Build packed pairs per core, assemble into sharded tensor
+            all_cores = ttnn.corerange_to_cores(core_grid)
+            num_pairs = num_tiles_k * out_w // 2
+            shard_data = []
+            for core_coord in all_cores:
+                shard_assignment = ct.get_assignment_per_shard(core_coord)
+                pairs = pack_pairs_as_ctas(shard_assignment)
+                shard_data.extend(pairs)
+
+            # Create sharded uint32 tensor: one shard per core, num_pairs words each
+            num_cores = len(all_cores)
+            fmt_torch = torch.tensor(shard_data, dtype=torch.int32).reshape(num_cores, num_pairs)
+            fmt_shard_spec = ttnn.ShardSpec(core_grid, [1, num_pairs * 4], ttnn.ShardOrientation.ROW_MAJOR)
+            fmt_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec
+            )
+            fmt_tensor = ttnn.from_torch(
+                fmt_torch.view(torch.uint8).reshape(num_cores, num_pairs * 4),
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=a_tensor.device(),
+                memory_config=fmt_mem_config,
+            )
+            fmt_l1_addr = fmt_tensor.buffer_address()
+            named_compile_time_args.append(("fmt_l1_addr", fmt_l1_addr))
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/matmul_custom_compressed/kernels/matmul_custom_compressed_kernel.cpp",

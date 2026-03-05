@@ -77,21 +77,19 @@ void kernel_main() {
 
     tile_regs_acquire();
 
-    constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
     constexpr uint32_t total_tiles = num_tiles_k * out_w;
 
 #if defined(USE_CONSTEXPR_UNROLL)
-    // Fully unrolled: packed format array, each pair is a separate code block
+    constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
     constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
     static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
     compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #else
-    // Runtime loop: packed pairs array — one uint32 per pair [sz1:sz0:fmt1:fmt0]
-    constexpr uint32_t num_pairs = total_tiles / 2;
-    static constexpr auto fmt_flat = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_pairs>();
-    compressed::custom_mm_compressed_block_runtime_loop<num_tiles_k, out_w, num_pairs, fmt_flat>(
-        addr_in0, addr_in1, in0_face_r_dim, 0);
+    // Runtime loop: read packed pairs from L1 tensor
+    constexpr uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
+    compressed::custom_mm_compressed_block_runtime_loop<num_tiles_k, out_w>(
+        fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
 #endif
 
     tile_regs_commit();
