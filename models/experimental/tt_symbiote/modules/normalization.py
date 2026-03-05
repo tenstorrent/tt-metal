@@ -126,11 +126,12 @@ class TTNNDistributedRMSNorm(TTNNModule):
     @run_on_devices(DeviceArch.T3K)
     def forward(self, inp):
         original_shape = inp.shape
-        if len(original_shape) == 3:
-            inp = ttnn.unsqueeze(inp, 1)  # Add batch dimension for RMSNorm
-        # Run distributed rmsnorm part 1
+        if inp.layout != ttnn.TILE_LAYOUT:
+            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        needs_squeeze = len(original_shape) == 3
+        if needs_squeeze:
+            inp = ttnn.unsqueeze(inp, 1)
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
-        # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
             dim=-1,
@@ -139,7 +140,6 @@ class TTNNDistributedRMSNorm(TTNNModule):
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
-        # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
             inp,
             tt_stats,
@@ -147,5 +147,6 @@ class TTNNDistributedRMSNorm(TTNNModule):
             weight=self.weight_distributed,
         )
         tt_stats.deallocate(True)
-
+        if needs_squeeze:
+            tt_out = ttnn.squeeze(tt_out, 1)
         return tt_out
