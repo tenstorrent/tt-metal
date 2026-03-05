@@ -103,45 +103,55 @@ def gen_controlled_sparse_buffer(
     experts_per_device,
     experts_total,
     selected_experts_k,
-    device_idx,
+    num_devices,
     tokens_per_expert=None,
     all_local_experts=False,
 ):
     """
     Generate sparse buffer with controlled token-to-expert routing.
 
+    Routes tokens across ALL devices so every device has work to do.
+
     Modes:
       - tokens_per_expert=None, all_local_experts=False:
-          Even distribution, 1 local expert per token.
+          Even distribution across all experts globally. Each token routes to
+          one expert per device (round-robin), giving each expert
+          total_tokens / experts_total tokens.
       - tokens_per_expert=[...], all_local_experts=False:
-          Uneven distribution, 1 local expert per token. Sum must equal total_tokens.
+          Uneven distribution on device 0 only. Sum must equal total_tokens.
+          Other devices get 0 tokens (single-device stress test mode).
       - all_local_experts=True:
-          Every token routes to ALL local experts (tokens_per_expert ignored).
-          Each k-slot is filled with a local expert. Requires selected_experts_k >= experts_per_device.
+          Every token routes to ALL E local experts on one device, cycling
+          through devices. Each device gets total_tokens/num_devices tokens
+          per expert. Requires selected_experts_k >= experts_per_device.
     """
     expert_indices = torch.zeros(total_tokens, selected_experts_k, dtype=torch.int32)
-    non_local_experts = [e for e in range(experts_total) if e // experts_per_device != device_idx]
 
     if all_local_experts:
         assert selected_experts_k >= experts_per_device
-        local_globals = [device_idx * experts_per_device + le for le in range(experts_per_device)]
+        # Each token routes to all E experts on one device, cycling through devices.
+        # Token t -> device (t % num_devices) -> all E experts on that device.
         for t in range(total_tokens):
+            target_device = t % num_devices
+            local_globals = [target_device * experts_per_device + le for le in range(experts_per_device)]
             for k in range(experts_per_device):
                 expert_indices[t, k] = local_globals[k]
-            # Fill remaining slots with non-local experts (if selected_experts_k > experts_per_device)
+            # Fill remaining k-slots with experts from other devices
             remaining = selected_experts_k - experts_per_device
             if remaining > 0:
-                others = random.sample(non_local_experts, remaining)
+                other_experts = [e for e in range(experts_total) if e // experts_per_device != target_device]
+                others = random.sample(other_experts, remaining)
                 for k, eid in enumerate(others):
                     expert_indices[t, experts_per_device + k] = eid
-    else:
-        if tokens_per_expert is None:
-            tokens_per_expert = [total_tokens // experts_per_device] * experts_per_device
 
+    elif tokens_per_expert is not None:
+        # Uneven distribution: device 0 only (single-device stress test mode)
+        device_idx = 0
         assert len(tokens_per_expert) == experts_per_device
         assert sum(tokens_per_expert) == total_tokens
 
-        # Build assignment: token t -> local expert based on tokens_per_expert distribution
+        non_local_experts = [e for e in range(experts_total) if e // experts_per_device != device_idx]
+
         token_to_local_expert = []
         for local_e, count in enumerate(tokens_per_expert):
             token_to_local_expert.extend([local_e] * count)
@@ -154,6 +164,28 @@ def gen_controlled_sparse_buffer(
             others = random.sample(non_local_experts, selected_experts_k - 1)
             for k, eid in enumerate(others):
                 expert_indices[t, k + 1] = eid
+
+    else:
+        # Default: even distribution across all devices.
+        # Each token routes to one expert per device (round-robin across local experts).
+        # With total_tokens=128, experts_total=16: each expert gets 32 tokens.
+        all_experts = list(range(experts_total))
+        for t in range(total_tokens):
+            # Pick one expert per device, cycling through local expert indices
+            selected = []
+            for d in range(num_devices):
+                local_e = t % experts_per_device
+                global_e = d * experts_per_device + local_e
+                selected.append(global_e)
+            # If selected_experts_k < num_devices, truncate; if >, fill with random extras
+            if len(selected) >= selected_experts_k:
+                selected = selected[:selected_experts_k]
+            else:
+                remaining_pool = [e for e in all_experts if e not in selected]
+                extra = random.sample(remaining_pool, selected_experts_k - len(selected))
+                selected.extend(extra)
+            for k, eid in enumerate(selected):
+                expert_indices[t, k] = eid
 
     expert_scores = torch.rand(total_tokens, selected_experts_k, dtype=torch.bfloat16) + 1e-5
     expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
@@ -383,10 +415,9 @@ def run_test_moe_gpt_tilize_matmul(
     )
 
     # ------------------------------------------------------------------
-    # Tilize inputs (controlled routing for device 0's experts)
-    # All devices get the same inputs; each processes its own local experts.
+    # Tilize inputs (routing distributed across all devices)
+    # All devices get the same replicated inputs; each processes its own local experts.
     # ------------------------------------------------------------------
-    device_idx = 0
     expert_mapping_torch = gen_expert_mapping(experts_total, num_devices)
     sparse_torch, indices_torch, scores_torch = gen_controlled_sparse_buffer(
         total_tokens,
@@ -394,7 +425,7 @@ def run_test_moe_gpt_tilize_matmul(
         E,
         experts_total,
         selected_experts_k,
-        device_idx,
+        num_devices,
         tokens_per_expert=tokens_per_expert,
         all_local_experts=all_local_experts,
     )
