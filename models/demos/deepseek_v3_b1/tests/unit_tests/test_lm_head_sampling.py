@@ -32,7 +32,9 @@ from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSamp
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def create_fabric_router_config(max_payload_size):
@@ -563,6 +565,267 @@ def test_single_device(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize("seed", [123, 1337])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 573440,
+        }
+    ],
+    indirect=True,
+)
+def test_lm_head_sampling_fused_argmax_single_device_mtp(
+    bh_2d_mesh_device,
+    use_fp32,
+    seed,
+):
+    """Single-device fused LM-head + argmax + MTP fusion test."""
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
+    device_grid_size = submesh.compute_with_storage_grid_size()
+
+    M = 1
+    K = 7168
+    embedding_dim = 7168
+    mtp_output_dim = 7168
+    num_matmul_cores = 101
+    n_per_core = 160
+    num_dram_banks = 8
+    n_total = num_matmul_cores * n_per_core
+    tile_width = 32
+    mtp_n_per_core = mtp_output_dim // num_dram_banks
+    mtp_padded_dim = num_dram_banks * mtp_n_per_core
+
+    a_tile = ttnn.Tile([1, 32])
+    b_tile = ttnn.Tile([32, 32])
+    out_tile = ttnn.Tile([1, 32])
+
+    mcast_core_x = device_grid_size.x - 1
+    mcast_core_y = 9
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
+    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    matmul_core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
+        ]
+    )
+    final_core = ttnn.CoreCoord(0, 0)
+
+    torch.manual_seed(seed)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
+    torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+
+    # MTP tensors
+    torch_embedding = torch.randn((n_total, embedding_dim), dtype=torch.bfloat16)
+    torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16)
+    torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
+    torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
+    torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
+
+    torch_expected_idx, torch_expected_mtp = LMHeadSampling.golden(
+        torch_a.float(),
+        torch_gamma.float(),
+        torch_b.float(),
+        indices=torch_indices,
+        k=1,
+        p=1.0,
+        fuse_mtp=True,
+        embedding_tensor=torch_embedding.float(),
+        h_gamma_tensor=torch_h_gamma.float(),
+        e_gamma_tensor=torch_e_gamma.float(),
+        eh_projection_tensor=torch_eh_proj.float(),
+    )
+
+    input_a_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    width_shard_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (K, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    indices_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_index_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(final_core, final_core)]), (1, 1), ttnn.ShardOrientation.ROW_MAJOR
+        ),
+    )
+    # --- MTP specific memory configs ---
+    compute_cores = submesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
+    )
+    eh_shard_grid = ttnn.CoreCoord(submesh.dram_grid_size().x - 1, submesh.dram_grid_size().y - 1)
+    eh_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), eh_shard_grid)})
+    mtp_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(compute_core_grid, (M, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    eh_proj_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(eh_shard_grid, (K + embedding_dim, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    input_tensor_mesh = ttnn.from_torch(
+        torch_a,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+    )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        torch.zeros_like(torch_a),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+    )
+    ttnn_gamma = ttnn.from_torch(
+        torch_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+    )
+    ttnn_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=width_shard_mem_config,
+        tile=b_tile,
+    )
+    ttnn_scores = ttnn.from_torch(
+        torch.zeros((M, n_total), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=output_mem_config,
+        tile=out_tile,
+    )
+    ttnn_indices = ttnn.from_torch(
+        torch_indices,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=indices_mem_config,
+    )
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros((1, 1), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=output_index_mem_config,
+    )
+    # --- MTP embedding tensor ---
+    ttnn_embedding = ttnn.from_torch(
+        torch_embedding,
+        dtype=ttnn.bfloat16,
+        # layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        # tile=b_tile,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # --- MTP rmsnorm gamma tensors ---
+    ttnn_h_gamma = ttnn.from_torch(
+        torch_h_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+    )
+    ttnn_e_gamma = ttnn.from_torch(
+        torch_e_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+    )
+    # --- MTP EH matmul tensors ---
+    # DRAM streaming matmul requires column-major tile order within each bank shard
+    torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
+    ttnn_eh_proj = ttnn.from_torch(
+        torch_eh_proj_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=eh_proj_mem_config,
+        tile=b_tile,
+    )
+    ttnn_mtp_output = ttnn.from_torch(
+        torch.zeros((M, mtp_padded_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=mtp_output_mem_config,
+        tile=out_tile,
+    )
+    LMHeadSampling.op(
+        input_tensor_mesh,
+        intermediate_tensor_mesh,
+        ttnn_gamma,
+        ttnn_b,
+        ttnn_scores,
+        output_mtp_tensor=ttnn_mtp_output,
+        embedding_tensor=ttnn_embedding,
+        h_gamma_tensor=ttnn_h_gamma,
+        e_gamma_tensor=ttnn_e_gamma,
+        eh_projection_tensor=ttnn_eh_proj,
+        sender_coord=ttnn.MeshCoordinate(0, 0),
+        indices_tensor=ttnn_indices,
+        output_index_tensor=ttnn_output_index,
+        argmax_final_core_coord=final_core,
+        semaphores=None,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=True,
+        enable_mtp=True,
+    )
+    ttnn.synchronize_device(submesh)
+
+    output_index_torch = ttnn.to_torch(ttnn_output_index).to(torch.uint32).reshape(1, 1)
+    logger.info(f"Output index: {output_index_torch}")
+    logger.info(f"Expected index: {torch_expected_idx}")
+    assert torch.equal(
+        output_index_torch, torch_expected_idx
+    ), f"Fused argmax index mismatch. expected={torch_expected_idx.item()}, got={output_index_torch.item()}"
+
+    mtp_output_torch = ttnn.to_torch(ttnn_mtp_output).to(torch.float32).reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
+    logger.info(f"MTP output shape: {mtp_output_torch.shape}")
+    logger.info(f"Expected MTP shape: {torch_expected_mtp.shape}")
+    mtp_passing_pcc, output = comp_pcc(mtp_output_torch, torch_expected_mtp.float(), 0.99)
+    if not mtp_passing_pcc:
+        logger.warning(f"MTP output PCC check failed: {mtp_passing_pcc}")
+    assert mtp_passing_pcc, "MTP output PCC check failed"
+
+
+@pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
 @pytest.mark.parametrize(
     "device_params",
@@ -966,6 +1229,369 @@ def test_multidevice(
     assert torch.equal(
         final_output_index, torch_expected_idx
     ), f"Fused mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={final_output_index.item()}"
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize("final_mesh_coord", [(1, 1)])
+@pytest.mark.parametrize("seed", [7, 1337])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 1163264,
+        }
+    ],
+    indirect=True,
+)
+def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_mtp(
+    bh_2d_mesh_device,
+    use_fp32,
+    final_mesh_coord,
+    seed,
+):
+    """4x2 mesh fused LM-head + argmax + MTP fusion with CCL enabled.
+
+    This test verifies multi-device MTP where:
+    1. Input is CCL broadcast from sender device to all devices
+    2. All devices run LM-head matmul and participate in mesh argmax
+    3. The argmax winner token is CCL broadcast from final_mesh_coord to all devices
+    4. All devices run MTP in parallel (embedding lookup, RMSNorm, concat, EH matmul)
+    5. Each device produces its local shard of the MTP output
+    """
+    mesh_rows, mesh_cols = 4, 2
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    device_grid_size = submesh.compute_with_storage_grid_size()
+    worker_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+    )
+
+    M = 1
+    K = 7168
+    embedding_dim = 7168
+    mtp_output_dim = 7168
+    num_matmul_cores = 101
+    n_per_core = 160
+    n_total = num_matmul_cores * n_per_core
+    tile_width = 32
+    num_dram_banks = 8
+    mtp_n_per_core = mtp_output_dim // num_dram_banks
+    mtp_padded_dim = num_dram_banks * mtp_n_per_core
+
+    a_tile = ttnn.Tile([1, 32])
+    b_tile = ttnn.Tile([32, 32])
+    out_tile = ttnn.Tile([1, 32])
+
+    mcast_core_x = device_grid_size.x - 1
+    mcast_core_y = 9
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
+    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    matmul_core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
+        ]
+    )
+    final_core = ttnn.CoreCoord(0, 0)
+    final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(final_core, final_core)])
+
+    # Get a representative device for DRAM bank core assignment (homogeneous mesh)
+    device = submesh.get_device(ttnn.MeshCoordinate(0, 0))
+
+    torch.manual_seed(seed)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_gamma = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
+    torch_indices_all = torch.arange(num_devices * n_total, dtype=torch.int32).reshape(num_devices, 1, n_total)
+
+    # MTP tensors
+    torch_embedding = torch.randn((n_total, embedding_dim), dtype=torch.bfloat16)
+    torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16)
+    torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
+    torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
+    torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
+
+    torch_expected_idx, torch_expected_mtp = LMHeadSampling.golden(
+        torch_a.float(),
+        torch_gamma.float(),
+        torch_b.float().unsqueeze(0).repeat(num_devices, 1, 1),
+        indices=torch_indices_all,
+        k=1,
+        p=1.0,
+        fuse_mtp=True,
+        embedding_tensor=torch_embedding.float(),
+        h_gamma_tensor=torch_h_gamma.float(),
+        e_gamma_tensor=torch_e_gamma.float(),
+        eh_projection_tensor=torch_eh_proj.float(),
+    )
+
+    input_a_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    width_shard_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (K, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    indices_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_index_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    winner_page_bytes = 16
+    scratch_shape_per_device = (1, ((mesh_rows + mesh_cols) * winner_page_bytes + 256 + 8) // 4)
+    scratch_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    # --- MTP specific memory configs ---
+    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
+    )
+    eh_shard_grid = ttnn.CoreCoord(submesh.dram_grid_size().x - 1, submesh.dram_grid_size().y - 1)
+    eh_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), eh_shard_grid)})
+    mtp_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(compute_core_grid, (M, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    eh_proj_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(eh_shard_grid, (K + embedding_dim, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    sender_coord = ttnn.MeshCoordinate(1, 0)
+    device_inputs = []
+    device_intermediate = []
+    for r in range(mesh_rows):
+        for c in range(mesh_cols):
+            if r == sender_coord[0] and c == sender_coord[1]:
+                device_inputs.append(torch_a)
+            else:
+                device_inputs.append(torch.zeros_like(torch_a))
+            device_intermediate.append(torch.zeros_like(torch_a))
+    mesh_input = torch.cat(device_inputs, dim=0)
+    mesh_intermediate = torch.cat(device_intermediate, dim=0)
+
+    mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
+    input_tensor_mesh = ttnn.from_torch(
+        mesh_input,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        mesh_intermediate,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_gamma = ttnn.from_torch(
+        torch_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=width_shard_mem_config,
+        tile=b_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn_scores = ttnn.from_torch(
+        torch.zeros((M, n_total), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=output_mem_config,
+        tile=out_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn_indices = ttnn.from_torch(
+        torch_indices_all,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=indices_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros((num_devices, 1, 1), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=output_index_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_fabric_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=scratch_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # MTP tensors - replicated across all devices
+    ttnn_embedding = ttnn.from_torch(
+        torch_embedding,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        tile=b_tile,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn_h_gamma = ttnn.from_torch(
+        torch_h_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn_e_gamma = ttnn.from_torch(
+        torch_e_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
+    ttnn_eh_proj = ttnn.from_torch(
+        torch_eh_proj_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=eh_proj_mem_config,
+        tile=b_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn_mtp_output = ttnn.from_torch(
+        torch.zeros((num_devices, M, mtp_padded_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=mtp_output_mem_config,
+        tile=out_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
+    barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
+    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
+    global_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
+    global_stage2_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
+
+    LMHeadSampling.op(
+        input_tensor_mesh,
+        intermediate_tensor_mesh,
+        ttnn_gamma,
+        ttnn_b,
+        ttnn_scores,
+        output_mtp_tensor=ttnn_mtp_output,
+        embedding_tensor=ttnn_embedding,
+        h_gamma_tensor=ttnn_h_gamma,
+        e_gamma_tensor=ttnn_e_gamma,
+        eh_projection_tensor=ttnn_eh_proj,
+        sender_coord=sender_coord,
+        indices_tensor=ttnn_indices,
+        output_index_tensor=ttnn_output_index,
+        argmax_final_core_coord=final_core,
+        argmax_final_mesh_coord=final_mesh_coord,
+        semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+        global_semaphore=global_semaphore,
+        global_stage2_semaphore=global_stage2_semaphore,
+        fabric_scratch_tensor=ttnn_fabric_scratch,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=False,
+        enable_mtp=True,
+        eh_subblock_k=subblock_k,
+    )
+    ttnn.synchronize_device(submesh)
+
+    # Verify argmax output from final device
+    output_shards = ttnn.get_device_tensors(ttnn_output_index)
+    final_device_idx = int(final_mesh_coord[0]) * mesh_cols + int(final_mesh_coord[1])
+    final_output_index = ttnn.to_torch(output_shards[final_device_idx]).to(torch.uint32).reshape(1, 1)
+    logger.info(f"Final output index: {final_output_index}")
+    logger.info(f"Expected index: {torch_expected_idx}")
+    assert torch.equal(
+        final_output_index, torch_expected_idx
+    ), f"Fused mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={final_output_index.item()}"
+
+    # Verify MTP output - trim padding from each device's output
+    mtp_output_shards = ttnn.get_device_tensors(ttnn_mtp_output)
+    mtp_outputs_per_device = []
+    for device_idx in range(num_devices):
+        shard_torch = (
+            ttnn.to_torch(mtp_output_shards[device_idx])
+            .to(torch.float32)
+            .reshape(1, mtp_padded_dim)[:, :mtp_output_dim]
+        )
+        mtp_outputs_per_device.append(shard_torch)
+        logger.info(f"Device {device_idx} MTP output shape: {shard_torch.shape}")
+
+    # All devices should produce the same MTP output since they all got the same token
+    # via CCL broadcast and have the same EH projection weights
+    mtp_output_torch = mtp_outputs_per_device[final_device_idx]
+    logger.info(f"Final device MTP output shape: {mtp_output_torch.shape}")
+    logger.info(f"Expected MTP shape: {torch_expected_mtp.shape}")
+
+    mtp_allclose = torch.allclose(mtp_output_torch, torch_expected_mtp.float(), rtol=0.1, atol=0.1)
+    if not mtp_allclose:
+        max_diff = (mtp_output_torch - torch_expected_mtp.float()).abs().max()
+        logger.warning(f"MTP output mismatch on final device. Max diff: {max_diff}")
+
+        # Check if other devices have the same output (verifies CCL broadcast worked)
+        for device_idx in range(num_devices):
+            if device_idx != final_device_idx:
+                other_mtp = mtp_outputs_per_device[device_idx]
+                if torch.allclose(other_mtp, mtp_output_torch, rtol=0.01, atol=0.01):
+                    logger.info(f"Device {device_idx} MTP matches final device")
+                else:
+                    logger.warning(
+                        f"Device {device_idx} MTP differs from final device. "
+                        f"Max diff: {(other_mtp - mtp_output_torch).abs().max()}"
+                    )
+
+    assert mtp_allclose, "MTP output mismatch"
 
 
 @pytest.mark.parametrize("use_fp32", [True])
