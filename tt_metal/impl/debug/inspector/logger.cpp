@@ -7,6 +7,7 @@
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "common/filesystem_utils.hpp"
 #include <iomanip>
 #include <chrono>
 
@@ -18,14 +19,13 @@ Logger::Logger(const std::filesystem::path& logging_path) : logging_path(logging
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
         "Inspector logger will impact tt-triage functionality.";
 
-    try {
-        // Recreate the logging directory if it doesn't exist or clear it if it does.
-        std::filesystem::remove_all(logging_path);
-        std::filesystem::create_directories(logging_path);
+    // Recreate the logging directory if it doesn't exist or clear it if it does.
+    // Use NFS-safe helpers that retry on ESTALE (stale file handle) errors.
+    if (!tt::filesystem::safe_remove_all(logging_path)) {
+        TT_INSPECTOR_THROW("Failed to remove logging directory: {}\n{}", logging_path.string(), additional_text);
     }
-    catch (const std::exception& e) {
-        TT_INSPECTOR_THROW(
-            "Failed to create logging directory: {}. Error: {}\n{}", logging_path.string(), e.what(), additional_text);
+    if (!tt::filesystem::safe_create_directories(logging_path)) {
+        TT_INSPECTOR_THROW("Failed to create logging directory: {}\n{}", logging_path.string(), additional_text);
     }
 
     // Write startup information to the inspector files.

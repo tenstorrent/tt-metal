@@ -367,7 +367,7 @@ public:
     void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
-    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
+    uint16_t get_inspector_rpc_server_port() const;
     bool get_serialize_inspector_on_dispatch_timeout() const {
         return inspector_settings.serialize_on_dispatch_timeout;
     }
@@ -408,9 +408,7 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const {
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
-    }
+    std::string get_inspector_rpc_server_address() const;
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -733,7 +731,10 @@ public:
     void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
 
 private:
-    // Helper functions to parse feature-specific environment variables.
+    /** Rank-aware port for Inspector RPC when running under MPI/tt-run (base_port + rank). */
+    uint16_t get_effective_inspector_rpc_server_port() const;
+
+    // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     bool ParseFeatureChipIds(

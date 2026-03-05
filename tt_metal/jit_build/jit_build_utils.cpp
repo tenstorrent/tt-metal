@@ -4,6 +4,8 @@
 
 #include "jit_build_utils.hpp"
 
+#include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -13,8 +15,11 @@
 #include <random>
 #include <string>
 #include <system_error>
+#include <thread>
 
 #include <tt-logger/tt-logger.hpp>
+#include <unistd.h>
+#include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::jit_build::utils {
@@ -45,7 +50,7 @@ void create_file(const std::string& file_path_str) {
     namespace fs = std::filesystem;
 
     fs::path file_path(file_path_str);
-    fs::create_directories(file_path.parent_path());
+    tt::filesystem::safe_create_directories(file_path.parent_path());
 
     std::ofstream ofs(file_path);
     ofs.close();
@@ -70,19 +75,39 @@ FileRenamer::FileRenamer(const std::string& target_path) :
     temp_path_(generate_temp_path(target_path)), target_path_(target_path) {}
 
 FileRenamer::~FileRenamer() {
-    std::error_code ec;
     if (target_path_.empty()) {
         return;
     }
-    std::filesystem::rename(temp_path_, target_path_, ec);
-    if (ec) {
-        log_error(
-            tt::LogBuildKernels,
-            "Failed to rename temporary file {} to target file {}: {}",
-            temp_path_,
-            target_path_,
-            ec.message());
+
+    // Retry rename operation with sleep for NFS ESTALE (stale file handle) errors
+    constexpr int kMaxRetries = 5;
+    constexpr int kRetryDelayMs = 500;
+    std::error_code ec;
+
+    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+        std::filesystem::rename(temp_path_, target_path_, ec);
+        if (!ec) {
+            // Success - sync to ensure data is flushed to NFS
+            ::sync();
+            return;
+        }
+        // Only retry on ESTALE (stale file handle) errors
+        if (ec.value() != ESTALE) {
+            break;
+        }
+        // If this is not the last attempt, sleep and retry
+        if (attempt < kMaxRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs * (attempt + 1)));
+        }
     }
+
+    // All retries failed or non-retryable error - log error
+    log_error(
+        tt::LogBuildKernels,
+        "Failed to rename temporary file {} to target file {}: {}",
+        temp_path_,
+        target_path_,
+        ec.message());
 }
 
 }  // namespace tt::jit_build::utils

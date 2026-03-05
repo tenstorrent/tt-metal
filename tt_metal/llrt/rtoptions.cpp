@@ -19,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
+#include "common/filesystem_utils.hpp"
 
 // NOLINTBEGIN(bugprone-branch-clone)
 
@@ -257,7 +258,7 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
-    if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+    if (tt::filesystem::safe_is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT)).value_or(false)) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
@@ -276,7 +277,7 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         // treat the current working directory as the repository root.
         std::filesystem::path current_working_directory = std::filesystem::current_path();
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
-        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
+        if (tt::filesystem::safe_is_directory(tt_metal_subdirectory).value_or(false)) {
             this->root_dir = current_working_directory.string();
             log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
         }
@@ -347,6 +348,58 @@ const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
 }
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
+
+namespace {
+/** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
+ * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
+ * (e.g. run_cluster_validation under mpirun), each still gets a distinct port. */
+int get_rank_from_env() {
+    const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("PMI_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("TT_MESH_HOST_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    return -1;
+}
+}  // namespace
+
+uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
+    int rank = get_rank_from_env();
+    uint32_t base = inspector_settings.rpc_server_port;
+    if (rank >= 0) {
+        uint32_t port = base + static_cast<uint32_t>(rank);
+        if (port > 65535) {
+            port = 65535;
+        }
+        return static_cast<uint16_t>(port);
+    }
+    return static_cast<uint16_t>(base);
+}
+
+uint16_t RunTimeOptions::get_inspector_rpc_server_port() const { return get_effective_inspector_rpc_server_port(); }
+
+std::string RunTimeOptions::get_inspector_rpc_server_address() const {
+    return inspector_settings.rpc_server_host + ":" + std::to_string(get_effective_inspector_rpc_server_port());
+}
 
 // ============================================================================
 // ENVIRONMENT VARIABLE HANDLER

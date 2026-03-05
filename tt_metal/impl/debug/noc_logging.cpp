@@ -21,6 +21,7 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "common/filesystem_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -34,7 +35,7 @@ constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
-    std::filesystem::create_directories(output_dir);
+    tt::filesystem::safe_create_directories(output_dir);
     std::string filename = rtoptions.get_logs_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 

@@ -25,6 +25,9 @@ sys.path.insert(0, triage_home)
 
 import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
+from metal_device_id_mapping import MetalDeviceIdMapping
+import inspector_data
+from dispatcher_data import DispatcherData
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
@@ -498,3 +501,160 @@ class TestTriage:
             ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
         return result
+
+
+def _make_triage_script(
+    name: str,
+    failed: bool = False,
+    failure_message: str | None = None,
+    depends: list[triage.TriageScript] | None = None,
+) -> triage.TriageScript:
+    return triage.TriageScript(
+        name=name,
+        path=name,
+        config=triage.ScriptConfig(),
+        module=sys.modules[__name__],
+        run_method=lambda args, context: None,
+        documentation="Usage:\n    test_script\n\nDescription:\n    test\n\nOwner:\n    test-owner\n",
+        depends=depends or [],
+        failed=failed,
+        failure_message=failure_message,
+    )
+
+
+def test_metal_device_id_mapping_none_result_has_descriptive_error():
+    class FakeInspectorData:
+        def getMetalDeviceIdMappings(self):
+            return None
+
+    with pytest.raises(triage.TTTriageError, match="getMetalDeviceIdMappings.*None|returned no data"):
+        MetalDeviceIdMapping(FakeInspectorData())
+
+
+def test_metal_device_id_mapping_malformed_result_has_descriptive_error():
+    class FakeInspectorData:
+        def getMetalDeviceIdMappings(self):
+            return object()
+
+    with pytest.raises(triage.TTTriageError, match="malformed result type|missing 'mappings'"):
+        MetalDeviceIdMapping(FakeInspectorData())
+
+
+def test_summarize_failure_message_prefers_root_cause_line():
+    traceback_message = (
+        "Traceback (most recent call last):\n"
+        '  File "/tmp/foo.py", line 1, in <module>\n'
+        "    run()\n"
+        "AttributeError: 'NoneType' object has no attribute 'mappings'\n"
+    )
+    assert (
+        triage.summarize_failure_message(traceback_message)
+        == "AttributeError: 'NoneType' object has no attribute 'mappings'"
+    )
+
+
+def test_build_dependency_failure_lines_lists_dependency_names_and_summaries():
+    failing_dep = _make_triage_script(
+        "metal_device_id_mapping.py",
+        failed=True,
+        failure_message="Traceback...\nAttributeError: 'NoneType' object has no attribute 'mappings'",
+    )
+    parent = _make_triage_script("run_checks.py", depends=[failing_dep])
+
+    lines = triage.build_dependency_failure_lines(parent)
+    joined = "\n".join(lines)
+
+    assert "Failed dependencies:" in joined
+    assert "metal_device_id_mapping.py" in joined
+    assert "'NoneType' object has no attribute 'mappings'" in joined
+    assert "Action:" in joined
+
+
+def test_serialize_result_prints_summary_before_details(capsys):
+    script = _make_triage_script(
+        "dispatcher_data.py",
+        failed=True,
+        failure_message=(
+            "Traceback (most recent call last):\n"
+            '  File "/tmp/dispatcher_data.py", line 1, in run\n'
+            "    fail()\n"
+            "RuntimeError: Inspector RPC unavailable\n"
+        ),
+    )
+
+    triage.serialize_result(script, None)
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert "Summary: RuntimeError: Inspector RPC unavailable" in output
+    assert "Details:" in output
+
+
+@pytest.fixture
+def inspector_run_args():
+    return {
+        "--inspector-rpc-port": "50051",
+        "--inspector-rpc-host": "localhost",
+        "--inspector-log-path": "/tmp/ignored",
+    }
+
+
+def _mock_rpc_unavailable_with_logs_present(monkeypatch):
+    monkeypatch.setattr(
+        inspector_data,
+        "connect_rpc_with_retry",
+        lambda host, port: (_ for _ in ()).throw(inspector_data.InspectorException("rpc unavailable")),
+    )
+    monkeypatch.setattr(inspector_data, "get_log_directory", lambda directory: "/tmp/tt-triage-test")
+    monkeypatch.setattr(inspector_data.os.path, "exists", lambda path: True)
+
+
+def test_inspector_data_run_falls_back_to_serialized_when_rpc_unavailable(monkeypatch, inspector_run_args):
+    sentinel = object()
+
+    _mock_rpc_unavailable_with_logs_present(monkeypatch)
+    monkeypatch.setattr(inspector_data, "InspectorRpcSerialized", lambda directory: sentinel)
+
+    result = inspector_data.run(inspector_run_args, context=None)
+    assert result is sentinel
+
+
+def test_inspector_data_run_reports_both_rpc_and_serialized_failures(monkeypatch, inspector_run_args):
+    _mock_rpc_unavailable_with_logs_present(monkeypatch)
+    monkeypatch.setattr(
+        inspector_data,
+        "InspectorRpcSerialized",
+        lambda directory: (_ for _ in ()).throw(ValueError("missing serialized artifacts")),
+    )
+
+    with pytest.raises(inspector_data.InspectorException) as exc:
+        inspector_data.run(inspector_run_args, context=None)
+    message = str(exc.value)
+    assert "RPC connection failure:" in message
+    assert "Serialized data failure:" in message
+    assert "rpc unavailable" in message
+    assert "missing serialized artifacts" in message
+
+
+def test_dispatcher_data_missing_build_env_includes_last_error_and_env_hint(monkeypatch):
+    dispatcher = DispatcherData.__new__(DispatcherData)
+    dispatcher._build_env_cache = {}
+    dispatcher._build_env_last_error = RuntimeError("rpc timeout")
+    dispatcher._refresh_build_env_cache = lambda: None
+
+    monkeypatch.setenv("TT_METAL_INSPECTOR_RPC", "0")
+    with pytest.raises(triage.TTTriageError) as exc:
+        dispatcher._get_build_env_for_device(99)
+    message = str(exc.value)
+    assert "unique_id=99" in message
+    assert "Last getAllBuildEnvs failure: RuntimeError: rpc timeout" in message
+    assert "TT_METAL_INSPECTOR_RPC is not set to 1" in message
+
+
+def test_extract_assert_code_handles_none_gracefully():
+    """Ensure extract_assert_code never passes None to path/stat (graceful during timeout/corrupted device triage)."""
+    from dump_lightweight_asserts import extract_assert_code
+
+    assert extract_assert_code(None, None, None) == "?"
+    assert extract_assert_code(None, 1, 0) == "?"
+    assert extract_assert_code("/nonexistent", None, 0) == "?"

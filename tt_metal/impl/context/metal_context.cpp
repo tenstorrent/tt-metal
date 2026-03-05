@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <algorithm>
-#include <memory>
 #include <mutex>
 #include <future>
-#include <set>
 #include <vector>
 #include <unordered_set>
 
@@ -18,13 +15,13 @@
 
 #include "metal_context.hpp"
 #include "core_coord.hpp"
-#include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "firmware_capability.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -34,9 +31,11 @@
 #include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
+#include "common/filesystem_utils.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
@@ -44,6 +43,7 @@
 #include <experimental/mock_device.hpp>
 #include "context/context_descriptor.hpp"
 #include "device/device_manager.hpp"
+#include "device/firmware/risc_firmware_initializer.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include <system_mesh.hpp>
@@ -439,7 +439,6 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
-    system_mesh_.reset();
     control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
@@ -607,8 +606,7 @@ void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
-    // Reset the system mesh and control plane, since they were initialized with custom parameters.
-    system_mesh_.reset();
+    // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
@@ -629,8 +627,14 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
-    // Stub control plane for mock devices will make this a no-op
-    this->get_control_plane().clear_fabric_context();
+
+    // Only clear if control plane exists; do not call get_control_plane() or
+    // we may lazily create one during teardown (e.g. after devices are
+    // closed), which can trigger topology mapper failures.
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    if (control_plane_) {
+        control_plane_->clear_fabric_context();
+    }
 }
 
 void MetalContext::set_fabric_config(
@@ -715,7 +719,6 @@ void MetalContext::set_fabric_config(
             "Fabric config changed from {} to {}, reinitializing control plane",
             this->get_control_plane().get_fabric_config(),
             this->fabric_config_);
-        system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
 }
@@ -872,7 +875,7 @@ void MetalContext::initialize_control_plane_impl() {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
         TT_FATAL(
-            std::filesystem::exists(mesh_graph_desc_path),
+            tt::filesystem::safe_exists(mesh_graph_desc_path).value_or(false),
             "Custom mesh graph descriptor file not found: {}",
             mesh_graph_desc_path.string());
 
@@ -896,21 +899,11 @@ void MetalContext::initialize_control_plane_impl() {
 
         TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
         TT_FATAL(
-            std::filesystem::exists(mesh_graph_desc_path),
+            tt::filesystem::safe_exists(mesh_graph_desc_path).value_or(false),
             "Mesh graph descriptor file not found: {}",
             mesh_graph_desc_path.string());
         this->construct_control_plane(mesh_graph_desc_path);
     }
-}
-
-// Command queue id stack for thread
-thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
-
-MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
-    return MetalContext::command_queue_id_stack_for_thread_;
-}
-const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
-    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
@@ -948,6 +941,16 @@ void MetalContext::on_dispatch_timeout_detected() {
             }
         }
     }
+}
+
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
+MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
+    return MetalContext::command_queue_id_stack_for_thread_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
+    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 }  // namespace tt::tt_metal

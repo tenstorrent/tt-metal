@@ -327,7 +327,9 @@ void set_config_vars() {
     // be running fabric routers
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
 
-    // Only set these if they are not already set
+    // Only set these if they are not already set. Keep TT_MESH_HOST_RANK=0 for all
+    // processes so control plane mesh graph validation succeeds; Inspector RPC
+    // port is made unique per process via OMPI_COMM_WORLD_RANK in rtoptions.
     if (getenv("TT_MESH_HOST_RANK") == nullptr) {
         setenv("TT_MESH_HOST_RANK", "0", 1);
     }
