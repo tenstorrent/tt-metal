@@ -34,6 +34,23 @@ from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 models_not_supported_for_device_sampling = ["Mistral-7B"]
 
 
+def get_test_mesh_shape():
+    mesh_shape_map = {
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+        "TG": (8, 4),
+        "P150": (1, 1),
+        "P300": (1, 2),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        "BHGLX": (8, 4),
+    }
+    mesh_device = os.environ.get("MESH_DEVICE")
+    return mesh_shape_map[mesh_device] if mesh_device in mesh_shape_map else len(ttnn.get_device_ids())
+
+
 class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
@@ -763,20 +780,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-            "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [get_test_mesh_shape()],
     indirect=True,
 )
 def test_demo_text(
