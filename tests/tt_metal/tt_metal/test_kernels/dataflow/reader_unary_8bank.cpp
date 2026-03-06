@@ -13,7 +13,7 @@
 
 void generate_bcast_scaler() {
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb2(2);
+    experimental::DataflowBuffer dfb1(1);
 #else
     constexpr uint32_t cb_in_2 = 2;
 #endif
@@ -25,8 +25,8 @@ void generate_bcast_scaler() {
     u.u = scaler;
     // DPRINT << "basic Scaler = " << F32(u.f) << ENDL();
 #ifdef ARCH_QUASAR
-    dfb2.reserve_back(1);
-    auto ptr = reinterpret_cast<uint16_t*>(dfb2.get_write_ptr());
+    dfb1.reserve_back(1);
+    auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr());
 #else
     cb_reserve_back(cb_in_2, 1);
     auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
@@ -41,7 +41,7 @@ void generate_bcast_scaler() {
         }
     }
 #ifdef ARCH_QUASAR
-    dfb2.push_back(1);
+    dfb1.push_back(1);
 #else
     cb_push_back(cb_in_2, 1);
 #endif

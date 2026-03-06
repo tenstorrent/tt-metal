@@ -18,8 +18,8 @@ void kernel_main() {
 
 #ifdef ARCH_QUASAR
     experimental::DataflowBuffer dfb_in(0);
-    experimental::DataflowBuffer dfb_in_scaler(2);
-    experimental::DataflowBuffer dfb_out(16);
+    experimental::DataflowBuffer dfb_in_scaler(1);
+    experimental::DataflowBuffer dfb_out(2);
     compute_kernel_hw_startup(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
     reduce_init(dfb_in.get_id(), dfb_in_scaler.get_id(), dfb_out.get_id());
 #else
@@ -30,7 +30,11 @@ void kernel_main() {
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #endif
 
+#ifdef ARCH_QUASAR
+    dfb_in_scaler.wait_front(1);
+#else
     cb2.wait_front(1);  // scaler tile from the reader
+#endif
     for (uint32_t nc = 0; nc < NC; nc++) {
         constexpr int onetile = 1;
         int reduce_dst_idx = 0;
