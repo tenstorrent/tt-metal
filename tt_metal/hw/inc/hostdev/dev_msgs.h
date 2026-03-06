@@ -150,7 +150,7 @@ struct kernel_config_msg_t {
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2[1];  // CODEGEN:skip
+    volatile uint8_t pad2[3];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint64_t local_cb_mask;
 
@@ -170,7 +170,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 4];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel; values fit in 8 bits)
     // The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of 16 bytes for the pair).
