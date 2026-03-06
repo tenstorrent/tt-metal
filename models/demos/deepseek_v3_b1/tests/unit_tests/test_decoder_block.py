@@ -27,9 +27,12 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.prepare_weights import prepare_routed_expert_weights, prepare_shared_expert_weights
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
-    create_routed_expert_tensors,
-    create_shared_expert_tensors,
+    ROUTED_EXPERT_LAYER_IDX,
+    RoutedExpert,
+    SharedExpert,
+    Tiles,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 
@@ -41,21 +44,25 @@ def create_fabric_router_config(max_payload_size):
 
 
 # ============================================================================
-# Attention Block tensor setup (adapted from test_attention_block.py)
+# Unified decoder block tensor setup (single BDW instance for all L1 weights)
 # ============================================================================
-def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, sender_col, position_id):
-    """Create all tensors required by AttentionBlock.get_program_context().
+def create_decoder_block_tensors(
+    submesh, mesh_rows, mesh_cols, sender_row, sender_col, position_id, state_dict, layer_idx
+):
+    """Create all tensors required by DecoderBlock.op() using a single BlitzDecodeWeights.
 
-    Returns a dict containing all ttnn tensors and scalars needed to call
-    DecoderBlock.op() for the attention portion.
+    This avoids the L1 OOM caused by allocating overlapped attention weights twice
+    (once for MLA, once for MoE's gate_mm/ffn_norm). A single BDW instance ensures
+    the three fused weight groups share L1 without duplication.
+
+    Returns a dict with all attention + MoE + shared expert + reduce tensors.
     """
     num_devices = mesh_rows * mesh_cols
     num_tp = mesh_cols
-    skip_ccl = False
-
     device_grid_size = submesh.compute_with_storage_grid_size()
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
-    # Head configuration
+    # ── Attention constants ──
     NUM_QNOPE_HEADS = 64
     NUM_QROPE_HEADS = 64
     QNOPE_HEAD_DIM = 128
@@ -65,22 +72,22 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
     KROPE_DIM = 64
 
     M = 1
+    K = 7168
     K1 = QNOPE_OUT_DIM
     post_sdpa_intermediate = 8192
     K2 = 8192
     output_size = 7168
-    shape = (1, 7168)
-    matmul_weights_shape = (7168, 1536)
+    shape = (1, K)
+    matmul_weights_shape = (K, 1536)
     max_seq_len = 32 * 1024
     scale = (QNOPE_HEAD_DIM + QROPE_HEAD_DIM) ** -0.5
     rmsnorm2_width = 1536
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
 
     QNOPE_GRID_COLS = 8
     QROPE_GRID_COLS = 4
     matmul2_grid_y = 8
-    qnope_num_cores = QNOPE_GRID_COLS * matmul2_grid_y
     qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y
-    kvpe_dim = KNOPE_DIM + KROPE_DIM
 
     NUM_SDPA_WORKERS = 8
     SDPA_L_HEIGHT = 8
@@ -92,7 +99,6 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
     mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
     tile = ttnn.Tile([1, 32])
 
-    # KV cache branch grid
     kv_cache_branch_start_offset = (0, 8)
     kv_cache_branch_rope_crs = ttnn.CoreRangeSet(
         {
@@ -103,7 +109,7 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
         }
     )
 
-    # ── SDPA KV cache buffer (overlaps with pre-SDPA CBs) ──
+    # ── SDPA KV cache buffer ──
     kv_cache_num_cores_x = device_grid_size.x
     kv_cache_num_cores_y = device_grid_size.y
     kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
@@ -123,7 +129,7 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
         ),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # ── SDPA output intermediate buffer ──
@@ -146,11 +152,11 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_out_interm_shard_spec
         ),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
         tile=ttnn.Tile([8, 32]),
     )
 
-    # ── Torch tensors ──
+    # ── Torch tensors for attention ──
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
@@ -163,9 +169,9 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
         (matmul_weights_shape[1], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
     torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
-    torch_dkv_matmul_weights = torch.randn((7168, KNOPE_DIM + KROPE_DIM), dtype=torch.bfloat16)
-    torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
-    torch_ffn_norm = torch.zeros((1, 7168), dtype=torch.bfloat16)
+    torch_dkv_matmul_weights = torch.randn((K, KNOPE_DIM + KROPE_DIM), dtype=torch.bfloat16)
+    torch_gate_mm_weights = torch.zeros((K, 256), dtype=torch.bfloat16)
+    torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
     torch_weights1 = torch.randn((K1, post_sdpa_intermediate), dtype=torch.bfloat16)
@@ -173,18 +179,12 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
     torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
     torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
 
-    # ── RoPE tensors ──
-    position_ids = torch.tensor([position_id])
-    base = 10000.0
-    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
-    t = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = torch.outer(t, inv_freq)
-    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
-    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
-    torch_trans_mat = get_rot_transformation_mat()
-
-    # ── BlitzDecodeWeights overlapped tensors ──
+    # ══════════════════════════════════════════════════════════════════════════
+    # Single BDW instance for ALL overlapped L1 weight groups
+    # ══════════════════════════════════════════════════════════════════════════
     bdw = BlitzDecodeWeights(submesh)
+
+    # Group 1: q_a_proj + q_b_proj + kv_a_proj
     (
         matmul_weights_overlapped,
         matmul2_weights_overlapped,
@@ -193,18 +193,20 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
         torch_matmul_weights, torch_matmul2_weights_full, torch_dkv_matmul_weights
     )
 
+    # Group 3: kv_b1 + kv_b2
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
     matmul3_weights_overlapped, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(
         torch_matmul3_weights_flat, torch_kv_b2_proj_weights
     )
 
+    # Group 2: o_proj + gate_mm + attn_norm + q_norm + kv_norm + ffn_norm
     (
         o_proj_overlapped,
         gate_mm_overlapped,
         gamma_overlapped,
         rmsnorm2_gamma_overlapped,
         dkv_rmsnorm_gamma_overlapped,
-        _,
+        ffn_norm_overlapped,
     ) = bdw.get_tt_o_proj_and_gate_mm_weights(
         torch_o_proj_weights,
         torch_gate_mm_weights,
@@ -214,416 +216,67 @@ def create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, se
         torch_ffn_norm,
     )
 
-    # ── Input/intermediate mesh tensors ──
-    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+    # ══════════════════════════════════════════════════════════════════════════
+    # MoE routed expert DRAM weights (via same BDW)
+    # ══════════════════════════════════════════════════════════════════════════
+    routed_weights = prepare_routed_expert_weights(
+        bdw,
+        state_dict,
+        layer_idx=layer_idx,
+        is_moe=True,
+        num_routed_experts=1,
+        move_to_device=True,
     )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    gate_proj_weights = routed_weights.routed_gate_proj[0]
+    up_proj_weights = routed_weights.routed_up_proj[0]
+    down_proj_weights = routed_weights.routed_down_proj[0]
 
-    device_tensors = []
-    intermediate_tensors = []
-    for row in range(mesh_rows):
-        for col in range(mesh_cols):
-            if row == sender_row and col == sender_col:
-                device_tensors.append(torch_input)
-            else:
-                device_tensors.append(torch.zeros_like(torch_input))
-            intermediate_tensors.append(torch.zeros_like(torch_input))
-
-    input_tensor_mesh = ttnn.from_torch(
-        torch.cat(device_tensors, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
-    )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        torch.cat(intermediate_tensors, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=tile,
-        dtype=ttnn.bfloat16,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+    # ══════════════════════════════════════════════════════════════════════════
+    # MoE shared expert weights (via same BDW)
+    # ══════════════════════════════════════════════════════════════════════════
+    shared_weights = prepare_shared_expert_weights(
+        bdw, state_dict, layer_idx=layer_idx, is_moe=True, move_to_device=True
     )
 
-    # ── RoPE TTNN tensors ──
-    qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    ttnn_qrope_cos = ttnn.from_torch(
-        torch_cos.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    # ── MoE final output config (DRAM streaming matmul output grid) ──
+    gate_proj_noc = ttnn.NOC.NOC_0
+    gate_proj_worker_cores = submesh.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
+    num_gate_proj_cores = len(gate_proj_worker_cores)
+    final_output_width_per_core = RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE
+    final_output_total_width = final_output_width_per_core * num_gate_proj_cores
+    num_banks = submesh.dram_grid_size().x
+    tile_w = RoutedExpert.TILE_W
+    down_proj_N_padded = ((K + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    per_core_down_proj_N = down_proj_N_padded // num_banks
+
+    final_output_shard_spec = ttnn.ShardSpec(
+        gate_proj_core_ranges,
+        (1, final_output_width_per_core),
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
-    ttnn_qrope_sin = ttnn.from_torch(
-        torch_sin.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    final_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
-    ttnn_krope_cos = ttnn.from_torch(
-        torch_cos.unsqueeze(0).unsqueeze(0),
+
+    # ── MoE residual mcast source tensor (on sender core) ──
+    input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
+    input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
+    ttnn_residual_mcast_src = ttnn.from_torch(
+        torch.randn((M, K), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    ttnn_krope_sin = ttnn.from_torch(
-        torch_sin.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=qrope_dram_mem,
-        tile=tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # ── Trans mat ──
-    qrope_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
-    )
-    trans_mat_crs = kv_cache_branch_rope_crs.merge(ttnn.CoreRangeSet({qrope_grid}))
-    trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
-    trans_shard_spec = ttnn.ShardSpec(trans_mat_crs, (ttnn.TILE_SIZE, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
-    trans_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
-    trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
-    ttnn_trans_mat = ttnn.from_torch(
-        trans_mat_replicated,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=trans_mem,
-        tile=trans_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # ── Position IDs ──
-    pos_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-    )
-    pos_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # ── KV Cache (ND sharded DRAM) ──
-    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
-    grid = program_config.grid
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
-        grid=grid.optimal_dram_grid(),
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
-    torch_kv_cache = torch.full((1, 1, max_seq_len, kvpe_dim), float("-inf"), dtype=torch.bfloat16)
-    for i in range(position_id):
-        torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
-    ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # ── SDPA output tensor ──
-    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
-    sdpa_input_output_grid_crs = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
-    )
-    HEADS_PER_ROW = 8
-    SDPA_INPUT_NUM_CORES = len(s1_cores)
-    sdpa_tile = ttnn.Tile([8, 32])
-    sdpa_input_output_shard_spec = ttnn.ShardSpec(
-        sdpa_input_output_grid_crs, (HEADS_PER_ROW, QNOPE_OUT_DIM), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    sdpa_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
-    )
-    ttnn_output = ttnn.from_torch(
-        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=sdpa_mem,
-        tile=sdpa_tile,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-
-    # ── Post-SDPA tensors ──
-    a_tile = ttnn.Tile([M, 32])
-    mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    gather_core = ttnn.CoreCoord(12, 9)
-    gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
-
-    ttnn_gather1_output = ttnn.from_torch(
-        torch.zeros((M, post_sdpa_intermediate), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn.get_device_tensors(input_tensor_mesh)[0].device(),
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(gather_core_grid, (M, post_sdpa_intermediate), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
         ),
-        tile=a_tile,
-    )
-
-    gather2_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_gather2_output = ttnn.from_torch(
-        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=gather2_mem,
+        tile=Tiles.TILE_1x32,
         mesh_mapper=mesh_mapper,
     )
 
-    ccl_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_ccl_intermediate = ttnn.from_torch(
-        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=ccl_mem,
-        mesh_mapper=mesh_mapper,
-    )
-
-    output_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_attention_block_output = ttnn.from_torch(
-        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ── SDPA worker/forwarder tensors ──
-    sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
-    sdpa_worker_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
-    )
-    sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS
-    sdpa_ms_per_worker = SDPA_MS_WIDTH // NUM_SDPA_WORKERS
-
-    sdpa_l_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sdpa_worker_grid, (SDPA_L_HEIGHT, sdpa_l_per_worker), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    sdpa_ms_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sdpa_worker_grid, (SDPA_L_HEIGHT, sdpa_ms_per_worker), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-    mesh_sdpa_l = torch.cat([torch.randn((SDPA_L_HEIGHT, SDPA_L_WIDTH), dtype=torch.bfloat16)] * num_devices, dim=0)
-    mesh_sdpa_ms = torch.cat([torch.randn((SDPA_L_HEIGHT, SDPA_MS_WIDTH), dtype=torch.bfloat16)] * num_devices, dim=0)
-
-    ttnn_sdpa_input_l = ttnn.from_torch(
-        mesh_sdpa_l,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_l_mem,
-        tile=sdpa_tile,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_sdpa_input_ms = ttnn.from_torch(
-        mesh_sdpa_ms,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_ms_mem,
-        tile=sdpa_tile,
-        mesh_mapper=mesh_mapper,
-    )
-    ttnn_sdpa_output_l = ttnn.from_torch(
-        torch.zeros_like(mesh_sdpa_l),
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_l_mem,
-        tile=sdpa_tile,
-        mesh_mapper=mesh_mapper,
-    )
-
-    sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker
-    sdpa_recv_shard_shape = (2 * SDPA_L_HEIGHT, sdpa_recv_per_worker)
-    sdpa_recv_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sdpa_worker_grid, sdpa_recv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    sdpa_recv_full_width = sdpa_recv_per_worker * NUM_SDPA_WORKERS
-    mesh_recv = torch.cat(
-        [torch.zeros((2 * SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
-    )
-    ttnn_sdpa_intermediate_recv = ttnn.from_torch(
-        mesh_recv,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=sdpa_recv_mem,
-        tile=sdpa_tile,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # SDPA forwarder scratch buffer
-    sdpa_forwarder_cores = [ttnn.CoreCoord(9, 8), ttnn.CoreCoord(10, 8)]
-    sdpa_forwarder_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sdpa_forwarder_cores])
-    sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
-        batch_size=SDPA_L_HEIGHT,
-        l_width=sdpa_l_per_worker,
-        num_cores=NUM_SDPA_WORKERS,
-    )
-    sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
-    sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // 2
-    sdpa_forwarder_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sdpa_forwarder_grid, (1, sdpa_fwd_per_forwarder), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    mesh_fwd_scratch = torch.cat([torch.zeros((1, sdpa_fwd_total_elements), dtype=torch.bfloat16)] * num_devices, dim=0)
-    ttnn_sdpa_forwarder_scratch = ttnn.from_torch(
-        mesh_fwd_scratch,
-        device=submesh,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=sdpa_forwarder_mem,
-        mesh_mapper=mesh_mapper,
-    )
-
-    return {
-        "input_tensor_mesh": input_tensor_mesh,
-        "intermediate_tensor_mesh": intermediate_tensor_mesh,
-        "gamma_overlapped": gamma_overlapped,
-        "matmul_weights_overlapped": matmul_weights_overlapped,
-        "rmsnorm2_gamma_overlapped": rmsnorm2_gamma_overlapped,
-        "matmul2_weights_overlapped": matmul2_weights_overlapped,
-        "matmul3_weights_overlapped": matmul3_weights_overlapped,
-        "ttnn_qrope_sin": ttnn_qrope_sin,
-        "ttnn_qrope_cos": ttnn_qrope_cos,
-        "ttnn_trans_mat": ttnn_trans_mat,
-        "ttnn_krope_cos": ttnn_krope_cos,
-        "ttnn_krope_sin": ttnn_krope_sin,
-        "dkv_matmul_weights_overlapped": dkv_matmul_weights_overlapped,
-        "dkv_rmsnorm_gamma_overlapped": dkv_rmsnorm_gamma_overlapped,
-        "ttnn_kv_cache": ttnn_kv_cache,
-        "position_id": position_id,
-        "ttnn_position_ids": ttnn_position_ids,
-        "scale": scale,
-        "ttnn_output": ttnn_output,
-        "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
-        "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
-        "sender_coord": sender_coord,
-        "kv_b2_overlapped": kv_b2_overlapped,
-        "o_proj_overlapped": o_proj_overlapped,
-        "ttnn_gather1_output": ttnn_gather1_output,
-        "ttnn_gather2_output": ttnn_gather2_output,
-        "ttnn_ccl_intermediate": ttnn_ccl_intermediate,
-        "ttnn_sdpa_input_l": ttnn_sdpa_input_l,
-        "ttnn_sdpa_input_ms": ttnn_sdpa_input_ms,
-        "ttnn_sdpa_output_l": ttnn_sdpa_output_l,
-        "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
-        "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
-        "ttnn_attention_block_output": ttnn_attention_block_output,
-        "gate_mm_overlapped": gate_mm_overlapped,
-    }
-
-
-# ============================================================================
-# Test: DecoderBlock compile-only
-# ============================================================================
-@pytest.mark.parametrize("sender_row, sender_col", [(1, 0)])
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
-@pytest.mark.parametrize("position_id", [127])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-def test_decoder_block_compile(
-    bh_2d_mesh_device,
-    mesh_rows,
-    mesh_cols,
-    sender_row,
-    sender_col,
-    position_id,
-    noc_mode,
-):
-    """Compile-only test: verifies fused kernel compiles with merged args."""
-    num_devices = mesh_rows * mesh_cols
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than available")
-
-    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    device_grid_size = submesh.compute_with_storage_grid_size()
-    if device_grid_size.x < 12:
-        pytest.skip(f"Device grid too small: need 12 columns, have {device_grid_size.x}")
-
-    logger.info("Creating attention block tensors...")
-    attn = create_attention_block_tensors(submesh, mesh_rows, mesh_cols, sender_row, sender_col, position_id)
-
-    logger.info("Creating MoE tensors...")
-    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-    r = create_routed_expert_tensors(
-        submesh,
-        use_hardcoded_expert_index=False,
-        mesh_mapper=mesh_mapper,
-        create_final_output=False,
-        enable_routing=False,
-    )
-    M, K = 1, 7168
-
-    # Create routing-specific small tensors manually (gate_mm comes from Group 2 overlap above)
-    device_grid_size = submesh.compute_with_storage_grid_size()
-    input_core = ttnn.CoreCoord(device_grid_size.x - 1, 9)
-    input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
+    # ── MoE routing small tensors ──
     tile_16x16 = ttnn.Tile([16, 16])
     tile_1x16 = ttnn.Tile((1, 16))
 
@@ -675,20 +328,334 @@ def test_decoder_block_compile(
         mesh_mapper=mesh_mapper,
     )
 
-    sender_core = r["ttnn_residual_mcast_src"].memory_config().shard_spec.grid.bounding_box().end
-    mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
-    s = create_shared_expert_tensors(submesh, M, K, mcast_grid, mesh_mapper=mesh_mapper)
+    # ══════════════════════════════════════════════════════════════════════════
+    # Attention input/intermediate/output mesh tensors
+    # ══════════════════════════════════════════════════════════════════════════
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    logger.info("Creating reduce tensors...")
+    device_tensors = []
+    intermediate_tensors_list = []
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            if row == sender_row and col == sender_col:
+                device_tensors.append(torch_input)
+            else:
+                device_tensors.append(torch.zeros_like(torch_input))
+            intermediate_tensors_list.append(torch.zeros_like(torch_input))
+
+    input_tensor_mesh = ttnn.from_torch(
+        torch.cat(device_tensors, dim=0),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        dtype=ttnn.bfloat16,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+    )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        torch.cat(intermediate_tensors_list, dim=0),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        dtype=ttnn.bfloat16,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+    )
+
+    # ── RoPE TTNN tensors ──
+    qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    position_ids = torch.tensor([position_id])
+    base = 10000.0
+    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)
+    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
+    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
+    torch_trans_mat = get_rot_transformation_mat()
+
+    ttnn_qrope_cos = ttnn.from_torch(
+        torch_cos.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_qrope_sin = ttnn.from_torch(
+        torch_sin.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_krope_cos = ttnn.from_torch(
+        torch_cos.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_krope_sin = ttnn.from_torch(
+        torch_sin.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── Trans mat ──
+    qrope_grid = ttnn.CoreRange(
+        ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
+    )
+    trans_mat_crs = kv_cache_branch_rope_crs.merge(ttnn.CoreRangeSet({qrope_grid}))
+    trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
+    trans_shard_spec = ttnn.ShardSpec(trans_mat_crs, (ttnn.TILE_SIZE, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
+    trans_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
+    trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
+    ttnn_trans_mat = ttnn.from_torch(
+        trans_mat_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=trans_mem,
+        tile=trans_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── Position IDs ──
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=pos_mem,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── KV Cache (ND sharded DRAM) ──
+    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
+    grid = program_config.grid
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
+        grid=grid.optimal_dram_grid(),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
+    torch_kv_cache = torch.full((1, 1, max_seq_len, kvpe_dim), float("-inf"), dtype=torch.bfloat16)
+    for i in range(position_id):
+        torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
+    ttnn_kv_cache = ttnn.from_torch(
+        torch_kv_cache,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=kv_mem,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── SDPA output tensor ──
+    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
+    sdpa_input_output_grid_crs = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
+    )
+    HEADS_PER_ROW = 8
+    SDPA_INPUT_NUM_CORES = len(s1_cores)
+    sdpa_tile = ttnn.Tile([8, 32])
+    sdpa_input_output_shard_spec = ttnn.ShardSpec(
+        sdpa_input_output_grid_crs, (HEADS_PER_ROW, QNOPE_OUT_DIM), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    sdpa_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
+    )
+
+    # ── Post-SDPA tensors ──
+    a_tile = ttnn.Tile([M, 32])
+    shard_mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
+    gather_core = ttnn.CoreCoord(12, 9)
+    gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
+
+    ttnn_gather1_output = ttnn.from_torch(
+        torch.zeros((M, post_sdpa_intermediate), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn.get_device_tensors(input_tensor_mesh)[0].device(),
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(gather_core_grid, (M, post_sdpa_intermediate), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        tile=a_tile,
+    )
+
+    gather2_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_gather2_output = ttnn.from_torch(
+        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=gather2_mem,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    ccl_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_ccl_intermediate = ttnn.from_torch(
+        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=ccl_mem,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    output_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_attention_block_output = ttnn.from_torch(
+        torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    # ── SDPA worker/forwarder tensors ──
+    sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
+    sdpa_worker_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
+    )
+    sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS
+    sdpa_ms_per_worker = SDPA_MS_WIDTH // NUM_SDPA_WORKERS
+
+    sdpa_l_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sdpa_worker_grid, (SDPA_L_HEIGHT, sdpa_l_per_worker), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    sdpa_ms_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sdpa_worker_grid, (SDPA_L_HEIGHT, sdpa_ms_per_worker), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    mesh_sdpa_l = torch.cat([torch.randn((SDPA_L_HEIGHT, SDPA_L_WIDTH), dtype=torch.bfloat16)] * num_devices, dim=0)
+    mesh_sdpa_ms = torch.cat([torch.randn((SDPA_L_HEIGHT, SDPA_MS_WIDTH), dtype=torch.bfloat16)] * num_devices, dim=0)
+
+    ttnn_sdpa_input_l = ttnn.from_torch(
+        mesh_sdpa_l,
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sdpa_l_mem,
+        tile=sdpa_tile,
+        mesh_mapper=shard_mesh_mapper,
+    )
+    ttnn_sdpa_input_ms = ttnn.from_torch(
+        mesh_sdpa_ms,
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sdpa_ms_mem,
+        tile=sdpa_tile,
+        mesh_mapper=shard_mesh_mapper,
+    )
+    ttnn_sdpa_output_l = ttnn.from_torch(
+        torch.zeros_like(mesh_sdpa_l),
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sdpa_l_mem,
+        tile=sdpa_tile,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker
+    sdpa_recv_shard_shape = (2 * SDPA_L_HEIGHT, sdpa_recv_per_worker)
+    sdpa_recv_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sdpa_worker_grid, sdpa_recv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    sdpa_recv_full_width = sdpa_recv_per_worker * NUM_SDPA_WORKERS
+    mesh_recv = torch.cat(
+        [torch.zeros((2 * SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
+    )
+    ttnn_sdpa_intermediate_recv = ttnn.from_torch(
+        mesh_recv,
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sdpa_recv_mem,
+        tile=sdpa_tile,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    sdpa_forwarder_cores = [ttnn.CoreCoord(9, 8), ttnn.CoreCoord(10, 8)]
+    sdpa_forwarder_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sdpa_forwarder_cores])
+    sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+        batch_size=SDPA_L_HEIGHT,
+        l_width=sdpa_l_per_worker,
+        num_cores=NUM_SDPA_WORKERS,
+    )
+    sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
+    sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // 2
+    sdpa_forwarder_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sdpa_forwarder_grid, (1, sdpa_fwd_per_forwarder), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mesh_fwd_scratch = torch.cat([torch.zeros((1, sdpa_fwd_total_elements), dtype=torch.bfloat16)] * num_devices, dim=0)
+    ttnn_sdpa_forwarder_scratch = ttnn.from_torch(
+        mesh_fwd_scratch,
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sdpa_forwarder_mem,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Reduce-to-one tensors
+    # ══════════════════════════════════════════════════════════════════════════
     root_coord = (1, 1)
     reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
     reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
-
     tile_1x32 = ttnn.Tile([1, 32])
-    final_output_total_width = r["final_output_total_width"]
-    final_output_mem_config = r["final_output_mem_config"]
 
-    intermediate_tensors = []
+    reduce_intermediate_tensors = []
     for _ in range(3):
         it = ttnn.from_torch(
             torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
@@ -699,7 +666,7 @@ def test_decoder_block_compile(
             tile=tile_1x32,
             mesh_mapper=reduce_mesh_mapper,
         )
-        intermediate_tensors.append(it)
+        reduce_intermediate_tensors.append(it)
 
     compute_grid = submesh.compute_with_storage_grid_size()
     reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
@@ -719,8 +686,131 @@ def test_decoder_block_compile(
         mesh_mapper=reduce_mesh_mapper,
     )
 
-    num_cores = compute_grid.x * compute_grid.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    # ── Shared expert mcast grid ──
+    sender_core_from_residual = ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
+    mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
+
+    return {
+        # Attention weights (overlapped L1)
+        "gamma_overlapped": gamma_overlapped,
+        "matmul_weights_overlapped": matmul_weights_overlapped,
+        "rmsnorm2_gamma_overlapped": rmsnorm2_gamma_overlapped,
+        "matmul2_weights_overlapped": matmul2_weights_overlapped,
+        "matmul3_weights_overlapped": matmul3_weights_overlapped,
+        "dkv_matmul_weights_overlapped": dkv_matmul_weights_overlapped,
+        "dkv_rmsnorm_gamma_overlapped": dkv_rmsnorm_gamma_overlapped,
+        "kv_b2_overlapped": kv_b2_overlapped,
+        "o_proj_overlapped": o_proj_overlapped,
+        "gate_mm_overlapped": gate_mm_overlapped,
+        "ffn_norm_overlapped": ffn_norm_overlapped,
+        # Attention activation/buffer tensors
+        "input_tensor_mesh": input_tensor_mesh,
+        "intermediate_tensor_mesh": intermediate_tensor_mesh,
+        "ttnn_qrope_sin": ttnn_qrope_sin,
+        "ttnn_qrope_cos": ttnn_qrope_cos,
+        "ttnn_trans_mat": ttnn_trans_mat,
+        "ttnn_krope_cos": ttnn_krope_cos,
+        "ttnn_krope_sin": ttnn_krope_sin,
+        "ttnn_kv_cache": ttnn_kv_cache,
+        "position_id": position_id,
+        "ttnn_position_ids": ttnn_position_ids,
+        "scale": scale,
+        "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
+        "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
+        "sender_coord": sender_coord,
+        "ttnn_gather1_output": ttnn_gather1_output,
+        "ttnn_gather2_output": ttnn_gather2_output,
+        "ttnn_ccl_intermediate": ttnn_ccl_intermediate,
+        "ttnn_sdpa_input_l": ttnn_sdpa_input_l,
+        "ttnn_sdpa_input_ms": ttnn_sdpa_input_ms,
+        "ttnn_sdpa_output_l": ttnn_sdpa_output_l,
+        "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
+        "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
+        "ttnn_attention_block_output": ttnn_attention_block_output,
+        # MoE tensors
+        "ttnn_residual_mcast_src": ttnn_residual_mcast_src,
+        "ttnn_gate_bias": ttnn_gate_bias,
+        "ttnn_gate_indices": ttnn_gate_indices,
+        "gate_output_scores_tensor": gate_output_scores_tensor,
+        "gate_output_indices_tensor": gate_output_indices_tensor,
+        "gate_proj_weights": gate_proj_weights,
+        "up_proj_weights": up_proj_weights,
+        "down_proj_weights": down_proj_weights,
+        "final_output_mem_config": final_output_mem_config,
+        "final_output_total_width": final_output_total_width,
+        # Shared expert weights
+        "shared_gate_weights_overlapped": shared_weights.shared_gate_proj,
+        "shared_up_weights_overlapped": shared_weights.shared_up_proj,
+        "shared_down_weights_tensor": shared_weights.shared_down_proj,
+        "shared_k_parallel": SharedExpert.K_PARALLEL,
+        "shared_n_parallel": SharedExpert.N_PARALLEL,
+        # Reduce-to-one
+        "reduce_intermediate_tensors": reduce_intermediate_tensors,
+        "reduce_output_tensor": reduce_output_tensor,
+        "reduce_root_coord": root_coord,
+        # MoE mcast grid (for shared expert)
+        "mcast_grid": mcast_grid,
+    }
+
+
+# ============================================================================
+# Test: DecoderBlock compile-only
+# ============================================================================
+@pytest.mark.parametrize("sender_row, sender_col", [(1, 0)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
+@pytest.mark.parametrize("position_id", [127])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+def test_decoder_block_compile(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    position_id,
+    noc_mode,
+    get_reference_model_state_dict,
+):
+    """Compile-only test: verifies fused kernel compiles with merged args."""
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than available")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    device_grid_size = submesh.compute_with_storage_grid_size()
+    if device_grid_size.x < 12:
+        pytest.skip(f"Device grid too small: need 12 columns, have {device_grid_size.x}")
+
+    state_dict = get_reference_model_state_dict(
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=1,
+    )
+
+    logger.info("Creating decoder block tensors...")
+    d = create_decoder_block_tensors(
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        position_id,
+        state_dict,
+        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+    )
+
+    num_cores = device_grid_size.x * device_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
     ttnn.synchronize_device(submesh)
     reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
     ttnn.synchronize_device(submesh)
@@ -731,64 +821,63 @@ def test_decoder_block_compile(
     logger.info("Calling DecoderBlock.op() with COMPILE_TEST_ONLY...")
     result = DecoderBlock.op(
         # AttentionBlock parameters
-        attn["input_tensor_mesh"],
-        attn["intermediate_tensor_mesh"],
-        attn["gamma_overlapped"],
-        attn["matmul_weights_overlapped"],
-        attn["rmsnorm2_gamma_overlapped"],
-        attn["matmul2_weights_overlapped"],
-        attn["matmul3_weights_overlapped"],
-        attn["ttnn_qrope_sin"],
-        attn["ttnn_qrope_cos"],
-        attn["ttnn_trans_mat"],
-        attn["ttnn_krope_cos"],
-        attn["ttnn_krope_sin"],
-        attn["dkv_matmul_weights_overlapped"],
-        attn["dkv_rmsnorm_gamma_overlapped"],
-        attn["ttnn_kv_cache"],
-        attn["position_id"],
-        attn["ttnn_position_ids"],
-        attn["scale"],
-        attn["ttnn_output"],
-        attn["sdpa_kv_cache_buffer"],
-        attn["sdpa_out_interm_buffer"],
-        attn["sender_coord"],
+        d["input_tensor_mesh"],
+        d["intermediate_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache"],
+        d["position_id"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
         # Post-SDPA
-        attn["kv_b2_overlapped"],
-        attn["o_proj_overlapped"],
-        attn["ttnn_gather1_output"],
-        attn["ttnn_gather2_output"],
-        attn["ttnn_ccl_intermediate"],
-        attn["ttnn_sdpa_input_l"],
-        attn["ttnn_sdpa_input_ms"],
-        attn["ttnn_sdpa_output_l"],
-        attn["ttnn_sdpa_intermediate_recv"],
-        attn["ttnn_sdpa_forwarder_scratch"],
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_gather1_output"],
+        d["ttnn_gather2_output"],
+        d["ttnn_ccl_intermediate"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
         0,  # sdpa_per_device_chunk_size
-        attn["ttnn_attention_block_output"],
+        d["ttnn_attention_block_output"],
         attention_block_semaphores=attn_semaphores,
         # MoE parameters
-        shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-        gate_mm_weights_tensor=attn["gate_mm_overlapped"],
-        gate_bias_tensor=ttnn_gate_bias,
-        gate_indices_tensor=ttnn_gate_indices,
-        gate_output_scores_tensor=gate_output_scores_tensor,
-        gate_output_indices_tensor=gate_output_indices_tensor,
-        gate_proj_weights_tensor=r["gate_proj_weights"],
-        up_proj_weights_tensor=r["up_proj_weights"],
-        down_proj_weights_tensor=r["down_proj_weights"],
-        moe_final_output_tensor=r["final_output_tensor"],
-        rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
-        shared_gate_weights_overlapped=s["shared_gate_weights_overlapped"],
-        shared_up_weights_overlapped=s["shared_up_weights_overlapped"],
-        shared_down_weights_tensor=s["ttnn_down_weights"],
-        shared_k_parallel=s["k_parallel"],
-        shared_n_parallel=s["n_parallel"],
+        shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+        gate_mm_weights_tensor=d["gate_mm_overlapped"],
+        gate_bias_tensor=d["ttnn_gate_bias"],
+        gate_indices_tensor=d["ttnn_gate_indices"],
+        gate_output_scores_tensor=d["gate_output_scores_tensor"],
+        gate_output_indices_tensor=d["gate_output_indices_tensor"],
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        moe_final_output_tensor=None,
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
         moe_semaphores=moe_semaphores,
-        reduce_intermediate_tensors=intermediate_tensors,
-        reduce_output_tensor=reduce_output_tensor,
+        reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+        reduce_output_tensor=d["reduce_output_tensor"],
         reduce_semaphores=reduce_semaphores,
-        reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+        reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
         # Shared parameters
         enable_routing=True,
         extra_defines={"COMPILE_TEST_ONLY": "1"},

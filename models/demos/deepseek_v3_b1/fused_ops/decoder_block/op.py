@@ -21,7 +21,11 @@ import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
+    PerCoreRuntimeArgsDescriptor,
+    UnifiedKernelDescriptor,
+)
 
 KERNEL_PATH = "models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp"
 
@@ -183,7 +187,6 @@ class DecoderBlock:
         position_id,
         position_ids_tensor,
         scale,
-        output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
         sender_coord,
@@ -237,6 +240,10 @@ class DecoderBlock:
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         extra_defines=None,
     ):
+        def _patch_named_compile_time_args(named_args, overrides):
+            """Replace selected named compile-time args while preserving order."""
+            return [(name, overrides.get(name, value)) for name, value in named_args]
+
         # Phase 1: Build AttentionBlock program context
         full_device_grid, attn_ctxs = AttentionBlock.get_program_context(
             input_tensor_mesh,
@@ -257,7 +264,6 @@ class DecoderBlock:
             position_id,
             position_ids_tensor,
             scale,
-            output_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
             sender_coord,
@@ -357,14 +363,40 @@ class DecoderBlock:
             moe._setup_per_device_args(chip_id, 1, reduce_root_coord, coord, row, col)
             reconfig_addr = moe.reconfig_tensor.buffer_address()
 
+            # In fused decoder, MoE common/per-core runtime args are appended after AttentionBlock args.
+            # Adjust MoE compile-time arg bases so MoE kernels index the correct runtime slices.
+            attn_ncrisc_common = ac.get("ncrisc_common_runtime_args", [])
+            attn_trisc_common = ac.get("trisc_common_runtime_args", [])
+            attn_per_core_brisc = ac.get("per_core_brisc_args", [])
+
+            moe_ncrisc_args = _patch_named_compile_time_args(
+                moe.ncrisc_args, {"reduce_ncrisc_common_rt_arg_base": len(attn_ncrisc_common)}
+            )
+            moe_trisc_args = _patch_named_compile_time_args(
+                moe.trisc_args, {"moe_rmsnorm_trisc_common_rt_arg_base": len(attn_trisc_common)}
+            )
+            moe_brisc_args = list(moe.brisc_args)
+
+            attn_brisc_prefix_len_by_core = {}
+            for core_coord, args in attn_per_core_brisc:
+                core_key = (core_coord.x, core_coord.y)
+                attn_brisc_prefix_len_by_core[core_key] = attn_brisc_prefix_len_by_core.get(core_key, 0) + len(args)
+
+            brisc_base_overrides = []
+            moe_per_core_brisc = moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []
+            for core_coord, _ in moe_per_core_brisc:
+                base = attn_brisc_prefix_len_by_core.get((core_coord.x, core_coord.y), 0)
+                if base != 0:
+                    brisc_base_overrides.append((core_coord, base))
+
             merged_ncrisc = (
-                ac["ncrisc_named_compile_time_args"] + moe.ncrisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
+                ac["ncrisc_named_compile_time_args"] + moe_ncrisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
             )
             merged_brisc = (
-                ac["brisc_named_compile_time_args"] + moe.brisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
+                ac["brisc_named_compile_time_args"] + moe_brisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
             )
             merged_trisc = (
-                ac["trisc_named_compile_time_args"] + moe.trisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
+                ac["trisc_named_compile_time_args"] + moe_trisc_args + [("reconfig_cb_config_l1_addr", reconfig_addr)]
             )
 
             merged_ncrisc_crt = ac.get("ncrisc_common_runtime_args", []) + moe.ncrisc_common_rt_args
@@ -376,6 +408,19 @@ class DecoderBlock:
 
             merged_ucd = ac["unified_compile_time_core_descriptors"] + moe.device_unified_core_descs
             merged_pcd = ac["per_core_compile_time_descriptors"] + moe.device_per_core_descs
+            if brisc_base_overrides:
+                merged_pcd = merged_pcd + [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="reduce_brisc_rt_arg_base",
+                        core_values=brisc_base_overrides,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="reduce_brisc_fabric_rt_arg_base",
+                        core_values=brisc_base_overrides,
+                        other_value=0,
+                    ),
+                ]
 
             moe_defines = dict(moe.kernel_defines) if moe.kernel_defines else {}
             if not skip_ccl:

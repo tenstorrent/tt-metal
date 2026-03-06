@@ -105,6 +105,7 @@ struct Core {
 };
 
 void kernel_main() {
+    DPRINT << "DECODER BLOCK KERNEL MAIN" << ENDL();
     // ============================================================================
     // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
     // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
@@ -928,6 +929,7 @@ void kernel_main() {
             .receiver_ready_semaphore_addr = get_named_compile_time_arg_val("mla_receiver_ready_semaphore_addr"),
             .cb_k_in = get_named_compile_time_arg_val("mla_k_in_cb"),
             .cb_q_in = get_named_compile_time_arg_val("mla_q_in_cb"),
+            .cb_mask = get_named_compile_time_arg_val("mla_mask_cb"),
             .cb_out_in = get_named_compile_time_arg_val("mla_out_in_cb"),
             .cb_ms_in = get_named_compile_time_arg_val("mla_ms_in_cb"),
             .cb_out_ms = get_named_compile_time_arg_val("mla_out_ms_cb"),
@@ -968,7 +970,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast3_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast3_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast3_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast3_data_sender_semaphore")),
+        get_named_compile_time_arg_val("mcast3_data_sender_semaphore_addr"),
         get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast3_data_size_bytes"),
         mcast3_src_cb,
@@ -1574,6 +1576,7 @@ void kernel_main() {
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ComputeCTArgs<
         get_named_compile_time_arg_val("mla_q_in_cb"),
         get_named_compile_time_arg_val("mla_k_in_cb"),
+        get_named_compile_time_arg_val("mla_mask_cb"),
         get_named_compile_time_arg_val("mla_interm_out_cb"),
         get_named_compile_time_arg_val("mla_interm_ms_cb"),
         get_named_compile_time_arg_val("mla_out_in_cb"),

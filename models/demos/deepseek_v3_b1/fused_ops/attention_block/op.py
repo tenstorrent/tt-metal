@@ -3705,7 +3705,6 @@ class AttentionBlock:
         position_id,
         position_ids_tensor,
         scale,
-        output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
         sender_coord,

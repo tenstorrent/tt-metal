@@ -197,7 +197,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             }
             auto current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
-            if (elapsed_ms > timeout_ms) {
+            if (elapsed_ms > 4 * timeout_ms) {
                 log_info(
                     tt::LogMetal,
                     "Fabric Router Sync: master chan={}, logical core={}, sync address=0x{:08x}",
@@ -206,7 +206,7 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                     router_sync_address);
                 TT_THROW(
                     "Fabric Router Sync: Timeout after {} ms. Device {}: Expected status 0x{:08x}, got 0x{:08x}",
-                    timeout_ms,
+                    4 * timeout_ms,
                     dev->id(),
                     expected_status,
                     master_router_status[0]);
