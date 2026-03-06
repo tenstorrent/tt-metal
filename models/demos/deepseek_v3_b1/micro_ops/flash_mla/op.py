@@ -248,6 +248,7 @@ class FlashMLAProgramConfig:
     device_chunk_size: int = None
     exp_approx_mode: bool = True
     grid: type = FlashMLAOptimalGridNOC0  # Grid layout class (NOC0 optimized by default)
+    device_chunk_size: int = None
 
     def __post_init__(self):
         expected = self.grid.CORES_PER_BLOCK * self.k_chunk_size

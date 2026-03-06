@@ -23,12 +23,20 @@ from ....utils.test import line_params, ring_params
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        expected_metrics = {
-            "encoder": 0.1,
-            "denoising": 800.0,
-            "vae": 9.0,
-            "total": 850.0,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.08,
+                "denoising": 240.0,
+                "vae": 5.0,
+                "total": 255.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.1,
+                "denoising": 800.0,
+                "vae": 9.0,
+                "total": 850.0,
+            }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
             "encoder": 0.1,
@@ -60,14 +68,6 @@ def t2v_metrics(mesh_device, height):
             "vae": 60.0,
             "total": 760.0,
         }
-    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
-        assert is_blackhole(), "1x8 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 0.08,
-            "denoising": 426.6,
-            "vae": 10.0,
-            "total": 449.3,
-        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
     return expected_metrics
@@ -86,7 +86,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3)), "RGB")
+        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3), dtype=np.uint8), "RGB")
 
     return pipeline_cls, image_prompt, expected_metrics
 
@@ -97,7 +97,8 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         # FSDP is needed for 2x2 with encoder now on device
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -106,7 +107,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
-        "1x8sp0tp1",
+        "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
     ],
@@ -323,8 +324,7 @@ def test_pipeline_performance(
                 )
         device_name_map = {
             (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
-            (1, 8): "BH_LB",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(
