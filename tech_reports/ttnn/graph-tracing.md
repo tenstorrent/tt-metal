@@ -331,7 +331,7 @@ ttnn.graph.enable_stack_traces()  # Restore default
 
 #### Python Stack Traces
 
-Python stack traces are **enabled by default**. When enabled, each operation records the Python call stack at invocation time, filtered to exclude ttnn decorator internals. This is far more useful for debugging than raw C++ addresses:
+Python stack traces are **enabled by default**. When enabled, each operation records the Python call stack at invocation time, filtered to exclude ttnn internals and test-runner noise. This is far more useful for debugging than raw C++ addresses:
 
 ```python
 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
@@ -349,13 +349,14 @@ ttnn.graph.enable_python_stack_traces()  # Restore default
 
 Python stack traces are stored in the `python_io` section of the JSON report and imported into the `stack_traces` table. For Python-level operations (those invoked through the decorators), the Python trace replaces the C++ one. Internal C++ operations (nested ops that don't go through the Python decorators) keep their C++ stack traces untouched.
 
-Example `stack_traces` entry for a Python op:
+Example `stack_traces` entry for a Python op (innermost frame first):
 
 ```
-  File "my_model.py", line 42, in forward
-    out = ttnn.add(x, y)
   File "resnet50.py", line 196, in __call__
     out, [h, w], [weight, bias] = ttnn.conv2d(
+
+  File "my_model.py", line 42, in forward
+    out = ttnn.add(x, y)
 ```
 
 ```python
