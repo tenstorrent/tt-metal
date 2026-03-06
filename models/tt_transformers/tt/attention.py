@@ -383,7 +383,7 @@ class Attention(LightweightModule):
         return (
             self.args.device_name == "T3K"
             and hasattr(self.args, "base_model_name")
-            and self.args.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B-1025")
+            and self.args.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B")
         )
 
     def _head_rearrangement_params(self):

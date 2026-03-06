@@ -2253,8 +2253,8 @@ class ModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 32, "TG": None, "P150x4": None},
-                "olmOCR-2-7B": {"N150": 4, "N300": 16, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": None, "P150x4": None},
+                "olmOCR-2-7B-1025": {"N150": 4, "N300": 16, "T3K": 128, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
@@ -2534,7 +2534,7 @@ class ModelArgs:
 
         # Pad heads so T3K TP=8 divisibility is satisfied for Qwen2.5-VL-7B and olmOCR-2-7B-1025
         # Also apply to N150x4 when running with T3K configuration (T3K4 mode)
-        if self.device_name == "T3K" and self.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B-1025"):
+        if self.device_name == "T3K" and self.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B"):
             self.n_heads = 32  # padded from 28 (nearest mult of 8)
             self.n_kv_heads = 8  # padded from 4 (nearest mult of 8)
 
@@ -3833,10 +3833,6 @@ class HfAttentionWrapper:
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
 
-        if self.rotary_emb is not None and position_ids.dim() == 2:
-            if type(self.rotary_emb).__name__ == "Qwen2_5_VLRotaryEmbedding":
-                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
@@ -3906,9 +3902,7 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        if self.rotary_emb is not None and position_ids.dim() == 2:
-            if type(self.rotary_emb).__name__ == "Qwen2_5_VLRotaryEmbedding":
-                position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
         position_embeddings = None
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)

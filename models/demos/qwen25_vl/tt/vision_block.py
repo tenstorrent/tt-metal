@@ -57,7 +57,7 @@ class VisionBlock(LightweightModule):
         extra_rmsnorm_kwargs = {}
         if args.base_model_name in (
             "Qwen2.5-VL-7B",
-            "olmOCR-2-7B-1025",
+            "olmOCR-2-7B",
         ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = RMSNorm(
