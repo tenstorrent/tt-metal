@@ -476,6 +476,7 @@ void MetalContext::initialize_base_objects() {
     }
 
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    log_info(tt::LogMetal, "DIAG MetalContext::initialize_base_objects: distributed_context_ rank={}, size={}", *distributed_context_->rank(), *distributed_context_->size());
     hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -868,6 +869,9 @@ void MetalContext::initialize_control_plane() {
 }
 
 void MetalContext::initialize_control_plane_impl() {
+    log_info(tt::LogMetal, "DIAG initialize_control_plane_impl: custom_mesh_graph_desc_path_={}, distributed_context_ rank={}, size={}",
+        custom_mesh_graph_desc_path_.has_value() ? custom_mesh_graph_desc_path_.value() : "NONE",
+        *distributed_context_->rank(), *distributed_context_->size());
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
@@ -884,8 +888,10 @@ void MetalContext::initialize_control_plane_impl() {
     log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
     if (*distributed_context_->size() == 1) {
+        log_info(tt::LogMetal, "DIAG initialize_control_plane_impl: taking SINGLE-HOST path (size==1)");
         this->construct_control_plane();
     } else {
+        log_info(tt::LogMetal, "DIAG initialize_control_plane_impl: taking MULTI-HOST path (size={})", *distributed_context_->size());
         auto cluster_type = cluster_->get_cluster_type();
         auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
         std::filesystem::path mesh_graph_desc_path =

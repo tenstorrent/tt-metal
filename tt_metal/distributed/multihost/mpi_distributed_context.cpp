@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
 // ULFM extensions.
@@ -164,25 +165,40 @@ inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
 
     std::call_once(mpi_once, [&] {
-        int provided = 0;
-        if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
-            TT_THROW("MPI_Init_thread failed");
+        int already_initialized = 0;
+        MPI_Initialized(&already_initialized);
+        log_info(tt::LogFabric, "DIAG MPI init_env: MPI_Initialized={}", already_initialized);
+
+        if (!already_initialized) {
+            int provided = 0;
+            if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
+                TT_THROW("MPI_Init_thread failed");
+            }
+            log_info(tt::LogFabric, "DIAG MPI init_env: MPI_Init_thread succeeded, provided={}", provided);
+
+            // Ensure MPI_Finalize is called when the program exits
+            std::atexit([] { MPI_Finalize(); });
         }
 
-        // Ensure MPI_Finalize is called when the program exits
-        std::atexit([] { MPI_Finalize(); });
+        int world_rank = -1, world_size = -1;
+        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+        MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+        log_info(tt::LogFabric, "DIAG MPI init_env: MPI_COMM_WORLD rank={}, size={}", world_rank, world_size);
     });
 }
 
 void MPIContext::create(int argc, char** argv) {
+    log_info(tt::LogFabric, "DIAG MPIContext::create called");
     init_env(argc, argv);
     // it is a good idea to duplicate the world communicator
     // don't want to rely on the global comm_world which cannot be replaced
     current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+    log_info(tt::LogFabric, "DIAG MPIContext::create: current_world_ rank={}, size={}", *current_world_->rank(), *current_world_->size());
 }
 
 const ContextPtr& MPIContext::get_current_world() {
     if (!current_world_) {
+        log_info(tt::LogFabric, "DIAG MPIContext::get_current_world: no current_world_, calling MPIContext::create");
         // Default initialization of MPIContext if not already initialized
         MPIContext::create(0, nullptr);
     }
@@ -208,6 +224,7 @@ MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
     id_ = DistributedContext::generate_unique_id();
+    log_info(tt::LogFabric, "DIAG MPIContext(comm) constructed: rank={}, size={}, comm={}", rank_, size_, (void*)comm_);
 }
 
 MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(group) {
@@ -215,6 +232,7 @@ MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(gro
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
     id_ = DistributedContext::generate_unique_id();
+    log_info(tt::LogFabric, "DIAG MPIContext(comm,group) constructed: rank={}, size={}, comm={}", rank_, size_, (void*)comm_);
 }
 
 Rank MPIContext::rank() const { return Rank(rank_); }

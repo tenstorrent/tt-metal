@@ -4,21 +4,38 @@
 
 #include "single_host_context.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
 
 namespace tt::tt_metal::distributed::multihost {
 // ---------------------------------------------------------------------
 //                           Context implementation
 // ---------------------------------------------------------------------
-SingleHostContext::SingleHostContext() : rank_(0), size_(1) { id_ = DistributedContext::generate_unique_id(); }
+SingleHostContext::SingleHostContext() : rank_(0), size_(1) {
+    id_ = DistributedContext::generate_unique_id();
+    log_info(tt::LogFabric, "DIAG SingleHostContext CREATED: rank={}, size={} (hardcoded)", rank_, size_);
+    const char* ompi_size = std::getenv("OMPI_COMM_WORLD_SIZE");
+    const char* ompi_rank = std::getenv("OMPI_COMM_WORLD_RANK");
+    const char* pmi_size = std::getenv("PMI_SIZE");
+    log_info(tt::LogFabric, "DIAG   MPI env vars: OMPI_COMM_WORLD_SIZE={}, OMPI_COMM_WORLD_RANK={}, PMI_SIZE={}",
+        ompi_size ? ompi_size : "UNSET",
+        ompi_rank ? ompi_rank : "UNSET",
+        pmi_size ? pmi_size : "UNSET");
+    if (ompi_size && std::atoi(ompi_size) > 1) {
+        log_info(tt::LogFabric, "DIAG   WARNING: MPI environment says world_size={} but SingleHostContext is active (libtt_metal.so built without OPEN_MPI?)", ompi_size);
+    }
+}
 
 void SingleHostContext::create(int argc [[maybe_unused]], char** argv [[maybe_unused]]) {
+    log_info(tt::LogFabric, "DIAG SingleHostContext::create called");
     current_world_ = std::make_shared<SingleHostContext>();
 }
 
 const ContextPtr& SingleHostContext::get_current_world() {
     if (!current_world_) {
+        log_info(tt::LogFabric, "DIAG SingleHostContext::get_current_world: no current_world_, creating default SingleHostContext");
         current_world_ = std::make_shared<SingleHostContext>();
     }
     return current_world_;
