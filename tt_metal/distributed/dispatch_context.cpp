@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed_context.hpp>
