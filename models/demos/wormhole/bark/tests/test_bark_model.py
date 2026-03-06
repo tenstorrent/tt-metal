@@ -88,7 +88,7 @@ class TestBarkSemantic:
 
     def test_semantic_pcc(self, device, hf_model):
         """Test PCC between TTNN and PyTorch semantic models."""
-        batch_size, seq_len = 1, 32
+        batch_size, seq_len = 1, 64
         input_ids = torch.randint(0, 10048, (batch_size, seq_len))
 
         # TTNN forward
@@ -146,7 +146,7 @@ class TestBarkCoarse:
 
     def test_coarse_pcc(self, device, hf_model):
         """Test PCC for coarse model between TTNN and PyTorch."""
-        batch_size, seq_len = 1, 32
+        batch_size, seq_len = 1, 64
         input_ids = torch.randint(0, 10048, (batch_size, seq_len))
 
         # TTNN forward
@@ -180,7 +180,7 @@ class TestBarkFine:
 
     def test_fine_forward_pass(self, device, hf_model):
         """Test single forward pass through fine model for codebook 2."""
-        batch_size, seq_len = 1, 32
+        batch_size, seq_len = 1, 64
         n_codes_total = hf_model.fine_acoustics.config.n_codes_total
 
         # Prepare input: [batch, seq, n_codes_total]
@@ -218,7 +218,7 @@ class TestBarkFine:
 
     def test_fine_pcc(self, device, hf_model):
         """Test PCC for fine model codebook prediction."""
-        batch_size, seq_len = 1, 16
+        batch_size, seq_len = 1, 64
         n_codes_total = hf_model.fine_acoustics.config.n_codes_total
         input_ids = torch.randint(0, 1024, (batch_size, seq_len, n_codes_total))
 

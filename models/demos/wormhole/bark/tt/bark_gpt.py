@@ -42,7 +42,7 @@ class BarkConfig:
     layer_norm_epsilon: float = 1e-5
 
     # Optimization config (Stage 2 & 3)
-    use_lofi: bool = True
+    use_lofi: bool = False
     use_sharding: bool = True  # Enable sharding for Stage 3
     grid_size: Optional[Any] = None  # ttnn.CoreGrid
 
@@ -103,9 +103,9 @@ class TtBarkMLP:
 
         # Optimization config (Stage 3)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi if config.use_lofi else ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=not config.use_lofi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -118,10 +118,22 @@ class TtBarkMLP:
             hidden_states,
             self.in_proj_weight,
             bias=self.in_proj_bias,
-            activation="gelu",
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        # Bark uses GELU_NEW (tanh approximation), NOT standard erf-based GELU.
+        # gelu_new(x) = 0.5 * x * (1 + tanh(√(2/π) * (x + 0.044715 * x³)))
+        # Using erf-based gelu causes PCC to decay ~0.03/layer across 12 layers.
+        x = intermediate
+        x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
+        inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
+        ttnn.deallocate(x_cubed)
+        inner = ttnn.multiply(inner, math.sqrt(2.0 / math.pi))
+        tanh_out = ttnn.tanh(inner)
+        ttnn.deallocate(inner)
+        intermediate = ttnn.multiply(ttnn.multiply(x, 0.5), ttnn.add(tanh_out, 1.0))
+        ttnn.deallocate(tanh_out)
 
         # Linear projection: 4*hidden -> hidden
         output = ttnn.linear(
@@ -161,9 +173,9 @@ class TtBarkAttention:
 
         # Optimization kernel configs (Stage 3)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi if config.use_lofi else ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=not config.use_lofi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -211,17 +223,32 @@ class TtBarkAttention:
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # 4D weights produce 4D output [B,1,S,3H] — reshape to 3D [B,S,3H]
-        # split_query_key_value_and_split_heads requires rank 3
+        # 4D weights produce 4D output [B,1,S,3H] — squeeze to 3D [B,S,3H]
         if len(qkv.shape) == 4:
-            qkv = ttnn.reshape(qkv, (qkv.shape[0], qkv.shape[2], qkv.shape[3]))
-        qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT)
+            qkv = ttnn.squeeze(qkv, dim=1)
 
-        # Split Q, K, V and split heads
-        query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=self.num_heads, memory_config=memory_config
-        )
+        # Manual Q/K/V split and head reshape to guarantee correct memory ordering.
+        # ttnn.transformer.split_query_key_value_and_split_heads can misinterpret
+        # tile boundaries, so we split manually on host then send back to device.
+        qkv_torch = ttnn.to_torch(qkv)
         ttnn.deallocate(qkv)
+
+        # qkv_torch: [B, S, 3*H] → split into Q, K, V each [B, S, H]
+        B, S, _ = qkv_torch.shape
+        H = self.embed_dim
+        q_torch = qkv_torch[..., :H]
+        k_torch = qkv_torch[..., H:2*H]
+        v_torch = qkv_torch[..., 2*H:]
+
+        # Reshape to multi-head: [B, S, H] → [B, num_heads, S, head_dim]
+        q_torch = q_torch.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+        k_torch = k_torch.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+        v_torch = v_torch.view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Send back to device in TILE layout for SDPA
+        query = ttnn.from_torch(q_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        key = ttnn.from_torch(k_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        value = ttnn.from_torch(v_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -236,17 +263,53 @@ class TtBarkAttention:
 
         layer_present = (key, value) if use_cache else None
 
-        # Fully on-device SDPA with Stage 3 optimizations
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            scale=self.scale,
-            is_causal=self.is_causal and layer_past is None,
-            memory_config=memory_config,
-            program_config=self.sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        # Fully on-device SDPA with dynamic chunk sizing
+        # TTNN SDPA requires seq_len to be compatible with chunk sizes
+        q_seq_len = query.shape[-2]
+        if q_seq_len >= 32:
+            # Dynamic chunk size: must divide evenly into seq_len, max 128
+            chunk_size = min(128, q_seq_len)
+            while q_seq_len % chunk_size != 0 and chunk_size > 32:
+                chunk_size //= 2
+
+            grid_size = self.config.grid_size if self.config.grid_size else self.device.compute_with_storage_grid_size()
+            sdpa_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(grid_size.x, grid_size.y),
+                q_chunk_size=chunk_size,
+                k_chunk_size=chunk_size,
+            )
+            # TTNN causal SDPA requires Sq == Sk
+            is_causal_mode = (
+                self.is_causal
+                and layer_past is None
+                and query.shape[-2] == key.shape[-2]
+            )
+
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                scale=None,
+                is_causal=is_causal_mode,
+                memory_config=memory_config,
+                program_config=sdpa_config,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+        else:
+            # Fallback to PyTorch SDPA for very small sequences (< TILE_SIZE)
+            q_torch = ttnn.to_torch(query)
+            k_torch = ttnn.to_torch(key)
+            v_torch = ttnn.to_torch(value)
+            attn_output_torch = torch.nn.functional.scaled_dot_product_attention(
+                q_torch,
+                k_torch,
+                v_torch,
+                scale=None,
+                is_causal=self.is_causal and layer_past is None,
+            )
+            attn_output = ttnn.from_torch(
+                attn_output_torch, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+            )
         ttnn.deallocate(query)
         if not use_cache:
             ttnn.deallocate(key)
@@ -392,9 +455,9 @@ class TtBarkGPT:
 
         # Optimization config (Stage 3)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi if config.use_lofi else ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=not config.use_lofi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -492,7 +555,7 @@ class TtBarkGPT:
         logits = ttnn.linear(
             tt_hidden,
             self.lm_head_weight,
-            memory_config=memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(tt_hidden)
