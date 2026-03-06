@@ -194,6 +194,10 @@ class LMHead(LightweightModule):
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
         )
 
+        sharded_output_memory_config = self.args.get_lm_head_sharded_output_mem_config(
+            self.prefetcher if use_prefetcher else None
+        )
+
         for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):
             output = ttnn.linear(
                 x,
@@ -208,15 +212,11 @@ class LMHead(LightweightModule):
                 output = ttnn.add(
                     output,
                     output_biases[i],
-                    memory_config=output.memory_config(),
+                    memory_config=sharded_output_memory_config,
                     dtype=ttnn.bfloat16,
                 )
-            output = ttnn.to_memory_config(
-                output,
-                memory_config=self.args.get_lm_head_sharded_output_mem_config(
-                    self.prefetcher if use_prefetcher else None
-                ),
-            )
+            else:
+                output = ttnn.to_memory_config(output, memory_config=sharded_output_memory_config)
 
             outputs.append(output)
 
