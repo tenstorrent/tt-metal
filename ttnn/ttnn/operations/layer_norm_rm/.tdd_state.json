@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/layer_norm_rm",
   "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 4,
-  "last_passing_commit": "9941e85096e2d0e06b8f32fda5f69d369dc640ae",
+  "current_stage_index": 5,
+  "last_passing_commit": "a019ed02b2bf27398cf1ddc111f8e6c7e7fcd10b",
   "stages": [
     {
       "name": "data_pipeline",
@@ -174,12 +174,28 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
+      "status": "passed",
+      "commit": "a019ed02b2bf27398cf1ddc111f8e6c7e7fcd10b",
       "attempts": 0,
-      "free_retries": 0,
+      "free_retries": 1,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: n function 'void chlkc_pack::pack_main()':\n/localdev/mstaletovic/tt-metal/ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_compute.cpp:76:13: error: 'NoAccumulation' was not declared in this s",
+          "details": {
+            "error_snippet": "n function 'void chlkc_pack::pack_main()':\n/localdev/mstaletovic/tt-metal/ttnn/ttnn/operations/layer_norm_rm/kernels/layer_norm_rm_compute.cpp:76:13: error: 'NoAccumulation' was not declared in this scope; did you mean 'compute_kernel_lib::NoAccumulation'?\n   76 |             [](uint32_t dst_idx) {"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "normalize",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "affine",
@@ -206,7 +222,7 @@
       "extra_ttnn_setup": "ttnn_gamma = ttnn.from_torch(gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\n    ttnn_beta = ttnn.from_torch(beta, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
       "output_shape_expr": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
