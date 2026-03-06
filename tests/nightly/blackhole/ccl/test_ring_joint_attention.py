@@ -2,14 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
-from loguru import logger
 import pytest
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
-    run_ring_joint_sdpa,
     run_test_ring_joint_sdpa,
-    create_ring_joint_sdpa_submesh,
     bh_qb_ge_unit_test_params,
     mesh_device_map,
 )
