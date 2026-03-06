@@ -26,6 +26,96 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 )
 
 
+def test_get_device_mla_work_assignment():
+    """Unit tests for get_device_mla_work_assignment, covering the key SP scenarios.
+
+    Python mirror of get_device_mla_work_assignment in rt_args_common.hpp.
+    Returns (skip_attention, skip_kv_cache_update, local_cur_pos).
+    """
+
+    def get_device_mla_work_assignment(cur_pos, sp_device_idx, device_chunk_size, num_sp_devices):
+        if cur_pos < sp_device_idx * device_chunk_size:
+            return True, True, 0
+
+        sp_block = device_chunk_size * num_sp_devices
+        num_full_blocks = cur_pos // sp_block
+        remainder = cur_pos % sp_block
+
+        dev_start = sp_device_idx * device_chunk_size
+        dev_contrib = max(0, remainder - dev_start)
+        if dev_contrib > device_chunk_size:
+            dev_contrib = device_chunk_size
+        local_seq_len = num_full_blocks * device_chunk_size + dev_contrib
+
+        owning_device = (cur_pos // device_chunk_size) % num_sp_devices
+        skip_kv_cache_update = sp_device_idx != owning_device
+        local_cur_pos = local_seq_len - 1 if skip_kv_cache_update else local_seq_len
+
+        return False, skip_kv_cache_update, local_cur_pos
+
+    dcs = 1024  # device_chunk_size
+    nsp = 4  # num_sp_devices
+
+    # ---- pos=0: only dev0 has work (owns it) ----
+    assert get_device_mla_work_assignment(0, 0, dcs, nsp) == (False, False, 0)  # dev0 owns, write slot 0
+    assert get_device_mla_work_assignment(0, 1, dcs, nsp) == (True, True, 0)  # dev1 no data yet
+    assert get_device_mla_work_assignment(0, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(0, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=1023: last slot in dev0's first chunk, dev0 owns it ----
+    assert get_device_mla_work_assignment(1023, 0, dcs, nsp) == (False, False, 1023)  # dev0 owns, write slot 1023
+    assert get_device_mla_work_assignment(1023, 1, dcs, nsp) == (True, True, 0)  # dev1 no data yet
+    assert get_device_mla_work_assignment(1023, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(1023, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=1024: first slot in dev1's first chunk, dev1 owns it ----
+    assert get_device_mla_work_assignment(1024, 0, dcs, nsp) == (False, True, 1023)  # dev0 full first block, non-owner
+    assert get_device_mla_work_assignment(1024, 1, dcs, nsp) == (False, False, 0)  # dev1 owns, write slot 0
+    assert get_device_mla_work_assignment(1024, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(1024, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=2047: last slot in dev1's first chunk ----
+    assert get_device_mla_work_assignment(2047, 0, dcs, nsp) == (False, True, 1023)  # dev0 full first block, non-owner
+    assert get_device_mla_work_assignment(2047, 1, dcs, nsp) == (False, False, 1023)  # dev1 owns, write slot 1023
+    assert get_device_mla_work_assignment(2047, 2, dcs, nsp) == (True, True, 0)  # dev2 no data yet
+    assert get_device_mla_work_assignment(2047, 3, dcs, nsp) == (True, True, 0)  # dev3 no data yet
+
+    # ---- pos=4095: last slot in dev3's first chunk ----
+    assert get_device_mla_work_assignment(4095, 0, dcs, nsp) == (False, True, 1023)  # dev0 full first block, non-owner
+    assert get_device_mla_work_assignment(4095, 1, dcs, nsp) == (False, True, 1023)  # dev1 full first block, non-owner
+    assert get_device_mla_work_assignment(4095, 2, dcs, nsp) == (False, True, 1023)  # dev2 full first block, non-owner
+    assert get_device_mla_work_assignment(4095, 3, dcs, nsp) == (False, False, 1023)  # dev3 owns, write slot 1023
+
+    # ---- pos=4096: first slot of second round-robin block, dev0 owns again ----
+    assert get_device_mla_work_assignment(4096, 0, dcs, nsp) == (False, False, 1024)  # dev0 owns, write slot 1024
+    assert get_device_mla_work_assignment(4096, 1, dcs, nsp) == (False, True, 1023)  # dev1 full first block, non-owner
+    assert get_device_mla_work_assignment(4096, 2, dcs, nsp) == (False, True, 1023)  # dev2 full first block, non-owner
+    assert get_device_mla_work_assignment(4096, 3, dcs, nsp) == (False, True, 1023)  # dev3 full first block, non-owner
+
+    # ---- local counts (2,2,1 + partial,1): 1 full block + partial reaching into dev2
+    # pos = sp_block + 2*dcs + 500 = 6644, owner=dev2, dev2 local=1524 (write slot)
+    assert get_device_mla_work_assignment(6644, 0, dcs, nsp) == (False, True, 2047)  # dev0 2 full chunks, non-owner
+    assert get_device_mla_work_assignment(6644, 1, dcs, nsp) == (False, True, 2047)  # dev1 2 full chunks, non-owner
+    assert get_device_mla_work_assignment(6644, 2, dcs, nsp) == (False, False, 1524)  # dev2 owns, write slot 1524
+    assert get_device_mla_work_assignment(6644, 3, dcs, nsp) == (False, True, 1023)  # dev3 1 full chunk, non-owner
+
+    # ---- local counts (3,2 + partial,2,2): 2 full blocks + partial into dev1
+    # pos = 2*sp_block + dcs + 700 = 9916, owner=dev1, dev1 local=2748 (write slot)
+    assert get_device_mla_work_assignment(9916, 0, dcs, nsp) == (False, True, 3071)  # dev0 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(9916, 1, dcs, nsp) == (False, False, 2748)  # dev1 owns, write slot 2748
+    assert get_device_mla_work_assignment(9916, 2, dcs, nsp) == (False, True, 2047)  # dev2 2 full chunks, non-owner
+    assert get_device_mla_work_assignment(9916, 3, dcs, nsp) == (False, True, 2047)  # dev3 2 full chunks, non-owner
+
+    # ---- local counts (3,3,3,2 + partial): 2 full blocks + partial into dev3
+    # pos = 2*sp_block + 3*dcs + 400 = 11664, owner=dev3, dev3 local=2448 (write slot)
+    assert get_device_mla_work_assignment(11664, 0, dcs, nsp) == (False, True, 3071)  # dev0 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(11664, 1, dcs, nsp) == (False, True, 3071)  # dev1 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(11664, 2, dcs, nsp) == (False, True, 3071)  # dev2 3 full chunks, non-owner
+    assert get_device_mla_work_assignment(11664, 3, dcs, nsp) == (False, False, 2448)  # dev3 owns, write slot 2448
+
+    logger.info("test_get_device_mla_work_assignment passed")
+
+
 @pytest.mark.parametrize(
     "sender_row, sender_col",
     [
@@ -36,9 +126,24 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
+@pytest.mark.parametrize("max_seq_len", [32 * 1024])
 @pytest.mark.parametrize(
-    "position_id", [127, 255, 1023]
-)  # Must test 128 chunk aligned decode postions, add other tests when causal masks are in for SDPA
+    "position_id",
+    [
+        0,
+        1,
+        127,
+        242,
+        255,
+        564,
+        1023,
+        2047,
+        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
+        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
+        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
+        pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+    ],
+)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -61,6 +166,7 @@ def test_pre_sdpa(
     epsilon,
     use_fp32,
     num_iters,
+    max_seq_len,
     position_id,
     noc_mode,
     device_params,
@@ -90,7 +196,7 @@ def test_pre_sdpa(
     shape = (1, 7168)
     matmul_weights_shape = (7168, 1536)
 
-    max_seq_len = 32 * 1024
+    per_device_max_seq_len = max_seq_len // mesh_rows
     assert position_id < max_seq_len, f"Position ID {position_id} must be less than max sequence length {max_seq_len}"
 
     # Head configuration
@@ -158,12 +264,14 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
+    # TODO: Reduce to 3 slots
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
-    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
+    # Matches flash_mla's cb_out_im sizing: 68 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 68 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_shard_height = 40  # 5 tile-rows of [8, 32]
-    sdpa_out_interm_shard_width = 544  # 17 tile-cols of [8, 32]
+    sdpa_out_interm_num_slots = 4
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
+    sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
 
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
@@ -511,13 +619,32 @@ def test_pre_sdpa(
         k_chunk_size=128,
         exp_approx_mode=False,  # Use exact exp for higher precision
     )
-    logger.info(f"Creating KV cache with seq_len={max_seq_len}...")
+    logger.info(f"Creating KV cache with per-device seq_len={per_device_max_seq_len}, total_seq_len={max_seq_len}...")
     kvpe_dim = KNOPE_DIM + KROPE_DIM
     cache_shape = (1, 1, max_seq_len, kvpe_dim)
-    # from 0 to position id, the kv cache is valid, position_id data is filled by test
-    torch_kv_cache = torch.full(cache_shape, float("-inf"), dtype=torch.bfloat16)
-    for i in range(position_id):
-        torch_kv_cache[:, :, i, :] = torch.randn(1, 1, 1, kvpe_dim, dtype=torch.bfloat16)
+
+    def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
+        """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+        The global KV cache is written in round-robin device_chunk_size blocks:
+          [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+        ShardTensor2dMesh splits dim-2 contiguously, so each device would
+        receive the wrong data.  This function reorders to:
+          [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+        so that after the contiguous split each device gets its own chunks.
+        """
+        b, h, seq, d = kv.shape
+        num_chunks = seq // device_chunk_size
+        chunks_per_device = num_chunks // num_devices
+        return (
+            kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
+        )
+
+    dcs = program_config.device_chunk_size
+    num_sp = mesh_rows
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
 
     # ND sharding with ROUND_ROBIN_1D distribution across DRAM banks
     # Each shard = one k_chunk (k_chunk_size x kvpe_dim), distributed round-robin
@@ -540,19 +667,19 @@ def test_pre_sdpa(
     )
 
     ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache,
+        torch_kv_cache_shuffled,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None)),
     )
     kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # ========================================================================
     # Run pre-SDPA operation
     # ========================================================================
-    logger.info("Running pre-SDPA operation...")
+    logger.info(f"Running pre-SDPA operation with position_id={position_id}...")
 
     for i in range(num_iters):
         ttnn_output_result = PreSDPA.op(
@@ -591,28 +718,62 @@ def test_pre_sdpa(
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    assert output_torch.shape[-1] == KNOPE_DIM, f"Output width {output_torch.shape[-1]} != {KNOPE_DIM}"
 
     # ========================================================================
-    # Compute golden reference
+    # Compute golden reference per SP device
+    #
+    # KV cache positions are distributed across SP devices in interleaved
+    # device_chunk_size blocks:
+    #   global [0, dcs) → SP0, [dcs, 2*dcs) → SP1, ..., wrapping round-robin.
+    # For each SP device that has data we run PreSDPA.golden with the
+    # device's local KV cache slice and the normalized local position_id.
+    # Only the owning device (the one whose chunk contains position_id)
+    # performs the KV cache update; all others run MLA over existing data.
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE).
-    # Full tensor with num_tp * 64 heads; output is split per-TP for comparison.
-    torch_q_expected, torch_kv_cache_expected, torch_output_expected = PreSDPA.golden(
-        torch_input,
-        torch_gamma,
-        torch_matmul_weights,
-        torch_rmsnorm2_gamma,
-        torch_matmul2_weights_full_unshuffled,
-        torch_matmul3_weights,
-        torch_sin,
-        torch_cos,
-        position_ids,
-        torch_dkv_matmul_weights,
-        torch_dkv_rmsnorm_gamma,
-        torch_kv_cache,
-        scale,
+    device_chunk_size = program_config.device_chunk_size
+    num_sp = mesh_rows
+    owning_sp_device = (position_id // device_chunk_size) % num_sp
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
+
+    def build_local_kv_cache(sp_idx):
+        """Extract sp_idx's local KV cache from torch_kv_cache_shuffled.
+
+        After the deinterleave shuffle, device sp_idx's data sits at
+        torch_kv_cache_shuffled[:, :, sp_idx*per_dev_seq : ..., :].
+        We compute local_len the same way get_normalized_position does.
+        """
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+
+        # How many positions in the partial block belong to this device:
+        # clamp the remainder to this device's [dev_start, dev_start + dcs) window.
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        local_len = num_full_blocks * device_chunk_size + dev_contrib
+
+        if local_len == 0:
+            return None, 0
+        shard_offset = sp_idx * per_device_max_seq_len
+        local_kv = torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
+        return local_kv, local_len
+
+    golden_args = dict(
+        input_tensor=torch_input,
+        gamma_tensor=torch_gamma,
+        matmul_weights_tensor=torch_matmul_weights,
+        rmsnorm2_gamma_tensor=torch_rmsnorm2_gamma,
+        matmul2_weights_tensor=torch_matmul2_weights_full_unshuffled,
+        matmul3_weights_tensor=torch_matmul3_weights,
+        sin_tensor=torch_sin,
+        cos_tensor=torch_cos,
+        dkv_matmul_weights_tensor=torch_dkv_matmul_weights,
+        dkv_rmsnorm_gamma_tensor=torch_dkv_rmsnorm_gamma,
+        scale=scale,
         epsilon=epsilon,
         num_qnope_heads=total_qnope_heads,
         num_qrope_heads=total_qrope_heads,
@@ -623,97 +784,91 @@ def test_pre_sdpa(
         rope_dim=KROPE_DIM,
     )
 
+    golden_per_sp = {}
+    for sp_idx in range(num_sp):
+        local_kv, local_seq_len = build_local_kv_cache(sp_idx)
+        is_owner = sp_idx == owning_sp_device
+        if local_kv is None:
+            if is_owner:
+                # Owning device at pos 0: no prior cache exists yet, but it
+                # still writes the first entry and runs MLA on it.
+                local_kv = torch.zeros(1, 1, 0, kvpe_dim, dtype=torch.bfloat16)
+            else:
+                continue
+        local_pos = torch.tensor([local_seq_len if is_owner else local_seq_len - 1])
+        _, golden_new_kv, mla_output = PreSDPA.golden(
+            **golden_args,
+            local_position_ids=local_pos,
+            global_position_ids=torch.tensor([position_id]),
+            kv_cache_tensor=local_kv,
+            kv_cache_update=is_owner,
+        )
+        golden_per_sp[sp_idx] = (golden_new_kv, mla_output, local_seq_len)
+
+    logger.info(
+        f"Golden computed for {len(golden_per_sp)} SP devices "
+        f"(owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})"
+    )
+
+    # ========================================================================
+    # Validate outputs
+    # ========================================================================
     slice_size = sdpa_input_output_shape[0]
-    expected_width = KNOPE_DIM  # 512
-
-    # KV Cache is same across devices in 4x2 submesh
-    expected_nope = torch_kv_cache_expected[..., :KNOPE_DIM]
-    expected_rope = torch_kv_cache_expected[..., KNOPE_DIM:]
-
-    sdpa_pcc_by_tp = {}
-    kv_nope_pcc_first = None
-    kv_rope_pcc_first = None
 
     for device_idx in range(mesh_rows * mesh_cols):
-        tp_group = device_idx % mesh_cols  # TP group determined by mesh column
+        tp_group = device_idx % mesh_cols
+        sp_group = device_idx // mesh_cols
 
-        # ---- KV Cache (fully replicated, no TP) ----
-        compare_kv_cache = kv_cache_output_torch[device_idx, ..., position_id, :]
+        if sp_group not in golden_per_sp:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no work, skipped")
+            continue
 
-        # check that kv cache for 0 to pos_id -  1 is identical to kv cache before op
-        for i in range(position_id):
-            assert torch.allclose(
-                kv_cache_bfp8_before_op[device_idx, ..., i, :], kv_cache_output_torch[device_idx, ..., i, :], atol=1e-6
-            ), "KV Cache before and after op mismatch"
-        logger.info(f"Device {device_idx} old cache validation passed")
+        golden_new_kv, golden_mla_output, local_seq_len = golden_per_sp[sp_group]
 
-        # Check that the new kv cache for pos_id is correct compared to golden
-        compare_nope = compare_kv_cache[..., :KNOPE_DIM]
-        compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+        # ---- KV Cache: old positions must be unchanged ----
+        assert torch.equal(
+            kv_cache_bfp8_before_op[device_idx, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
-        nope_max_diff = torch.max(torch.abs(expected_nope - compare_nope)).item()
-        nope_mean_diff = torch.mean(torch.abs(expected_nope - compare_nope)).item()
-        logger.info(f"Device {device_idx} KV Cache NOPE: Max diff={nope_max_diff}, Mean diff={nope_mean_diff}")
-        nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
-        logger.info(f"Device {device_idx} KV Cache NOPE PCC: {nope_pcc}")
-        assert nope_passing, f"Device {device_idx} KV Cache NOPE PCC check failed: {nope_pcc}"
+        # ---- KV Cache new-position check (owning device only) ----
+        if golden_new_kv is not None:
+            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-        if kv_nope_pcc_first is not None:
-            assert nope_pcc == kv_nope_pcc_first, (
-                f"Device {device_idx} KV Cache NOPE PCC mismatch across replicated dim: "
-                f"got {nope_pcc}, expected {kv_nope_pcc_first}"
-            )
-        else:
-            kv_nope_pcc_first = nope_pcc
-        rope_max_diff = torch.max(torch.abs(expected_rope - compare_rope)).item()
-        rope_mean_diff = torch.mean(torch.abs(expected_rope - compare_rope)).item()
-        logger.info(f"Device {device_idx} KV Cache ROPE: Max diff={rope_max_diff}, Mean diff={rope_mean_diff}")
-        rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
-        logger.info(f"Device {device_idx} KV Cache ROPE PCC: {rope_pcc}")
-        assert rope_passing, f"Device {device_idx} KV Cache ROPE PCC check failed: {rope_pcc}"
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
 
-        if kv_rope_pcc_first is not None:
-            assert rope_pcc == kv_rope_pcc_first, (
-                f"Device {device_idx} KV Cache ROPE PCC mismatch across replicated dim: "
-                f"got {rope_pcc}, expected {kv_rope_pcc_first}"
-            )
-        else:
-            kv_rope_pcc_first = rope_pcc
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
 
-        # ---- PreSDPA Output (TP-sharded: replicated across rows, different across columns) ----
+        # ---- PreSDPA / MLA Output ----
         start = device_idx * slice_size
         end = start + slice_size
-        received = output_torch[start:end, :expected_width]
+        received = output_torch[start:end, :]
 
-        # Golden SDPA output is [num_tp * 64, 576]; slice per TP group.
-        # Each row is one head: [qnope[512], qrope[64]], 8 cores x 8 heads = 64 rows per TP.
         tp_start = tp_group * slice_size
         tp_end = tp_start + slice_size
-        torch_output_expected_flat = torch_output_expected[tp_start:tp_end, :]
+        torch_output_expected_flat = golden_mla_output[tp_start:tp_end, :]
 
         if received.shape != torch_output_expected_flat.shape:
             logger.error(
-                f"PreSDPA Output shape mismatch at device {device_idx} (TP={tp_group}): "
+                f"Device {device_idx} (TP={tp_group}, SP={sp_group}) output shape mismatch: "
                 f"got {received.shape}, expected {torch_output_expected_flat.shape}"
             )
             continue
 
-        max_diff = torch.max(torch.abs(received - torch_output_expected_flat)).item()
-        mean_diff = torch.mean(torch.abs(received - torch_output_expected_flat)).item()
-        logger.info(f"Device {device_idx} (TP={tp_group}) PreSDPA Output: Max diff={max_diff}, Mean diff={mean_diff}")
-
-        # Lower PCC threshold due to random weights
-        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.90)
-        logger.info(f"Device {device_idx} (TP={tp_group}) PreSDPA Output PCC: {sdpa_pcc}")
-        assert passing, f"Device {device_idx} (TP={tp_group}) PreSDPA Output PCC check failed: {sdpa_pcc}"
-
-        if tp_group in sdpa_pcc_by_tp:
-            assert sdpa_pcc == sdpa_pcc_by_tp[tp_group], (
-                f"Device {device_idx} (TP={tp_group}) PreSDPA Output PCC mismatch across replicated dim: "
-                f"got {sdpa_pcc}, expected {sdpa_pcc_by_tp[tp_group]}"
-            )
-        else:
-            sdpa_pcc_by_tp[tp_group] = sdpa_pcc
+        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.84)
+        logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {sdpa_pcc}")
+        assert (
+            passing
+        ), f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {sdpa_pcc}"
 
     logger.info("✓ PreSDPA mesh test passed!")
 

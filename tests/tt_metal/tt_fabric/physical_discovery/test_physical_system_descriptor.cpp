@@ -321,7 +321,6 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
         pcie_id_to_logical_id[static_cast<uint32_t>(pcie_id)] = static_cast<uint32_t>(logical_id);
     }
 
-    // Generate a YAML File with the tray to device mapping (using logical IDs for TT_VISIBLE_DEVICES)
     YAML::Node tray_to_pcie_device_mapping;
     YAML::Node device_mapping;
     for (const auto& [tray_id, pcie_devices] : pcie_devices_per_tray.at(my_host)) {
@@ -336,6 +335,36 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
     std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
     outfile << tray_to_pcie_device_mapping;
+    outfile.close();
+}
+
+TEST(PhysicalMappingGeneration, GeneratePCIeToLogicalMapping) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
+    auto my_host = physical_system_desc.my_host_name();
+
+    // Build PCI device ID -> logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs.
+    std::unordered_map<uint32_t, uint32_t> pcie_id_to_logical_id;
+    for (const auto& [logical_id, pcie_id] : cluster.get_cluster_desc()->get_chips_with_mmio()) {
+        pcie_id_to_logical_id[static_cast<uint32_t>(pcie_id)] = static_cast<uint32_t>(logical_id);
+    }
+
+    YAML::Node host_mapping;
+    for (const auto& [pcie_id, logical_id] : pcie_id_to_logical_id) {
+        host_mapping[std::to_string(pcie_id)] = logical_id;
+    }
+
+    YAML::Node root;
+    root[my_host] = host_mapping;
+
+    std::string out_filename = my_host + "_pcie_to_logical.yaml";
+    std::ofstream outfile(out_filename);
+    outfile << root;
     outfile.close();
 }
 

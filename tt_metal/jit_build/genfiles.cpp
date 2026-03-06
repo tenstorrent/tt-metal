@@ -177,7 +177,7 @@ void jit_build_genfiles_triscs_src(
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
-
+    const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
     // Read content for syntax detection (needed for both paths)
     const string kernel_content = kernel_src.get_content();
     const bool simplified = simple_kernel_syntax::is_used_in_source(kernel_content);
@@ -196,7 +196,7 @@ void jit_build_genfiles_triscs_src(
     const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
     const string math_prolog = build_trisc_prolog("TRISC_MATH");
     const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-
+    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
     // Determine kernel source for each TRISC.
     //
     // Why the if-else structure is necessary:
@@ -204,7 +204,7 @@ void jit_build_genfiles_triscs_src(
     // - Legacy syntax: use existing get_kernel_source_to_include() which returns:
     //   - FILE_PATH: #include directive (preserves file refs in compiler errors)
     //   - SOURCE_CODE: the source directly
-    string unpack_src, math_src, pack_src;
+    string unpack_src, math_src, pack_src, isolate_sfpu_src;
     if (simplified) {
         // For FILE_PATH sources, add #line directive to preserve original file's line numbers
         // in compiler diagnostics and __LINE__ macro. This ensures error messages reference
@@ -216,17 +216,19 @@ void jit_build_genfiles_triscs_src(
         unpack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_unpack", "unpack_main");
         math_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_math", "math_main");
         pack_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(kernel_content, "chlkc_pack", "pack_main");
+        isolate_sfpu_src = line_directive + simple_kernel_syntax::transform_to_legacy_syntax(
+                                                kernel_content, "chlkc_isolate_sfpu", "isolate_sfpu_main");
     } else {
         // Legacy: use existing helper that handles FILE_PATH vs SOURCE_CODE appropriately
         const string src = get_kernel_source_to_include(kernel_src);
-        unpack_src = math_src = pack_src = src;
+        unpack_src = math_src = pack_src = isolate_sfpu_src = src;
     }
 
-    // Generate the three TRISC source files
+    // Generate the four TRISC source files (fourth only used on Quasar)
     write_file(unpack_cpp, unpack_prolog + unpack_src);
     write_file(math_cpp, math_prolog + math_src);
     write_file(pack_cpp, pack_prolog + pack_src);
-
+    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + isolate_sfpu_src);
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
@@ -381,7 +383,7 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
 
-    // equalize "upack src" and "pack dst" data format vectors
+    // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
     // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be
     // DataFromat::Invalid if the other is set) if both formats are DataFormat::Invalid then this CB is not used this
@@ -512,7 +514,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_pack_tile_dims(out, desc, max_cbs);
     out << "#endif\n\n";
 
-    out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK)\n";
+    out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
+           "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
     emit_compute_scalar_descriptors(out, options);
     out << "#endif\n";
 

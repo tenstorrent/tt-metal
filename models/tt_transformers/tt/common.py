@@ -470,7 +470,7 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
 
 #  Add-Multiply method of rotary embeddings for prefill
-def get_rot_transformation_mat(dhead):
+def get_rot_transformation_mat(dhead=32):
     # ROPE op uses a single tile
     dhead = 32
     # Delegate to TTTv2 implementation for consistency
@@ -808,6 +808,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
+    use_hf_rope=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -823,6 +824,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         prefetcher=prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     if num_layers is not None:

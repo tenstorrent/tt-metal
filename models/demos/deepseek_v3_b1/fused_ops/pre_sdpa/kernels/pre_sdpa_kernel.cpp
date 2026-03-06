@@ -264,6 +264,7 @@ if constexpr (!Core::skip_ccl) {
     deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
         flash_mla_args = {
+            // k_addr/pos_addr are appended in op.py as NCRISC common runtime args.
             .k_addr = get_common_arg_val<uint32_t>(5),
             .pos_addr = get_common_arg_val<uint32_t>(6),
             .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),

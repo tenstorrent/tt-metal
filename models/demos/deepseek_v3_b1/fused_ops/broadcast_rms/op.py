@@ -257,6 +257,7 @@ class BroadcastRMSNorm:
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
                     ncrisc_common_runtime_args=writer_common_rt_args,
                     brisc_common_runtime_args=brisc_common_runtime_args,
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                     trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,

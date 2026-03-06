@@ -179,6 +179,19 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
+    // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
+    const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
+    const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
+    const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+
+    // Partial tile support when padding boundary falls inside a tile.
+    const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
+    const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
+    const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
+    // Single CB holds: 1 neginf tile + up to 2 partial mask tiles
+    const uint32_t total_lightweight_mask_tiles = 1 + partial_mask_tiles;
+
     const uint32_t num_local_q_chunks = tt::div_up(local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
@@ -257,7 +270,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
     uint32_t out0_t = Sq_chunk_t * DHt;
@@ -268,7 +280,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
     log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
@@ -292,6 +303,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+
+    // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
+    // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
+    const bool use_streaming_compute =
+        !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % (8 / qk_out_subblock_h) == 0;
+    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -397,11 +414,25 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        args.all_gather_operation_attributes.ring_size};
+        args.all_gather_operation_attributes.ring_size,
+        global_n_partial_col,
+        joint_l_partial_col,
+    };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
+
+    // Early format check: when all data formats are identical, reconfig calls can be skipped.
+    const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    const tt::DataFormat k_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
+    const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
+    const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
+    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
+    const bool uniform_dataformat =
+        (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
+         q_df_early == mask_df_early && q_df_early == im_df_early);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -434,7 +465,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_union.u};
+        scale_union.u,
+        (std::uint32_t)use_streaming_compute,
+        global_n_partial_col,
+        joint_l_partial_col,
+        (std::uint32_t)uniform_dataformat,
+    };
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -472,7 +508,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
+    // Lightweight mask: both streaming and non-streaming paths use Float16_b
+    // to support L1-accumulation and avoid Bfp4_b precision loss.
+    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -511,10 +549,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    // attn_mask input
-    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                            .set_page_size(tt::CB::c_in3, mask_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in3_config);
+    // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
+    if (needs_lightweight_mask) {
+        auto c_in3_config =
+            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                .set_page_size(tt::CB::c_in3, mask_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in3_config);
+    }
 
     // scale input
     auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
@@ -590,6 +631,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
+
+    // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
+    // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
+    if (use_streaming_compute) {
+        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
+                                          .set_page_size(tt::CBIndex::c_9, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
+    }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
@@ -877,7 +926,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.semaphore,
         args.all_gather_operation_attributes.sub_device_id,
         all_gather_fused_op_signaler,
-        args.ccl_core_grid_offset);
+        args.ccl_core_grid_offset,
+        args.all_gather_operation_attributes.core_allocation_strategy);
 
     return cached_program_t{
         std::move(program),
