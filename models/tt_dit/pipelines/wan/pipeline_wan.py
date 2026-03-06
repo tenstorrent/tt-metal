@@ -256,10 +256,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            # This is the best dynamic loading strategy across all supported device configurations.
             self.tt_umt5_encoder.set_unload_set(self.transformer_2)
-            self.transformer.set_unload_set(self.transformer_2)
-            self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            if ttnn.device.is_blackhole():
+                self.transformer.set_unload_set(self.transformer_2)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            else:
+                # WH T3K has tighter DRAM — include VAE in the unload chain so
+                # transformers and VAE never coexist in DRAM across pipeline runs.
+                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
