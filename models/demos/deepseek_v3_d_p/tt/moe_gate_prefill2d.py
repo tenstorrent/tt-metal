@@ -2,24 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import torch
+
 import ttnn
 
 
 class MoEGatePrefill:
     """MoE gate module from DeepSeek-R1."""
 
-    def __init__(self, config, seq_len, mesh2d):
+    def __init__(self, config, mesh_device):
         self.dim = config.dim
         self.topk = config.n_activated_experts
         self.n_groups = config.n_expert_groups
         self.topk_groups = config.n_limited_groups
         self.score_func = config.score_func
         self.route_scale = config.route_scale
-        self.mesh2d = mesh2d
-        # self.row_submesh = row_submesh
-        self.seq_len_per_chip = seq_len
-        self.num_chips_in_row = mesh2d.get_num_devices()
-        self.num_chips_in_col = mesh2d.get_num_devices()
+        self.mesh_device = mesh_device
+        self.seq_len_per_chip = config.sp_dim
+        self.num_chips_in_row = mesh_device.get_num_devices()
+        self.num_chips_in_col = mesh_device.get_num_devices()
 
         self.core_grid = config.core_grid
 
@@ -29,9 +30,31 @@ class MoEGatePrefill:
         self.mm_program_config = config.mm_configs["DEFAULT_PROGRAM_CONFIG"]
         self.ccl_config = config.ccl_config
 
-        self.weight = ttnn.zeros([config.n_routed_experts, config.dim], device=self.mesh2d, layout=ttnn.TILE_LAYOUT)
-        self.bias = (
-            ttnn.zeros([seq_len, 256], device=self.mesh2d, layout=ttnn.TILE_LAYOUT) if config.dim == 7168 else None
+        self.weight = ttnn.from_torch(
+            torch.zeros([config.dim, config.n_routed_experts]),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0),
+                mesh_shape=mesh_device.shape,
+            ),
+        )
+
+        self.bias = ttnn.from_torch(
+            # ttnn.experimental.deepseek_grouped_gate() requires bias to be broadcasted already
+            torch.zeros([config.n_routed_experts]).repeat(config.sp_dim).view(config.sp_dim, -1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        self.experts_in_dispatch_row = ttnn.ones(
+            [config.n_routed_experts],
+            device=mesh_device,
         )
 
     def linear(self, x: ttnn.Tensor):
@@ -42,16 +65,16 @@ class MoEGatePrefill:
     def all_reduce(self, x: ttnn.Tensor):
         return ttnn.all_reduce(
             x,
-            cluster_axis=1,  # self.ccl_config["CLUSTER_AXIS"],
-            num_links=2,  # self.ccl_config["NUM_LINKS"],
-            topology=ttnn.Topology.Linear,  # self.ccl_config["COL_TOPOLOGY"],
+            cluster_axis=self.ccl_config["TP_AXIS"],
+            num_links=self.ccl_config["NUM_LINKS"],
+            topology=ttnn.Topology.Linear,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     def get_onehot_expert_selection(self, global_expert_indices):
         global_onehot_experts = ttnn.zeros(
             shape=[self.seq_len_per_chip, self.n_routed_experts],
-            dtype=ttnn.uint16,
+            dtype=ttnn.uint32,
             layout=ttnn.TILE_LAYOUT,
             device=global_expert_indices.device(),
         )
@@ -63,18 +86,21 @@ class MoEGatePrefill:
 
     def cumulative_sum_across_columns(self, input_tensor: ttnn.Tensor):
         input_tensor = ttnn.unsqueeze(input_tensor, dim=0)
+
         gathered = ttnn.all_gather(
             input_tensor,
             dim=0,
-            cluster_axis=0,
-            num_links=4,
+            cluster_axis=self.ccl_config["DISPATCH_AXIS"],
+            num_links=self.ccl_config["NUM_LINKS"],
             topology=ttnn.Topology.Linear,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        reshaped = ttnn.reshape(gathered, (self.mesh2d.shape[1], self.n_routed_experts))
+        reshaped = ttnn.reshape(gathered, (self.mesh_device.shape[1], self.n_routed_experts))
         cumsum_result = ttnn.cumsum(reshaped, dim=0)
-
+        cumsum_result = ttnn.to_layout(cumsum_result, ttnn.ROW_MAJOR_LAYOUT)
+        cumsum_result = ttnn.pad(cumsum_result, padding=[(1, 0), (0, 0)], value=0)  # add zeros at the beginning
+        cumsum_result = cumsum_result * self.experts_in_dispatch_row
         return cumsum_result
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
