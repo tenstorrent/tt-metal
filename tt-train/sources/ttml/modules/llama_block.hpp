@@ -16,7 +16,6 @@
 namespace ttml::modules {
 
 class LlamaMLP : public modules::ModuleBase {
-private:
     std::shared_ptr<LinearLayer> m_w1;
     std::shared_ptr<LinearLayer> m_w3;
     std::shared_ptr<LinearLayer> m_w2;
@@ -29,7 +28,6 @@ public:
 };
 
 class LlamaBlock : public modules::ModuleBase {
-private:
     std::shared_ptr<LlamaMLP> m_mlp;
     std::shared_ptr<RMSNormLayer> m_attention_norm;
     std::shared_ptr<RMSNormLayer> m_mlp_norm;

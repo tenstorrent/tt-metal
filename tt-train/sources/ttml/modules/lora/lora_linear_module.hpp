@@ -26,6 +26,9 @@ struct LoRALayerConfig {
 
     // Bias configuration specifies how biases are handled during fine-tuning.
     bool is_bias_trainable = false;
+
+    // Whether to use Rank-Stabilized LoRA - scale = alpha/sqrt(r) instead of standard scaling (alpha/r)
+    bool use_rslora = false;
 };
 
 class LoRALinearLayer : public ModuleBase {
@@ -36,7 +39,7 @@ private:
     autograd::TensorPtr m_lora_a;
     autograd::TensorPtr m_lora_b;
 
-    std::shared_ptr<ModuleBase> m_dropout;
+    ModuleBasePtr m_dropout;
 
     float m_scale = 1.0F;
 

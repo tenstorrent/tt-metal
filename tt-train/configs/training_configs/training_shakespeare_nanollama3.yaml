@@ -12,6 +12,8 @@ training_config:
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   model_config: "configs/model_configs/nanollama3.yaml"
+  # Uncomment to enable LoRA fine-tuning:
+  # lora_config: "configs/lora_configs/nanollama.yaml"
 
 eval_config:
   repetition_penalty: 1.0
