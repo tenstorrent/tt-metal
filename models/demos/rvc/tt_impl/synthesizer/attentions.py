@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 from models.demos.rvc.tt_impl.conv1d import Conv1d
+from models.demos.rvc.tt_impl.linear import Linear
 
 
 class MultiHeadAttention:
@@ -32,38 +33,38 @@ class MultiHeadAttention:
         self.window_size = window_size
         self.k_channels = channels // n_heads
 
-        self.conv_q = Conv1d(
+        self.linear_q = Linear(
             device=device,
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=1,
+            in_features=channels,
+            out_features=channels,
         )
-        self.conv_k = Conv1d(
+        self.linear_k = Linear(
             device=device,
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=1,
+            in_features=channels,
+            out_features=channels,
         )
-        self.conv_v = Conv1d(
+        self.linear_v = Linear(
             device=device,
-            in_channels=channels,
-            out_channels=channels,
-            kernel_size=1,
+            in_features=channels,
+            out_features=channels,
         )
-        self.conv_o = Conv1d(
+        self.linear_o = Linear(
             device=device,
-            in_channels=channels,
-            out_channels=out_channels,
-            kernel_size=1,
+            in_features=channels,
+            out_features=out_channels,
         )
         self.emb_rel_k: ttnn.Tensor | None = None
         self.emb_rel_v: ttnn.Tensor | None = None
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.conv_q.load_parameters(parameters=parameters, key="conv_q", prefix=prefix)
-        self.conv_k.load_parameters(parameters=parameters, key="conv_k", prefix=prefix)
-        self.conv_v.load_parameters(parameters=parameters, key="conv_v", prefix=prefix)
-        self.conv_o.load_parameters(parameters=parameters, key="conv_o", prefix=prefix)
+        q_key = "linear_q" if (f"{prefix}linear_q.weight" if prefix else "linear_q.weight") in parameters else "conv_q"
+        k_key = "linear_k" if (f"{prefix}linear_k.weight" if prefix else "linear_k.weight") in parameters else "conv_k"
+        v_key = "linear_v" if (f"{prefix}linear_v.weight" if prefix else "linear_v.weight") in parameters else "conv_v"
+        o_key = "linear_o" if (f"{prefix}linear_o.weight" if prefix else "linear_o.weight") in parameters else "conv_o"
+        self.linear_q.load_parameters(parameters=parameters, key=q_key, prefix=prefix)
+        self.linear_k.load_parameters(parameters=parameters, key=k_key, prefix=prefix)
+        self.linear_v.load_parameters(parameters=parameters, key=v_key, prefix=prefix)
+        self.linear_o.load_parameters(parameters=parameters, key=o_key, prefix=prefix)
         if self.window_size is not None:
             key_emb_rel_k = f"{prefix}emb_rel_k" if prefix else "emb_rel_k"
             key_emb_rel_v = f"{prefix}emb_rel_v" if prefix else "emb_rel_v"
@@ -88,9 +89,9 @@ class MultiHeadAttention:
             )
 
     def __call__(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
-        q = self._project_qkv(self.conv_q(x), transpose_k=False)
-        k = self._project_qkv(self.conv_k(c), transpose_k=True)
-        v = self._project_qkv(self.conv_v(c), transpose_k=False)
+        q = self._project_qkv(self.linear_q(x), transpose_k=False)
+        k = self._project_qkv(self.linear_k(c), transpose_k=True)
+        v = self._project_qkv(self.linear_v(c), transpose_k=False)
         q_scaled = q * (1.0 / math.sqrt(self.k_channels))
         scores = ttnn.matmul(q_scaled, k)
         _, _, target_length, source_length = scores.shape
@@ -118,14 +119,12 @@ class MultiHeadAttention:
         batch_size, length, _, _ = output.shape
         output = ttnn.reshape(output, (batch_size, length, self.n_heads * self.k_channels))
 
-        out_tt = self.conv_o(output)
-        batch_size, _, length, channels = out_tt.shape
-        out_tt = ttnn.reshape(out_tt, (batch_size, length, channels))
+        out_tt = self.linear_o(output)
         return out_tt
 
     def _project_qkv(self, x: ttnn.Tensor, *, transpose_k: bool) -> ttnn.Tensor:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        batch_size, _, length, channels = x.shape
+        batch_size, length, channels = x.shape
         x = ttnn.reshape(x, (batch_size, length, self.n_heads, self.k_channels))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
