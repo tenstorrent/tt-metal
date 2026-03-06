@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "fabric_firmware_initializer.hpp"
 
 #include <chrono>

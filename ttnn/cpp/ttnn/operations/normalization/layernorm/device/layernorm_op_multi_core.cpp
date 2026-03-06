@@ -10,6 +10,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -290,7 +291,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         a.device()->l1_size_per_core());
     if (!use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
-            // In the case that the required space is larger than what can be handeled by the single pass
+            // In the case that the required space is larger than what can be handled by the single pass
             large_tensor_needed = true;
             Wt_next_block_up = with_weights_max_size;
         } else if (!cb_fits_in_L1) {
@@ -372,6 +373,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (rms_norm) {
         reader_defines.emplace_back("RMSNORM", "1");
         compute_defines.emplace_back("RMSNORM", "1");
+    }
+
+    if (operation_attributes.fused_activation.has_value()) {
+        const auto& act = operation_attributes.fused_activation.value();
+        auto act_defines =
+            ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output.dtype());
+        for (auto& [key, val] : act_defines) {
+            compute_defines.emplace_back(key, val);
+        }
     }
 
     // Select reader kernel path

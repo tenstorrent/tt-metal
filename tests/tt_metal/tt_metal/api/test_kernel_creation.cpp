@@ -14,13 +14,12 @@
 
 #include "base_types.hpp"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/kernels/kernel.hpp"
@@ -118,6 +117,36 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     EXPECT_THROW(this->create_kernel(kernel_file), std::exception);
+}
+
+TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
+    const std::string inline_source = "void kernel_main() {}";
+
+    auto program = CreateProgram();
+
+    auto file_kernel_handle = CreateKernel(
+        program,
+        kernel_file,
+        CoreCoord(0, 0),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    auto inline_kernel_handle = CreateKernelFromString(
+        program,
+        inline_source,
+        CoreCoord(0, 0),
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto file_kernel = program.impl().get_kernel(file_kernel_handle);
+    auto inline_kernel = program.impl().get_kernel(inline_kernel_handle);
+
+    auto file_meta = file_kernel->meta(nullptr);
+    auto inline_meta = inline_kernel->meta(nullptr);
+
+    EXPECT_EQ(inline_meta.source, "Inline source")
+        << "SOURCE_CODE kernels should report 'Inline source' in metadata, not the raw source code";
+
+    EXPECT_EQ(file_meta.source, kernel_file) << "FILE_PATH kernels should report their file path in metadata";
 }
 
 // Unit test for Kernel::compute_hash() - tests that different unpack_to_dest_mode produces different hashes

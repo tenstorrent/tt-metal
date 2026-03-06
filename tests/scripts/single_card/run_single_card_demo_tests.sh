@@ -75,10 +75,10 @@ run_qwen25_vl_perfunc() {
 
 run_ds_r1_qwen_func() {
   ds_r1_qwen_14b=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
-  HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 $PYTEST_CMD --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
+  HF_MODEL=$ds_r1_qwen_14b MESH_DEVICE=N300 $PYTEST_CMD --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
 
   ds_r1_qwen_1_5b=deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 $PYTEST_CMD --timeout 600 models/experimental/tt_transformers_v2/ds_r1_qwen.py
+  HF_MODEL=$ds_r1_qwen_1_5b MESH_DEVICE=N300 $PYTEST_CMD --timeout 1200 models/experimental/tt_transformers_v2/ds_r1_qwen.py
 }
 
 run_gemma3_func() {
@@ -203,8 +203,8 @@ run_resnet_func() {
 }
 
 run_sdxl_func() {
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }

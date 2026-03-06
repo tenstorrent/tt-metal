@@ -4,6 +4,7 @@
 
 #include <graph_tracking.hpp>
 
+#include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
@@ -12,6 +13,8 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
+
+nlohmann::json IGraphProcessor::end_capture() { return nullptr; }
 
 GraphTracker& GraphTracker::instance() {
     static GraphTracker tracker;

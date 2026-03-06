@@ -23,12 +23,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>

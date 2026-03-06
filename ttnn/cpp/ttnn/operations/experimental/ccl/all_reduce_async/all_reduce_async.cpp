@@ -97,7 +97,7 @@ Tensor local_sum(
     return sum_tensor;
 }
 
-// moreh sum does not support float32 datatye
+// moreh sum does not support float32 datatype
 Tensor local_sum_float32(
     const ttnn::Tensor& gathered_tensor,
     int reduce_dim,
@@ -241,6 +241,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         /*cluster_axis*/ std::nullopt,
         /*use_optimal_ccl_for_llama*/ false,
         use_llama_sharded,
+        /*use_all_gather_async_via_broadcast*/ false,
         barrier_semaphores[1],
         /*chunks_per_sync*/ std::nullopt,
         /*num_workers_per_link*/ std::nullopt,
@@ -373,6 +374,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             cluster_axis.value(),
             /*use_optimal_ccl_for_llama*/ false,
             use_llama_sharded,
+            /*use_all_gather_async_via_broadcast*/ false,
             barrier_semaphores.value()[1],
             /*chunks_per_sync*/ std::nullopt,
             /*num_workers_per_link*/ std::nullopt,

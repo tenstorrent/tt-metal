@@ -39,7 +39,7 @@ DistributedMultiHeadAttention::DistributedMultiHeadAttention(
 }
 
 ttml::autograd::TensorPtr DistributedMultiHeadAttention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     auto qkv = (*m_qkv_linear)(x);
 
     auto [query_with_heads, key_with_heads, value_with_heads] = ops::heads_creation(qkv, m_local_num_heads);

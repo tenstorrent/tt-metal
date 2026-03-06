@@ -18,7 +18,12 @@ target_link_libraries(unit_tests_device_smoke PRIVATE test_metal_common_libs)
 
 # Non-smoke tests
 add_executable(unit_tests_device)
-target_sources(unit_tests_device PRIVATE test_release_ownership.cpp)
+target_sources(
+    unit_tests_device
+    PRIVATE
+        test_release_ownership.cpp
+        test_mock_device_api_nightly.cpp
+)
 target_include_directories(
     unit_tests_device
     PRIVATE
