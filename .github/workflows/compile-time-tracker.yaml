@@ -1,7 +1,7 @@
 name: "Compile Time Tracker"
 
 # Track full compilation time over time.
-# Builds with PCH and Unity disabled, no ccache, 32 cores.
+# Builds with PCH and Unity disabled, no ccache, 16 cores.
 # Results are pushed to https://github.com/tenstorrent/tt-metal-compile-time-tracker
 
 on:
@@ -66,7 +66,7 @@ jobs:
           apt-get update -qq && apt-get install -y -qq time >/dev/null 2>&1
           /usr/bin/time --version
 
-      - name: ⏱️ Timed Compile (32 cores)
+      - name: ⏱️ Timed Compile (16 cores)
         id: compile
         timeout-minutes: 90
         run: |
@@ -74,7 +74,7 @@ jobs:
 
           # Capture wall time (SECONDS) and CPU time (/usr/bin/time user+sys)
           SECONDS=0
-          /usr/bin/time -o /tmp/cpu_time.txt -f '%U %S' cmake --build build --parallel 32
+          /usr/bin/time -o /tmp/cpu_time.txt -f '%U %S' cmake --build build --parallel 16
           wall_time=$SECONDS
 
           read user_time sys_time < /tmp/cpu_time.txt
