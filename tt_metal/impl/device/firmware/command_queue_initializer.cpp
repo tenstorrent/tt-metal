@@ -76,6 +76,23 @@ void CommandQueueInitializer::teardown(std::unordered_set<InitializerKey>& init_
 
 bool CommandQueueInitializer::is_initialized() const { return initialized_; }
 
+void CommandQueueInitializer::add_devices(
+    const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& /*init_done*/) {
+    if (descriptor_->is_mock_device()) {
+        for (auto* dev : new_devices) {
+            devices_.push_back(dev);
+        }
+        return;
+    }
+
+    for (auto* dev : new_devices) {
+        if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
+            initialize_host(dev);
+        }
+        devices_.push_back(dev);
+    }
+}
+
 void CommandQueueInitializer::initialize_host(Device* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 

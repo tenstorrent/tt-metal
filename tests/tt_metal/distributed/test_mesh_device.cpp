@@ -24,6 +24,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
@@ -206,6 +207,116 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->impl().get_device(coord)->id()),
             fabric_node_id);
     }
+}
+
+TEST(MeshDeviceInitTest, MultipleMeshDevice) {
+    auto pcie_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().all_pci_chip_ids();
+    std::vector<int> pcie_ids(pcie_ids_set.begin(), pcie_ids_set.end());
+    size_t num_pcie = pcie_ids.size();
+    if (num_pcie < 2) {
+        GTEST_SKIP() << "Need at least 2 PCIe devices for this test";
+    }
+
+    size_t first_size = num_pcie / 2;
+    size_t second_size = num_pcie - first_size;
+    std::vector<int> first_half(pcie_ids.begin(), pcie_ids.begin() + first_size);
+    std::vector<int> second_half(pcie_ids.begin() + first_size, pcie_ids.end());
+
+    auto md_1 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(first_size)),
+        std::nullopt,
+        first_half,
+    });
+    auto md_2 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(second_size)),
+        std::nullopt,
+        second_half,
+    });
+
+    EXPECT_EQ(md_1->num_devices(), first_size);
+    EXPECT_EQ(md_2->num_devices(), second_size);
+}
+
+TEST(MeshDeviceInitTest, MultipleMeshDeviceWithSubMesh) {
+    auto pcie_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().all_pci_chip_ids();
+    std::vector<int> pcie_ids(pcie_ids_set.begin(), pcie_ids_set.end());
+    size_t num_pcie = pcie_ids.size();
+    if (num_pcie < 2) {
+        GTEST_SKIP() << "Need at least 2 PCIe devices for this test";
+    }
+
+    auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(num_pcie)),
+        std::nullopt,
+        pcie_ids,
+    });
+    EXPECT_EQ(mesh->num_devices(), num_pcie);
+
+    size_t first_size = num_pcie / 2;
+    size_t second_size = num_pcie - first_size;
+
+    auto sub_1 = mesh->create_submesh(MeshShape{1, static_cast<uint32_t>(first_size)}, MeshCoordinate{0, 0});
+    auto sub_2 = mesh->create_submesh(
+        MeshShape{1, static_cast<uint32_t>(second_size)}, MeshCoordinate{0, static_cast<uint32_t>(first_size)});
+
+    EXPECT_EQ(sub_1->num_devices(), first_size);
+    EXPECT_EQ(sub_2->num_devices(), second_size);
+}
+
+TEST(MeshDeviceInitTest, FabricReconfigWhileDevicesOpen) {
+    auto pcie_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().all_pci_chip_ids();
+    std::vector<int> pcie_ids(pcie_ids_set.begin(), pcie_ids_set.end());
+    size_t num_pcie = pcie_ids.size();
+    if (num_pcie < 2) {
+        GTEST_SKIP() << "Need at least 2 PCIe devices for this test";
+    }
+
+    size_t first_size = num_pcie / 2;
+    size_t second_size = num_pcie - first_size;
+    std::vector<int> first_half(pcie_ids.begin(), pcie_ids.begin() + first_size);
+    std::vector<int> second_half(pcie_ids.begin() + first_size, pcie_ids.end());
+
+    auto current_config = tt::tt_fabric::GetFabricConfig();
+    auto other_config = (current_config == tt::tt_fabric::FabricConfig::DISABLED)
+                            ? tt::tt_fabric::FabricConfig::FABRIC_1D
+                            : tt::tt_fabric::FabricConfig::DISABLED;
+
+    auto md_1 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(first_size)),
+        std::nullopt,
+        first_half,
+    });
+    auto md_2 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(second_size)),
+        std::nullopt,
+        second_half,
+    });
+
+    // Both meshes open: reconfigure must fail
+    EXPECT_ANY_THROW(tt::tt_fabric::SetFabricConfig(other_config));
+
+    // Close first mesh: reconfigure must still fail (second mesh still open)
+    md_1->close();
+    EXPECT_ANY_THROW(tt::tt_fabric::SetFabricConfig(other_config));
+
+    // Close second mesh: reconfigure should succeed now
+    md_2->close();
+    EXPECT_NO_THROW(tt::tt_fabric::SetFabricConfig(other_config));
+
+    // Reopen two meshes to verify everything still works after reconfiguration
+    md_1 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(first_size)),
+        std::nullopt,
+        first_half,
+    });
+    md_2 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(second_size)),
+        std::nullopt,
+        second_half,
+    });
+
+    EXPECT_EQ(md_1->num_devices(), first_size);
+    EXPECT_EQ(md_2->num_devices(), second_size);
 }
 
 }  // namespace

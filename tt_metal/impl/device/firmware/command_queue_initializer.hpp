@@ -18,6 +18,8 @@ public:
     void configure() override;
     void teardown(std::unordered_set<InitializerKey>& init_done) override;
     bool is_initialized() const override;
+    void add_devices(
+        const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& init_done) override;
 
 private:
     void initialize_host(Device* dev) const;

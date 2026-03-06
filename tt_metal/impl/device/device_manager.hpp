@@ -40,6 +40,10 @@ public:
 
     IDevice* get_active_device(ChipId device_id) const;
     std::vector<IDevice*> get_all_active_devices() const;
+    // Returns devices activated during the most recent incremental initialize() call. This is
+    // used to incremental initializing devices for the MeshDevice.
+    // Empty if the last initialize() was a fresh (non-incremental) init.
+    const std::vector<Device*>& get_newly_activated_devices() const { return newly_activated_devices_; }
     bool close_device(ChipId device_id);
     std::vector<ChipId> get_all_active_device_ids() const;
     std::unordered_map<ChipId, std::vector<uint32_t>> get_all_command_queue_event_infos() const;
@@ -72,6 +76,7 @@ private:
 
     mutable std::mutex lock_;
     std::vector<std::unique_ptr<Device>> devices_;
+    std::vector<Device*> newly_activated_devices_;
 
     bool skip_remote_devices_{};
     const std::unordered_set<CoreCoord> empty_container_;
