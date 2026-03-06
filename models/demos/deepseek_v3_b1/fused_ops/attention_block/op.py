@@ -853,6 +853,7 @@ class AttentionBlock:
         # MLA parameters
         mla_q_in_cb = create_q_heads_out_cb  # In for MLA q heads
         mla_k_in_cb = 35  # Input CB for MLA
+        mla_mask_cb = 42  # Mask CB for MLA
         mla_interm_out_cb = 36  # Intermediate output CB for MLA
         mla_interm_ms_cb = 37  # Intermediate MS CB for MLA
         mla_out_in_cb = 38  # Output input CB for MLA
@@ -1529,6 +1530,7 @@ class AttentionBlock:
             ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_k_in_cb", mla_k_in_cb),
             ("mla_q_in_cb", mla_q_in_cb),
+            ("mla_mask_cb", mla_mask_cb),
             ("mla_out_in_cb", mla_out_in_cb),
             ("mla_ms_in_cb", mla_ms_in_cb),
             ("mla_out_o_cb", mla_out_o_cb),
@@ -1563,6 +1565,7 @@ class AttentionBlock:
             ("dst_size", mla_dst_size),
             ("mla_q_in_cb", mla_q_in_cb),
             ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_mask_cb", mla_mask_cb),
             ("mla_interm_out_cb", mla_interm_out_cb),
             ("mla_interm_ms_cb", mla_interm_ms_cb),
             ("mla_out_in_cb", mla_out_in_cb),
@@ -2506,6 +2509,15 @@ class AttentionBlock:
                 mla_cb_descriptors.append(mla_k_in_cb_descriptor)
                 # V is read directly from K buffer (strided matmul) - no separate V CB needed
 
+                # cb_mask: Mask input
+                mla_cb_descriptors.append(
+                    ttnn.CBDescriptor(
+                        total_size=q_tile_size,
+                        core_ranges=mla_core_grid,
+                        format_descriptors=[ttnn.CBFormatDescriptor(mla_mask_cb, q_df, q_tile_size)],
+                    )
+                )
+
                 if optimized_mla_grid.NUM_TREE_REDUCTION_STEPS > 0:
                     # cb_out_in: output input (tiny tile)
                     mla_out_in_total_size = mla_intermed_output_tiles * stats_tile_size
@@ -3196,31 +3208,6 @@ class AttentionBlock:
                     + mla_trisc_named_compile_time_args
                     + post_sdpa_trisc_named_compile_time_args
                 )
-
-                if mesh_coord == ttnn.MeshCoordinate(0, 0):
-                    core_grids = {
-                        "is_input_core": rmsnorm_core,
-                        "is_matmul_core": matmul_weights_core_grid,
-                        "is_matmul2_core": matmul2_weights_core_grid,
-                        "is_qnope_core": qnope_grid,
-                        "is_qrope_core": qrope_grid,
-                        "is_sdpa_input_core": sdpa_input_grid,
-                        "is_dkv_matmul_core": dkv_matmul_weights_core_grid,
-                        "is_kv_rmsnorm_core": dkv_rmsnorm_grid,
-                        "is_knope_core": dkv_gather_sender_grid,
-                        "is_krope_core": krope_grid,
-                        "is_mla_core": mla_core_grid,
-                        "is_sdpa_worker_core": sdpa_worker_grid,
-                        "is_sdpa_forwarder_core": sdpa_forwarder_grid,
-                        "is_matmul4_core": matmul4_core_grid,
-                        "is_gather_receiver_core": gather_core_grid,
-                        "is_matmul5_core": matmul5_active_core_grid,
-                        "is_mcast3_receiver_core": mcast3_core_grid,
-                        "is_ccl_sender_core": ccl_sender_core_grid,
-                        "is_ccl_receiver_core": gather_core_grid,
-                    }
-                    for name, grid in core_grids.items():
-                        print(f"  {name}: {grid}")
 
                 unified_compile_time_core_descriptors = [
                     UnifiedCompileTimeCoreDescriptor(
