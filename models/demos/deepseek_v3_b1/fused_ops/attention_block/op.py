@@ -816,6 +816,7 @@ class AttentionBlock:
         q_df = data_format
         k_df = kv_cache_tensor.dtype
         stats_df = ttnn.bfloat16
+        untilize_df = ttnn.bfloat16
 
         # ==================================================================
         # CB indices (auto-assigned via CircularBufferIdManager)
@@ -888,7 +889,7 @@ class AttentionBlock:
         )  # Intermediate CB for CreateQHeads (row-major data before tilization)
 
         kv_cache_output_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Output CB for KV Cache Branch
-        kv_cache_intermed_cb = cb_id_context.get_cb_id(stats_df, TD_32x32)  # Intermed CB for KV Cache Branch
+        kv_cache_intermed_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Intermed CB for KV Cache Branch
         kv_cache_input_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Input CB for KV Cache Branch
 
         # MLA parameters
@@ -2340,7 +2341,7 @@ class AttentionBlock:
                 # so senders can use get_write_ptr to determine the L1 destination address
                 TILE_8x32 = ttnn.Tile((Q_TILE_HEIGHT, 32))
                 create_q_heads_interm_tile_descriptor = ttnn.TileDescriptor(TILE_8x32)
-                create_q_heads_interm_page_size = TILE_8x32.get_tile_size(data_format)  # 8*32*2 = 512 bytes
+                create_q_heads_interm_page_size = TILE_8x32.get_tile_size(untilize_df)  # 8*32*2 = 512 bytes
                 create_q_heads_interm_total_size = (
                     2 * nope_tiles + rope_tiles
                 ) * create_q_heads_interm_page_size  # 18 pages (all phases: 8+8+2)
@@ -2353,7 +2354,7 @@ class AttentionBlock:
                 create_q_heads_interm_cb_descriptor.format_descriptors = [
                     ttnn.CBFormatDescriptor(
                         buffer_index=create_q_heads_receiver_in_cb,
-                        data_format=data_format,
+                        data_format=untilize_df,
                         page_size=create_q_heads_interm_page_size,
                         tile=create_q_heads_interm_tile_descriptor,
                     )
@@ -2490,11 +2491,11 @@ class AttentionBlock:
                 sdpa_out_interm_running_offset += krope_output_cb_descriptor.total_size  # +64 B
 
                 TILE_32x32 = ttnn.Tile((32, 32))
-                kv_cache_page_size = TILE_32x32.get_tile_size(ttnn.bfloat8_b)
+                kv_cache_page_size = TILE_32x32.get_tile_size(k_df)
                 kv_cache_num_tiles = 16
                 kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=kv_cache_input_cb,
-                    data_format=ttnn.bfloat8_b,
+                    data_format=k_df,
                     page_size=kv_cache_page_size,
                     tile=ttnn.TileDescriptor(TILE_32x32),
                 )
@@ -2505,7 +2506,7 @@ class AttentionBlock:
                 )
                 kv_cache_output_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=kv_cache_output_cb,
-                    data_format=ttnn.bfloat8_b,
+                    data_format=k_df,
                     page_size=kv_cache_page_size,
                     tile=ttnn.TileDescriptor(TILE_32x32),
                 )
@@ -2516,13 +2517,13 @@ class AttentionBlock:
                 )
                 kv_cache_intermed_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=kv_cache_intermed_cb,
-                    data_format=ttnn.bfloat16,
-                    page_size=TILE_32x32.get_tile_size(ttnn.bfloat16),
+                    data_format=untilize_df,
+                    page_size=TILE_32x32.get_tile_size(untilize_df),
                     tile=ttnn.TileDescriptor(TILE_32x32),
                 )
                 # One extra tile for syncing, can optimize to remove
                 kv_cache_intermed_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(ttnn.bfloat16),
+                    total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(untilize_df),
                     core_ranges=kv_cache_update_grid,
                     format_descriptors=[kv_cache_intermed_cb_format],
                 )
