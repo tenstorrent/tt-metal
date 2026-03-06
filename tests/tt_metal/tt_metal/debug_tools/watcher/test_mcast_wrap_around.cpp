@@ -44,7 +44,7 @@ void DoHostMcastWrite(ChipId chip_id, CoreCoord core_start, CoreCoord core_end) 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Down) {
     auto* device = this->devices_[0]->get_devices()[0];
     ChipId chip_id = device->id();
-    CoreCoord grid = device->logical_grid_size();
+    CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
         GTEST_SKIP() << "Need grid.y >= 2 for Y-wrap test";
@@ -61,7 +61,7 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Down) {
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Up) {
     auto* device = this->devices_[0]->get_devices()[0];
     ChipId chip_id = device->id();
-    CoreCoord grid = device->logical_grid_size();
+    CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
         GTEST_SKIP() << "Need grid.y >= 2 for Y-wrap test";
@@ -78,7 +78,7 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Up) {
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Right) {
     auto* device = this->devices_[0]->get_devices()[0];
     ChipId chip_id = device->id();
-    CoreCoord grid = device->logical_grid_size();
+    CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
         GTEST_SKIP() << "Need grid.x >= 2 for X-wrap test";
@@ -95,7 +95,7 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Right) {
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Left) {
     auto* device = this->devices_[0]->get_devices()[0];
     ChipId chip_id = device->id();
-    CoreCoord grid = device->logical_grid_size();
+    CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
         GTEST_SKIP() << "Need grid.x >= 2 for X-wrap test";
@@ -112,7 +112,7 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Left) {
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundXY_DownRight) {
     auto* device = this->devices_[0]->get_devices()[0];
     ChipId chip_id = device->id();
-    CoreCoord grid = device->logical_grid_size();
+    CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2 || grid.y < 2) {
         GTEST_SKIP() << "Need grid.x >= 2 and grid.y >= 2 for XY-wrap test";
@@ -129,7 +129,7 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundXY_DownRight) {
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundXY_UpLeft) {
     auto* device = this->devices_[0]->get_devices()[0];
     ChipId chip_id = device->id();
-    CoreCoord grid = device->logical_grid_size();
+    CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2 || grid.y < 2) {
         GTEST_SKIP() << "Need grid.x >= 2 and grid.y >= 2 for XY-wrap test";
