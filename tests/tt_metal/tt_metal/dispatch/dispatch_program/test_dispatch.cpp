@@ -17,13 +17,12 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -33,8 +32,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size
+// Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size, Eth, EthernetConfig
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -442,6 +442,29 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
                 this->RunProgram(mesh_device, workload);
             }
         }
+    }
+}
+
+TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
+    for (auto& device : devices_) {
+        auto& cq = device->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        auto grid_size = device->compute_with_storage_grid_size();
+        CoreRange cr({0, 0}, {grid_size.x, grid_size.y - 1});
+        CoreRangeSet cr_set({cr});
+
+        uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
+        CircularBufferConfig config =
+            CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
+        CreateCircularBuffer(program_, cr_set, config);
+
+        EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
     }
 }
 

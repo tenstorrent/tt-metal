@@ -78,7 +78,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
 
-    // If MLA is enabled, vDH is overridded by head_dim_v. Otherwise, vDH is same as DH.
+    // If MLA is enabled, vDH is overridden by head_dim_v. Otherwise, vDH is same as DH.
     uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
 
     uint32_t num_kv_heads = k_shape[1];
@@ -218,7 +218,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     //// recalculate num_cores_per_batch based on num_active_cores
     num_cores_per_batch = num_active_cores / B;
     // Calculate tree reduction parameters
-    uint32_t num_tree_reduction_rounds = 32 - __builtin_clz(num_cores_per_head);  // ceil(log2(num_cores_per_head))
+    uint32_t num_tree_reduction_rounds =
+        (num_cores_per_head <= 1) ? 0 : (32 - __builtin_clz(num_cores_per_head - 1));  // ceil(log2(num_cores_per_head))
     log_debug(tt::LogOp, "Tree reduction enabled: num_tree_reduction_rounds: {}", num_tree_reduction_rounds);
 
     TT_FATAL(
@@ -307,7 +308,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
 
-    // If using dyanmic chunk size, set it to some max number of tiles (less than DST for now)
+    // If using dynamic chunk size, set it to some max number of tiles (less than DST for now)
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t max_dynamic_chunk_size = dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;

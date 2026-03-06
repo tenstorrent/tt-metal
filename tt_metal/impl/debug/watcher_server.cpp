@@ -19,8 +19,10 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#include <fmt/core.h>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include "core_coord.hpp"
 #include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -118,7 +120,8 @@ void WatcherServer::Impl::attach_devices() {
         for (ChipId device_id : all_devices) {
             device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
             log_info(LogLLRuntime, "Watcher attached device {}", device_id);
-            fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
+            fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
+            fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
 
         // Since dma library is not thread-safe, disable it when watcher runs.
@@ -145,14 +148,6 @@ void WatcherServer::Impl::detach_devices() {
     }
 
     if (server_thread_) {
-        // Let one full watcher dump happen so we can catch anything between the last scheduled dump and teardown.
-        // Don't do this in test mode, to keep the tests running quickly.
-        if (!MetalContext::instance().rtoptions().get_test_mode_enabled() and !server_killed_due_to_error_) {
-            int target_count = dump_count() + 1;
-            while (dump_count() < target_count) {
-                ;
-            }
-        }
         // Signal the server thread to finish
         stop_server_ = true;
         stop_server_cv_.notify_all();
@@ -282,7 +277,15 @@ void WatcherServer::Impl::create_log_file() {
 
     fprintf(f, "At %.3lfs starting\n", get_elapsed_secs());
     fprintf(f, "Legend:\n");
-    fprintf(f, "\tComma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2\n");
+
+    // Get processor info from shared helper
+    auto tensix_info = get_enable_symbols_info(HalProgrammableCoreType::TENSIX);
+
+    fprintf(
+        f,
+        "\tComma separated list specifies waypoint for %s\n",
+        fmt::format("{}", fmt::join(tensix_info.processor_names, ", ")).c_str());
+    fprintf(f, "\t%s is main processor, others are subordinates\n", tensix_info.main_processor.c_str());
     fprintf(f, "\tI=initialization sequence\n");
     fprintf(f, "\tW=wait (top of spin loop)\n");
     fprintf(f, "\tR=run (entering kernel)\n");
@@ -294,10 +297,12 @@ void WatcherServer::Impl::create_log_file() {
     fprintf(f, "\t\tNWD is \"noc write done\"\n");
     fprintf(
         f,
-        "\trmsg(brisc host run message): D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
-        "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg(subordinate run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
-    fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
+        "\trmsg(%s host run message): D/H device/host dispatch; NOC ID; I/G/D init/go/done; | separator; "
+        "enable flags %s\n",
+        tensix_info.main_processor.c_str(),
+        tensix_info.enable_legend.c_str());
+    fprintf(f, "\tsmsg(subordinate run message): I/G/D for subordinate processors\n");
+    fprintf(f, "\tk_ids: kernel IDs per processor (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
 
@@ -518,11 +523,6 @@ void WatcherServer::Impl::poll_watcher_data() {
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
-        std::unique_lock<std::mutex> lock(watch_mutex_);
-        if (stop_server_cv_.wait_for(lock, sleep_duration, [&] { return stop_server_.load(); })) {
-            break;
-        }
-
         fprintf(logfile_, "-----\n");
         fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
 
@@ -544,6 +544,23 @@ void WatcherServer::Impl::poll_watcher_data() {
         fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
         fflush(logfile_);
         dump_count_++;
+
+        // Wait for the interval, but check stop flag frequently to exit early
+        constexpr auto poll_interval = std::chrono::milliseconds(100);
+        auto remaining = sleep_duration;
+        while (remaining > std::chrono::milliseconds(0)) {
+            auto wait_time = std::min(remaining, poll_interval);
+            std::unique_lock<std::mutex> lock(watch_mutex_);
+            // wait_for with predicate returns true if stop requested, false on timeout
+            // Only decrement remaining on timeout (predicate handles spurious wakeups internally)
+            if (stop_server_cv_.wait_for(lock, wait_time, [&] { return stop_server_.load(); })) {
+                break;
+            }
+            remaining -= wait_time;
+        }
+        if (stop_server_.load()) {
+            break;
+        }
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");

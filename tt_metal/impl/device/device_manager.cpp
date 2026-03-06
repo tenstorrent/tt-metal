@@ -137,7 +137,7 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
     uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     constexpr uint32_t max_num_procs_per_device = 2;
     // When using multiple command queues, assign separate CPU cores to worker and completion queue reader threads,
-    // if enough processors exist on host. Atleast one core is given to the main thread.
+    // if enough processors exist on host. At least one core is given to the main thread.
     bool separate_procs_for_worker_and_reader =
         (num_hw_cqs > 1) && (max_num_procs_per_device * device_ids.size() <= num_online_processors - 1);
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map = {};
@@ -693,11 +693,19 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     // Order matters
-    initializers_[DispatchKernelInitializer::key]->teardown();
-    initializers_[FabricFirmwareInitializer::key]->teardown();
-    initializers_[ProfilerInitializer::key]->teardown();
-    initializers_[CommandQueueInitializer::key]->teardown();
+    TT_ASSERT(init_done_.contains(DispatchKernelInitializer::key));
+    initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
 
+    TT_ASSERT(init_done_.contains(FabricFirmwareInitializer::key));
+    initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+
+    TT_ASSERT(init_done_.contains(ProfilerInitializer::key));
+    initializers_[ProfilerInitializer::key]->teardown(init_done_);
+
+    TT_ASSERT(init_done_.contains(CommandQueueInitializer::key));
+    initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+
+    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
     initializers_[DispatchKernelInitializer::key]->post_teardown();
     initializers_[FabricFirmwareInitializer::key]->post_teardown();
     initializers_[ProfilerInitializer::key]->post_teardown();
@@ -723,6 +731,7 @@ DeviceManager::~DeviceManager() {
     }
     this->devices_.clear();
     init_done_.clear();
+    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
     initializers_.clear();
     descriptor_.reset();
 }

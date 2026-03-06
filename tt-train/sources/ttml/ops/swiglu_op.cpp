@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/ttnn_all_includes.hpp>
+#include "swiglu_op.hpp"
+
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -11,6 +12,10 @@
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
@@ -37,7 +42,6 @@ autograd::TensorPtr swiglu(
         auto sigmoid_linear1 = ttnn::sigmoid(linear1);                            // sigmoid(x @ w1)
         auto swished = ttnn::multiply(linear1, sigmoid_linear1);                  // silu(x @ w1)
         auto gated = ttnn::multiply(swished, gate);                               // silu(x @ w1) * (x @ w3)
-        auto projected = ttnn_fixed::matmul(gated, w2->get_value());              // gated @ w2
 
         // Backward through final matmul: dL_dgated = dL_dout @ w2^T
         auto dL_dgated = ttnn_fixed::matmul(dL_dout, w2->get_value(), false, true);

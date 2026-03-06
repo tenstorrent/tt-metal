@@ -167,6 +167,9 @@ public:
     const std::optional<ChannelTrimmingOverrideMap>& get_channel_trimming_overrides() const {
         return channel_trimming_overrides_;
     }
+    const ChannelTrimmingGlobalOverrides& get_channel_trimming_global_overrides() const {
+        return channel_trimming_global_overrides_;
+    }
 
     // ============ Intermesh VC Configuration ============
     const IntermeshVCConfig& get_intermesh_vc_config() const { return intermesh_vc_config_; }
@@ -211,6 +214,9 @@ private:
 
     // Channel trimming overrides loaded from profile YAML (if specified)
     std::optional<ChannelTrimmingOverrideMap> channel_trimming_overrides_;
+
+    // Global channel trimming overrides loaded from override YAML (if specified)
+    ChannelTrimmingGlobalOverrides channel_trimming_global_overrides_;
 
     IntermeshVCConfig intermesh_vc_config_;
 

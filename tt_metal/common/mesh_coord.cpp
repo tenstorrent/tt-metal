@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <boost/move/utility_core.hpp>
+#include <fmt/format.h>
 #include <mesh_coord.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -660,3 +662,49 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_s
 }
 
 }  // namespace tt::tt_metal::distributed
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshShape& shape) {
+    std::string result = "MeshShape([";
+    for (size_t i = 0; i < shape.dims(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += std::to_string(shape[i]);
+    }
+    result += "])";
+    return result;
+}
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    std::string result = "MeshCoordinate([";
+    for (size_t i = 0; i < coord.dims(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += std::to_string(coord[i]);
+    }
+    result += "])";
+    return result;
+}
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoordinateRange& range) {
+    return fmt::format(
+        "MeshCoordinateRange(start={}, end={})",
+        ttsl::fmt_detail::to_string(range.start_coord()),
+        ttsl::fmt_detail::to_string(range.end_coord()));
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinate>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRange>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRangeSet>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
+}

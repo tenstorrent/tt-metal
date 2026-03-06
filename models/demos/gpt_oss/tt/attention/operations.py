@@ -132,7 +132,9 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         Tensor after allreduce (if TP > 1) or original tensor
     """
     if mesh_config.tp > 1:
-        tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
+        tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
+        tensor.deallocate(True)
+        tensor = tensor_allreduced
 
         # Remove padding added in weights.py for tile-aligned CCL operations.
         # If local_hidden was padded (e.g., 360 -> 384), we need to slice back to original hidden_size.
@@ -142,12 +144,14 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
             # Slice from padded_hidden back to hidden_size on the last dimension.
             # Works for both decode [1, 1, batch, padded_hidden] and prefill [1, batch, seq_len, padded_hidden].
             shape = tensor.shape
-            tensor = ttnn.slice(
+            tensor_sliced = ttnn.slice(
                 tensor,
                 starts=[0, 0, 0, 0],
                 ends=[shape[0], shape[1], shape[2], hidden_size],
                 steps=[1, 1, 1, 1],
             )
+            tensor.deallocate(True)
+            tensor = tensor_sliced
     return tensor
 
 

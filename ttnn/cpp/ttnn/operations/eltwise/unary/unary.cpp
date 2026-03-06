@@ -125,6 +125,7 @@ template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
 template struct ExecuteUnary<UnaryOpType::CBRT>;
+template struct ExecuteUnary<UnaryOpType::LGAMMA>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -336,6 +337,20 @@ Tensor Softplus::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
+}
+
+// xIELU (Expanded Integral of the Exponential Linear Unit)
+// With beta = 0.5 and eps = -1e-6:
+//     x > 0 :  alpha_p * x^2 + beta * x
+//     x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+Tensor Xielu::invoke(
+    const Tensor& input,
+    const float alpha_p,
+    const float alpha_n,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}}, memory_config, optional_output_tensor);
 }
 
 // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)

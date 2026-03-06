@@ -37,6 +37,10 @@
 
 enum class AddressableCoreType : uint8_t;
 
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
 namespace tt::tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
@@ -87,7 +91,7 @@ static constexpr int MAX_PROCESSOR_TYPES_COUNT = 24;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
-// of a given progammable core to start FW.
+// of a given programmable core to start FW.
 // fw_launch_addr_value will be a jump instruction to FW or the address of FW
 struct HalJitBuildConfig {
     DeviceAddr fw_base_addr;
@@ -112,6 +116,13 @@ enum class FWMailboxMsg : uint8_t {
     // Execute function from the core
     // arg0: L1 addr of function, arg1: unused, arg2: unused
     ETH_MSG_RELEASE_CORE,
+    // Re-initialize the link including the MAC/PCS level
+    // arg0: no of attempts, arg1: reinit_option, arg2: unused
+    // Use reinit_option 2 to reinit MAC + SERDES from reset
+    ETH_MSG_PORT_REINIT_MACPCS,
+    // Bring the port up or down
+    // arg0: 1 = link up, 2 = link down, arg1: unused, arg2: unused
+    ETH_MSG_PORT_ACTION,
     // Heartbeat counter
     HEARTBEAT,
     // Retrain Count
@@ -247,6 +258,7 @@ public:
         HalProgrammableCoreType core_type;
         HalProcessorClassType processor_class;
         uint32_t processor_id;
+        const llrt::RunTimeOptions& rtoptions;
     };
     virtual ~HalJitBuildQueryInterface() = default;
     // Returns a list of objects to be linked; these were compiled offline.

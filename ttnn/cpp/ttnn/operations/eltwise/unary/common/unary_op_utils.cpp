@@ -59,6 +59,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
+        case UnaryOpType::XIELU: return "SFPU_OP_XIELU_INCLUDE";
         case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
@@ -95,6 +96,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -424,6 +426,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0),  // Pass reciprocal to avoid doing it on device
                     std::bit_cast<uint32_t>(param1))};
         }
+        case UnaryOpType::XIELU: {
+            TT_ASSERT(params.size() == 2, "Expected xielu to take 2 parameters (alpha_p, alpha_n)");
+            return {
+                "xielu_tile_init();",
+                fmt::format(
+                    "xielu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(params[1]))};
+        }
         case UnaryOpType::PRELU_SFPU: {
             return {
                 "prelu_tile_init();", fmt::format("prelu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
@@ -609,6 +621,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 case DataType::FLOAT32: data_format = "Float32"; break;
                 case DataType::BFLOAT16: data_format = "Float16_b"; break;
                 case DataType::BFLOAT8_B: data_format = "Bfp8_b"; break;
+                case DataType::BFLOAT4_B: data_format = "Bfp4_b"; break;
                 default: TT_THROW("Unsupported data format for logical not unary: {}", input_dtype);
             }
             return {
@@ -749,6 +762,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::LGAMMA:
         case UnaryOpType::MISH:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
@@ -863,6 +877,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS, {1.0f, 20.0f, 0.0f});  // beta=1, threshold=20, approx_mode=0
     }
+    if (name == "xielu") {
+        return UnaryWithParam(UnaryOpType::XIELU, {0.8f, 0.8f});  // alpha_p=0.8, alpha_n=0.8
+    }
     if (name == "selu") {
         return UnaryWithParam(UnaryOpType::SELU);
     }
@@ -961,6 +978,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::LGAMMA: return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
