@@ -218,7 +218,6 @@ def test_matmul_custom_compressed_clustered(device):
     import numpy as np
 
     M, K, N = 1, 7168, 32
-    num_cores = 1
     n_per_core = N
 
     torch.manual_seed(0)
@@ -296,7 +295,6 @@ def _run_matmul_interleaved_by_n(device, interleave_n, use_constexpr_unroll=True
     import numpy as np
 
     M, K, N = 1, 7168, 32
-    num_cores = 1
     n_per_core = N
 
     torch.manual_seed(0)
@@ -398,7 +396,6 @@ def test_matmul_custom_compressed_hybrid(device):
     import numpy as np
 
     M, K, N = 1, 7168, 32
-    num_cores = 1
     n_per_core = N
 
     torch.manual_seed(0)
