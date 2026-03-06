@@ -14,7 +14,10 @@ constexpr uint32_t cb_out = 16;
 constexpr uint32_t cb_tilized = 24;
 constexpr uint32_t cb_mean = 25;
 constexpr uint32_t cb_centered = 26;
+constexpr uint32_t cb_squared = 27;
+constexpr uint32_t cb_var_eps = 28;
 constexpr uint32_t cb_normed = 30;
+constexpr uint32_t cb_affine_out = 31;
 
 void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -41,14 +44,37 @@ void kernel_main() {
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-        // Phase 3: sub<COL> cb_tilized - cb_mean -> cb_centered
+        // Phase 3: sub<COL> cb_tilized - cb_mean -> cb_centered (pop cb_tilized after)
         compute_kernel_lib::sub<
             compute_kernel_lib::BroadcastDim::COL,
             compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
             compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
             cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
-        // Untilize centered to output
-        compute_kernel_lib::untilize<Wt, cb_centered, cb_out>(1);
+        // Phase 4: Square centered (WaitUpfrontNoPop so cb_centered persists for variance broadcast trick)
+        compute_kernel_lib::square<compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
+            cb_centered, cb_squared, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // Phase 5: Reduce variance - SUM with 1/W scaler
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_squared, cb_reduce_scaler, cb_var_eps, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+
+        // Stage 4 output: broadcast variance to full width using c - (c - var_bcast) = var_bcast
+        // sub<COL>(cb_centered, cb_var_eps) -> cb_normed = centered - var_bcast
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_centered, cb_var_eps, cb_normed, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // sub<NONE>(cb_centered, cb_normed) -> cb_affine_out = c - (c - var) = var_bcast
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_centered, cb_normed, cb_affine_out, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // Untilize to output
+        compute_kernel_lib::untilize<Wt, cb_affine_out, cb_out>(1);
     }
 }
