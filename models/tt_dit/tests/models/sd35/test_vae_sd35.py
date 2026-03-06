@@ -609,6 +609,11 @@ def test_sd35_vae_vae_decoder(
     dit_unit_test: bool,
 ):
     skip_invalid_submesh_shape(mesh_device, submesh_shape)
+    if tuple(mesh_device.shape) == (2, 4):
+        pytest.skip(
+            "T3K: sd35 VAE decoder triggers TT_FATAL in op_slicing (dram_slice_config.num_slices > max_num_slices). "
+            "See https://github.com/tenstorrent/tt-metal/issues/39317"
+        )
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = VaeDecoder(
         block_out_channels=block_out_channels,
