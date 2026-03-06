@@ -4,15 +4,14 @@
 
 #include "matmul_wo_nanobind.hpp"
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "matmul_wo.hpp"
 
 namespace ttnn::operations::experimental::deepseek::mla::detail {
 
 void bind_matmul_wo(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"matmul_wo", "ttnn.experimental.deepseek.mla.">(
         mod,
-        ttnn::experimental::matmul_wo,
         R"doc(
         Experimental, high-performance Matmul WO operation for DeepSeek.
 
@@ -22,13 +21,12 @@ void bind_matmul_wo(nb::module_& mod) {
             output_tensor: Output tensor (sharded)
             layer_id: The layer for which the Matmul WO operation is being performed
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("w_tensor"),
-            nb::arg("output_tensor"),
-            nb::arg("layer_id"),
-        });
+        &ttnn::experimental::deepseek::mla::matmul_wo,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("w_tensor"),
+        nb::arg("output_tensor"),
+        nb::arg("layer_id"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::mla::detail

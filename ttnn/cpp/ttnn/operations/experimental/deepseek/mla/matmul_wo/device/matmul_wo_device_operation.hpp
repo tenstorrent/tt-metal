@@ -36,7 +36,11 @@ struct MatmulWODeviceOperation {
 }  // namespace ttnn::operations::experimental::deepseek::mla
 
 namespace ttnn::prim {
-constexpr auto matmul_wo = ttnn::register_operation<
-    "ttnn::prim::matmul_wo",
-    ttnn::operations::experimental::deepseek::mla::MatmulWODeviceOperation>();
+
+ttnn::Tensor matmul_wo(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& w_tensor,
+    const ttnn::Tensor& output_tensor,
+    uint32_t layer_id);
+
 }  // namespace ttnn::prim

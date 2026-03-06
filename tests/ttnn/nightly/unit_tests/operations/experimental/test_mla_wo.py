@@ -227,7 +227,7 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for output
-    # Tensor shape: (M, N) -> Sharded across 8 cores
+    # Tensor shape: (M, N) -> Sharded across 7 collector cores
     # ------------------------------------------------------------------------
     output_shard_height = M
     output_shard_width = N // 7
@@ -296,7 +296,7 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
 
         ttnn.experimental.deepseek.mla.matmul_wo(
             tt_input,
-            w_tensor=tt_w[layer_id],
+            w_tensor=tt_w,
             output_tensor=tt_output,
             layer_id=layer_id,
         )

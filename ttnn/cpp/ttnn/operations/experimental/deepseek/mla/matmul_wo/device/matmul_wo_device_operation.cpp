@@ -41,3 +41,19 @@ MatmulWODeviceOperation::invoke(
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::mla
+
+namespace ttnn::prim {
+
+ttnn::Tensor matmul_wo(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& w_tensor,
+    const ttnn::Tensor& output_tensor,
+    uint32_t layer_id) {
+    using OperationType = ttnn::operations::experimental::deepseek::mla::MatmulWODeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{.layer_id = layer_id};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .w_tensor = w_tensor, .output_tensor = output_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::prim

@@ -5,9 +5,9 @@
 #include "matmul_wo.hpp"
 #include "device/matmul_wo_device_operation.hpp"
 
-namespace ttnn::operations::experimental::deepseek::mla {
+namespace ttnn::experimental::deepseek::mla {
 
-ttnn::Tensor ExecuteMatmulWO::invoke(
+ttnn::Tensor matmul_wo(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& w_tensor,
     const ttnn::Tensor& output_tensor,
@@ -15,4 +15,4 @@ ttnn::Tensor ExecuteMatmulWO::invoke(
     return ttnn::prim::matmul_wo(input_tensor, w_tensor, output_tensor, layer_id);
 }
 
-}  // namespace ttnn::operations::experimental::deepseek::mla
+}  // namespace ttnn::experimental::deepseek::mla
