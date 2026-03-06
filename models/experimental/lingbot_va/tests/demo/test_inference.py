@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 from models.experimental.lingbot_va.reference.model import WanTransformer3DModel
 from transformers import T5Tokenizer, T5EncoderModel

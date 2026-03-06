@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
 import math
 from copy import deepcopy
