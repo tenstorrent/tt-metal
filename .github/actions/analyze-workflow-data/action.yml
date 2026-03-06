@@ -34,6 +34,10 @@ inputs:
   last-success-timestamps-path:
     description: 'Path to JSON mapping workflow_name -> last success timestamp info (optional)'
     required: false
+  force-regression-workflow:
+    description: 'Force a stayed_failing workflow to be treated as a regression for auto-triage. Use the workflow run name, e.g. "apc nightly debug run with watcher". Supports substring matching.'
+    required: false
+    default: ''
 
 outputs:
   failed_workflows:

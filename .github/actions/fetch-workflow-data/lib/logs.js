@@ -17,9 +17,10 @@ const { execFileSync } = require('child_process');
  * @param {Set} cachedRunAttempts - Set of cached (run ID, attempt) tuples
  * @param {object} octokit - Octokit client
  * @param {object} context - GitHub Actions context
+ * @param {boolean} [restoreHadLogFailures=false] - If true, never skip download based on cache; artifact restore had failures
  * @returns {Promise<{annotationsIndexPath: string, gtestLogsIndexPath: string, otherLogsIndexPath: string}>}
  */
-async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotationsIndex, cachedGtestLogsIndex, cachedOtherLogsIndex, cachedRunAttempts, octokit, context) {
+async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotationsIndex, cachedGtestLogsIndex, cachedOtherLogsIndex, cachedRunAttempts, octokit, context, restoreHadLogFailures = false) {
   const owner = context.repo.owner;
   const repo = context.repo.repo;
 
@@ -193,12 +194,25 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
 
       // Skip if this exact (run ID, attempt) combination is already cached
       // Note: Different attempts of the same run ID need different logs/annotations
+      // IMPORTANT: Only skip when we actually HAVE the log/annotation data. If artifact
+      // restoration failed (restoreHadLogFailures), never trust cache - always re-download.
+      // Otherwise, only skip when we have index entries (annotations, gtest, or other logs).
       const targetRunIdStr = String(targetRun.id);
       const targetRunAttempt = targetRun.run_attempt || 1;
       const targetRunKey = `${targetRunIdStr}:${targetRunAttempt}`;
-      if (cachedRunAttempts.has(targetRunKey)) {
+      const hasAnnotations = annotationsIndex[targetRunIdStr];
+      const hasGtestLogs = gtestLogsIndex[targetRunIdStr];
+      const hasOtherLogs = otherLogsIndex[targetRunIdStr];
+      const hasCachedData = hasAnnotations || hasGtestLogs || hasOtherLogs;
+      const canSkip = !restoreHadLogFailures && cachedRunAttempts.has(targetRunKey) && hasCachedData;
+      if (canSkip) {
         core.info(`[LOGS] Skipping download for run ${targetRunIdStr} attempt ${targetRunAttempt} (workflow: ${name}) - already in cache`);
         continue;
+      }
+      if (restoreHadLogFailures) {
+        core.info(`[LOGS] Re-downloading run ${targetRunIdStr} (workflow: ${name}) - artifact restore had failures, not trusting cache`);
+      } else if (cachedRunAttempts.has(targetRunKey) && !hasCachedData) {
+        core.info(`[LOGS] Re-downloading run ${targetRunIdStr} (workflow: ${name}) - in cache but no log/annotation data (e.g. restore failed)`);
       }
 
       core.info(`[LOGS] Processing failing run ${targetRun.id} for workflow '${name}' (conclusion: ${targetRun.conclusion})`);

@@ -98,6 +98,7 @@ async function run() {
     let cachedOtherLogsIndex = {};
     let cachedCommits = [];
     let cachedLastSuccessTimestamps = {};
+    let restoreHadLogFailures = false;
     let annotationsIndexPath;
     let gtestLogsIndexPath;
     let otherLogsIndexPath;
@@ -116,6 +117,10 @@ async function run() {
         cachedOtherLogsIndex = restored.cachedOtherLogsIndex;
         cachedCommits = restored.cachedCommits;
         cachedLastSuccessTimestamps = restored.cachedLastSuccessTimestamps;
+        restoreHadLogFailures = restored.restoreHadLogFailures || false;
+        if (restoreHadLogFailures) {
+          core.info('[CACHE] Log/annotation restore had failures - will re-download for failing runs instead of trusting cache');
+        }
       } else {
         core.info('[CACHE] No previous aggregate run found, starting fresh');
       }
@@ -203,7 +208,8 @@ async function run() {
       cachedOtherLogsIndex,
       cachedRunAttempts,
       octokit,
-      github.context
+      github.context,
+      restoreHadLogFailures
     );
     annotationsIndexPath = annIndexPath;
     gtestLogsIndexPath = gtestIndexPath;
