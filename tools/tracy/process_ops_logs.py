@@ -458,7 +458,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
     EVENT_CORE_COORDS_IDX = 4
     PERF_COUNTER_ID = 9090
 
-    # Counter type enum from perf_counters.hpp (94 total counters)
+    # Counter type enum from perf_counters.hpp (IDs 0..94: 95 entries including UNDEF=0)
     COUNTER_TYPE_NAMES = {
         0: "UNDEF",
         # FPU Group (3)
