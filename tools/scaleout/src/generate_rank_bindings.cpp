@@ -275,6 +275,11 @@ TopologyMappingResult run_topology_mapping(
     config.strict_mode = true;
     config.disable_rank_bindings = true;  // Do not pass rank bindings at all
 
+    // Provide hostname_to_asics from PSD so same-host constraint is applied (all ASICs on a host map to one rank)
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[desc.host_name].insert(asic_id);
+    }
+
     // Set per-mesh validation modes based on mesh graph policy
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
