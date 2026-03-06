@@ -12,6 +12,9 @@ constexpr uint32_t cb_in = 0;
 constexpr uint32_t cb_reduce_scaler = 8;
 constexpr uint32_t cb_out = 16;
 constexpr uint32_t cb_tilized = 24;
+constexpr uint32_t cb_mean = 25;
+constexpr uint32_t cb_centered = 26;
+constexpr uint32_t cb_normed = 30;
 
 void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -26,14 +29,34 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_reduce_scaler, cb_out);
 
-    // Wait for constant CBs (reduce_scaler pushed by reader)
+    // Wait for constant CBs
     cb_wait_front(cb_reduce_scaler, 1);
 
     for (uint32_t tr = 0; tr < N; tr++) {
         // Phase 1: Tilize input (cb_in -> cb_tilized)
         compute_kernel_lib::tilize<cb_in, cb_tilized>(Wt, 1);
 
-        // Stage 1: passthrough — untilize directly (cb_tilized -> cb_out)
-        compute_kernel_lib::untilize<Wt, cb_tilized, cb_out>(1);
+        // Phase 2: Reduce mean - SUM with 1/W scaler (WaitUpfrontNoPop so cb_tilized persists)
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+
+        // Phase 3: sub<COL> cb_tilized - cb_mean -> cb_centered (cb_tilized persists via NoWaitNoPop)
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // Stage 2 output: x - (x - mean) = mean broadcast
+        // sub<NONE> cb_tilized - cb_centered -> cb_normed
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_tilized, cb_centered, cb_normed, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
+
+        // Untilize to output
+        compute_kernel_lib::untilize<Wt, cb_normed, cb_out>(1);
     }
 }
