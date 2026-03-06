@@ -299,6 +299,10 @@ def pytest_configure(config):
         "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
         "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
     )
+    config.addinivalue_line(
+        "markers",
+        "ci_fused_op: mark curated DeepSeek fused-op functional tests used by CI folder-based execution",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
