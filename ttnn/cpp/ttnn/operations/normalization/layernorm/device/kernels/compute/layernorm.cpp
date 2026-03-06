@@ -85,18 +85,12 @@ void kernel_main() {
     constexpr uint32_t cb_x = cb_in;
 #endif
 
-#ifdef FUSE_PRE_ADD
+#ifdef TILIZE_IN
+    binary_op_init_common(cb_in_rm, cb_in_rm, cb_in);
+#elif defined(FUSE_PRE_ADD)
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #elif defined(RMSNORM)
     binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
-#elif defined(TILIZE_IN)
-    // Initializes the MATH-PACK DST semaphore so that the first tilize_block's
-    // internal llk_math_wait_for_dest_available() does not deadlock.
-    // Must be called once at startup, BEFORE the ncht loop (not immediately before
-    // tilize_init — doing so puts the UNPACK into binary-AB mode with SRCA=cb_in,
-    // which tilize_init does not fully undo, causing tilize_block to read from
-    // cb_in instead of cb_in_rm and produce garbage output).
-    binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #else
     binary_op_init_common(cb_x, cb_scaler, cb_ex);
 #endif
@@ -113,7 +107,9 @@ void kernel_main() {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_cb<block_size>(cb_in_rm, cb_in, Wt);
         // Re-init binary ops after tilize hardware reconfiguration.
-#ifdef RMSNORM
+#ifdef FUSE_PRE_ADD
+        binary_op_init_common(cb_in, cb_inb, cb_x);
+#elif defined(RMSNORM)
         binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
 #else
         binary_op_init_common(cb_x, cb_scaler, cb_ex);
