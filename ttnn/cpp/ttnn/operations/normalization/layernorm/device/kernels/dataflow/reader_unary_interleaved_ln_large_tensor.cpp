@@ -212,6 +212,6 @@ void kernel_main() {
 #ifdef FUSE_BETA
             layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
 #endif
-        }
-    }
+        }  // wt loop
+    }  // ncht loop
 }
