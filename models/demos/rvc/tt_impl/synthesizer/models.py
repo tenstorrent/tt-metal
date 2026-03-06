@@ -22,6 +22,16 @@ from models.demos.rvc.tt_impl.synthesizer.modules import (
 )
 
 
+def ttnn_randn_fallback(shape, dtype, device):
+    # Fallback random generator using PyTorch, since TTNN's random generation is not available in the current version.
+    return ttnn.from_torch(
+        torch.randn(shape, dtype=torch.float32),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+
 def _interpolate_1d(
     x: ttnn.Tensor,
     scale_factor: int | float,
@@ -358,24 +368,14 @@ class SineGen:
 
         # Accumulate phase and add random initial offset per harmonic.
         phase = ttnn.cumsum(f0_harm / self.sampling_rate, dim=1)
-        rand_ini = torch.rand(f0_up.shape[0], self.harmonic_num + 1)
-        rand_ini[:, 0] = 0
-        rand_ini = ttnn.from_torch(
-            rand_ini.unsqueeze(1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+        rand_ini = ttnn.rand((f0_up.shape[0], self.harmonic_num + 1), dtype=ttnn.bfloat16, device=self.device)
         phase = phase + rand_ini
         sine_waves = ttnn.sin(2 * math.pi * phase) * self.sine_amp
 
         # Mix with noise based on voiced/unvoiced.
         noise_amp = uv * self.noise_std + ttnn.rsub(uv, 1) * self.sine_amp / 3
-        sine_waves = sine_waves * uv + noise_amp * ttnn.from_torch(
-            torch.randn(tuple(sine_waves.shape)),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
+        sine_waves = sine_waves + noise_amp * ttnn_randn_fallback(
+            tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device
         )
         return sine_waves
 
@@ -597,13 +597,12 @@ class SynthesizerTrnMsNSF:
         g = self.emb_g(speaker_id)
         g = ttnn.reshape(g, (g.shape[0], 1, g.shape[-1]))
         m_p, logs_p = self.enc_p(phone, pitch)
-        r = ttnn.from_torch(
-            torch.randn(tuple(m_p.shape)),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
+        z_p = (
+            m_p
+            + ttnn.exp(logs_p)
+            * ttnn_randn_fallback(tuple(m_p.shape), dtype=ttnn.bfloat16, device=self.device)
+            * 0.66666
         )
-        z_p = m_p + ttnn.exp(logs_p) * r * 0.66666
         z = self.flow(z_p, g=g)
         return self.dec(z, nsff0, g=g)
 
@@ -665,12 +664,11 @@ class SynthesizerTrnMsNSF_nono:
         g = self.emb_g(speaker_id)
         g = ttnn.reshape(g, (g.shape[0], 1, g.shape[-1]))
         m_p, logs_p = self.enc_p(phone, None)
-        r = ttnn.from_torch(
-            torch.randn(tuple(m_p.shape)),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
+        z_p = (
+            m_p
+            + ttnn.exp(logs_p)
+            * ttnn_randn_fallback(tuple(m_p.shape), dtype=ttnn.bfloat16, device=self.device)
+            * 0.66666
         )
-        z_p = m_p + ttnn.exp(logs_p) * r * 0.66666
         z = self.flow(z_p, g=g)
         return self.dec(z, g=g)
