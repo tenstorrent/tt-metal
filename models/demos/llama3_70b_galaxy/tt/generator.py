@@ -231,7 +231,9 @@ class Generator(WarmupForwardMixin):
                         f"Skipping warmup step for prefill sequence length {warmup_sequence_length}, batch size: {batch}"
                     )
                     continue
-                logger.info(f"Running warmup prefill for sequence length: {warmup_sequence_length}, batch size: {batch}")
+                logger.info(
+                    f"Running warmup prefill for sequence length: {warmup_sequence_length}, batch size: {batch}"
+                )
                 if batch == 32:
                     current_batch = page_table.shape[0]
                     if current_batch < batch:
@@ -285,8 +287,8 @@ class Generator(WarmupForwardMixin):
             num_blocks_in_seq(num_cached + sl, block_size) for sl in warmup_sequence_lengths
         )
 
-        # Use distinct sequential block IDs (0, 1, 2, ...) instead of all-zeros.
-        page_table_phase2 = torch.arange(num_blocks_for_prefix_cache, dtype=torch.int32).unsqueeze(0)
+        # Use all-zero block IDs for phase-2 warmup page table.
+        page_table_phase2 = torch.zeros(1, num_blocks_for_prefix_cache, dtype=torch.int32)
 
         for supported_length in warmup_sequence_lengths:
             # Warmup records all sp1 traces regardless of the inference heuristic.
