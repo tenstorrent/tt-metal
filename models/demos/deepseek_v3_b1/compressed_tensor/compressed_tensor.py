@@ -144,7 +144,8 @@ class CompressedTensor:
     Device-side usage:
         The LLK kernel reads the packed data bytes and uses the per-tile assignment
         to reconfigure the unpacker format on each tile. See llk_unpack_compressed.h
-        and llk_custom_mm_compressed.h for the device-side APIs.
+        and llk_custom_mm_compressed_{constexpr,runtime}.h for the
+        device-side APIs.
 
     Unpacking flow (to_torch):
         Reverses the packing: reads packed bytes from device, iterates tiles in
