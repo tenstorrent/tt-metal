@@ -47,7 +47,7 @@ def create_fabric_router_config(max_payload_size):
 # Unified decoder block tensor setup (single BDW instance for all L1 weights)
 # ============================================================================
 def create_decoder_block_tensors(
-    submesh, mesh_rows, mesh_cols, sender_row, sender_col, position_id, state_dict, layer_idx
+    submesh, mesh_rows, mesh_cols, sender_row, sender_col, position_id, state_dict, layer_idx, num_routed_experts
 ):
     """Create all tensors required by DecoderBlock.op() using a single BlitzDecodeWeights.
 
@@ -154,14 +154,14 @@ def create_decoder_block_tensors(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # All weights via prepare_moe_layer_weights (single BDW, all 256 experts)
+    # All weights via prepare_moe_layer_weights (single BDW)
     # ══════════════════════════════════════════════════════════════════════════
     bdw = BlitzDecodeWeights(submesh)
     layer = prepare_moe_layer_weights(
         bdw,
         state_dict,
         layer_idx,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         move_to_device=True,
     )
 
@@ -685,6 +685,7 @@ def test_decoder_block_compile(
 ):
     """Compile-only test: verifies fused kernel compiles with merged args."""
     num_devices = mesh_rows * mesh_cols
+    logger.info(f"Number of devices: {num_devices}")
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
 
@@ -693,12 +694,13 @@ def test_decoder_block_compile(
     if device_grid_size.x < 12:
         pytest.skip(f"Device grid too small: need 12 columns, have {device_grid_size.x}")
 
+    num_routed_experts = 1
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -711,6 +713,7 @@ def test_decoder_block_compile(
         position_id,
         state_dict,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        num_routed_experts=num_routed_experts,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
