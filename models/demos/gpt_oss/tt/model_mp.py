@@ -482,7 +482,6 @@ class ModelWithMP:
         # padded_vocab_size before column-parallel sharding, so each device's
         # matmul output is already tile-aligned (per_device_padded width).
         # logger.info("Synchronzing last submesh")
-        ttnn.synchronize_device(self.mp_submeshes[self.last_submesh_id])
         return logits
 
     def ttnn_decode_forward(

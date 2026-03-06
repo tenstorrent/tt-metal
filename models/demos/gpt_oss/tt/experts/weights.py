@@ -137,11 +137,12 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Handle row-parallel bias (must not be replicated across TP devices)
-    if mesh_config.decode.tp > 1:
-        down_proj_bias = torch.cat(
-            [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_config.decode.tp - 1), dim=-1
-        )
+    if down_proj_bias is not None:
+        # Handle row-parallel bias (must not be replicated across TP devices)
+        if mesh_config.decode.tp > 1:
+            down_proj_bias = torch.cat(
+                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_config.decode.tp - 1), dim=-1
+            )
 
     down_proj_bias_tt = ttnn.as_tensor(
         down_proj_bias,

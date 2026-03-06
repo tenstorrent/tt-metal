@@ -112,13 +112,7 @@ class MeshConfig:
     # Clean semantic helpers (all use unified shard_mapper)
     def column_parallel(self, mesh_device):
         """Column-parallel weights (feature dimension sharding)"""
-        if self.mp_enabled:
-            return self.shard_mapper(mesh_device, mesh_dims=(None, None))
-        column_shard_mapper = self.shard_mapper(mesh_device, tensor_dim=-1)
-        print(
-            f"Column parallel mapper for mesh {mesh_device.shape} with TP axis {self.tp_axis}, MP {self.mp_enabled}, {self.mp}: {column_shard_mapper}"
-        )
-        return column_shard_mapper
+        return self.shard_mapper(mesh_device, tensor_dim=-1)
 
     def row_parallel(self, mesh_device):
         """Row-parallel weights (sequence/batch dimension sharding)"""

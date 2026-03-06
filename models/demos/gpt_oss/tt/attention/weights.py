@@ -49,6 +49,7 @@ def load_attention_weights(
     Returns:
         AttentionWeights container with all loaded weights
     """
+    o_proj_cache_suffix = f"_padded_tp{mesh_config.tp}" if mesh_config.tp > 1 else ""
 
     if state_dict:
         # Extract projection weights from state dict
@@ -126,9 +127,7 @@ def load_attention_weights(
         decode_sinks /= config.scaling
 
         # Use unique cache key when padding is applied
-        o_proj_cache_suffix = f"_padded{padded_local_hidden}" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
     else:
-        o_proj_cache_suffix = ""
         q_proj_weight = None
         k_proj_weight = None
         v_proj_weight = None

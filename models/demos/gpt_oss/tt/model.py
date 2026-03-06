@@ -137,8 +137,11 @@ class Model:
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
-        embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-        embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        if state_dict:
+            embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
+            embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        else:
+            embedding_weight = None
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
@@ -181,11 +184,16 @@ class Model:
         sampling_splits = mesh_device.shape[1]
         per_device_padded = (((self.vocab_size + sampling_splits - 1) // sampling_splits + 31) // 32) * 32
         padded_vocab_size = per_device_padded * sampling_splits
-        lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
-        if lm_head_weight.shape[1] < padded_vocab_size:
-            lm_head_weight = torch.nn.functional.pad(
-                lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
-            )
+
+        if state_dict:
+            lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
+            if lm_head_weight.shape[1] < padded_vocab_size:
+                lm_head_weight = torch.nn.functional.pad(
+                    lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
+                )
+        else:
+            lm_head_weight = None
+
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             device=mesh_device,

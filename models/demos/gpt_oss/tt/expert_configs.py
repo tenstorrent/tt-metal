@@ -20,13 +20,13 @@ class GPTOSSProgramConfig(ProgramConfig):
     decode_gate_up_cores: tuple[int, int] = (3, 5)
     decode_gate_up_in0_block_w: int = 30
     decode_down_cores: tuple[int, int] = (5, 6)
-    decode_down_in0_block_w: int = 9
+    decode_down_in0_block_w: int = 6
 
     # Prefill
     prefill_gate_up_cores: tuple[int, int] = (3, 5)
     prefill_gate_up_in0_block_w: int = 30
     prefill_down_cores: tuple[int, int] = (5, 6)
-    prefill_down_in0_block_w: int = 9
+    prefill_down_in0_block_w: int = 6
 
     # Memory
     sequence_chunk_size: int = 4 * 1024

@@ -56,10 +56,11 @@ def decode_forward(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
     ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    num_cores = min(mesh_device.core_grid.x * mesh_device.core_grid.y, xqkv_fused.shape[-1] // 32)
     xqkv_fused_memory_config = xqkv_fused.memory_config().with_shard_spec(
         ttnn.ShardSpec(
-            ttnn.num_cores_to_corerangeset(40, mesh_device.compute_with_storage_grid_size(), row_wise=True),
-            (32, xqkv_fused.shape[-1] // 40),
+            ttnn.num_cores_to_corerangeset(num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True),
+            (32, xqkv_fused.shape[-1] // num_cores),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
     )
