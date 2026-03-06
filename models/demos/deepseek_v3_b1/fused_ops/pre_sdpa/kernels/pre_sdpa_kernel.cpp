@@ -809,7 +809,7 @@ if constexpr (!Core::skip_ccl) {
 #if defined(COMPILE_FOR_BRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
 #elif defined(COMPILE_FOR_NCRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(14);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(6);
 #elif defined(COMPILE_FOR_TRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(7);
 #endif
