@@ -1,0 +1,109 @@
+{
+  "num_devices": 32,
+  "num_experts_per_device": 4,
+  "hidden_size": 2880,
+  "num_experts_per_tok": 2,
+  "num_dispatch_devices": 4,
+  "backend": "gptoss",
+  "moe_experts": {
+    "mesh_device": {
+      "mesh_shape": [
+        4,
+        8
+      ]
+    },
+    "w1_experts": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "L1"
+    },
+    "w2_experts": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "L1"
+    },
+    "w3_experts": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "L1"
+    },
+    "mul_experts": {
+      "memory_config": "L1",
+      "input_tensor_a_activations": [
+        "UnaryOpType.SILU"
+      ]
+    },
+    "input_memory_config": "L1",
+    "output_memory_config": "L1",
+    "num_experts_per_device": 4,
+    "router_state_dict": {
+      "weight": "<random tensor shape=[128, 2880]>",
+      "bias": "<random tensor shape=[128]>"
+    }
+  },
+  "use_throughput_experts": true,
+  "input_memory_config": "DRAM",
+  "output_memory_config": "DRAM",
+  "unified_expert_config": {
+    "hidden_size": 2880,
+    "intermediate_size": 11520,
+    "num_experts_per_device": 4,
+    "activation": {
+      "activation_type": "clamped_swiglu",
+      "swiglu_alpha": 1.702,
+      "swiglu_limit": 7.0,
+      "memory_config": "L1"
+    },
+    "use_fused_gate_up": false,
+    "weight_dtype": "BFLOAT4_B",
+    "input_memory_config": "L1",
+    "output_memory_config": "L1",
+    "use_all_to_all": true,
+    "dispatch_config": {
+      "cluster_axis": 0,
+      "memory_config": "L1"
+    },
+    "combine_config": {
+      "cluster_axis": 0,
+      "memory_config": "L1"
+    },
+    "output_shape_format": "gptoss",
+    "use_experimental_all_reduce": false,
+    "all_reduce_num_links": 4,
+    "all_reduce_cluster_axis": 1,
+    "num_experts_per_tok": 2
+  },
+  "intermediate_size": 11520,
+  "use_fused_gate_up": false,
+  "mode": "decode",
+  "batch_size": 32,
+  "sequence_length": 1,
+  "model_type": "phimoe",
+  "total_experts": 128,
+  "activation": {
+    "type": "clamped_swiglu",
+    "swiglu_alpha": 1.702,
+    "swiglu_limit": 7.0
+  },
+  "weight_dtype": "bfloat8_b",
+  "activation_dtype": "bfloat16",
+  "enable_chunking": false
+}

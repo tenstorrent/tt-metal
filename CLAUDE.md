@@ -64,3 +64,22 @@ rm -rf $DEEPSEEK_V3_CACHE
 - Use test-specific cache directories to prevent cache conflicts between tests
 - Always create the cache directory with `mkdir -p` before running tests
 - Consider cleaning up cache directories after tests complete to save disk space
+
+## Device Reset
+
+If tests hang or devices get stuck with dispatch cores still running:
+```bash
+# Kill hanging pytest processes
+pkill -9 pytest
+
+# Reset the Galaxy devices
+source python_env/bin/activate
+tt-smi -glx_reset
+
+# The reset may take a few seconds to complete
+```
+
+This is especially useful when you see errors like:
+- "active ethernet dispatch core detected as still running"
+- "Read unexpected run_mailbox value"
+- Tests hanging during device initialization

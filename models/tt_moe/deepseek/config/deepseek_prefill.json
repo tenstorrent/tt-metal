@@ -1,0 +1,280 @@
+{
+  "num_devices": 32,
+  "num_experts_per_device": 8,
+  "hidden_size": 7168,
+  "num_experts_per_tok": 8,
+  "num_dispatch_devices": 4,
+  "backend": "deepseek",
+  "moe_gate": {
+    "gate_proj": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "DRAM"
+    },
+    "add_score_correction_bias": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "DRAM",
+      "dtype": "BFLOAT16"
+    },
+    "multiply_expert_scale": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "DRAM",
+      "dtype": "BFLOAT16"
+    },
+    "reshape_scores": {
+      "shape": [
+        1,
+        -1,
+        8,
+        32
+      ]
+    },
+    "topk_within_expert_groups": {
+      "k": 2,
+      "dim": -1,
+      "largest": true,
+      "sorted": true
+    },
+    "topk_expert_groups": {
+      "k": 3,
+      "dim": -1,
+      "largest": true,
+      "sorted": true
+    },
+    "scatter_top_expert_groups": {
+      "input": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "dim": 3,
+      "src": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      }
+    },
+    "reshape_group_mask": {
+      "shape": [
+        1,
+        -1,
+        8,
+        1
+      ]
+    },
+    "reshape_active_experts": {
+      "shape": [
+        1,
+        1,
+        -1,
+        256
+      ]
+    },
+    "mul_scores_with_mask": {
+      "memory_config": "DRAM"
+    },
+    "topk_experts": {
+      "k": 8,
+      "dim": -1,
+      "largest": true,
+      "sorted": true
+    },
+    "topk_fallback": false,
+    "topk_fallback_config": {
+      "mesh_device": {
+        "mesh_shape": [
+          4,
+          8
+        ]
+      },
+      "dtype": "BFLOAT16",
+      "memory_config": "DRAM",
+      "use_bitonic_sort": true
+    },
+    "linear_fallback": false,
+    "linear_fallback_config": {
+      "mesh_device": {
+        "mesh_shape": [
+          4,
+          8
+        ]
+      },
+      "dtype": "BFLOAT16"
+    },
+    "mesh_device": {
+      "mesh_shape": [
+        4,
+        8
+      ]
+    },
+    "input_memory_config": "DRAM",
+    "output_memory_config": "DRAM"
+  },
+  "all_to_all_dispatch_output_memory_config": "DRAM",
+  "all_to_all_dispatch_metadata_memory_config": "DRAM",
+  "activations_repeat": {
+    "repeat_dims": [
+      1,
+      8,
+      1,
+      1
+    ]
+  },
+  "moe_experts": {
+    "mesh_device": {
+      "mesh_shape": [
+        4,
+        8
+      ]
+    },
+    "w1_experts": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "DRAM"
+    },
+    "w2_experts": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "DRAM"
+    },
+    "w3_experts": {
+      "input_tensor_b": {
+        "mesh_device": {
+          "mesh_shape": [
+            4,
+            8
+          ]
+        }
+      },
+      "memory_config": "DRAM"
+    },
+    "mul_experts": {
+      "memory_config": "DRAM",
+      "input_tensor_a_activations": [
+        "UnaryOpType.SILU"
+      ]
+    },
+    "input_memory_config": "DRAM",
+    "output_memory_config": "DRAM",
+    "num_experts_per_device": 8
+  },
+  "all_to_all_combine_output_memory_config": "DRAM",
+  "topk_weights_repeat": {
+    "repeat_dims": [
+      7168,
+      1,
+      1,
+      1
+    ]
+  },
+  "mul_experts_output_with_weights": {
+    "memory_config": "DRAM"
+  },
+  "input_memory_config": "DRAM",
+  "output_memory_config": "DRAM",
+  "all_to_all_dispatch": {
+    "cluster_axis": 0,
+    "memory_config": "DRAM",
+    "topology": "Linear"
+  },
+  "all_to_all_combine": {
+    "cluster_axis": 0,
+    "memory_config": "DRAM",
+    "topology": "Linear"
+  },
+  "final_output_reduce_scatter": {
+    "dim": 3,
+    "num_links": 4,
+    "memory_config": "DRAM",
+    "topology": "Linear",
+    "cluster_axis": 1
+  },
+  "revert_tp": {
+    "dim": -1,
+    "cluster_axis": 1,
+    "mesh_device": {
+      "mesh_shape": [
+        4,
+        8
+      ]
+    },
+    "topology": "Linear",
+    "num_links": 4,
+    "memory_config": "DRAM"
+  },
+  "unified_expert_config": {
+    "hidden_size": 7168,
+    "intermediate_size": 2048,
+    "num_experts_per_device": 8,
+    "activation": {
+      "activation_type": "silu",
+      "swiglu_alpha": 1.702,
+      "swiglu_limit": 7.0,
+      "memory_config": "DRAM"
+    },
+    "use_fused_gate_up": false,
+    "weight_dtype": "BFLOAT8_B",
+    "input_memory_config": "DRAM",
+    "output_memory_config": "DRAM",
+    "use_all_to_all": false,
+    "output_shape_format": "deepseek",
+    "use_experimental_all_reduce": false,
+    "all_reduce_num_links": 4,
+    "all_reduce_cluster_axis": 1,
+    "num_experts_per_tok": 8
+  },
+  "moe_intermediate_size": 2048,
+  "moe_chunk_size": 512,
+  "mode": "prefill",
+  "batch_size": 1,
+  "sequence_length": 2048,
+  "model_type": "deepseek_v3",
+  "total_experts": 256,
+  "prefill_chunk_size": 16384,
+  "activation": {
+    "type": "swiglu",
+    "swiglu_alpha": 1.0,
+    "swiglu_limit": Infinity
+  },
+  "enable_chunking": true,
+  "chunk_size": 512,
+  "chunk_dim": 2
+}

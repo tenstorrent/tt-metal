@@ -41,7 +41,7 @@ def reference_model(hf_config):
     return DeepseekV3MoE(hf_config).eval()
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(180)  # Reduced timeout for faster debugging
 @pytest.mark.parametrize(
     "backend,device_params",
     [

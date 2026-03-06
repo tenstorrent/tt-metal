@@ -165,15 +165,56 @@ MoEUnifiedConfig(
 )
 ```
 
+## JSON Configuration Support (2026-03-06)
+
+### ✅ Implemented JSON Config Export/Import System
+- **Created**: `models/tt_moe/config/expert_configs.py` - Unified expert configuration classes
+- **Created**: `models/tt_moe/utils/json_export.py` - JSON serialization utilities for TTNN objects
+- **Created**: `models/tt_moe/export_configs.py` - Script to generate JSON config files
+- **Generated**: JSON config files for both backends in:
+  - `models/tt_moe/deepseek/config/` - DeepSeek configurations
+  - `models/tt_moe/gpt-oss/config/` - GPT-OSS configurations
+
+### ✅ Fixed GPT-OSS Test Issues
+1. **Weight Loading Issue**:
+   - GPT-OSS weights are **interleaved**, not concatenated
+   - Reverted incorrect change that tried to split weights as concatenated
+   - Correct: `gate_up[..., ::2]` and `gate_up[..., 1::2]`
+
+2. **Fabric Configuration**:
+   - GPT-OSS requires `FABRIC_1D_RING` for all_to_all operations
+   - DeepSeek uses `FABRIC_1D`
+   - Fixed test parametrization to use correct fabric for each backend
+
+3. **Galaxy Device Reset**:
+   - Added reminder to use `tt-smi -glx_reset` when tests hang
+   - Successfully resolved hanging tests by resetting devices
+
+## Latest Test Results (2026-03-06)
+
+### DeepSeek Backend ✅ COMPLETE
+| Mode | Status | PCC | Notes |
+|------|--------|-----|-------|
+| **Decode** | ✅ PASSED | 0.9909 | Stable with JSON config |
+| **Prefill** | ✅ PASSED | 0.9913 | Stable with JSON config |
+
+### GPT-OSS Backend ✅ COMPLETE
+| Mode | Status | PCC | Notes |
+|------|--------|-----|-------|
+| **Decode** | ✅ PASSED | 0.9259 | Fixed with correct weight loading |
+| **Prefill** | ✅ PASSED | 0.9178 | Fixed with correct weight loading |
+
 ## Next Steps
 1. ✅ ~~Fix prefill memory configuration issue~~ - COMPLETED
 2. ✅ ~~Test GPT-OSS backend (decode and prefill)~~ - COMPLETED
 3. ✅ ~~Verify PCC values remain identical for all configurations~~ - COMPLETED
-4. Clean up debug logging
-5. Document configuration parameters in detail
-6. Consider performance optimizations
-7. Remove old duplicate implementations (_fwd_moe_gptoss_unified can be deleted)
-8. Add comprehensive unit tests for the unified configuration
+4. ✅ ~~Clean up debug logging~~ - COMPLETED
+5. ✅ ~~Implement JSON config export/import~~ - COMPLETED
+6. Document configuration parameters in detail
+7. Consider performance optimizations
+8. Remove old duplicate implementations (_fwd_moe_gptoss_unified can be deleted)
+9. Add comprehensive unit tests for the unified configuration
+10. Test loading configs from JSON files instead of generating at runtime
 
 ## Benefits Achieved
 - **Code Unification**: Single implementation for both backends

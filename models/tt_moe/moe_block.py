@@ -355,6 +355,11 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
 
             if backend == "deepseek":
                 # DeepSeek-specific configuration
+                # Create unified expert config at config time
+                unified_config = create_deepseek_expert_config(
+                    hf_config, mode=mode, num_experts_per_device=num_experts_per_device
+                )
+
                 config.update(
                     {
                         "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
@@ -385,6 +390,9 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                             memory_config=memory_config,
                             cluster_axis=1,
                         ),
+                        "unified_expert_config": unified_config,
+                        "moe_intermediate_size": getattr(hf_config, "moe_intermediate_size", 2048),
+                        "moe_chunk_size": 32 if mode == "decode" else 512,  # Default chunk sizes
                     }
                 )
             else:  # gptoss
@@ -392,14 +400,20 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                 # For unified path, we need the expert configs similar to DeepSeek
                 experts_config = MoEExperts._create_model_config(hf_config, mesh_device, mode)
 
-                # Add mock router_state_dict for testing (will be overridden by actual weights in tests)
-                import torch
-
+                # Add placeholder router_state_dict for testing (will be overridden by actual weights in tests)
                 num_experts = num_experts_per_device * mesh_device.get_num_devices()
                 experts_config["router_state_dict"] = {
-                    "weight": torch.randn(num_experts, hf_config.hidden_size),
-                    "bias": torch.randn(num_experts),
+                    "weight": f"<random tensor shape=[{num_experts}, {hf_config.hidden_size}]>",
+                    "bias": f"<random tensor shape=[{num_experts}]>",
                 }
+
+                # Create unified expert config at config time
+                unified_config = create_gptoss_expert_config(
+                    hf_config,
+                    mode=mode,
+                    num_experts_per_device=num_experts_per_device,
+                    use_fused_weights=False,  # Default to False
+                )
 
                 config.update(
                     {
@@ -407,6 +421,9 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                         "use_throughput_experts": True,
                         "input_memory_config": input_output_memory_config,
                         "output_memory_config": input_output_memory_config,
+                        "unified_expert_config": unified_config,
+                        "intermediate_size": getattr(hf_config, "intermediate_size", 11520),
+                        "use_fused_gate_up": False,  # Default configuration
                     }
                 )
 
@@ -425,7 +442,12 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
             }
 
             if backend == "deepseek":
-                # DeepSeek-specific configuration
+                # DeepSeek-specific configuration for prefill
+                # Create unified expert config at config time
+                unified_config = create_deepseek_expert_config(
+                    hf_config, mode=mode, num_experts_per_device=num_experts_per_device
+                )
+
                 config.update(
                     {
                         "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
@@ -451,6 +473,9 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
                             cluster_axis=1,
                         ),
+                        "unified_expert_config": unified_config,
+                        "moe_intermediate_size": getattr(hf_config, "moe_intermediate_size", 2048),
+                        "moe_chunk_size": 512,  # Default chunk size for prefill
                     }
                 )
             else:  # gptoss
@@ -458,14 +483,20 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                 # For unified path, include expert configs
                 experts_config = MoEExperts._create_model_config(hf_config, mesh_device, mode)
 
-                # Add mock router_state_dict for testing (will be overridden by actual weights in tests)
-                import torch
-
+                # Add placeholder router_state_dict for testing (will be overridden by actual weights in tests)
                 num_experts = num_experts_per_device * mesh_device.get_num_devices()
                 experts_config["router_state_dict"] = {
-                    "weight": torch.randn(num_experts, hf_config.hidden_size),
-                    "bias": torch.randn(num_experts),
+                    "weight": f"<random tensor shape=[{num_experts}, {hf_config.hidden_size}]>",
+                    "bias": f"<random tensor shape=[{num_experts}]>",
                 }
+
+                # Create unified expert config at config time
+                unified_config = create_gptoss_expert_config(
+                    hf_config,
+                    mode=mode,
+                    num_experts_per_device=num_experts_per_device,
+                    use_fused_weights=False,  # Default to False
+                )
 
                 config.update(
                     {
@@ -473,6 +504,9 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                         "use_throughput_experts": True,
                         "input_memory_config": memory_config,
                         "output_memory_config": memory_config,
+                        "unified_expert_config": unified_config,
+                        "intermediate_size": getattr(hf_config, "intermediate_size", 11520),
+                        "use_fused_gate_up": False,  # Default configuration
                     }
                 )
 
@@ -1006,69 +1040,56 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         backend = cfg.get("backend", "deepseek")
         mode = "decode" if seq_len == 1 else "prefill"
 
-        # Get or create hf_config
-        hf_config = cfg.get("hf_config")
+        # Use pre-configured unified expert config
+        if "unified_expert_config" not in cfg:
+            # Fallback: create unified config at runtime (for backward compatibility)
+            hf_config = cfg.get("hf_config")
+            if backend == "gptoss":
+                if not hf_config:
+                    hf_config = type(
+                        "obj",
+                        (object,),
+                        {
+                            "hidden_size": cfg["hidden_size"],
+                            "intermediate_size": cfg.get("intermediate_size", 11520),
+                            "num_experts_per_tok": cfg["num_experts_per_tok"],
+                        },
+                    )
+                    logger.warning("GPT-OSS: Creating fallback hf_config at runtime")
 
-        # Create unified config based on backend and mode
-        if backend == "gptoss":
-            # Ensure hf_config has necessary fields
-            if not hf_config:
-                hf_config = type(
-                    "obj",
-                    (object,),
-                    {
-                        "hidden_size": cfg["hidden_size"],
-                        "intermediate_size": cfg.get("intermediate_size", 2880),  # GPT-OSS default
-                        "num_experts_per_tok": cfg["num_experts_per_tok"],
-                    },
+                cfg["unified_expert_config"] = create_gptoss_expert_config(
+                    hf_config,
+                    mode=mode,
+                    num_experts_per_device=cfg["num_experts_per_device"],
+                    use_fused_weights=cfg.get("use_fused_gate_up", False),
                 )
-                logger.warning(f"GPT-OSS: Using fallback config with intermediate_size={hf_config.intermediate_size}")
+            else:  # deepseek
+                if not hf_config:
+                    hf_config = type(
+                        "obj",
+                        (object,),
+                        {
+                            "hidden_size": cfg["hidden_size"],
+                            "moe_intermediate_size": cfg.get("moe_intermediate_size", 2048),
+                            "num_experts_per_tok": cfg["num_experts_per_tok"],
+                        },
+                    )
+                    logger.warning("DeepSeek: Creating fallback hf_config at runtime")
 
-            # Create GPT-OSS expert config for loading weights
-            unified_config = create_gptoss_expert_config(
-                hf_config,
-                mode=mode,
-                num_experts_per_device=cfg["num_experts_per_device"],
-                use_fused_weights=cfg.get("use_fused_gate_up", False),
-            )
-            cfg["unified_expert_config"] = unified_config
+                cfg["unified_expert_config"] = create_deepseek_expert_config(
+                    hf_config, mode=mode, num_experts_per_device=cfg["num_experts_per_device"]
+                )
 
-            # Get MoE unified config
-            if mode == "decode":
-                config = get_gptoss_decode_config()
-            else:
-                config = get_gptoss_prefill_config()
+        # Get MoE unified config based on backend and mode
+        if backend == "gptoss":
+            config = get_gptoss_decode_config() if mode == "decode" else get_gptoss_prefill_config()
+        else:  # deepseek
+            config = get_deepseek_config(mode)
+            # Adjust chunk size if specified in cfg
+            if "moe_chunk_size" in cfg:
+                config.chunk_size = cfg["moe_chunk_size"]
 
-            # Use the unified forward path for GPT-OSS
-            return cls._fwd_moe_unified(x, topk_experts_indices, topk_experts_weights, cfg, config)
-
-        # DeepSeek backend - also use unified implementation
-        if not hf_config:
-            # Create a minimal config object for DeepSeek if not provided
-            hf_config = type(
-                "obj",
-                (object,),
-                {
-                    "hidden_size": cfg["hidden_size"],
-                    "moe_intermediate_size": cfg.get("moe_intermediate_size", cfg.get("intermediate_size", 4608)),
-                    "num_experts_per_tok": cfg["num_experts_per_tok"],
-                },
-            )
-
-        # Create DeepSeek expert config for loading weights
-        unified_config = create_deepseek_expert_config(
-            hf_config, mode=mode, num_experts_per_device=cfg["num_experts_per_device"]
-        )
-        cfg["unified_expert_config"] = unified_config
-
-        # Get MoE unified config for DeepSeek
-        config = get_deepseek_config(mode)
-
-        # Adjust chunk size if specified in cfg
-        if "moe_chunk_size" in cfg:
-            config.chunk_size = cfg["moe_chunk_size"]
-
-        # Use the unified forward path for DeepSeek
+        # Use the unified forward path for both backends
         return cls._fwd_moe_unified(x, topk_experts_indices, topk_experts_weights, cfg, config)
 
     @classmethod

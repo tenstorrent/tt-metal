@@ -332,7 +332,7 @@ def _skip_single_device_ccl():
         # TODO: Replace expected_perf_us baselines with theoretical targets.
         ("decode", 1, 0.92, 0.5, 0.5, 168570.044),  # Measured PCC from module test: 0.927
         # Prefill mode - batch 1, seq_len 128
-        # ("prefill", 128, 0.92, 0.5, 0.5, 0.0),  # TODO: Enable once prefill is verified
+        ("prefill", 128, 0.92, 0.5, 0.5, 0.0),  # Enable prefill to test PCC
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [False], ids=["random_weights"])

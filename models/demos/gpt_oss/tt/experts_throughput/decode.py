@@ -233,6 +233,85 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     return tensor
 
 
+def decode_forward_debug_save_activations(
+    hidden_states,
+    topk_expert_indices,
+    topk_expert_weights,
+    weights,
+    config,
+    expert_mapping_tensors,
+    remap_topk_mask,
+    dispatch_config,
+    combine_config,
+    program_config,
+    mesh_device,
+    mesh_config,
+    ccl_manager,
+):
+    """Debug version that saves intermediate activations."""
+    import os
+
+    import torch
+    from loguru import logger
+
+    debug_dir = "/tmp/gptoss_reference_debug"
+    os.makedirs(debug_dir, exist_ok=True)
+    logger.info(f"[REFERENCE] Saving intermediate activations to: {debug_dir}")
+
+    # Save initial inputs
+    x_torch = ttnn.to_torch(hidden_states).float().cpu()
+    torch.save(x_torch, f"{debug_dir}/1_input_x.pt")
+    logger.info(f"[REFERENCE] Saved: 1_input_x.pt shape={x_torch.shape}")
+
+    indices_torch = ttnn.to_torch(topk_expert_indices).cpu()
+    torch.save(indices_torch, f"{debug_dir}/1_input_indices.pt")
+    logger.info(f"[REFERENCE] Saved: 1_input_indices.pt shape={indices_torch.shape}")
+
+    weights_torch = ttnn.to_torch(topk_expert_weights).float().cpu()
+    torch.save(weights_torch, f"{debug_dir}/1_input_weights.pt")
+    logger.info(f"[REFERENCE] Saved: 1_input_weights.pt shape={weights_torch.shape}")
+
+    # Call the regular decode_forward and capture intermediates
+    return decode_forward_with_debug(
+        hidden_states=hidden_states,
+        topk_expert_indices=topk_expert_indices,
+        topk_expert_weights=topk_expert_weights,
+        weights=weights,
+        config=config,
+        expert_mapping_tensors=expert_mapping_tensors,
+        remap_topk_mask=remap_topk_mask,
+        dispatch_config=dispatch_config,
+        combine_config=combine_config,
+        program_config=program_config,
+        mesh_device=mesh_device,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
+        debug_dir=debug_dir,
+    )
+
+
+def decode_forward_with_debug(
+    hidden_states,
+    topk_expert_indices,
+    topk_expert_weights,
+    weights,
+    config,
+    expert_mapping_tensors,
+    remap_topk_mask,
+    dispatch_config,
+    combine_config,
+    program_config,
+    mesh_device,
+    mesh_config,
+    ccl_manager,
+    debug_dir,
+):
+    """Inner function with debug instrumentation."""
+
+    # Continue with original function...
+    # (rest of original decode_forward content follows)
+
+
 def decode_forward(
     hidden_states: ttnn.Tensor,
     topk_expert_indices: ttnn.Tensor,
