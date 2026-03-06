@@ -169,6 +169,11 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
 
 void RiscFirmwareInitializer::configure() {}
 
+void RiscFirmwareInitializer::add_devices(
+    const std::vector<Device*>& /*new_devices*/, const std::unordered_set<InitializerKey>& /*init_done*/) {
+    TT_THROW("Cannot incrementally initialize Risc firmware at this time");
+}
+
 void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
     // If simulator is enabled, force a teardown of active ethernet cores for WH
     if (rtoptions_.get_simulator_enabled()) {

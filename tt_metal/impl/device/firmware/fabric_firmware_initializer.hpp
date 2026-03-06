@@ -26,6 +26,8 @@ public:
     void teardown(std::unordered_set<InitializerKey>& init_done) override;
     void post_teardown() override;
     bool is_initialized() const override;
+    void add_devices(
+        const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& init_done) override;
 
 private:
     // Compile fabric on all devices, parallelized via async.

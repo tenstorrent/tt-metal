@@ -101,4 +101,21 @@ void ProfilerInitializer::post_teardown() {
 
 bool ProfilerInitializer::is_initialized() const { return initialized_; }
 
+void ProfilerInitializer::add_devices(
+    const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& /*init_done*/) {
+#if defined(TRACY_ENABLE)
+    if (!devices_.empty() && getDeviceProfilerState()) {
+        for (auto* dev : new_devices) {
+            if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
+                detail::InitDeviceProfiler(dev);
+                log_info(tt::LogMetal, "Profiler started on device {}", dev->id());
+            }
+        }
+    }
+#endif
+    for (auto* dev : new_devices) {
+        devices_.push_back(dev);
+    }
+}
+
 }  // namespace tt::tt_metal

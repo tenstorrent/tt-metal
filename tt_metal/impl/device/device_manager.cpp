@@ -201,6 +201,22 @@ void DeviceManager::initialize(
 
     l1_bank_remap_.assign(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
 
+    if (is_initialized_) {
+        // Incremental mode: only activate devices that are not yet active
+        // and extend existing firmware initializers for the new devices.
+        newly_activated_devices_.clear();
+        for (auto id : device_ids) {
+            if (!is_device_active(id)) {
+                activate_device(id);
+                newly_activated_devices_.push_back(get_device(id));
+            }
+        }
+        if (!newly_activated_devices_.empty() && initializers_.contains(CommandQueueInitializer::key)) {
+            initializers_[CommandQueueInitializer::key]->add_devices(newly_activated_devices_, init_done_);
+        }
+        return;
+    }
+
     open_devices(device_ids);
     is_initialized_ = true;
 }
@@ -458,6 +474,12 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 }
 
 void DeviceManager::initialize_profiler() {
+    if (init_done_.contains(ProfilerInitializer::key) && !newly_activated_devices_.empty()) {
+        dynamic_cast<ProfilerInitializer*>(initializers_[ProfilerInitializer::key].get())
+            ->add_devices(newly_activated_devices_, init_done_);
+        return;
+    }
+
     auto& ctx = tt::tt_metal::MetalContext::instance();
     auto active_devices = this->get_all_active_devices_impl();
     initializers_[ProfilerInitializer::key] =
@@ -468,6 +490,16 @@ void DeviceManager::initialize_profiler() {
 }
 
 void DeviceManager::initialize_fabric_and_dispatch_fw() {
+    if (init_done_.contains(FabricFirmwareInitializer::key) && !newly_activated_devices_.empty()) {
+        // Incremental path: extend existing initializers with the new devices.
+        initializers_[FabricFirmwareInitializer::key]->add_devices(newly_activated_devices_, init_done_);
+        auto* dki = dynamic_cast<DispatchKernelInitializer*>(initializers_[DispatchKernelInitializer::key].get());
+        dki->add_devices(newly_activated_devices_, init_done_);
+        dki->configure_new_devices(newly_activated_devices_);
+        newly_activated_devices_.clear();
+        return;
+    }
+
     auto& ctx = tt::tt_metal::MetalContext::instance();
 
     if (using_fast_dispatch_ && ctx.get_cluster().is_galaxy_cluster()) {
@@ -692,29 +724,42 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
-    // Order matters
-    TT_ASSERT(init_done_.contains(DispatchKernelInitializer::key));
-    initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+    // Teardown firmware in order. When multiple MeshDevices share a DeviceManager,
+    // the first close tears down all firmware; subsequent closes skip gracefully.
+    if (init_done_.contains(DispatchKernelInitializer::key)) {
+        initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+    }
+    if (init_done_.contains(FabricFirmwareInitializer::key)) {
+        initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+    }
+    if (init_done_.contains(ProfilerInitializer::key)) {
+        initializers_[ProfilerInitializer::key]->teardown(init_done_);
+    }
+    if (init_done_.contains(CommandQueueInitializer::key)) {
+        initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+    }
 
-    TT_ASSERT(init_done_.contains(FabricFirmwareInitializer::key));
-    initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
-
-    TT_ASSERT(init_done_.contains(ProfilerInitializer::key));
-    initializers_[ProfilerInitializer::key]->teardown(init_done_);
-
-    TT_ASSERT(init_done_.contains(CommandQueueInitializer::key));
-    initializers_[CommandQueueInitializer::key]->teardown(init_done_);
-
-    TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
-    initializers_[DispatchKernelInitializer::key]->post_teardown();
-    initializers_[FabricFirmwareInitializer::key]->post_teardown();
-    initializers_[ProfilerInitializer::key]->post_teardown();
-    initializers_[CommandQueueInitializer::key]->post_teardown();
+    if (init_done_.empty()) {
+        if (initializers_.contains(DispatchKernelInitializer::key)) {
+            initializers_[DispatchKernelInitializer::key]->post_teardown();
+        }
+        if (initializers_.contains(FabricFirmwareInitializer::key)) {
+            initializers_[FabricFirmwareInitializer::key]->post_teardown();
+        }
+        if (initializers_.contains(ProfilerInitializer::key)) {
+            initializers_[ProfilerInitializer::key]->post_teardown();
+        }
+        if (initializers_.contains(CommandQueueInitializer::key)) {
+            initializers_[CommandQueueInitializer::key]->post_teardown();
+        }
+    }
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
-        auto* dev = this->get_active_device(dev_id);
-        pass &= dev->close();
+        auto* device = get_device(dev_id);
+        if (device && device->is_initialized()) {
+            pass &= device->close();
+        }
     }
 
     return pass;

@@ -123,13 +123,15 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
 
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }
 
-void DispatchKernelInitializer::compile_dispatch_kernels() {
+void DispatchKernelInitializer::compile_dispatch_kernels() { compile_dispatch_kernels_for_devices(devices_); }
+
+void DispatchKernelInitializer::compile_dispatch_kernels_for_devices(const std::vector<Device*>& devices) {
     if (descriptor_->is_mock_device()) {
         return;
     }
 
     // Generate static args
-    for (auto* dev : devices_) {
+    for (auto* dev : devices) {
         if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             continue;
         }
@@ -149,7 +151,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
     }
 
     // Create command queue programs
-    for (auto* dev : devices_) {
+    for (auto* dev : devices) {
         if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             continue;
         }
@@ -172,30 +174,30 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
     dispatch_topology_->compile_cq_programs();
 }
 
-void DispatchKernelInitializer::init_device_command_queues() {
-    // Initialize device-side command queues (parallelized per MMIO device).
+void DispatchKernelInitializer::init_device_command_queues() { init_device_command_queues_for_devices(devices_); }
 
+void DispatchKernelInitializer::init_device_command_queues_for_devices(const std::vector<Device*>& devices) {
     if (descriptor_->is_mock_device()) {
         return;
     }
 
     std::vector<std::shared_future<void>> events;
-    for (auto* dev : devices_) {
+    for (auto* dev : devices) {
         if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             continue;
         }
         ChipId mmio_device_id = dev->id();
-        events.emplace_back(detail::async([this, dev, mmio_device_id]() {
+        events.emplace_back(detail::async([this, dev, mmio_device_id, &devices]() {
             auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(mmio_device_id);
             dev->init_command_queue_device_with_topology(dispatch_topology_.get());
             log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
             for (const auto& tunnel : tunnels_from_mmio) {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
-                    auto it = std::find_if(devices_.begin(), devices_.end(), [&](IDevice* d) {
+                    auto it = std::find_if(devices.begin(), devices.end(), [&](IDevice* d) {
                         return d->id() == mmio_controlled_device_id;
                     });
-                    if (it != devices_.end()) {
+                    if (it != devices.end()) {
                         (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());
                         log_debug(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
                     }
@@ -206,6 +208,44 @@ void DispatchKernelInitializer::init_device_command_queues() {
     for (const auto& event : events) {
         event.get();
     }
+}
+
+void DispatchKernelInitializer::add_devices(
+    const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& init_done) {
+    if (!using_fast_dispatch() || new_devices.empty()) {
+        for (auto* dev : new_devices) {
+            devices_.push_back(dev);
+        }
+        return;
+    }
+
+    populate_fd_kernels_only(new_devices);
+
+    for (auto* dev : new_devices) {
+        devices_.push_back(dev);
+    }
+
+    if (descriptor_->is_mock_device()) {
+        return;
+    }
+
+    TT_ASSERT(
+        init_done.contains(InitializerKey::Fabric), "Fabric firmware must be initialized before dispatch firmware");
+    TT_ASSERT(
+        init_done.contains(InitializerKey::Profiler), "Profiler firmware must be initialized before dispatch firmware");
+    TT_ASSERT(
+        init_done.contains(InitializerKey::CommandQueue),
+        "Host-side command queue firmware must be initialized before dispatch firmware");
+
+    compile_dispatch_kernels_for_devices(new_devices);
+}
+
+void DispatchKernelInitializer::configure_new_devices(const std::vector<Device*>& new_devices) {
+    if (!using_fast_dispatch()) {
+        return;
+    }
+
+    init_device_command_queues_for_devices(new_devices);
 }
 
 void DispatchKernelInitializer::terminate_command_queues() {

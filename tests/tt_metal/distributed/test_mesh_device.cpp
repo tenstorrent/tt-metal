@@ -208,5 +208,59 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     }
 }
 
+TEST(MeshDeviceInitTest, MultipleMeshDevice) {
+    auto pcie_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().all_pci_chip_ids();
+    std::vector<int> pcie_ids(pcie_ids_set.begin(), pcie_ids_set.end());
+    size_t num_pcie = pcie_ids.size();
+    if (num_pcie < 2) {
+        GTEST_SKIP() << "Need at least 2 PCIe devices for this test";
+    }
+
+    size_t first_size = num_pcie / 2;
+    size_t second_size = num_pcie - first_size;
+    std::vector<int> first_half(pcie_ids.begin(), pcie_ids.begin() + first_size);
+    std::vector<int> second_half(pcie_ids.begin() + first_size, pcie_ids.end());
+
+    auto md_1 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(first_size)),
+        std::nullopt,
+        first_half,
+    });
+    auto md_2 = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(second_size)),
+        std::nullopt,
+        second_half,
+    });
+
+    EXPECT_EQ(md_1->num_devices(), first_size);
+    EXPECT_EQ(md_2->num_devices(), second_size);
+}
+
+TEST(MeshDeviceInitTest, MultipleMeshDeviceWithSubMesh) {
+    auto pcie_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().all_pci_chip_ids();
+    std::vector<int> pcie_ids(pcie_ids_set.begin(), pcie_ids_set.end());
+    size_t num_pcie = pcie_ids.size();
+    if (num_pcie < 2) {
+        GTEST_SKIP() << "Need at least 2 PCIe devices for this test";
+    }
+
+    auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{
+        distributed::MeshShape(1, static_cast<uint32_t>(num_pcie)),
+        std::nullopt,
+        pcie_ids,
+    });
+    EXPECT_EQ(mesh->num_devices(), num_pcie);
+
+    size_t first_size = num_pcie / 2;
+    size_t second_size = num_pcie - first_size;
+
+    auto sub_1 = mesh->create_submesh(MeshShape{1, static_cast<uint32_t>(first_size)}, MeshCoordinate{0, 0});
+    auto sub_2 = mesh->create_submesh(
+        MeshShape{1, static_cast<uint32_t>(second_size)}, MeshCoordinate{0, static_cast<uint32_t>(first_size)});
+
+    EXPECT_EQ(sub_1->num_devices(), first_size);
+    EXPECT_EQ(sub_2->num_devices(), second_size);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed

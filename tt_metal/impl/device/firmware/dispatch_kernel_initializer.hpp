@@ -35,10 +35,19 @@ public:
     // Populate the FD kernels only. This will cause dispatch cores to be allocated in dispatch_core_manager
     void populate_fd_kernels_only(const std::vector<Device*>& devices);
 
+    // Incrementally add new devices: allocate dispatch cores, compile dispatch kernels for them.
+    void add_devices(
+        const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& init_done) override;
+
+    // Configure (init device command queues) only for the specified devices.
+    void configure_new_devices(const std::vector<Device*>& new_devices);
+
 private:
     void compile_dispatch_kernels();
+    void compile_dispatch_kernels_for_devices(const std::vector<Device*>& devices);
 
     void init_device_command_queues();
+    void init_device_command_queues_for_devices(const std::vector<Device*>& devices);
 
     void terminate_command_queues();
 
