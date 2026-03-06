@@ -340,16 +340,14 @@ void create_and_cache_mesh_workload(
                     tensor_args,
                     tensor_return_value,
                     mesh_device,
-                    workload,
-                    false);
+                    workload);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
                     operation_attributes,
                     tensor_args,
                     tensor_return_value,
                     mesh_device,
-                    cached_workload.workload,
-                    false);
+                    cached_workload.workload);
             }
         });
 }
