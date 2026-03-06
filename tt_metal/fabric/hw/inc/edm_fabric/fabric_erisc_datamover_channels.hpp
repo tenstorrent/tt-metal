@@ -290,50 +290,44 @@ using StaticSizedSenderEthChannelBuffers =
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using EthChannelBuffers = StaticSizedEthChannelBuffers<HEADER_TYPE, ChannelBuffers>;
 
-// Channel buffer tuple that extracts buffer config from pool data at compile time.
-// All channels are static-sized; each channel gets its base_address and num_slots from its pool.
+// Channel buffer construction from ChannelAllocations compile-time data.
+// Each channel gets its num_slots from its allocation entry at compile time.
 template <
     typename HEADER_TYPE,
-    typename ChannelPoolCollection,
+    typename Allocs,
     template <typename, size_t> class ChannelType,
-    auto& ChannelToPoolIndex,
+    auto& ChannelToEntryIndex,
     typename IndexSequence>
-struct PoolChannelBuilder;
+struct AllocChannelBuilder;
 
 template <
     typename HEADER_TYPE,
-    typename ChannelPoolCollection,
+    typename Allocs,
     template <typename, size_t> class ChannelType,
-    auto& ChannelToPoolIndex,
+    auto& ChannelToEntryIndex,
     size_t... Indices>
-struct PoolChannelBuilder<
-    HEADER_TYPE,
-    ChannelPoolCollection,
-    ChannelType,
-    ChannelToPoolIndex,
-    std::index_sequence<Indices...>> {
+struct AllocChannelBuilder<HEADER_TYPE, Allocs, ChannelType, ChannelToEntryIndex, std::index_sequence<Indices...>> {
     template <size_t ChannelIdx>
     FORCE_INLINE static constexpr size_t get_buffer_count() {
-        constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
-        using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
-        return PoolType::num_slots;
+        constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
+        return Allocs::template Entry<entry_idx>::num_slots;
     }
 
     using type = std::tuple<ChannelType<HEADER_TYPE, get_buffer_count<Indices>()>...>;
 };
 
-// Channel tuple wrapper that initializes each channel from its pool's base_address.
-template <typename HEADER_TYPE, typename ChannelPoolCollection, typename ChannelTypes, auto& ChannelToPoolIndex>
-struct PoolChannelTuple {
+// Channel tuple wrapper that initializes each channel from its allocation entry's base_address.
+template <typename HEADER_TYPE, typename Allocs, typename ChannelTypes, auto& ChannelToEntryIndex>
+struct AllocChannelTuple {
     static constexpr size_t const num_channels = std::tuple_size_v<ChannelTypes>;
 
     ChannelTypes channel_buffers;
 
-    explicit PoolChannelTuple() = default;
+    explicit AllocChannelTuple() = default;
 
-    template <typename PoolCollection>
+    template <typename AllocsT>
     FORCE_INLINE void init(size_t buffer_size_bytes, size_t header_size_bytes) {
-        init_impl<PoolCollection>(buffer_size_bytes, header_size_bytes, std::make_index_sequence<num_channels>());
+        init_impl<AllocsT>(buffer_size_bytes, header_size_bytes, std::make_index_sequence<num_channels>());
     }
 
     template <size_t I>
@@ -342,61 +336,49 @@ struct PoolChannelTuple {
     }
 
 private:
-    template <typename PoolCollection, size_t... ChannelIndices>
+    template <typename AllocsT, size_t... ChannelIndices>
     FORCE_INLINE void init_impl(
         size_t buffer_size_bytes, size_t header_size_bytes, std::index_sequence<ChannelIndices...>) {
-        (init_single_channel<PoolCollection, ChannelIndices>(
+        (init_single_channel<AllocsT, ChannelIndices>(
              std::get<ChannelIndices>(channel_buffers), buffer_size_bytes, header_size_bytes),
          ...);
     }
 
-    template <typename PoolCollection, size_t ChannelIdx, typename Channel>
+    template <typename AllocsT, size_t ChannelIdx, typename Channel>
     FORCE_INLINE void init_single_channel(Channel& chan, size_t buffer_size_bytes, size_t header_size_bytes) {
-        constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
-        using PoolType = std::tuple_element_t<pool_idx, typename PoolCollection::PoolsTuple>;
-        chan.init(PoolType::base_address, buffer_size_bytes, header_size_bytes);
+        constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
+        chan.init(AllocsT::template Entry<entry_idx>::base_address, buffer_size_bytes, header_size_bytes);
     }
 };
 
 template <
     typename HEADER_TYPE,
-    typename ChannelPoolCollection,
-    auto& PoolTypes,
+    typename Allocs,
     template <typename, size_t> class ChannelType,
-    auto& ChannelToPoolIndex>
-struct MultiPoolChannelBuffers {
-    static constexpr size_t num_channels = ChannelToPoolIndex.size();
-
+    auto& ChannelToEntryIndex>
+struct ChannelBuffersFromAllocs {
+    static constexpr size_t num_channels = ChannelToEntryIndex.size();
     static_assert(num_channels > 0, "Must have at least one channel");
-    static_assert(num_channels == PoolTypes.size(), "PoolTypes array size must match number of channels");
 
-    using ChannelTypes = typename PoolChannelBuilder<
+    using ChannelTypes = typename AllocChannelBuilder<
         HEADER_TYPE,
-        ChannelPoolCollection,
+        Allocs,
         ChannelType,
-        ChannelToPoolIndex,
+        ChannelToEntryIndex,
         std::make_index_sequence<num_channels>>::type;
 
     FORCE_INLINE static auto make() {
-        return PoolChannelTuple<HEADER_TYPE, ChannelPoolCollection, ChannelTypes, ChannelToPoolIndex>{};
+        return AllocChannelTuple<HEADER_TYPE, Allocs, ChannelTypes, ChannelToEntryIndex>{};
     }
 };
 
-template <typename HEADER_TYPE, typename ChannelPoolCollection, auto& PoolTypes, auto& ChannelToPoolIndex>
-using MultiPoolSenderEthChannelBuffers = MultiPoolChannelBuffers<
-    HEADER_TYPE,
-    ChannelPoolCollection,
-    PoolTypes,
-    StaticSizedSenderEthChannel,
-    ChannelToPoolIndex>;
+template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
+using SenderChannelBuffersFromAllocs =
+    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedSenderEthChannel, ChannelToEntryIndex>;
 
-template <typename HEADER_TYPE, typename ChannelPoolCollection, auto& PoolTypes, auto& ChannelToPoolIndex>
-using MultiPoolEthChannelBuffers = MultiPoolChannelBuffers<
-    HEADER_TYPE,
-    ChannelPoolCollection,
-    PoolTypes,
-    StaticSizedEthChannelBuffer,
-    ChannelToPoolIndex>;
+template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
+using ReceiverChannelBuffersFromAllocs =
+    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedEthChannelBuffer, ChannelToEntryIndex>;
 
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using SenderEthChannelBuffers = StaticSizedSenderEthChannelBuffers<HEADER_TYPE, ChannelBuffers>;

@@ -3043,26 +3043,16 @@ void kernel_main() {
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
 
-    // create the remote receiver channel buffers using multi-pool system
-    auto remote_receiver_channels = tt::tt_fabric::MultiPoolEthChannelBuffers<
+    auto remote_receiver_channels = tt::tt_fabric::ReceiverChannelBuffersFromAllocs<
         PACKET_HEADER_TYPE,
-        eth_remote_channel_pools_args,
-        REMOTE_RECEIVER_TO_POOL_TYPE,
-        REMOTE_RECEIVER_TO_POOL_IDX>::make();
+        eth_remote_channel_allocs,
+        REMOTE_RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_receiver_channels =
-        tt::tt_fabric::MultiPoolEthChannelBuffers<
-            PACKET_HEADER_TYPE,
-            channel_pools_args,
-            RECEIVER_TO_POOL_TYPE,
-            RECEIVER_TO_POOL_IDX
-        >::make();
+    auto local_receiver_channels = tt::tt_fabric::
+        ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_sender_channels = tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
-        PACKET_HEADER_TYPE,
-        channel_pools_args,
-        SENDER_TO_POOL_TYPE,
-        SENDER_TO_POOL_IDX>::make();
+    auto local_sender_channels =
+        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -3283,19 +3273,13 @@ void kernel_main() {
 #endif
 
     // initialize the local receiver channel buffers
-    local_receiver_channels.init<channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    local_receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
     // initialize the remote receiver channel buffers
-    remote_receiver_channels.init<eth_remote_channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    remote_receiver_channels.init<eth_remote_channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the local sender channel worker interfaces
-    local_sender_channels.init<channel_pools_args>(
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE));
+    // initialize the local sender channel buffers
+    local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
     // initialize the local sender channel worker interfaces
     // Sender channel 0 is always for local worker in the new design

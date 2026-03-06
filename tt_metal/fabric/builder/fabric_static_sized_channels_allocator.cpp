@@ -561,4 +561,56 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
     }
 }
 
+void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
+    std::vector<uint32_t>& ct_args,
+    size_t num_used_vc0_sender_channels,
+    size_t num_used_vc1_sender_channels,
+    size_t num_used_receiver_channels) const {
+    // Tag
+    ct_args.push_back(0xabcd1234);
+
+    // num_entries = total sender + receiver channels in the allocator
+    size_t total_sender_channels = get_num_sender_channels();
+    size_t total_receiver_channels = get_num_receiver_channels();
+    size_t num_entries = total_sender_channels + total_receiver_channels;
+    ct_args.push_back(static_cast<uint32_t>(num_entries));
+
+    // Per-entry data (reuse existing emit_ct_args which emits per-channel data)
+    emit_ct_args(ct_args);
+
+    // Channel-to-entry index mappings
+    // The allocator emits entries in order: VC0 senders, VC1 senders, VC0 receivers, VC1 receivers.
+    // The router may use fewer channels than allocated. When there are unused channels,
+    // VC1 sender entries need to skip over the unused VC0 entry slots.
+    size_t num_used_sender_channels = num_used_vc0_sender_channels + num_used_vc1_sender_channels;
+    size_t num_unused_channels = total_sender_channels - num_used_sender_channels;
+    bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
+
+    // Sender channel-to-entry index
+    if (has_unused_channels) {
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            if (i < num_used_vc0_sender_channels) {
+                ct_args.push_back(static_cast<uint32_t>(i));
+            } else {
+                // VC1 channels skip the unused VC0 channel entries
+                ct_args.push_back(static_cast<uint32_t>(i + num_unused_channels));
+            }
+        }
+        // Padding for unused channels
+        for (size_t i = 0; i < num_unused_channels; ++i) {
+            ct_args.push_back(0);
+        }
+    } else {
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(i));
+        }
+    }
+
+    // Receiver channel-to-entry index (receivers start after all sender entries)
+    size_t receiver_entry_base = total_sender_channels;
+    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+        ct_args.push_back(static_cast<uint32_t>(i + receiver_entry_base));
+    }
+}
+
 };  // namespace tt::tt_fabric

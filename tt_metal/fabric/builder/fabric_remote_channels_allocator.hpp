@@ -52,6 +52,12 @@ public:
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     /**
+     * Emit the complete ChannelAllocations CT arg block for remote receiver channels.
+     * Format: [tag] [num_entries] [per-entry data...] [receiver_to_entry_idx...]
+     */
+    void emit_channel_allocations_ct_args(std::vector<uint32_t>& ct_args, size_t num_used_receiver_channels) const;
+
+    /**
      * Get the base address for a specific remote receiver channel in a specific VC.
      * @param vc_id Virtual Channel ID (0 for VC0, 1 for VC1)
      * @param channel_id Channel ID within the VC
