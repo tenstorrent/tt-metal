@@ -1940,10 +1940,6 @@ void kernel_main() {
 
     DPRINT << " DONE CCL BROADCAST" << ENDL();
 
-#ifdef COMPILE_TEST_ONLY
-    return;
-#endif
-
     // SP position handling
 #if defined(COMPILE_FOR_BRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
@@ -2089,6 +2085,10 @@ void kernel_main() {
                 create_q_heads(create_q_heads_args);
             }
         }
+
+#ifdef COMPILE_TEST_ONLY
+        return;
+#endif
         // ====================================================================
         // KV Cache Branch
         // Non-owning SP devices skip the entire branch and just signal the
