@@ -34,8 +34,9 @@ static std::vector<CoreCoord> find_collector_core_coords(
         }
     }
 
-    // We come here if we did not find enough collector cores
+    // We come here if we did not find enough collector cores; TT_FATAL is expected not to return.
     TT_FATAL(false, "Failed to find {} cores", num_collectors);
+    return {};
 }
 
 MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
