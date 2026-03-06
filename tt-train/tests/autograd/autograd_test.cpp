@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <memory>
 #include <vector>

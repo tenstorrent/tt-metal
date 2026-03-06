@@ -5,7 +5,6 @@
 #include "rmsnorm_op.hpp"
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -16,6 +15,10 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {

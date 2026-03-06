@@ -4,8 +4,6 @@
 
 #include "reshape_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"

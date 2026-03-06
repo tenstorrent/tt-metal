@@ -6,8 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"

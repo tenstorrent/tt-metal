@@ -4,7 +4,6 @@
 
 #include "ttnn_ops.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster.hpp>
@@ -13,6 +12,15 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "tt-metalium/experimental/fabric/fabric.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 

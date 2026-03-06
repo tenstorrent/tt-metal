@@ -4,7 +4,6 @@
 
 #include <CLI/CLI.hpp>
 #include <chrono>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <vector>
 
@@ -13,6 +12,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;

@@ -6,12 +6,13 @@
 
 #include <fmt/core.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+
+#include "tt-metalium/experimental/fabric/fabric.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 

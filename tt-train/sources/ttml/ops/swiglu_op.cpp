@@ -4,7 +4,6 @@
 
 #include "swiglu_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -13,6 +12,10 @@
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {

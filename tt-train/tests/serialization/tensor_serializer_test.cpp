@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -17,6 +16,7 @@
 #include "modules/multi_layer_perceptron.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace {
 std::string generate_unique_temp_dir_name() {

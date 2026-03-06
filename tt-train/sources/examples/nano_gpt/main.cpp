@@ -4,7 +4,6 @@
 
 #include <CLI/CLI.hpp>
 #include <chrono>
-#include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -30,6 +29,8 @@
 #include "optimizers/no_op.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn/distributed/create_socket.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
