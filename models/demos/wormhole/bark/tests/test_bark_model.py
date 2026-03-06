@@ -12,28 +12,21 @@ Tests:
 5. Emotion annotation support ([laughs], [sighs])
 """
 
+import numpy as np
 import pytest
 import torch
-import numpy as np
-import ttnn
 
-from models.demos.wormhole.bark.tt.bark_gpt import (
-    BarkConfig,
-    TtBarkGPT,
-    preprocess_model_parameters,
-)
-from models.demos.wormhole.bark.tt.bark_fine import (
-    TtBarkFineModel,
-    preprocess_fine_model_parameters,
-)
-from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
+import ttnn
 from models.demos.wormhole.bark.reference.bark_reference import (
+    compute_pcc,
     load_bark_reference,
-    run_semantic_forward,
     run_coarse_forward,
     run_fine_forward,
-    compute_pcc,
+    run_semantic_forward,
 )
+from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
+from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
+from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
 
 @pytest.fixture(scope="module")

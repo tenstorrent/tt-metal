@@ -17,17 +17,10 @@ from typing import Optional
 
 import numpy as np
 import torch
-import ttnn
 
-from models.demos.wormhole.bark.tt.bark_gpt import (
-    BarkConfig,
-    TtBarkGPT,
-    preprocess_model_parameters,
-)
-from models.demos.wormhole.bark.tt.bark_fine import (
-    TtBarkFineModel,
-    preprocess_fine_model_parameters,
-)
+import ttnn
+from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
+from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
 
 
 class TtBarkModel:
