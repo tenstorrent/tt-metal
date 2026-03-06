@@ -2,7 +2,7 @@
 
 This folder contains a CLI for running the current DeepSeek V3 B1 demo.
 
-The demo runs prefill + decode over `DeepSeekV3` sockets and streams decoded text to stdout.
+The demo runs prefill + decode over the pod pipeline and streams decoded text to stdout.
 
 ## Requirements
 

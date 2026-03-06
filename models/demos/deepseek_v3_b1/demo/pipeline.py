@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+import torch
+
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
     DenseDecoderStage,
@@ -193,8 +195,12 @@ class PipelineConfiguration:
     def __init__(
         self,
         stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]],
+        input_rank: int = 0,
+        output_rank: int | None = None,
     ) -> None:
         self._stage_factories = stage_factories
+        self.input_rank = input_rank
+        self.output_rank = output_rank if output_rank is not None else max(stage_factories.keys())
 
     @property
     def num_stages(self) -> int:
@@ -204,16 +210,24 @@ class PipelineConfiguration:
         """Create a Pipeline for this process's stage (determined by mesh_id)."""
         my_mesh_id = mesh_device.get_system_mesh_id()
         stage = self._stage_factories[my_mesh_id](mesh_device)
-        return Pipeline(mesh_device, stage)
+        return Pipeline(mesh_device, stage, self.input_rank, self.output_rank)
 
 
 class Pipeline:
     """Orchestrator for one pipeline stage with explicit 4-phase setup."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        stage_kind: StageKind,
+        input_rank: int,
+        output_rank: int,
+    ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
         self._my_mesh_id = mesh_device.get_system_mesh_id()
+        self._input_rank = input_rank
+        self._output_rank = output_rank
         self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
         self._ctx = StageContext(
             mesh_device=mesh_device,
@@ -225,6 +239,14 @@ class Pipeline:
     @property
     def my_mesh_id(self) -> int:
         return self._my_mesh_id
+
+    @property
+    def is_input_rank(self) -> bool:
+        return self._my_mesh_id == self._input_rank
+
+    @property
+    def is_output_rank(self) -> bool:
+        return self._my_mesh_id == self._output_rank
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
@@ -264,6 +286,18 @@ class Pipeline:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(output_tensor)
+
+    def recv_output_token(self) -> int:
+        """Input rank: receive a token id from the output rank via distributed context."""
+        return ttnn.recv_token(ttnn.Rank(self._output_rank))
+
+    def read_and_send_output_token(self, d2h_output_tensor: ttnn.Tensor) -> None:
+        """Output rank: read D2H output then send the extracted token id to the input rank."""
+        if self._pipeline_block is None:
+            raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
+        self._pipeline_block.read_output(d2h_output_tensor)
+        token_id = int(ttnn.to_torch(d2h_output_tensor).to(torch.int32).flatten()[0].item())
+        ttnn.send_token(token_id, ttnn.Rank(self._input_rank))
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
