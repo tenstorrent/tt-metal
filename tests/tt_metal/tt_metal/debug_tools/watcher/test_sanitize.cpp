@@ -423,7 +423,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr + sizeof(std::uint32_t),
+                l1_overflow_addr,
                 sizeof(std::uint32_t));
         } break;
         case SanitizeEthSrcL1Overflow: {

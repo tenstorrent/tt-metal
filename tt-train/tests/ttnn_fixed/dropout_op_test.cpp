@@ -5,12 +5,12 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/experimental/dropout/dropout.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class DropoutTest : public ::testing::Test {

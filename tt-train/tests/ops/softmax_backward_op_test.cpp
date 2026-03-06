@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 #include <optional>
 #include <string_view>
 #include <tt-metalium/core_coord.hpp>
@@ -17,6 +16,9 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "tt-metalium/bfloat16.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace {
 

@@ -21,8 +21,11 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "core/ttnn_all_includes.hpp"
 #include "serialization/serialization.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace {
 // Concept for trivially copyable types

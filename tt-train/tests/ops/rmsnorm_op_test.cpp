@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
