@@ -35,17 +35,11 @@ void kernel_main() {
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
-        // Track previous CBs for inner loop reconfiguration
-        uint32_t prev_cb_srca = in_cb;
-        uint32_t prev_cb_output = untilized_in_cb;
-
         for (uint32_t u = 0; u < u_count; ++u) {
-            // Untilize cache blocks with reconfiguration
             compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(granularity);
 
-            // Wait on writer to update block. Tilize with reconfiguration
-            compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(granularity  // num_blocks
-            );
+            // Wait on writer to update block, then tilize back
+            compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(granularity);
         }
         reconfig_data_format_srca(cache_cb, in_cb);
     }

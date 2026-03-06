@@ -24,8 +24,6 @@
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-// Removed tilize_in() - now using compute_kernel_lib::tilize
-
 inline void eltwise_mul_and_add_block_v2(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
