@@ -411,6 +411,95 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     return programs;
 }
 
+std::vector<std::shared_ptr<Program>> create_benchmark_programs(
+    uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program) {
+    uint32_t MAX_LOOP = 100;
+
+    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+    CoreRangeSet cr_set(cr);
+
+    std::vector<std::shared_ptr<Program>> programs;
+    programs.reserve(num_programs);
+
+    std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
+    std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
+
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs;
+
+    uint32_t NUM_CBS = max_cbs;
+    uint32_t NUM_SEMS = NUM_SEMAPHORES;
+
+    // Deterministic rt args: use max_runtime_args for unique, 0 for common
+    auto [unique_rtargs, common_rtargs] = create_runtime_args(max_runtime_args, 0, 0, 0);
+    uint32_t num_unique_rtargs = unique_rtargs.size();
+    uint32_t num_common_rtargs = common_rtargs.size();
+
+    for (uint32_t i = 0; i < num_programs; i++) {
+        Program& program = *programs.emplace_back(std::make_shared<Program>());
+
+        // Create CBs
+        for (uint32_t j = 0; j < NUM_CBS; j++) {
+            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
+                                                 .set_page_size(j, page_size * (j + 1));
+            CreateCircularBuffer(program, cr_set, cb_config);
+        }
+
+        // Create Semaphores
+        for (uint32_t j = 0; j < NUM_SEMS; j++) {
+            CreateSemaphore(program, cr_set, j + 1);
+        }
+
+        // Program ID as compile-time arg forces unique compilation per program
+        uint32_t program_id = unique_per_program ? i : 0;
+        std::vector<uint32_t> compile_args = {
+            MAX_LOOP,
+            MAX_LOOP,
+            MAX_LOOP,
+            NUM_CBS,
+            NUM_SEMS,
+            num_unique_rtargs,
+            num_common_rtargs,
+            page_size,
+            program_id};
+
+        // Always create all 3 kernels (BRISC, NCRISC, TRISC)
+        auto dummy_brisc_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = compile_args,
+                .defines = data_movement_defines});
+        SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, unique_rtargs);
+        SetCommonRuntimeArgs(program, dummy_brisc_kernel, common_rtargs);
+
+        auto dummy_ncrisc_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = compile_args,
+                .defines = data_movement_defines});
+        SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, unique_rtargs);
+        SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, common_rtargs);
+
+        auto dummy_trisc_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
+            cr_set,
+            ComputeConfig{.math_approx_mode = false, .compile_args = compile_args, .defines = compute_defines});
+        SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, unique_rtargs);
+        SetCommonRuntimeArgs(program, dummy_trisc_kernel, common_rtargs);
+    }
+    return programs;
+}
+
 ScopedEnvVar::ScopedEnvVar(const char* name, const char* value) : name_(name) {
     // Save original value
     const char* original = std::getenv(name);
