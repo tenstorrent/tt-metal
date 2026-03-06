@@ -18,6 +18,7 @@ from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 from math import nan, isnan
+from itertools import chain
 
 import click
 from loguru import logger
@@ -823,7 +824,6 @@ def _build_trace_ops_mapping(host_ops_by_device: DeviceOpsDict, ops: Dict[int, O
             if "metal_trace_replay_session_id" in op:
                 augmented_id = op["global_call_count"] | (op["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT)
                 trace_copy = copy.deepcopy(op)
-                trace_copy["global_call_count"] = augmented_id
                 trace_ops_by_augmented_id[augmented_id] = trace_copy
             else:
                 ops[op["global_call_count"]] = op
@@ -875,19 +875,19 @@ def append_device_data(
         npe_stats = analyzeNoCTraces(logFolder)
         if npe_stats is not None:
             ops_found = 0
-            for device_id in host_ops_by_device:
-                for op in host_ops_by_device[device_id]:
-                    metal_trace_id = op.get("metal_trace_id", None)
-                    metal_trace_replay_session_id = op.get("metal_trace_replay_session_id", None)
-                    op_npe_stats = npe_stats.getDatapointByID(
-                        op["global_call_count"], metal_trace_id, metal_trace_replay_session_id
-                    )
-                    if op_npe_stats is not None:
-                        ops_found += 1
-                        op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
-                        op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-                        op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
-                        op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
+            for op in chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()):
+                global_call_count = op["global_call_count"]
+                metal_trace_id = op.get("metal_trace_id", None)
+                metal_trace_replay_session_id = op.get("metal_trace_replay_session_id", None)
+                op_npe_stats = npe_stats.getDatapointByID(
+                    global_call_count, metal_trace_id, metal_trace_replay_session_id
+                )
+                if op_npe_stats is not None:
+                    ops_found += 1
+                    op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                    op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                    op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
+                    op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return host_ops_by_device, trace_ops_by_augmented_id
@@ -1243,7 +1243,6 @@ def generate_reports(
                 op = row
                 if op > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
                     device_op_record = traceOps[op]
-                    device_op_record["global_call_count"] = ((1 << TRACE_OP_ID_BITSHIFT) - 1) & op
                     active_op_record = device_op_record
                 else:
                     host_op_record = ops[op]
