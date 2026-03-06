@@ -252,6 +252,21 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         }
     }
 
+    // Fabric requires all devices to be initialized regardless of dispatch mode
+    if (tt_fabric::is_tt_fabric_config(tt::tt_metal::MetalContext::instance().get_fabric_config())) {
+        device_ids_to_open.clear();
+        for (int id = 0; id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); ++id) {
+            device_ids_to_open.push_back(id);
+        }
+        for (auto dev_id : device_ids_to_open) {
+            any_remote_devices |=
+                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id) != dev_id;
+            if (any_remote_devices) {
+                break;
+            }
+        }
+    }
+
     std::vector<ChipId> target_mmio_ids;
     for (const auto& device_id : device_ids_to_open) {
         TT_FATAL(
