@@ -28,7 +28,6 @@ struct semaphore
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
-        LLK_ASSERT(sem_index < NUM_SEMAPHORES, "Semaphore index out of bounds");
         return (1 << sem_index);
     }
 };
