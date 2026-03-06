@@ -7,6 +7,7 @@ import torch
 import ttnn
 from ttnn.graph_tracer_utils import GraphTracerUtils
 from ttnn.operations.conv2d import Conv2dConfig
+from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -432,6 +433,7 @@ def test_extract_levelized_graph(device):
     assert len(levelized_graph_2) >= len(levelized_graph_1)
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address validation.")
 def test_program_cache_invalidation_across_dispatch_modes(device):
     def test_conv(device):
         weights_shape = (32, 3, 3, 3)
