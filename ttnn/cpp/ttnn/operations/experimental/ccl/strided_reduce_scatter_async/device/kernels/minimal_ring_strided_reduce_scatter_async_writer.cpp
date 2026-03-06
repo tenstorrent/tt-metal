@@ -308,12 +308,13 @@ void kernel_main() {
 
                                     // Gather phase: compute tile indices for every slot in this packet.
                                     // The reader always advances l1_write_addr regardless of validity,
-                                    // so CB slot i corresponds to iteration tile i. We track first_valid_l1
-                                    // to find the actual L1 address of the first valid tile.
+                                    // so CB slot i corresponds to iteration tile i. We track valid_l1_addrs
+                                    // per valid tile because ghost tiles can appear mid-packet (e.g. VGVV)
+                                    // when chunk_col_in_tiles wraps within a batch.
                                     uint32_t global_tile_idxs[num_tiles_to_write_per_packet];
+                                    uint32_t valid_l1_addrs[num_tiles_to_write_per_packet];
                                     uint32_t slice_tile_idx_first = 0;
                                     uint32_t num_in_bounds_tiles = 0;
-                                    uint32_t first_valid_l1 = l1_read_addr;
                                     for (uint32_t packet_slot = 0; packet_slot < tiles_to_put_in_current_packet;
                                          ++packet_slot) {
                                         const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
@@ -336,8 +337,9 @@ void kernel_main() {
                                                     actual_slice_idx,
                                                     slice_Wt,
                                                     input_tensor_Wt);
+                                            valid_l1_addrs[num_in_bounds_tiles] =
+                                                l1_read_addr + packet_slot * page_size;
                                             if (num_in_bounds_tiles == 0) {
-                                                first_valid_l1 = l1_read_addr + packet_slot * page_size;
                                                 slice_tile_idx_first = slice_coordinates_to_slice_tile_index(
                                                     slice_row, slice_col - cols_before_actual_slice, slice_Wt);
                                             }
@@ -359,6 +361,8 @@ void kernel_main() {
                                         // Send tile(s) to the intermediate buffer on the neighboring device.
                                         switch (num_in_bounds_tiles) {
                                             case 4: {
+                                                // All 4 tiles valid: valid_l1_addrs[0] == l1_read_addr,
+                                                // always contiguous — scatter from l1_read_addr is correct.
                                                 const auto noc_address0 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                                         intermediate_addrgen, global_tile_idxs[0], 0);
@@ -390,13 +394,36 @@ void kernel_main() {
                                                 const auto noc_address2 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                                         intermediate_addrgen, global_tile_idxs[2], 0);
-                                                fabric_unicast_noc_scatter_write_with_state<
-                                                    UnicastScatterWriteUpdateMask::DstAddrs>(
-                                                    &mux_connection_handle,
-                                                    pkt_scatter_hdr_3,
-                                                    l1_read_addr,
-                                                    NocUnicastScatterCommandHeader(
-                                                        {noc_address0, noc_address1, noc_address2}));
+                                                if (valid_l1_addrs[2] == valid_l1_addrs[0] + 2 * page_size) {
+                                                    // Valid tiles are contiguous in L1: scatter from first.
+                                                    fabric_unicast_noc_scatter_write_with_state<
+                                                        UnicastScatterWriteUpdateMask::DstAddrs>(
+                                                        &mux_connection_handle,
+                                                        pkt_scatter_hdr_3,
+                                                        valid_l1_addrs[0],
+                                                        NocUnicastScatterCommandHeader(
+                                                            {noc_address0, noc_address1, noc_address2}));
+                                                } else {
+                                                    // Ghost tile(s) in the middle: per-tile writes.
+                                                    fabric_unicast_noc_unicast_write_with_state<
+                                                        UnicastWriteUpdateMask::DstAddr>(
+                                                        &mux_connection_handle,
+                                                        pkt_unicast_hdr,
+                                                        valid_l1_addrs[0],
+                                                        NocUnicastCommandHeader{noc_address0});
+                                                    fabric_unicast_noc_unicast_write_with_state<
+                                                        UnicastWriteUpdateMask::DstAddr>(
+                                                        &mux_connection_handle,
+                                                        pkt_unicast_hdr,
+                                                        valid_l1_addrs[1],
+                                                        NocUnicastCommandHeader{noc_address1});
+                                                    fabric_unicast_noc_unicast_write_with_state<
+                                                        UnicastWriteUpdateMask::DstAddr>(
+                                                        &mux_connection_handle,
+                                                        pkt_unicast_hdr,
+                                                        valid_l1_addrs[2],
+                                                        NocUnicastCommandHeader{noc_address2});
+                                                }
                                                 break;
                                             }
                                             case 2: {
@@ -406,12 +433,29 @@ void kernel_main() {
                                                 const auto noc_address1 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                                         intermediate_addrgen, global_tile_idxs[1], 0);
-                                                fabric_unicast_noc_scatter_write_with_state<
-                                                    UnicastScatterWriteUpdateMask::DstAddrs>(
-                                                    &mux_connection_handle,
-                                                    pkt_scatter_hdr,
-                                                    l1_read_addr,
-                                                    NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                                                if (valid_l1_addrs[1] == valid_l1_addrs[0] + page_size) {
+                                                    // Valid tiles are contiguous in L1: scatter from first.
+                                                    fabric_unicast_noc_scatter_write_with_state<
+                                                        UnicastScatterWriteUpdateMask::DstAddrs>(
+                                                        &mux_connection_handle,
+                                                        pkt_scatter_hdr,
+                                                        valid_l1_addrs[0],
+                                                        NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                                                } else {
+                                                    // Ghost tile(s) in the middle: per-tile writes.
+                                                    fabric_unicast_noc_unicast_write_with_state<
+                                                        UnicastWriteUpdateMask::DstAddr>(
+                                                        &mux_connection_handle,
+                                                        pkt_unicast_hdr,
+                                                        valid_l1_addrs[0],
+                                                        NocUnicastCommandHeader{noc_address0});
+                                                    fabric_unicast_noc_unicast_write_with_state<
+                                                        UnicastWriteUpdateMask::DstAddr>(
+                                                        &mux_connection_handle,
+                                                        pkt_unicast_hdr,
+                                                        valid_l1_addrs[1],
+                                                        NocUnicastCommandHeader{noc_address1});
+                                                }
                                                 break;
                                             }
                                             case 1: {
@@ -422,7 +466,7 @@ void kernel_main() {
                                                     UnicastWriteUpdateMask::DstAddr>(
                                                     &mux_connection_handle,
                                                     pkt_unicast_hdr,
-                                                    first_valid_l1,
+                                                    valid_l1_addrs[0],
                                                     NocUnicastCommandHeader{noc_address0});
                                                 break;
                                             }
@@ -435,7 +479,7 @@ void kernel_main() {
                                             const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx_first;
                                             const uint64_t local_noc_addr =
                                                 get_noc_addr(output_tile_id, output_addrgen);
-                                            noc_async_write(first_valid_l1, local_noc_addr, page_size);
+                                            noc_async_write(valid_l1_addrs[0], local_noc_addr, page_size);
                                         }
                                     }
                                     l1_read_addr += page_size * tiles_to_put_in_current_packet;
