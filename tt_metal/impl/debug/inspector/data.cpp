@@ -50,6 +50,21 @@ Data::Data()
 }
 
 Data::~Data() {
+    // Clear all callbacks first to prevent use-after-free during destruction.
+    // The RPC server runs in a separate thread and may still be processing
+    // requests. If a request arrives after 'this' is destroyed but before stop()
+    // completes, the callback would access freed memory, causing a segfault.
+    // The generated RPC code checks for null callbacks and returns safely.
+    get_rpc_server().setGetProgramsCallback(nullptr);
+    get_rpc_server().setGetMeshDevicesCallback(nullptr);
+    get_rpc_server().setGetMeshWorkloadsCallback(nullptr);
+    get_rpc_server().setGetMeshWorkloadsRuntimeIdsCallback(nullptr);
+    get_rpc_server().setGetDevicesInUseCallback(nullptr);
+    get_rpc_server().setGetKernelCallback(nullptr);
+    get_rpc_server().setGetAllBuildEnvsCallback(nullptr);
+    get_rpc_server().setGetAllDispatchCoreInfosCallback(nullptr);
+    get_rpc_server().setGetMetalDeviceIdMappingsCallback(nullptr);
+
     rpc_server_controller.stop();
 }
 

@@ -7,9 +7,11 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
@@ -124,9 +126,10 @@ const std::string& MPIDistributedException::error_string() const noexcept { retu
 /* -------------------------- MPIRequest ---------------------------------- */
 
 Status MPIRequest::wait() {
+    std::lock_guard<std::mutex> lock(req_mutex_);
     MPI_Status status{};
     MPI_CHECK(MPI_Wait(&req_, &status));
-    done_ = true;
+    done_.test_and_set(std::memory_order_release);
 
     int count = 0;
     MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &count));
@@ -134,6 +137,7 @@ Status MPIRequest::wait() {
 }
 
 std::optional<Status> MPIRequest::test() {
+    std::lock_guard<std::mutex> lock(req_mutex_);
     MPI_Status status{};
     int flag = 0;
     MPI_CHECK(MPI_Test(&req_, &flag, &status));
@@ -141,22 +145,23 @@ std::optional<Status> MPIRequest::test() {
         return std::nullopt;
     }
 
-    done_ = true;
+    done_.test_and_set(std::memory_order_release);
     int count = 0;
     MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &count));
     return Status{Rank(status.MPI_SOURCE), Tag(status.MPI_TAG), count};
 }
 
 void MPIRequest::cancel() {
-    if (done_) {
+    std::lock_guard<std::mutex> lock(req_mutex_);
+    if (done_.test(std::memory_order_acquire)) {
         return;
     }
     MPI_CHECK(MPI_Cancel(&req_));
     MPI_CHECK(MPI_Request_free(&req_));
-    done_ = true;
+    done_.test_and_set(std::memory_order_release);
 }
 
-bool MPIRequest::active() const { return !done_; }
+bool MPIRequest::active() const { return !done_.test(std::memory_order_acquire); }
 
 /* -------------------------- MPIContext ---------------------------------- */
 
@@ -175,16 +180,33 @@ inline void init_env(int& argc, char**& argv) {
 }
 
 void MPIContext::create(int argc, char** argv) {
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     init_env(argc, argv);
     // it is a good idea to duplicate the world communicator
     // don't want to rely on the global comm_world which cannot be replaced
     current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+    current_world_initialized_.test_and_set(std::memory_order_release);
 }
 
 const ContextPtr& MPIContext::get_current_world() {
+    // Fast path: check atomic flag without acquiring mutex
+    // std::atomic_flag::test() returns true if the flag is set (C++20)
+    if (current_world_initialized_.test(std::memory_order_acquire)) {
+        // current_world_ is guaranteed to be initialized, but we need to
+        // synchronize with the write to current_world_. Use an acquire fence
+        // to ensure we see the fully initialized shared_ptr.
+        std::atomic_thread_fence(std::memory_order_acquire);
+        return current_world_;
+    }
+
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     if (!current_world_) {
         // Default initialization of MPIContext if not already initialized
-        MPIContext::create(0, nullptr);
+        int argc = 0;
+        char** argv = nullptr;
+        init_env(argc, argv);
+        current_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
+        current_world_initialized_.test_and_set(std::memory_order_release);
     }
     return current_world_;
 }
@@ -193,11 +215,18 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
     TT_FATAL(
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
         "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
+    std::lock_guard<std::mutex> lock(current_world_mutex_);
     MPIContext::current_world_ = ctx;
+    current_world_initialized_.test_and_set(std::memory_order_release);
 }
 
 bool MPIContext::is_initialized() {
-    int is_mpi_initialized;
+    // Fast path: check atomic flag without calling MPI
+    if (current_world_initialized_.test(std::memory_order_acquire)) {
+        return true;
+    }
+    // Slow path: verify with MPI if not yet initialized via our flag
+    int is_mpi_initialized = 0;
     MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
     return is_mpi_initialized != 0;
 }
@@ -221,6 +250,34 @@ Rank MPIContext::rank() const { return Rank(rank_); }
 Size MPIContext::size() const { return Size(size_); }
 bool MPIContext::supports_fault_tolerance() const { return OMPI_HAS_ULFM; }
 void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
+
+bool MPIContext::barrier_with_timeout(std::chrono::milliseconds timeout) const {
+    MPI_Request req{};
+    MPI_CHECK(MPI_Ibarrier(comm_, &req));
+
+    auto start_time = std::chrono::steady_clock::now();
+    int flag = 0;
+
+    while (!flag) {
+        MPI_CHECK(MPI_Test(&req, &flag, MPI_STATUS_IGNORE));
+        if (flag) {
+            return true;  // Barrier completed successfully
+        }
+
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed) >= timeout) {
+            // Cancel the request on timeout (best effort)
+            MPI_Cancel(&req);
+            MPI_Request_free(&req);
+            return false;  // Timeout occurred
+        }
+
+        // Small sleep to avoid busy-waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    return true;
+}
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 

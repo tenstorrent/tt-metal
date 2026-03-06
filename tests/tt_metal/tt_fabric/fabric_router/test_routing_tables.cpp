@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <stdexcept>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -506,6 +507,72 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneTests,
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
+
+TEST_F(ControlPlaneFixture, TestT3k1x8CustomMeshInitDoesNotSurfaceStdMapAt) {
+    const std::filesystem::path t3k_1x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto";
+
+    try {
+        auto control_plane = make_control_plane(t3k_1x8_mesh_graph_desc_path);
+        (void)control_plane;
+    } catch (const std::out_of_range& e) {
+        FAIL() << "Unexpected std::out_of_range from control-plane setup: " << e.what();
+    } catch (const std::exception& e) {
+        std::string what = e.what();
+        EXPECT_THAT(what, ::testing::Not(::testing::HasSubstr("unordered_map::at")));
+        EXPECT_THAT(what, ::testing::HasSubstr("descriptor"));
+    }
+}
+
+// Test that ControlPlaneInitFailure exception is properly defined and can be caught
+TEST(ControlPlaneExceptionTest, ControlPlaneInitFailureIsRuntimeError) {
+    // Verify ControlPlaneInitFailure inherits from std::runtime_error
+    try {
+        throw tt::tt_fabric::ControlPlaneInitFailure("test error message");
+    } catch (const std::runtime_error& e) {
+        // Should be catchable as std::runtime_error
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("test error message"));
+    } catch (...) {
+        FAIL() << "ControlPlaneInitFailure should inherit from std::runtime_error";
+    }
+
+    // Verify it can be caught specifically
+    try {
+        throw tt::tt_fabric::ControlPlaneInitFailure("specific error");
+    } catch (const tt::tt_fabric::ControlPlaneInitFailure& e) {
+        EXPECT_STREQ(e.what(), "specific error");
+    } catch (...) {
+        FAIL() << "ControlPlaneInitFailure should be catchable as its own type";
+    }
+}
+
+// Test that ControlPlaneInitFailure can be used for retry logic pattern
+TEST(ControlPlaneExceptionTest, ControlPlaneInitFailureRetryPattern) {
+    int attempt_count = 0;
+    const int kMaxAttempts = 3;
+
+    // Simulate a retry loop that eventually succeeds
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        attempt_count++;
+        try {
+            if (attempt < 3) {
+                // Simulate transient failure
+                throw tt::tt_fabric::ControlPlaneInitFailure("transient failure");
+            }
+            // Success on 3rd attempt
+            break;
+        } catch (const tt::tt_fabric::ControlPlaneInitFailure& e) {
+            // Expected - can retry
+            EXPECT_THAT(e.what(), ::testing::HasSubstr("transient"));
+            if (attempt == kMaxAttempts) {
+                FAIL() << "Should have succeeded before max attempts";
+            }
+        }
+    }
+
+    EXPECT_EQ(attempt_count, 3) << "Should have taken 3 attempts to succeed";
+}
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =

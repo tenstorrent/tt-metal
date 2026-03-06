@@ -790,13 +790,20 @@ void run_single_galaxy_pipeline(
                                        ? (num_ranks - 1u)
                                        : upstream_stage;  // stage 4's upstream is stage 3 (rank 3)
 
-    const auto& global_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
-    const tt::tt_fabric::MeshId my_mesh_id = std::get<0>(global_bindings.at(distributed::multihost::Rank(my_rank)));
-    const tt::tt_fabric::MeshId upstream_mesh_id =
-        std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
-    const tt::tt_fabric::MeshId downstream_mesh_id =
-        std::get<0>(global_bindings.at(distributed::multihost::Rank(downstream_rank)));
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    // Helper to safely unwrap the global logical binding.
+    // The control plane returns an optional to signal that a binding might not exist (e.g. for disconnected ranks),
+    // but in this test pipeline we expect these specific ranks to be bound, so we check explicitly and abort if missing
+    // rather than doing an unchecked .value() which would raise a less informative std::bad_optional_access.
+    auto get_mesh_id = [&control_plane](uint32_t rank) {
+        auto binding = control_plane.get_global_logical_binding(distributed::multihost::Rank(rank));
+        TT_FATAL(binding.has_value(), "Rank {} not found in global logical bindings", rank);
+        return std::get<0>(binding.value());
+    };
+
+    const tt::tt_fabric::MeshId my_mesh_id = get_mesh_id(my_rank);
+    const tt::tt_fabric::MeshId upstream_mesh_id = get_mesh_id(upstream_rank);
+    const tt::tt_fabric::MeshId downstream_mesh_id = get_mesh_id(downstream_rank);
 
     const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
 
@@ -1042,9 +1049,19 @@ void run_single_galaxy_rate_pipeline(
     const uint32_t downstream_rank = my_rank + 1;
     const uint32_t upstream_rank = my_rank - 1;  // wraps for rank 0, but unused there
 
-    const auto& global_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
-    const tt::tt_fabric::MeshId my_mesh_id = std::get<0>(global_bindings.at(distributed::multihost::Rank(my_rank)));
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Helper to safely unwrap the global logical binding.
+    // The control plane returns an optional to signal that a binding might not exist (e.g. for disconnected ranks),
+    // but in this test pipeline we expect these specific ranks to be bound, so we check explicitly and abort if missing
+    // rather than doing an unchecked .value() which would raise a less informative std::bad_optional_access.
+    auto get_mesh_id = [&control_plane](uint32_t rank) {
+        auto binding = control_plane.get_global_logical_binding(distributed::multihost::Rank(rank));
+        TT_FATAL(binding.has_value(), "Rank {} not found in global logical bindings", rank);
+        return std::get<0>(binding.value());
+    };
+
+    const tt::tt_fabric::MeshId my_mesh_id = get_mesh_id(my_rank);
 
     const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
 
@@ -1079,8 +1096,7 @@ void run_single_galaxy_rate_pipeline(
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
-        const tt::tt_fabric::MeshId downstream_mesh_id =
-            std::get<0>(global_bindings.at(distributed::multihost::Rank(downstream_rank)));
+        const tt::tt_fabric::MeshId downstream_mesh_id = get_mesh_id(downstream_rank);
         auto fwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(my_sender, logical_coord),
             distributed::MeshCoreCoord(downstream_recv, logical_coord));
@@ -1146,8 +1162,7 @@ void run_single_galaxy_rate_pipeline(
         auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
         const auto& end_coord = my_exit;
 
-        const tt::tt_fabric::MeshId upstream_mesh_id =
-            std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
+        const tt::tt_fabric::MeshId upstream_mesh_id = get_mesh_id(upstream_rank);
         auto bwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(upstream_exit, logical_coord),
             distributed::MeshCoreCoord(my_entry, logical_coord));
@@ -1198,10 +1213,8 @@ void run_single_galaxy_rate_pipeline(
         auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
         auto downstream_entry = pipeline_stages[downstream_rank].entry_node_coord;
 
-        const tt::tt_fabric::MeshId upstream_mesh_id =
-            std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
-        const tt::tt_fabric::MeshId downstream_mesh_id =
-            std::get<0>(global_bindings.at(distributed::multihost::Rank(downstream_rank)));
+        const tt::tt_fabric::MeshId upstream_mesh_id = get_mesh_id(upstream_rank);
+        const tt::tt_fabric::MeshId downstream_mesh_id = get_mesh_id(downstream_rank);
 
         auto bwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(upstream_exit, logical_coord),

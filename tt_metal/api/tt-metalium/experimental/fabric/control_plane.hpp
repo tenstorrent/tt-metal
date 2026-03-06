@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/fabric/control_plane_init_failure.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -14,7 +15,10 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 
+#include <atomic>
 #include <map>
+#include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <memory>
 #include <vector>
@@ -258,8 +262,12 @@ public:
     const MeshGraph& get_mesh_graph() const;
 
     // Get the logical node id to mesh id and mesh host rank id mapping
-    const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+    std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
     get_global_logical_bindings() const;
+
+    // Get the logical node id to mesh id and mesh host rank id mapping for a specific rank
+    std::optional<std::pair<MeshId, MeshHostRankId>> get_global_logical_binding(
+        tt_metal::distributed::multihost::Rank rank) const;
 
     // Check if the physical system supports the specified fabric configuration
     // Returns true if valid, false otherwise.
@@ -273,6 +281,17 @@ public:
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
+    // Set when MetalContext is tearing down; allows ControlPlane to return safe fallbacks
+    // instead of throwing when router maps are incomplete (e.g. custom mesh descriptors).
+    // Note: This is now managed internally by initialize_fabric_context() and clear_fabric_context().
+    void set_teardown_in_progress(bool in_progress) {
+        if (in_progress) {
+            teardown_in_progress_.test_and_set(std::memory_order_seq_cst);
+        } else {
+            teardown_in_progress_.clear(std::memory_order_seq_cst);
+        }
+    }
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }
@@ -341,6 +360,20 @@ private:
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
+
+    // Lock Ordering Hierarchy (to prevent deadlocks):
+    // 1. routing_tables_mutex_ (higher-level, shorter hold times)
+    // 2. global_bindings_mutex_ (lower-level, nested inside routing_tables if needed)
+    // 3. asic_id_to_fabric_node_cache_mutex_ (independent, only for cache)
+    //
+    // CRITICAL: MPI collective operations (broadcast, all_gather, barrier) must NEVER
+    // be called while holding any of these locks. All ranks must participate in MPI
+    // collectives, and holding locks during blocking MPI calls can cause deadlocks
+    // when other ranks are waiting for the lock.
+    //
+    // Mutex to protect routing tables during initialization and concurrent access
+    // Use shared_mutex for reader-writer pattern: multiple readers, exclusive writer
+    mutable std::shared_mutex routing_tables_mutex_;
     // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
     // to the physical channel id
     std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
@@ -348,6 +381,9 @@ private:
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
         global_logical_bindings_;
+    mutable std::shared_mutex global_bindings_mutex_;
+    // atomic_flag for lock-free initialization checks - guaranteed lock-free on all platforms
+    mutable std::atomic_flag global_bindings_initialized_ = ATOMIC_FLAG_INIT;
 
     // custom logic to order eth channels
     void order_ethernet_channels();
@@ -364,6 +400,7 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+    void validate_fabric_node_mapping_complete() const;
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
@@ -488,10 +525,17 @@ private:
     // Cache for faster asic_id to fabric_node_id lookup
     // Valid for the lifetime of the physical_system_descriptor_; cleared when fabric context is reset
     mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
+    mutable std::mutex asic_id_to_fabric_node_cache_mutex_;
 
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
     std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
+
+    // Logs all FabricNodeIds present in router_port_directions_to_physical_eth_chan_map_
+    // for triage when a lookup fails.
+    void log_available_fabric_node_ids() const;
+
+    mutable std::atomic_flag teardown_in_progress_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace tt::tt_fabric

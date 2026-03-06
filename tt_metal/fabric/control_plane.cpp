@@ -5,6 +5,7 @@
 #include <iostream>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +41,7 @@
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
+#include "host_api.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
@@ -54,6 +56,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
+#include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
@@ -64,6 +67,51 @@
 namespace tt::tt_fabric {
 
 namespace {
+
+// Timeout duration for MPI barriers - helps detect deadlocks during control plane initialization
+constexpr std::chrono::seconds CONTROL_PLANE_BARRIER_TIMEOUT{300};  // 5 minutes
+
+// Helper function to perform barrier with timeout and diagnostic logging
+// Returns true if barrier succeeded, false if timeout occurred
+bool barrier_with_logging(
+    const tt::tt_metal::distributed::multihost::DistributedContext& distributed_context,
+    const std::string& operation_name,
+    int line_number) {
+    int rank = *distributed_context.rank();
+    int world_size = *distributed_context.size();
+
+    log_debug(
+        tt::LogDistributed,
+        "Rank {}/{} entering barrier for '{}' at control_plane.cpp:{}",
+        rank,
+        world_size,
+        operation_name,
+        line_number);
+
+    bool success = distributed_context.barrier_with_timeout(CONTROL_PLANE_BARRIER_TIMEOUT);
+
+    if (!success) {
+        log_fatal(
+            tt::LogDistributed,
+            "Rank {}/{} TIMEOUT in barrier for '{}' at control_plane.cpp:{} after {} seconds. "
+            "This indicates a potential deadlock - not all ranks reached the barrier.",
+            rank,
+            world_size,
+            operation_name,
+            line_number,
+            CONTROL_PLANE_BARRIER_TIMEOUT.count());
+        return false;
+    }
+
+    log_debug(
+        tt::LogDistributed,
+        "Rank {}/{} completed barrier for '{}' at control_plane.cpp:{}",
+        rank,
+        world_size,
+        operation_name,
+        line_number);
+    return true;
+}
 
 // Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
 // This is a performance optimization to ensure that MGD mapping does not bisect a device.
@@ -275,7 +323,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             distributed_context.all_gather(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
-            distributed_context.barrier();
+            barrier_with_logging(distributed_context, "initialize_dynamic_routing_plane_counts", __LINE__);
             const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
             const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
             // TODO: specialize by topology for better perf
@@ -305,10 +353,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
-    // When unset, use UNSET sentinel value.
+    // When unset, assume host rank 0.
     const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
     const MeshHostRankId host_rank = (host_rank_str == nullptr)
-                                         ? MESH_HOST_RANK_UNSET
+                                         ? MeshHostRankId{0}
                                          : MeshHostRankId{static_cast<unsigned int>(std::stoi(host_rank_str))};
 
     // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
@@ -354,7 +402,12 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // Validate host rank (only if mesh_id is valid)
     const auto& host_ranks = this->mesh_graph_->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
     if (host_rank_str == nullptr) {
-        local_mesh_binding.host_rank = MESH_HOST_RANK_UNSET;
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+        TT_FATAL(
+            host_ranks.size() == 1 && *host_ranks.front() == 0,
+            "TT_MESH_HOST_RANK must be set when multiple host ranks are present in the mesh graph descriptor for mesh "
+            "ID {}",
+            *local_mesh_binding.mesh_ids[0]);
     } else {
         TT_FATAL(
             std::find(host_ranks.begin(), host_ranks.end(), local_mesh_binding.host_rank) != host_ranks.end(),
@@ -382,12 +435,17 @@ void ControlPlane::initialize_distributed_contexts() {
 
     // Use mesh_graph to get all (mesh_id, host_rank) pairs (this follows topology_mapper's mesh_rank_bindings),
     // then use topology_mapper's helper function to get the MPI rank for each (mesh_id, host_rank) pair.
-    for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
-        const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
-        for (const auto& [_, mesh_host_rank] : host_ranks) {
-            int mpi_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
-            mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
-            global_logical_bindings_[tt::tt_metal::distributed::multihost::Rank{mpi_rank}] = {mesh_id, mesh_host_rank};
+    // Hold exclusive lock while populating global_logical_bindings_ to ensure thread-safety with readers.
+    {
+        std::unique_lock<std::shared_mutex> lock(global_bindings_mutex_);
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
+            for (const auto& [_, mesh_host_rank] : host_ranks) {
+                int mpi_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
+                mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
+                global_logical_bindings_[tt::tt_metal::distributed::multihost::Rank{mpi_rank}] = {
+                    mesh_id, mesh_host_rank};
+            }
         }
     }
 
@@ -414,13 +472,19 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
         }
     }
+
+    // Signal that global_logical_bindings_ is fully populated and safe to read
+    global_bindings_initialized_.test_and_set(std::memory_order_release);
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
-    // Check cache first for faster lookup
-    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
-    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
-        return cache_it->second;
+    // Check cache first; mutex guards concurrent reads/writes to the unordered_map
+    {
+        std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+        auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+        if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+            return cache_it->second;
+        }
     }
 
     const auto& cluster = this->cluster_.get();
@@ -429,7 +493,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
         if (unique_id == asic_id) {
             FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-            // Cache the result for future lookups
+            std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
             asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
             return fabric_node_id;
         }
@@ -515,6 +579,10 @@ void ControlPlane::init_control_plane(
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
+    // NOTE: File operations are done with error tracking to ensure all ranks remain synchronized.
+    // If one rank fails and another succeeds, subsequent MPI collectives would deadlock.
+    int local_error_count = 0;
+
     std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
@@ -522,6 +590,7 @@ void ControlPlane::init_control_plane(
         tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
+        local_error_count++;
     }
 
     std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
@@ -531,6 +600,25 @@ void ControlPlane::init_control_plane(
         tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
+        local_error_count++;
+    }
+
+    // Synchronize error count across all ranks to ensure consistent state before MPI collectives
+    // This prevents deadlocks where some ranks throw exceptions and others don't
+    int global_error_count = 0;
+    distributed_context->all_reduce(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_error_count), sizeof(local_error_count)),
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&global_error_count), sizeof(global_error_count)),
+        tt::tt_metal::distributed::multihost::ReduceOp::SUM,
+        tt::tt_metal::distributed::multihost::DType::INT32);
+
+    if (global_error_count > 0) {
+        log_warning(
+            tt::LogFabric,
+            "Rank {}/{}: {} ranks had file serialization errors. Continuing with initialization...",
+            rank,
+            world_size,
+            global_error_count);
     }
 
     // Initialize routing table generator after topology_mapper is created
@@ -715,6 +803,9 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::initialize_fabric_context() {
+    // Clear teardown flag to allow normal operation
+    teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
         this->fabric_context_ = std::make_unique<FabricContext>(
             *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
@@ -1079,6 +1170,10 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
+    // Note: global_logical_bindings_ may not be initialized in single-host scenarios.
+    // The reads below use get_global_logical_binding() which returns nullopt if not initialized,
+    // and callers handle the missing binding gracefully with continue.
+
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -1175,14 +1270,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     // Assign this edge to all links on the local chip part of this intramesh connection
                     for (const auto& neighbor_host : neighbor_hosts) {
                         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-                        auto neighbor_mesh_id =
-                            this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                                .first;
-                        auto neighbor_mesh_host_rank =
-                            this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                                .second;
+                        auto neighbor_binding = this->get_global_logical_binding(
+                            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+                        if (!neighbor_binding.has_value()) {
+                            continue;
+                        }
+                        auto neighbor_mesh_id = neighbor_binding->first;
+                        auto neighbor_mesh_host_rank = neighbor_binding->second;
                         if (neighbor_mesh_id == mesh_id && neighbor_mesh_host_rank == connected_host_rank_id) {
                             const auto& neighbor_exit_nodes =
                                 physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
@@ -1220,6 +1314,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     this->convert_fabric_routing_table_to_chip_routing_table();
     // After this, router_port_directions_to_physical_eth_chan_map_, intra_mesh_routing_tables_,
     // inter_mesh_routing_tables_ should be populated for all hosts in BigMesh
+
+    // Validate that the fabric node mapping is complete; throws ControlPlaneInitFailure on
+    // transient failures so MetalContext can retry initialization with exponential backoff.
+    // Skip validation for mock devices - they use synthetic mappings that may be incomplete.
+    if (this->cluster_.get().get_target_device_type() != tt::TargetDevice::Mock) {
+        this->validate_fabric_node_mapping_complete();
+    }
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const {
@@ -2128,8 +2229,16 @@ std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() con
 }
 
 void ControlPlane::clear_fabric_context() {
+    // Set teardown flag to warn concurrent callers and provide safe fallback behavior
+    teardown_in_progress_.test_and_set(std::memory_order_seq_cst);
+
     this->fabric_context_.reset(nullptr);
-    asic_id_to_fabric_node_cache_.clear();
+
+    // Clear cache under mutex to avoid race with get_fabric_node_id_from_asic_id()
+    {
+        std::lock_guard<std::mutex> lock(asic_id_to_fabric_node_cache_mutex_);
+        asic_id_to_fabric_node_cache_.clear();
+    }
 }
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
@@ -2257,21 +2366,7 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     return local_mesh_ids;
 }
 
-MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const {
-    // TODO: Change mesh id to use topology mapper as well please
-    // Get host rank from topology mapper based on current host instead of using local_mesh_binding
-    // This ensures we use the actual mapped host rank rather than potentially UNSET values
-    // Use the first local mesh ID to get the host rank
-    const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
-    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found");
-    auto host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[0]);
-    TT_FATAL(
-        host_rank.has_value(),
-        "ControlPlane: Could not determine local host rank for mesh {}. "
-        "This may happen if the topology mapping has not been completed yet.",
-        local_mesh_ids[0].get());
-    return host_rank.value();
-}
+MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
 
 MeshCoordinate ControlPlane::get_local_mesh_offset() const {
     auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
@@ -2302,9 +2397,24 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
     return host_local_context_;
 }
 
-const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
 ControlPlane::get_global_logical_bindings() const {
+    std::shared_lock<std::shared_mutex> lock(global_bindings_mutex_);
     return global_logical_bindings_;
+}
+
+std::optional<std::pair<MeshId, MeshHostRankId>> ControlPlane::get_global_logical_binding(
+    tt_metal::distributed::multihost::Rank rank) const {
+    // Fast-path: if bindings have not been initialized yet, return nullopt without locking
+    if (!global_bindings_initialized_.test(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+    std::shared_lock<std::shared_mutex> lock(global_bindings_mutex_);
+    auto it = global_logical_bindings_.find(rank);
+    if (it == global_logical_bindings_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 // Helper function to fill connection info with common fields for fabric router configs
@@ -2544,7 +2654,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         }
         // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
         // root
-        distributed_context.barrier();
+        barrier_with_logging(distributed_context, "broadcast_router_port_directions", __LINE__);
     }
 }
 
@@ -2552,9 +2662,31 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 
 void ControlPlane::generate_intermesh_connectivity() {
     AnnotatedIntermeshConnections intermesh_connections;
+    const auto& distributed_context = this->distributed_context_.get();
 
-    auto generate_mapping_locally_ = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
-                                     (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
+    // Compute local decision for whether to generate mapping locally
+    // This depends on per-rank state (local_mesh_binding_) so we must synchronize across ranks
+    bool generate_mapping_locally = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
+                                    (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
+
+    // Synchronize the decision across all ranks using all_reduce with LAND
+    // If ANY rank needs multi-host processing (generate_mapping_locally=false), ALL ranks must participate
+    bool global_generate_mapping_locally = false;
+    distributed_context.all_reduce(
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(&generate_mapping_locally), sizeof(generate_mapping_locally)),
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(&global_generate_mapping_locally), sizeof(global_generate_mapping_locally)),
+        tt::tt_metal::distributed::multihost::ReduceOp::LAND,
+        tt::tt_metal::distributed::multihost::DType::BOOL);
+
+    log_debug(
+        tt::LogDistributed,
+        "Rank {}/{}: generate_intermesh_connectivity - local={}, global={}",
+        *distributed_context.rank(),
+        *distributed_context.size(),
+        generate_mapping_locally,
+        global_generate_mapping_locally);
 
     auto get_num_requested_intermesh_connections = [&]() -> size_t {
         const auto& mesh_graph = *this->mesh_graph_;
@@ -2567,7 +2699,9 @@ void ControlPlane::generate_intermesh_connectivity() {
                                                         : requested_intermesh_ports.size();
     };
 
-    if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
+    // Use the GLOBAL synchronized decision, not the local one
+    // This ensures ALL ranks take the same code path and participate in the same MPI collectives
+    if (!global_generate_mapping_locally && *(distributed_context.size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
         intermesh_connections = this->convert_port_desciptors_to_intermesh_connections(exit_node_port_descriptors);
@@ -2597,9 +2731,14 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::unordered_set<port_id_t>& assigned_port_ids) {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-    const auto& neighbor_binding = this->global_logical_bindings_.at(
+    auto neighbor_binding = this->get_global_logical_binding(
         tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
-    const auto neighbor_mesh_id = neighbor_binding.first;
+    TT_FATAL(
+        neighbor_binding.has_value(),
+        "Neighbor host {} (rank {}) not found in global logical bindings",
+        neighbor_host,
+        neighbor_host_rank);
+    const auto neighbor_mesh_id = neighbor_binding->first;
 
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
@@ -2678,15 +2817,13 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
 
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-        // Skip if neighbor host is not in our global logical bindings
-        if (!this->global_logical_bindings_.contains(
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})) {
+        // Skip if neighbor host is not in our global logical bindings (using thread-safe accessor)
+        auto neighbor_binding = this->get_global_logical_binding(
+            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+        if (!neighbor_binding.has_value()) {
             continue;
         }
-        auto neighbor_mesh_id =
-            this->global_logical_bindings_
-                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                .first;
+        auto neighbor_mesh_id = neighbor_binding->first;
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {
@@ -2829,7 +2966,7 @@ void ControlPlane::forward_descriptors_to_controller(
             }
         }
     }
-    distributed_context.barrier();
+    barrier_with_logging(distributed_context, "forward_descriptors_to_controller", __LINE__);
 }
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
@@ -2873,7 +3010,7 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
             Tag{0});
         intermesh_connections = deserialize_intermesh_connections_from_bytes(serialized_connections);
     }
-    distributed_context.barrier();
+    barrier_with_logging(distributed_context, "forward_intermesh_connections_from_controller", __LINE__);
 }
 
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
@@ -3259,7 +3396,50 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
 }
 
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+    if (teardown_in_progress_.test(std::memory_order_seq_cst)) {
+        log_warning(
+            tt::LogFabric,
+            "get_asic_id_from_fabric_node_id called during teardown for Mesh {} Chip {}. "
+            "Returning 0 as safe fallback.",
+            fabric_node_id.mesh_id,
+            fabric_node_id.chip_id);
+        return tt::tt_metal::AsicID{0};
+    }
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+}
+
+void ControlPlane::log_available_fabric_node_ids() const {
+    log_warning(
+        tt::LogFabric,
+        "Available FabricNodeIds in router port directions map ({} entries):",
+        this->router_port_directions_to_physical_eth_chan_map_.size());
+    for (const auto& [fabric_node_id, _] : this->router_port_directions_to_physical_eth_chan_map_) {
+        log_warning(tt::LogFabric, "  Mesh {} Chip {}", fabric_node_id.mesh_id, fabric_node_id.chip_id);
+    }
+}
+
+void ControlPlane::validate_fabric_node_mapping_complete() const {
+    if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+        throw ControlPlaneInitFailure(
+            "Fabric node to physical chip mapping is empty after initialization. "
+            "This indicates a transient race condition or incomplete mesh graph descriptor.");
+    }
+
+    for (const auto& [fabric_node_id, _] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
+            log_warning(
+                tt::LogFabric,
+                "FabricNodeId Mesh {} Chip {} is in the chip mapping but missing from router port directions map.",
+                fabric_node_id.mesh_id,
+                fabric_node_id.chip_id);
+            log_available_fabric_node_ids();
+            throw ControlPlaneInitFailure(
+                "FabricNodeId Mesh " + std::to_string(*fabric_node_id.mesh_id) + " Chip " +
+                std::to_string(fabric_node_id.chip_id) +
+                " present in chip mapping but absent from router port directions map. "
+                "This may indicate a transient race condition during multi-process initialization.");
+        }
+    }
 }
 
 ControlPlane::~ControlPlane() = default;

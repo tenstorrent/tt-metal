@@ -81,6 +81,8 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    // NOTE: DeviceManager is not internally synchronized. Access should only occur during
+    // single-threaded initialization/teardown phases or through thread-safe APIs on Device.
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
@@ -192,6 +194,10 @@ private:
     // Mutex to protect control_plane_ for thread-safe access
     std::mutex control_plane_mutex_;
 
+    // Atomic flag to prevent control plane initialization during teardown
+    // This prevents deadlocks where get_control_plane() is called during destruction
+    std::atomic_flag control_plane_teardown_in_progress_ = ATOMIC_FLAG_INIT;
+
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
@@ -225,6 +231,7 @@ private:
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
+    std::mutex compute_only_context_mutex_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread

@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <system_error>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -650,17 +651,22 @@ void JitBuildState::weaken(const string& out_dir) const {
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
-    static std::atomic<bool> new_log = true;
     if (env_.get_rtoptions().get_profiler_enabled()) {
-        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
-        }
+        // Use std::call_once to ensure thread-safe initialization of the log file
+        static std::once_flag init_flag;
+        std::call_once(init_flag, []() {
+            if (std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+                std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+            }
+            if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+                tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
+            }
+        });
 
-        if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
-        }
-
+        // Mutex to protect concurrent appends to the global log file
+        static std::mutex profiler_log_mutex;
         auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
+        std::lock_guard<std::mutex> lock(profiler_log_mutex);
         tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
     }
 }
@@ -677,10 +683,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     }
     const size_t num_objs = this->objs_.size();
 
-    fs::create_directories(out_dir);
-
-    // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
-    // have changed, force full recompilation and relinking.
+    // Handle race conditions in directory creation - another thread may have created it
+    std::error_code ec;
+    fs::create_directories(out_dir, ec);
+    // Ignore errors if directory already exists (another thread created it)
+    if (ec && ec != std::errc::file_exists) {
+        log_warning(tt::LogBuildKernels, "Failed to create directory {}: {}", out_dir, ec.message());
+    }
     bool state_changed = !build_state_matches(out_dir);
 
     auto compiled = compile(out_dir, settings, state_changed);
@@ -709,7 +718,11 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
     for (const auto* target : link_targets) {
         string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
-        fs::create_directories(target_out_dir);
+        fs::create_directories(target_out_dir, ec);
+        // Ignore errors if directory already exists (another thread created it)
+        if (ec && ec != std::errc::file_exists) {
+            log_warning(tt::LogBuildKernels, "Failed to create directory {}: {}", target_out_dir, ec.message());
+        }
         if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
             target->link(target_out_dir, settings, link_objs);
@@ -724,18 +737,40 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
     if (!link_objs.empty()) {
         // Rename the temporary .o and .dephash files after linking is done.
+        // Handle race conditions - another thread may have already renamed/removed the file
         fs::path src_path = out_dir;
         fs::path dst_path = out_dir;
         for (size_t i = 0; i < num_objs; ++i) {
             src_path.replace_filename(this->temp_objs_[i]);
             dst_path.replace_filename(this->objs_[i]);
             if (compiled.test(i)) {
-                fs::rename(src_path, dst_path);
+                fs::rename(src_path, dst_path, ec);
+                // Ignore if source doesn't exist (another thread already renamed it)
+                if (ec && ec != std::errc::no_such_file_or_directory) {
+                    log_warning(
+                        tt::LogBuildKernels,
+                        "Failed to rename {} to {}: {}",
+                        src_path.string(),
+                        dst_path.string(),
+                        ec.message());
+                }
                 src_path += ".dephash";
                 dst_path += ".dephash";
-                fs::rename(src_path, dst_path);
+                fs::rename(src_path, dst_path, ec);
+                if (ec && ec != std::errc::no_such_file_or_directory) {
+                    log_warning(
+                        tt::LogBuildKernels,
+                        "Failed to rename {} to {}: {}",
+                        src_path.string(),
+                        dst_path.string(),
+                        ec.message());
+                }
             } else {
-                fs::remove(src_path);
+                fs::remove(src_path, ec);
+                // Ignore if file doesn't exist (another thread already removed it)
+                if (ec && ec != std::errc::no_such_file_or_directory) {
+                    log_warning(tt::LogBuildKernels, "Failed to remove {}: {}", src_path.string(), ec.message());
+                }
             }
         }
     }

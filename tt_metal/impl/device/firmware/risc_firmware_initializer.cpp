@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <future>
+#include <mutex>
 #include <set>
 
 #include <enchantum/enchantum.hpp>
@@ -113,6 +114,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             tt::ChipId device_id = refs.device_id;
             // Clear L1/DRAM if requested - skip for mock devices
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+                // Lock cluster operations for thread-safe hardware access
+                std::lock_guard<std::mutex> lock(cluster_ops_mutex_);
                 if (rtoptions_.get_clear_l1()) {
                     clear_l1_state(device_id);
                 }
@@ -143,6 +146,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
                 // can enter an undefined state by reading a corrupted launch message. Routing firmware will never
                 // run in this case, causing UMD issued transactions to hang.
+                // Lock cluster operations for thread-safe hardware access
+                std::lock_guard<std::mutex> lock(cluster_ops_mutex_);
                 clear_launch_messages_on_eth_cores(device_id);
             }
         }));
@@ -164,7 +169,9 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             initialize_and_launch_firmware(device_id);
         }
     }
-    initialized_ = true;
+    // Set the initialized flag with sequential consistency to ensure all previous
+    // operations are visible to other threads before the flag is set.
+    initialized_.test_and_set(std::memory_order_seq_cst);
 }
 
 void RiscFirmwareInitializer::configure() {}
@@ -208,10 +215,17 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         }
     }
 
-    initialized_ = false;
+    // Clear the initialized flag with sequential consistency to ensure all previous
+    // operations are completed before the flag is cleared.
+    initialized_.clear(std::memory_order_seq_cst);
 }
 
-bool RiscFirmwareInitializer::is_initialized() const { return initialized_; }
+bool RiscFirmwareInitializer::is_initialized() const {
+    // Use acquire memory order to synchronize with the release in run_launch_phase.
+    // This ensures that if is_initialized returns true, all initialization side effects
+    // are visible to the calling thread.
+    return initialized_.test(std::memory_order_acquire);
+}
 
 void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
     log_debug(tt::LogMetal, "Clearing L1 for device {}", device_id);
@@ -400,6 +414,10 @@ CoreCoord RiscFirmwareInitializer::virtual_noc0_coordinate(tt::ChipId device_id,
 }
 
 void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(tt::ChipId device_id) {
+    // Lock tables_mutex_ for thread-safe map access when directly accessing unordered_map.
+    // Note: The async phase uses pointer isolation (passing vector references) which is
+    // thread-safe since each device accesses only its own vectors.
+    std::lock_guard<std::mutex> lock(tables_mutex_);
     generate_device_bank_to_noc_tables(
         device_id,
         dram_bank_offset_map_[device_id],
@@ -477,6 +495,10 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
 }
 
 void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(tt::ChipId device_id) {
+    // Lock tables_mutex_ for thread-safe map access when directly accessing unordered_map.
+    // Note: The async phase uses pointer isolation (passing vector references) which is
+    // thread-safe since each device accesses only its own vectors.
+    std::lock_guard<std::mutex> lock(tables_mutex_);
     generate_worker_logical_to_virtual_map(
         device_id, worker_logical_col_to_virtual_col_[device_id], worker_logical_row_to_virtual_row_[device_id]);
 }
@@ -512,6 +534,9 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
+    // Lock tables_mutex_ for thread-safe table reads during launch phase.
+    // run_launch_phase is single-threaded, but this protects against future concurrent access.
+    std::lock_guard<std::mutex> lock(tables_mutex_);
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -593,6 +618,9 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
 
 void RiscFirmwareInitializer::initialize_worker_logical_to_virtual_tables(
     tt::ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core) {
+    // Lock tables_mutex_ for thread-safe table reads during launch phase.
+    // run_launch_phase is single-threaded, but this protects against future concurrent access.
+    std::lock_guard<std::mutex> lock(tables_mutex_);
     const auto& soc_desc = cluster_.get_soc_desc(device_id);
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
         worker_logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);

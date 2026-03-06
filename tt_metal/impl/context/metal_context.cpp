@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <filesystem>
@@ -25,6 +26,7 @@
 #include "hal_types.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "allocator/allocator.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -37,6 +39,7 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
@@ -155,6 +158,11 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
 
+    // Clear the teardown flag to allow control plane access during initialization.
+    // The flag may have been set by a previous teardown() call; clearing it here
+    // ensures get_control_plane() can proceed with lazy initialization.
+    control_plane_teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     // Workaround for galaxy, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
         force_reinit_ = true;
@@ -265,7 +273,7 @@ void MetalContext::initialize(
     risc_firmware_initializer_->run_async_build_phase(device_ids);
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+    if (has_flag(this->get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
         cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), true);
     }
@@ -305,6 +313,10 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    // NOTE: Do NOT set control_plane_teardown_in_progress_ here.
+    // teardown() is called between tests to reset state for reuse - lazy init should
+    // be allowed afterwards. The flag is only set in teardown_base_objects() which is
+    // called during actual destruction (process exit or mock-to-real switch).
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
@@ -340,8 +352,11 @@ void MetalContext::teardown() {
     // Deinitialize inspector
     inspector_data_.reset();
 
-    system_mesh_.reset();
-    control_plane_.reset();
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        system_mesh_.reset();
+        control_plane_.reset();
+    }
 
     noc_debug_state_.reset();
 }
@@ -397,9 +412,15 @@ void MetalContext::destroy_instance(bool check_device_count) {
 }
 
 void MetalContext::teardown_base_objects() {
+    // Set flag to prevent lazy initialization during teardown
+    control_plane_teardown_in_progress_.test_and_set(std::memory_order_seq_cst);
+
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
-    system_mesh_.reset();
-    control_plane_.reset();
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        system_mesh_.reset();
+        control_plane_.reset();
+    }
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
@@ -419,6 +440,10 @@ void MetalContext::teardown_dispatch_state() {
 }
 
 void MetalContext::initialize_base_objects() {
+    // Clear teardown flag to allow control plane initialization during reinit flows
+    // (e.g. reinitialize_for_real_hardware calls teardown_base_objects then initialize_base_objects)
+    control_plane_teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
@@ -532,8 +557,16 @@ const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) 
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
+
     if (!control_plane_) {
-        // Initialize control plane (creates stub for mock devices)
+        // Prevent lazy initialization during teardown to avoid deadlocks and use-after-free.
+        // Only guard the lazy-init path: if control_plane_ is already valid, always return it.
+        if (control_plane_teardown_in_progress_.test(std::memory_order_seq_cst)) {
+            TT_THROW(
+                "ControlPlane is being destroyed. Cannot access control plane during teardown. "
+                "Ensure all devices are closed before destroying MetalContext.");
+        }
+        log_debug(tt::LogDistributed, "Lazy initializing ControlPlane from get_control_plane()");
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
@@ -542,6 +575,12 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
 distributed::SystemMesh& MetalContext::get_system_mesh() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!system_mesh_) {
+        // Prevent lazy initialization during teardown (consistent with get_control_plane).
+        if (control_plane_teardown_in_progress_.test(std::memory_order_seq_cst)) {
+            TT_THROW(
+                "ControlPlane is being destroyed. Cannot access system mesh during teardown. "
+                "Ensure all devices are closed before destroying MetalContext.");
+        }
         if (!control_plane_) {
             this->initialize_control_plane_impl();
         }
@@ -588,8 +627,17 @@ void MetalContext::teardown_fabric_config() {
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
-    // Stub control plane for mock devices will make this a no-op
-    this->get_control_plane().clear_fabric_context();
+
+    // Only clear if control plane exists; do not call get_control_plane() or
+    // we may lazily create one during teardown (e.g. after devices are
+    // closed), which can trigger topology mapper failures.
+    // Note: do NOT set control_plane_teardown_in_progress_ here — this function only
+    // clears the fabric context but leaves control_plane_ alive. Setting the flag here
+    // would block legitimate get_control_plane() calls in subsequent test setup.
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    if (control_plane_) {
+        control_plane_->clear_fabric_context();
+    }
 }
 
 void MetalContext::set_fabric_config(
@@ -827,6 +875,10 @@ void MetalContext::initialize_control_plane() {
 }
 
 void MetalContext::initialize_control_plane_impl() {
+    // Reset teardown flag to allow control plane initialization
+    // This is needed when re-initializing after a previous teardown
+    control_plane_teardown_in_progress_.clear(std::memory_order_seq_cst);
+
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());

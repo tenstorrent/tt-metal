@@ -5,7 +5,9 @@
 #pragma once
 
 #include <mpi.h>
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -47,7 +49,9 @@ public:
 
 private:
     mutable MPI_Request req_{};
-    bool done_{};
+    mutable std::mutex req_mutex_;
+    // atomic_flag is guaranteed lock-free on all platforms
+    mutable std::atomic_flag done_ = ATOMIC_FLAG_INIT;
 };
 
 // ---------------------------------------------------------------------
@@ -69,6 +73,7 @@ public:
     [[nodiscard]] Size size() const override;
     [[nodiscard]] bool supports_fault_tolerance() const override;
     void barrier() const override;
+    bool barrier_with_timeout(std::chrono::milliseconds timeout) const override;
 
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
@@ -127,6 +132,9 @@ private:
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD
     inline static ContextPtr current_world_;
+    inline static std::mutex current_world_mutex_;
+    // atomic_flag for lock-free is_initialized() checks - guaranteed lock-free on all platforms
+    inline static std::atomic_flag current_world_initialized_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

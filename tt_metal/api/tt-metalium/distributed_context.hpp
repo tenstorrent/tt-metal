@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
@@ -167,6 +168,10 @@ public:
 
     //--- Synchronization ----------------------------------------------------
     virtual void barrier() const = 0;
+
+    /// Barrier with timeout. Returns true if barrier completed successfully,
+    /// false if timeout occurred. Throws on MPI error.
+    virtual bool barrier_with_timeout(std::chrono::milliseconds timeout) const = 0;
 
     //--- Point-to-point (blocking) -----------------------------------------
     virtual void send(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;

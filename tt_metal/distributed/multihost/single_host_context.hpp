@@ -4,8 +4,13 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include "api/tt-metalium/distributed_context.hpp"
+
+// Note: std::atomic_flag is guaranteed to be lock-free on all platforms,
+// making it preferable to std::atomic<bool> for initialization flags.
 
 namespace tt::tt_metal::distributed::multihost {
 // ---------------------------------------------------------------------
@@ -35,6 +40,7 @@ public:
 
     /* --------------- the rest of the methods are unsupported and throw --------- */
     void barrier() const override;
+    bool barrier_with_timeout(std::chrono::milliseconds timeout) const override;
 
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
@@ -81,6 +87,9 @@ private:
 
     // caching our own world communicator
     inline static ContextPtr current_world_;
+    inline static std::mutex current_world_mutex_;
+    // atomic_flag for lock-free is_initialized() checks - guaranteed lock-free on all platforms
+    inline static std::atomic_flag current_world_initialized_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

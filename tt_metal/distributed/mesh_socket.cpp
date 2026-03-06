@@ -83,16 +83,19 @@ void MeshSocket::process_host_ranks() {
         rank_translation_table_[config_.sender_rank] = config_.sender_rank;
         rank_translation_table_[config_.receiver_rank] = config_.receiver_rank;
     }
-    const auto& global_logical_bindings =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
+    auto sender_binding =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_binding(sender_rank);
+    auto receiver_binding =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_binding(receiver_rank);
+
     TT_FATAL(
-        global_logical_bindings.contains(sender_rank) && global_logical_bindings.contains(receiver_rank),
+        sender_binding.has_value() && receiver_binding.has_value(),
         "Invalid socket sender rank {} or receiver rank {} specified.",
         *sender_rank,
         *receiver_rank);
 
-    config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
-    config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
+    config_.sender_mesh_id = std::get<0>(sender_binding.value());
+    config_.receiver_mesh_id = std::get<0>(receiver_binding.value());
     // These ranks belong to the global distributed context. Use them to ensure
     // that the hosts they correspond to own socket connection coordinates.
     validate_device_ownership(sender_rank, receiver_rank, config_);
