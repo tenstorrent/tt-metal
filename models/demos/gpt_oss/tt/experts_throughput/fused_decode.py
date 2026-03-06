@@ -58,8 +58,12 @@ def fused_decode_forward(
         so PCC vs. a reference with bias+weighting will be off — expected until
         proper routing-weight application is implemented.
     """
-    # Ensure hidden_states is in L1 (all_to_all_dispatch_metadata requires L1 input tokens).
-    # If already in L1 this is a no-op; otherwise moves from DRAM → L1.
+    # Ensure hidden_states is in ROW_MAJOR L1 (all_to_all_dispatch_metadata requires both).
+    # In production the prior layer outputs TILE_LAYOUT; dispatch needs ROW_MAJOR.
+    if hidden_states.layout != ttnn.ROW_MAJOR_LAYOUT:
+        hidden_states_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(hidden_states)
+        hidden_states = hidden_states_rm
     if hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
         hidden_states_l1 = ttnn.to_memory_config(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(hidden_states)

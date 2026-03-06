@@ -727,8 +727,9 @@ def create_fused_moe_gpt_config(
     w2 = w2.float()
 
     # --- Prepare fused kernel weights (DRAM HEIGHT_SHARDED) ---
-    device0 = mesh_device.get_device(0, 0)
-    ring2cores = _build_ring2cores(device0)
+    # _build_ring2cores uses get_optimal_dram_bank_to_logical_worker_assignment which
+    # works on both single Device and MeshDevice objects.
+    ring2cores = _build_ring2cores(mesh_device)
     num_cores = len(ring2cores)
     L = 1  # single-layer mode
 
