@@ -220,9 +220,9 @@ class SD35JointAttention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
-                add_q_BHLE,
-                add_k_BHLE,
-                add_v_BHLE,
+                joint_tensor_q=add_q_BHLE,
+                joint_tensor_k=add_k_BHLE,
+                joint_tensor_v=add_v_BHLE,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),

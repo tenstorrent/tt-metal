@@ -2073,6 +2073,7 @@ void sdpa_standard(
     const uint32_t k_num_chunks,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t cb_q_in,
@@ -2100,7 +2101,6 @@ void sdpa_standard(
         DHt,
         vDHt,
         use_attention_sink,
-        is_causal,
         use_provided_mask,
         use_padded_mask,
         false,  // use_joint_mask (not used)
@@ -2129,6 +2129,7 @@ void sdpa_standard(
         k_num_chunks,  // iter_k_chunk_end
         q_chunk_tiles,
         k_chunk_tiles,
+        v_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
         0,      // mask_chunk_0 (not used)
@@ -2159,7 +2160,9 @@ void sdpa_standard(
         0,  // cb_lse_in (not used)
         0,  // cb_lse_out (not used)
         0,  // cb_prev_out (not used)
-        cb_out);
+        cb_out,
+        {},  // lw_mask (not used)
+        is_causal);
 }
 
 /**
@@ -2221,7 +2224,6 @@ void sdpa_joint(
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
-        false,  // is_causal (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)
         use_joint_mask,
@@ -2249,6 +2251,7 @@ void sdpa_joint(
         0,             // iter_k_chunk_start
         k_num_chunks,  // iter_k_chunk_end
         q_chunk_tiles,
+        k_chunk_tiles,
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
@@ -2481,7 +2484,6 @@ void sdpa_windowed(
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
-        false,  // is_causal (not used)
         true,   // use_provided_mask (used)
         false,  // use_padded_mask (not used)
         false,  // use_joint_mask (not used)
@@ -2509,6 +2511,7 @@ void sdpa_windowed(
         0,  // iter_k_chunk_start
         0,  // iter_k_chunk_end (not used -- uses Skt)
         q_chunk_tiles,
+        k_chunk_tiles,
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
