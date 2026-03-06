@@ -4,8 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"

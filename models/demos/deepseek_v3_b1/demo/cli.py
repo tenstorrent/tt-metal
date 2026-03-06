@@ -9,37 +9,16 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import TextIO
 
-import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
 from conftest import bh_2d_mesh_device_context
-from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.pipeline import (
-    WeightProvider,
-    create_fabric_router_config,
-    create_pipeline_configuration_from_num_procs,
-)
-from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    DeepSeekV3DenseLayerWeights,
-    DeepSeekV3EmbeddingLayerWeights,
-    DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
-    load_dense_decoder_layer,
-    load_embedding_weights,
-    load_lm_head_weights,
-    load_moe_decoder_layer,
-    load_moe_routed_experts,
-    prepare_embedding_weights,
-    prepare_lm_head_weights,
-)
+from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
-FIRST_K_DENSE_REPLACE = 3
 
 
 def _fabric_config_for_num_procs(num_procs: int):
@@ -48,7 +27,9 @@ def _fabric_config_for_num_procs(num_procs: int):
         return ttnn.FabricConfig.FABRIC_2D
     if num_procs == 16:
         return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4 or 16)")
+    if num_procs == 64:
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
 
 
 @contextlib.contextmanager
@@ -72,85 +53,9 @@ def open_mesh_device():
         yield mesh_device
 
 
-def decoder_layer_id_from_mesh_id(mesh_id: int) -> int:
-    """
-    Layer ID is the index of the layer in the original model (i.e. layer 0-3 are dense layers, layer 4-60 are MoE layers)
-    The mesh ID is the pipeline stage index (0 is embedding, 1-3 are dense layers, 4-61 are MoE, and 62 is LM head + sampling)
-    """
-    assert mesh_id > 0 and mesh_id <= 61, f"Cannot get layer ID from mesh ID: {mesh_id}"
-    return mesh_id - 1
-
-
-SYSTEM_MESH_ID_EMBEDDING = 0
-SYSTEM_MESH_ID_LM_HEAD = 62
-
-
-class CacheWeightProvider:
-    """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
-
-    def __init__(self, cache_path: Path) -> None:
-        self._path = cache_path
-
-    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        return load_embedding_weights(self._path, device)
-
-    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        return load_lm_head_weights(self._path, device)
-
-
-class SyntheticWeightProvider:
-    """Create deterministic synthetic embedding and LM head weights in place (no cache)."""
-
-    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        emb_w = torch.zeros((129280, 7168), dtype=torch.bfloat16)
-        emb_w[torch.arange(129280), torch.arange(129280, dtype=torch.int64) % 7168] = 1
-        return prepare_embedding_weights({"model.embed_tokens.weight": emb_w}, device, move_to_device=True)
-
-    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        lm_w = torch.full((129280, 7168), -1.0, dtype=torch.bfloat16)
-        lm_w[torch.arange(7168, dtype=torch.int64) % 16160, torch.arange(7168)] = 1
-        return prepare_lm_head_weights(
-            {
-                "lm_head.weight": lm_w,
-                "model.norm.weight": torch.ones(7168, dtype=torch.bfloat16),
-            },
-            device,
-            move_to_device=True,
-        )
-
-
-def load_weights_from_cache(
-    cache_path: Path,
-    mesh_device: ttnn.MeshDevice,
-    layer_offset: int,
-) -> (
-    DeepSeekV3EmbeddingLayerWeights | DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights | DeepSeekV3LMHeadWeights
-):
-    """Load weights from cache (embedding, decoder layer, or lm_head)."""
-    mesh_id = mesh_device.get_system_mesh_id() + layer_offset
-    assert (
-        mesh_id >= SYSTEM_MESH_ID_EMBEDDING and mesh_id <= SYSTEM_MESH_ID_LM_HEAD
-    ), f"Mesh ID must be between {SYSTEM_MESH_ID_EMBEDDING} and {SYSTEM_MESH_ID_LM_HEAD} but got {mesh_id}"
-    if mesh_id == SYSTEM_MESH_ID_EMBEDDING:
-        logger.info("Loading embedding weights from cache")
-        return load_embedding_weights(cache_path, mesh_device)
-    elif mesh_id == SYSTEM_MESH_ID_LM_HEAD:
-        logger.info("Loading LM head weights from cache")
-        return load_lm_head_weights(cache_path, mesh_device)
-    else:
-        layer_id = decoder_layer_id_from_mesh_id(mesh_id)
-        is_moe = layer_id >= FIRST_K_DENSE_REPLACE
-        logger.info(f"Loading {'moe' if is_moe else 'dense'} layer weights from cache")
-        if is_moe:
-            with ttnn.device.setup_fast_dispatch(mesh_device):
-                preloaded_experts = load_moe_routed_experts(cache_path, mesh_device, layer_id)
-            return load_moe_decoder_layer(cache_path, mesh_device, layer_id, preloaded_routed_experts=preloaded_experts)
-        return load_dense_decoder_layer(cache_path, mesh_device, layer_id)
-
-
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN (pod pipeline)")
-    parser.add_argument("--prompt", type=str, default="", help="Prompt text (for future real decode loop)")
+    parser.add_argument("--prompt", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)")
     parser.add_argument(
         "--max-new-tokens",
         type=int,
@@ -167,13 +72,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--cache-path",
         type=Path,
         required=True,
-        help="Path to the weight cache directory (for future real weights)",
+        help="Path to the weight cache directory (required for --weights real)",
     )
     parser.add_argument(
-        "--layer-id-offset",
-        type=int,
-        default=0,
-        help="Layer ID offset (for future multi-pod offset)",
+        "--weights",
+        type=str,
+        choices=("synthetic", "real"),
+        default="synthetic",
+        help="Use synthetic or real (cached) weights (default: synthetic)",
     )
     parser.add_argument(
         "--fp32",
@@ -186,6 +92,20 @@ def create_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Use persistent mode for LMHead sampling kernel",
+    )
+    parser.add_argument(
+        "--dense-layer-id-override",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Force all dense stages to use this layer id (e.g. 0); default: use 0,1,2",
+    )
+    parser.add_argument(
+        "--moe-layer-id-override",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     return parser
 
@@ -200,63 +120,54 @@ def run_demo(
     max_new_tokens: int,
     tokenizer_name_or_path: str,
     cache_path: Path,
-    layer_id_offset: int = 0,
-    fp32: bool = True,
-    persistent_mode: bool = True,
-    output_stream: TextIO,
+    use_real_weights: bool = False,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
 ) -> None:
-    """Run the pod pipeline (synthetic weights). Requires 4 or 16 distributed processes."""
+    """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
-    logger.info(
-        "Starting DeepSeek V3 B1 demo pod pipeline (iterations={}, layer_id_offset={}, fp32={}, persistent_mode={})",
-        iterations,
-        layer_id_offset,
-        fp32,
-        persistent_mode,
-    )
-    if not is_slow_dispatch():
-        raise RuntimeError(
-            "DeepSeek V3 B1 demo requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
-        )
+    logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
     with open_mesh_device() as mesh_device:
-        num_procs = int(ttnn.distributed_context_get_size())
-        if num_procs not in (4, 16):
-            raise RuntimeError(f"Pod pipeline requires 4 or 16 distributed processes; got {num_procs}")
-        ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-
-        # Each host loads/creates only the weights for its stage via the provider.
-        provider: WeightProvider = SyntheticWeightProvider()
-        config = create_pipeline_configuration_from_num_procs(
-            num_procs,
-            provider,
-            fp32_dest_acc_en=fp32,
-            persistent_mode=persistent_mode,
+        # Initialize model pipeline
+        model_pipeline = ModelPipeline(
+            mesh_device=mesh_device,
+            cache_path=cache_path,
+            use_real_weights=use_real_weights,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            dense_layer_id_override=dense_layer_id_override,
+            moe_layer_id_override=moe_layer_id_override,
         )
 
-        logger.info(f"Building pipeline")
-        pipeline = config.build_pipeline(mesh_device)
+        # Run prefill + decode loop
+        my_mesh_id = mesh_device.get_system_mesh_id()
+        if my_mesh_id == 0:
+            # Prefill + decode pattern per model.py: prefill(prompt) -> sample y0; decode_step(y_t) -> sample y_{t+1}.
+            tokenizer = load_tokenizer(tokenizer_name_or_path)
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
+            logger.debug(f"Encoded prompt: {prompt_ids}")
+            if not prompt_ids:
+                prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
 
-        logger.info(f"Setting up and running pipeline")
-        pipeline.setup_and_run()
+            # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
+            next_token_id = model_pipeline.prefill_forward(prompt_ids)
+            generated = [next_token_id]
+            logger.info(
+                "Prefill done ({} prompt tokens); sampled y0: {}",
+                len(prompt_ids),
+                next_token_id,
+            )
+            # Generation loop: feed y[t], get output, sample y[t+1].
+            for step in range(iterations - 1):
+                next_token_id = model_pipeline.decode_forward(next_token_id)
+                generated.append(next_token_id)
+                logger.info("Decode step {} output token: {}", step + 1, next_token_id)
+            logger.info("Generated {} tokens total", len(generated))
 
-        if pipeline.my_mesh_id == 0:
-            for iteration in range(iterations):
-                logger.info(f"Writing token for iteration {iteration}")
-                torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                pipeline.write_token(token_tensor)
-                pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                logger.info("Iteration {} output token: {}", iteration, got.item())
-
-        pipeline.barrier()
+        model_pipeline.barrier()
     logger.info("Pod pipeline complete")
 
 
@@ -270,10 +181,11 @@ def main(argv: list[str] | None = None) -> int:
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
         cache_path=args.cache_path,
-        layer_id_offset=args.layer_id_offset,
-        fp32=args.fp32,
-        persistent_mode=args.persistent_mode,
-        output_stream=sys.stdout,
+        use_real_weights=(args.weights == "real"),
+        lm_head_fp32_dest_acc_en=args.fp32,
+        lm_head_persistent_mode=args.persistent_mode,
+        dense_layer_id_override=args.dense_layer_id_override,
+        moe_layer_id_override=args.moe_layer_id_override,
     )
     print(file=sys.stdout, flush=True)
     return 0

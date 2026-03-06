@@ -2526,6 +2526,7 @@ class ModelArgs:
         # multimodal llama additionally adds cross attention layers
         # they are calculated in HF but not calculated in Meta
         self.n_layers -= len(text_config.get("cross_attention_layers", ()))
+        self.vision_num_cross_attention_layers = len(text_config.get("cross_attention_layers", ()))
 
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
@@ -2672,9 +2673,6 @@ class ModelArgs:
         chunk_size_fallback = self.image_size if self.image_size != -1 else vision_config.get("image_size", -1)
         self.vision_chunk_size = vision_config.get("vision_chunk_size", chunk_size_fallback)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
-        self.vision_num_cross_attention_layers = vision_config.get(
-            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", 8)
-        )
 
         # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
