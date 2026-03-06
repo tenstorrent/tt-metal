@@ -72,6 +72,19 @@ ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id);
  */
 ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format);
 
+// =============================================================================
+// Data Format Classification Helpers
+// =============================================================================
+
+/**
+ * @brief Check if a data format is a block float (Bfp) type
+ *
+ * Block float formats (Bfp8, Bfp4, Bfp2 and their _b variants) share exponents
+ * across groups of datums, making them incompatible with certain operations
+ * (e.g., tilize input, untilize output).
+ */
+ALWI constexpr bool is_block_float_format(uint32_t format);
+
 }  // namespace compute_kernel_lib
 
 // Include implementation
