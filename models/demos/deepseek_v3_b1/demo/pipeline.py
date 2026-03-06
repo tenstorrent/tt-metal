@@ -291,13 +291,14 @@ class Pipeline:
         """Input rank: receive a token id from the output rank via distributed context."""
         return ttnn.recv_token(ttnn.Rank(self._output_rank))
 
-    def read_and_send_output_token(self, d2h_output_tensor: ttnn.Tensor) -> None:
+    def read_and_send_output_token(self, d2h_output_tensor: ttnn.Tensor) -> int:
         """Output rank: read D2H output then send the extracted token id to the input rank."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(d2h_output_tensor)
         token_id = int(ttnn.to_torch(d2h_output_tensor).to(torch.int32).flatten()[0].item())
         ttnn.send_token(token_id, ttnn.Rank(self._input_rank))
+        return token_id
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()

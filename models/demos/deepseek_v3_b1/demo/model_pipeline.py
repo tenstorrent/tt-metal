@@ -95,7 +95,8 @@ class ModelPipeline:
         """Run full inference across all ranks.
 
         All ranks must pass the same prompt_token_ids and max_new_tokens so
-        they agree on the total iteration count.
+        they agree on the upper-bound iteration count.  Both input and output
+        ranks independently break early when EOS is produced after prefill.
 
         - Input rank: writes tokens (prefill then decode) and receives output
           token ids from the output rank via recv_token.
@@ -103,61 +104,70 @@ class ModelPipeline:
           input rank via send_token.
         - Other ranks: no-op (pipeline kernels handle forwarding).
         """
-        total_iterations = len(prompt_token_ids) + max_new_tokens
+        num_prefill = len(prompt_token_ids)
         if self.pipeline.is_input_rank:
             return self._run_input_rank(
-                total_iterations,
                 prompt_token_ids,
+                num_prefill=num_prefill,
+                max_new_tokens=max_new_tokens,
                 on_token=on_token,
                 eos_token_id=eos_token_id,
                 return_generated_tokens=return_generated_tokens,
             )
         elif self.pipeline.is_output_rank:
-            self._run_output_rank(total_iterations)
+            self._run_output_rank(
+                num_prefill=num_prefill,
+                max_new_tokens=max_new_tokens,
+                eos_token_id=eos_token_id,
+            )
         return None
 
     def _run_input_rank(
         self,
-        total_iterations: int,
         prompt_token_ids: list[int],
+        num_prefill: int,
+        max_new_tokens: int,
         on_token: Callable[[int], None] | None,
         eos_token_id: int | None,
         return_generated_tokens: bool,
     ) -> list[int] | None:
-        num_prefill = len(prompt_token_ids)
         generated: list[int] = []
-        hit_eos = False
 
-        for i in range(total_iterations):
+        for i in range(num_prefill + max_new_tokens):
             if i < num_prefill:
                 token_id = prompt_token_ids[i]
-            elif generated and not hit_eos:
+            elif generated:
                 token_id = generated[-1]
             else:
                 token_id = 0
 
             self.pipeline.write_token(self._make_token_tensor(token_id))
             out_token = self.pipeline.recv_output_token()
-            logger.debug(f"Received token {out_token} from rank {self.pipeline.my_mesh_id}")
+            logger.debug(f"Received token {out_token} at iteration {i}")
 
-            # Prefill outputs before the last prompt token are discarded.
             if i >= num_prefill - 1:
-                if not hit_eos:
-                    generated.append(out_token)
-                    if on_token is not None:
-                        on_token(out_token)
-                    if eos_token_id is not None and out_token == eos_token_id:
-                        hit_eos = True
-                        logger.debug("EOS token {} at iteration {}", eos_token_id, i)
+                generated.append(out_token)
+                if on_token is not None:
+                    on_token(out_token)
+                if eos_token_id is not None and out_token == eos_token_id:
+                    logger.debug("EOS token {} at iteration {}", eos_token_id, i)
+                    break
 
         logger.debug("Generation complete ({} tokens generated)", len(generated))
         if return_generated_tokens:
             return generated
         return None
 
-    def _run_output_rank(self, total_iterations: int) -> None:
-        for _ in range(total_iterations):
-            self.pipeline.read_and_send_output_token(self._d2h_output_tensor)
+    def _run_output_rank(
+        self,
+        num_prefill: int,
+        max_new_tokens: int,
+        eos_token_id: int | None,
+    ) -> None:
+        for i in range(num_prefill + max_new_tokens):
+            out_token = self.pipeline.read_and_send_output_token(self._d2h_output_tensor)
+            if i >= num_prefill - 1 and eos_token_id is not None and out_token == eos_token_id:
+                break
 
     def barrier(self) -> None:
         self.pipeline.barrier()
