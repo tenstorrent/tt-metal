@@ -10,6 +10,7 @@ Tests the LLK pack kernel with:
 - Destination sync modes (SyncHalf for double-buffering, SyncFull for single-buffering)
 """
 
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -19,16 +20,33 @@ from helpers.constraints import (
 )
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat
-from helpers.golden_generators import PackGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, PackerReluType, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.golden_generators import (
+    FACES_PER_TILE,
+    TILE_DIMENSIONS,
+    PackGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    PackerReluType,
+    format_dict,
+)
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
     TILE_COUNT,
     TILIZE,
@@ -120,7 +138,7 @@ def is_relu_threshold_tolerance_issue(
         ]
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
+    input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32], [128, 256]],
     relu_type=[
         PackerReluType.NoRelu,
         PackerReluType.ZeroRelu,
@@ -128,10 +146,8 @@ def is_relu_threshold_tolerance_issue(
         PackerReluType.MaxThresholdRelu,
     ],
     dest_sync=[DestSync.Half, DestSync.Full],
-    dest_index=lambda dest_acc, dest_sync, input_dimensions: get_valid_dest_indices(
-        dest_sync=dest_sync,
-        dest_acc=dest_acc,
-        tile_count=(input_dimensions[0] * input_dimensions[1]) // (32 * 32),
+    dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
+        dest_sync, dest_acc, formats, input_dimensions
     ),
 )
 def test_pack(
@@ -215,6 +231,23 @@ def test_pack(
         data_formats.pack_src,
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    if dest_index != 0:
+        num_tiles_in_block = num_tiles_in_block - dest_index
+        if num_tiles_in_block <= 0 or tile_cnt_A % num_tiles_in_block != 0:
+            pytest.skip(
+                f"Dest index {dest_index} is not valid for tile count {tile_cnt_A} and num_tiles_in_block {num_tiles_in_block}."
+            )
+        num_blocks = tile_cnt_A // num_tiles_in_block
+
     configuration = TestConfig(
         "sources/pack_test.cpp",
         formats,
@@ -227,7 +260,9 @@ def test_pack(
             TILE_COUNT(tile_cnt_A),
             DEST_INDEX(dest_index),
             RELU_CONFIG(relu_config),
-            NUM_FACES(num_faces=4),
+            NUM_FACES(num_faces=FACES_PER_TILE),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
