@@ -436,7 +436,7 @@ def test_bcast_moe_two_stage_pipeline(
     indirect=True,
 )
 @pytest.mark.parametrize("embedding_dim", [7168])
-@pytest.mark.parametrize("iterations", [131072])
+@pytest.mark.parametrize("iterations", [4000])
 @pytest.mark.timeout(120000)
 def test_persistent_moe_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict

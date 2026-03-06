@@ -267,13 +267,8 @@ struct ReduceToOneB1 {
             // ================================================================
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
-                DPRINT << "is fabric core\n";
-                DPRINT << "device role is root1: " << (uint32_t)(CTArgs::device_role == MESH_ROOT1) << "\n";
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                    DPRINT << "persistent fabric signal enable: " << (uint32_t)CTArgs::persistent_fabric_signal_enable
-                           << "\n";
                     if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
-                        DPRINT << "persistent mode for fabric\n";
                         // Persistent fabric core: wait for aggregator signal, then send
                         // cross-device atomic inc to bcast sender on entry device.
                         // Persistent args start after the worker sem addrs.
@@ -285,17 +280,10 @@ struct ReduceToOneB1 {
                         uint32_t dst_chip_id = get_arg_val<uint32_t>(p_idx++);
                         uint32_t dst_sem_addr = get_arg_val<uint32_t>(p_idx++);
 
-                        DPRINT << "dst noc coords: (" << dst_noc_x << ", " << dst_noc_y << ")\n";
-                        DPRINT << "dst mesh id: " << dst_mesh_id << "\n";
-                        DPRINT << "dst chip id: " << dst_chip_id << "\n";
-                        DPRINT << "dst sem addr: " << dst_sem_addr << "\n";
-
                         volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
-                        DPRINT << "waiting for semaphore inc\n";
                         noc_semaphore_wait_min(wait_sem_ptr, 1);
                         unified_kernels::semaphore_dec(wait_sem_ptr);
-                        DPRINT << "received sem\n";
 
                         constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
                         PacketHeaderPool::reset();
@@ -314,7 +302,6 @@ struct ReduceToOneB1 {
                         sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
                         sender.close();
                         noc_async_full_barrier();
-                        DPRINT << "sent persistent signal to entry device\n";
                     }
                     return;
                 }
