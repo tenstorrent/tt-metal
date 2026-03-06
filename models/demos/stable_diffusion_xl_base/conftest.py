@@ -1,9 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
+from loguru import logger
 
 from conftest import is_galaxy
+from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_FILENAME, TEST_LORA_REPO_ID
 
 
 def pytest_configure(config):
@@ -49,6 +53,24 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run SDXL in debug mode (default: False)",
+    )
+    parser.addoption(
+        "--lora-weights",
+        action="store",
+        default=None,
+        help="Full path to a local .safetensors file with LoRA weights. Overrides --lora-hf-repo and --lora-hf-filename",
+    )
+    parser.addoption(
+        "--lora-hf-repo",
+        action="store",
+        default=None,
+        help="Hugging Face repo id for LoRA (e.g. 'user/repo'). Required together with --lora-hf-filename",
+    )
+    parser.addoption(
+        "--lora-hf-filename",
+        action="store",
+        default=None,
+        help="Filename in the Hugging Face repo (e.g. 'lora.safetensors'). Required together with --lora-hf-repo",
     )
 
 
@@ -135,3 +157,54 @@ def validate_fabric_compatibility(request):
             requested_devices = total_devices
 
         assert requested_devices == total_devices, "Requested devices must be equal to total devices"
+
+
+def _resolve_local_lora_file_path(path_input):
+    if not path_input or not path_input.strip():
+        return None
+    resolved_path = Path(path_input).expanduser().resolve()
+    if not resolved_path.exists() or not resolved_path.is_file():
+        return None
+    return str(resolved_path)
+
+
+@pytest.fixture(scope="function")
+def lora_path(request, is_ci_env, is_ci_v2_env):
+    """
+    Resolve LoRA weights path.
+    1) --lora-weights: full path to a local .safetensors file.
+    2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
+    3) If nothing provided: use default weights (HF download).
+    """
+    lora_weights_cli_path = request.config.getoption("--lora-weights", default=None)
+    hf_repo_id = request.config.getoption("--lora-hf-repo", default=None)
+    hf_filename = request.config.getoption("--lora-hf-filename", default=None)
+
+    # Local file path via --lora-weights
+    if lora_weights_cli_path is not None and str(lora_weights_cli_path).strip():
+        resolved_lora_path = _resolve_local_lora_file_path(lora_weights_cli_path)
+        if resolved_lora_path:
+            return resolved_lora_path
+        pytest.skip(
+            f"LoRA path must be an existing .safetensors file: {lora_weights_cli_path}. "
+            f"Provide a full path to the file (not a directory)."
+        )
+
+    if not (hf_repo_id and hf_filename):
+        logger.warning(
+            f"No LoRA weights provided. Using default weights. Repo: {TEST_LORA_REPO_ID}, File: {TEST_LORA_FILENAME}"
+        )
+        hf_repo_id = TEST_LORA_REPO_ID
+        hf_filename = TEST_LORA_FILENAME
+
+    try:
+        from huggingface_hub import hf_hub_download
+
+        return hf_hub_download(
+            repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
+        )
+    except Exception as _:
+        pytest.skip(
+            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "
+            f"Use --lora-weights for a local file path, or ensure network/cache for HF."
+        )
