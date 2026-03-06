@@ -39,6 +39,6 @@ void kernel_main() {
         compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<untilized_cache2_cb, out_cb>(Wt, 1);
+        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1);
     }
 }
