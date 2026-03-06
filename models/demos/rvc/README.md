@@ -61,9 +61,12 @@ Expected layout after download:
 - `RVC_ASSETS_DIR` contains `hubert.safetensors` and `pretrained/` weights.
 
 
-## Status
-Early and intentionally minimal. Expect missing features and breaking changes while the
-interface is refined.
+## Development
+
+Running tests
+```sh
+uv run --active pytest ./models/demos/rvc/tests
+```
 
 ## Attributions
 Heavily inspired by RVC (Retrieval-based Voice Conversion) and please see the original repo
