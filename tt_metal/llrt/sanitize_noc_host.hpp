@@ -23,12 +23,15 @@ namespace tt {
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
-#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                                              \
-    ((((a) >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                       \
-                  tt::tt_metal::HalProgrammableCoreType::DRAM)) &&                                                 \
-      ((a) + (l) <= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                \
-                         tt::tt_metal::HalProgrammableCoreType::DRAM) +                                            \
-                         HAL_MEM_DRAM_L1_SIZE)) ||                                                                 \
+#define DEBUG_VALID_DRAM_L1_ADDR(a, l)                                                                                \
+    ((tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(                                  \
+          tt::tt_metal::HalProgrammableCoreType::DRAM) <                                                              \
+          tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_count() &&                          \
+      (((a) >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(                                        \
+                   tt::tt_metal::HalProgrammableCoreType::DRAM)) &&                                                   \
+       ((a) + (l) <=                                                                                                  \
+        tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) + \
+            HAL_MEM_DRAM_L1_SIZE))) ||                                                                                \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
@@ -84,7 +87,8 @@ static void watcher_sanitize_host_noc(
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        if (addr >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(
+        if (coord_found_p(virtual_dram_hw_cores, core) &&
+            addr >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(
                         tt::tt_metal::HalProgrammableCoreType::DRAM)) {
             if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
                 print_stack_trace();
