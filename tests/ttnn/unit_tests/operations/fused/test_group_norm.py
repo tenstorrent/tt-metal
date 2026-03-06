@@ -906,3 +906,66 @@ def test_group_norm_negative_tests(
             core_grid=ttnn.CoreGrid(y=1, x=1),
             inplace=False,
         )
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups",
+    [
+        (1, 480, 8, 8, 32),
+        (1, 320, 32, 32, 32),
+        (1, 1280, 16, 16, 32),
+    ],
+)
+def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
+    """Use determine_expected_group_norm_dram_grid_size to pick a grid, then
+    run DRAM-interleaved group norm and compare against torch."""
+    torch.manual_seed(0)
+
+    grid_size = ttnn.determine_expected_group_norm_dram_grid_size(
+        device=device,
+        num_channels=C,
+        num_groups=num_groups,
+        input_nhw=N * H * W,
+    )
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+
+    torch_output = torch.nn.functional.group_norm(torch_input, num_groups, weight=torch_weight, bias=torch_bias)
+    torch_output = torch_output.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+
+    [gamma_t, beta_t], input_mask = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight.float(), torch_bias.float()],
+        C,
+        num_groups,
+        device,
+        core_grid=grid_size,
+        return_mask=True,
+    )
+
+    tt_input = torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+    tt_input = ttnn.from_torch(
+        tt_input,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=num_groups,
+        input_mask=input_mask,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid_size,
+        inplace=False,
+        num_out_blocks=1,
+    )
+
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.999)
