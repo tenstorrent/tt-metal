@@ -194,8 +194,8 @@ class ResNet50TestInfra:
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
 
-        if batch_size <= 2:
-            pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+        if batch_size == 2:
+            pytest.skip("Batch size 2 is not supported with sharded data")
         elif batch_size == 8:
             pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
@@ -212,7 +212,6 @@ class ResNet50TestInfra:
             "WEIGHTS_DTYPE": weight_dtype,
             "ACTIVATIONS_DTYPE": act_dtype,
         }
-
         input_shape = (batch_size * self.num_devices, 3, 224, 224)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
@@ -229,7 +228,6 @@ class ResNet50TestInfra:
         ## golden
 
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
-
         ## ttnn
 
         self.ttnn_resnet50_model = resnet50(
@@ -257,7 +255,9 @@ class ResNet50TestInfra:
         return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
-        if self.batch_size == 16:
+        if self.batch_size == 1:
+            core_grid = ttnn.CoreGrid(y=8, x=8)
+        elif self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
             if is_blackhole():

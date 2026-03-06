@@ -124,13 +124,14 @@ def run_resnet_inference(
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
+    logger.info(f"batch_size_per_device is {batch_size_per_device}")
     # set up image processor
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
     # load inputs
     images = get_data(input_loc)
     batch_size = batch_size_per_device * device.get_num_devices()
-
+    logger.info(f"total batch_size is {batch_size}")
     profiler.start(f"processing_inputs")
     inputs = None
     num_images = len(images)
