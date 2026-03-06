@@ -164,39 +164,28 @@ class MultiHeadAttention:
 
     def _relative_position_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        idx_row = torch.arange(length, dtype=torch.int64).view(length, 1)
-        idx_col = torch.arange(length, dtype=torch.int64).view(1, length)
+        idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=1)
+        idx_col = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=0)
         rel_idx = idx_col - idx_row + (length - 1)
-        rel_idx = rel_idx.view(1, 1, length, length).expand(batch, heads, length, length).contiguous()
-        rel_idx_tt = ttnn.from_torch(
-            rel_idx,
-            dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        x_final = ttnn.gather(x, dim=3, index=rel_idx_tt)
+        rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
+        rel_idx = ttnn.typecast(ttnn.to_layout(rel_idx, ttnn.TILE_LAYOUT), ttnn.uint32)
+        x_final = ttnn.gather(x, dim=3, index=rel_idx)
         return x_final
 
     def _absolute_position_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         batch, heads, length, _ = x.shape
-        idx_row = torch.arange(length, dtype=torch.int64).view(length, 1)
-        idx_col = torch.arange(length, dtype=torch.int64).view(1, length)
+        idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=1)
+        idx_col = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=0)
         rel_idx = idx_col - idx_row + (length - 1)
-        rel_idx = rel_idx.view(1, 1, length, length).expand(batch, heads, length, length).contiguous()
-        rel_idx_tt = ttnn.from_torch(
-            rel_idx,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+        rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
         out = ttnn.zeros(
             (batch, heads, length, 2 * length - 1),
             dtype=x.dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
         )
-        out = ttnn.scatter(out, dim=3, index=rel_idx_tt, src=x)
+        out = ttnn.scatter(out, dim=3, index=rel_idx, src=x)
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
 

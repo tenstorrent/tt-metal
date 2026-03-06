@@ -22,6 +22,31 @@ from models.demos.rvc.tt_impl.synthesizer.modules import (
 )
 
 
+def _interpolate_1d(
+    x: ttnn.Tensor,
+    scale_factor: int | float,
+    mode: str = "nearest",
+    memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+) -> ttnn.Tensor:
+    # 1D upsample for [N, L, C] via 2D NHWC upsample with height fixed to 1.
+    if mode not in ("nearest", "linear"):
+        raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
+    upsample_mode = "nearest" if mode == "nearest" else "bilinear"
+
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x_nhwc = ttnn.reshape(x, (x.shape[0], 1, x.shape[1], 1))
+    y_nhwc = ttnn.upsample(
+        x_nhwc,
+        [1, scale_factor],
+        mode=upsample_mode,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    y = ttnn.reshape(y_nhwc, (y_nhwc.shape[0], y_nhwc.shape[2], y_nhwc.shape[3]))
+    return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+
+
 def _to_nlc(x: ttnn.Tensor) -> ttnn.Tensor:
     if len(x.shape) == 4:
         b, _, t, c = x.shape
@@ -318,62 +343,41 @@ class SineGen:
         self.sampling_rate = samp_rate
         self.voiced_threshold = voiced_threshold
 
-    def _f02uv(self, f0: torch.Tensor) -> torch.Tensor:
-        uv = torch.ones_like(f0)
-        uv = uv * (f0 > self.voiced_threshold)
-        return uv
-
     def __call__(self, f0: ttnn.Tensor, upp: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        with torch.no_grad():
-            f0 = ttnn.to_torch(f0).to(torch.float32)
-            f0 = f0.reshape(f0.shape[0], -1)
-            f0 = f0[:, None].transpose(1, 2)
-            f0_buf = torch.zeros(f0.shape[0], f0.shape[1], self.dim, device=f0.device)
-            f0_buf[:, :, 0] = f0[:, :, 0]
-            for idx in range(self.harmonic_num):
-                f0_buf[:, :, idx + 1] = f0_buf[:, :, 0] * (idx + 2)
-            rad_values = (f0_buf / self.sampling_rate) % 1
-            rand_ini = torch.rand(f0_buf.shape[0], f0_buf.shape[2], device=f0_buf.device)
-            rand_ini[:, 0] = 0
-            rad_values[:, 0, :] = rad_values[:, 0, :] + rand_ini
-            tmp_over_one = torch.cumsum(rad_values, 1)
-            tmp_over_one *= upp
-            tmp_over_one = torch.nn.functional.interpolate(
-                tmp_over_one.transpose(2, 1),
-                scale_factor=float(upp),
-                mode="linear",
-            ).transpose(2, 1)
-            rad_values = torch.nn.functional.interpolate(
-                rad_values.transpose(2, 1),
-                scale_factor=float(upp),
-                mode="nearest",
-            ).transpose(2, 1)
-            tmp_over_one %= 1
-            tmp_over_one_idx = (tmp_over_one[:, 1:, :] - tmp_over_one[:, :-1, :]) < 0
-            cumsum_shift = torch.zeros_like(rad_values)
-            cumsum_shift[:, 1:, :] = tmp_over_one_idx * -1.0
-            sine_waves = torch.sin(torch.cumsum(rad_values + cumsum_shift, dim=1) * 2 * torch.pi)
-            sine_waves = sine_waves * self.sine_amp
-            uv = self._f02uv(f0)
-            uv = torch.nn.functional.interpolate(uv.transpose(2, 1), scale_factor=float(upp), mode="nearest").transpose(
-                2, 1
-            )
-            noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
-            noise = noise_amp * torch.randn_like(sine_waves)
-            sine_waves = sine_waves * uv + noise
-        sine_waves_tt = ttnn.from_torch(
-            sine_waves,
+        # f0: [B, T]
+        # Upsample f0 to full resolution first using TTNN wrapper.
+        f0_up = _interpolate_1d(f0, scale_factor=upp, mode="nearest")
+
+        # Voiced/unvoiced mask.
+        f0_up = ttnn.to_layout(f0_up, ttnn.TILE_LAYOUT)
+        uv = ttnn.gt_(f0_up, self.voiced_threshold)
+
+        # Expand for harmonics: [B, T*upp, H].
+        harmonics = ttnn.arange(start=1, end=self.harmonic_num + 2, dtype=f0_up.dtype, device=self.device)
+        f0_harm = f0_up * harmonics
+
+        # Accumulate phase and add random initial offset per harmonic.
+        phase = ttnn.cumsum(f0_harm / self.sampling_rate, dim=1)
+        rand_ini = torch.rand(f0_up.shape[0], self.harmonic_num + 1)
+        rand_ini[:, 0] = 0
+        rand_ini = ttnn.from_torch(
+            rand_ini.unsqueeze(1),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
         )
-        uv_tt = ttnn.from_torch(
-            uv,
+        phase = phase + rand_ini
+        sine_waves = ttnn.sin(2 * math.pi * phase) * self.sine_amp
+
+        # Mix with noise based on voiced/unvoiced.
+        noise_amp = uv * self.noise_std + ttnn.rsub(uv, 1) * self.sine_amp / 3
+        sine_waves = sine_waves * uv + noise_amp * ttnn.from_torch(
+            torch.randn(tuple(sine_waves.shape)),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
         )
-        return sine_waves_tt, uv_tt
+        return sine_waves
 
 
 class SourceModuleHnNSF:
@@ -394,7 +398,7 @@ class SourceModuleHnNSF:
         self.l_linear.load_parameters(parameters=parameters, key="l_linear", prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor, upp: int = 1) -> ttnn.Tensor:
-        sine_wavs, _ = self.l_sin_gen(x, upp)
+        sine_wavs = self.l_sin_gen(x, upp)
         tt_linear = self.l_linear(sine_wavs)
         tt_linear0 = ttnn.to_layout(tt_linear, ttnn.TILE_LAYOUT)
         tt_tanh = ttnn.tanh(tt_linear0)
@@ -552,6 +556,7 @@ class SynthesizerTrnMsNSF:
         gin_channels: int,
         sr: int | str,
     ) -> None:
+        print(f"hello from nsf! sr: {sr}")
         if isinstance(sr, str):
             sr = sr2sr[sr]
         self.device = device
@@ -592,10 +597,13 @@ class SynthesizerTrnMsNSF:
         g = self.emb_g(speaker_id)
         g = ttnn.reshape(g, (g.shape[0], 1, g.shape[-1]))
         m_p, logs_p = self.enc_p(phone, pitch)
-        m_p_torch = ttnn.to_torch(m_p).to(torch.float32)
-        logs_p_torch = ttnn.to_torch(logs_p).to(torch.float32)
-        z_p_torch = m_p_torch + torch.exp(logs_p_torch) * torch.randn_like(m_p_torch) * 0.66666
-        z_p = ttnn.from_torch(z_p_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        r = ttnn.from_torch(
+            torch.randn(tuple(m_p.shape)),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        z_p = m_p + ttnn.exp(logs_p) * r * 0.66666
         z = self.flow(z_p, g=g)
         return self.dec(z, nsff0, g=g)
 
@@ -657,9 +665,12 @@ class SynthesizerTrnMsNSF_nono:
         g = self.emb_g(speaker_id)
         g = ttnn.reshape(g, (g.shape[0], 1, g.shape[-1]))
         m_p, logs_p = self.enc_p(phone, None)
-        m_p_torch = ttnn.to_torch(m_p).to(torch.float32)
-        logs_p_torch = ttnn.to_torch(logs_p).to(torch.float32)
-        z_p_torch = m_p_torch + torch.exp(logs_p_torch) * torch.randn_like(m_p_torch) * 0.66666
-        z_p = ttnn.from_torch(z_p_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        r = ttnn.from_torch(
+            torch.randn(tuple(m_p.shape)),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        z_p = m_p + ttnn.exp(logs_p) * r * 0.66666
         z = self.flow(z_p, g=g)
         return self.dec(z, g=g)
