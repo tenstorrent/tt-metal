@@ -486,7 +486,7 @@ if __name__ == "__main__":
     core_cdf, left_cdf, right_cdf = approach_cdf()
     approach_direct()
     approach_wide_cdf()
-    core_cdf_mixed, left_gelu_mixed, right_gelu_mixed = approach_mixed()
+    approach_mixed()
 
     # Output best coefficients
     print("\n" + "=" * 70)
