@@ -242,12 +242,15 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
     if (has_dram_fw) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
-        uint64_t noc_offset = hal_.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
-            cluster_.write_core(dram_zero_vec.data(), dram_l1_size, tt_cxy_pair(device_id, virtual_core), noc_offset);
+            cluster_.write_core(
+                dram_zero_vec.data(),
+                dram_l1_size,
+                tt_cxy_pair(device_id, virtual_core),
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE));
         }
     }
 
