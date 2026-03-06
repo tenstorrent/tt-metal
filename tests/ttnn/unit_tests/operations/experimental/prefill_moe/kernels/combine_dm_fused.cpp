@@ -10,8 +10,14 @@
 // occurs when RISC-V scalar L1 access on dm0 overlaps with active matmul
 // barrier signaling on 15+ compute cores.
 //
+// Packed metadata format (per expert):
+//   [out_buf_addr, M_e, rw_0, rw_1, ..., rw_{M_e-1}]
+//   - Each rw_i packs (row_index, weight_bf16) into one uint32:
+//     low 16 bits = row index, high 16 bits = bf16 weight
+//   - Per expert: 2 + M_e words (vs old format: 2 + 2*M_e words)
+//
 // For each expert e:
-//   For each assigned token t with weight w:
+//   For each assigned token i with row t and weight w:
 //     output[t, :] += w * out_buf[e][t, :]
 //
 // For P > 32, tiles are addressed with 2D page indexing:
@@ -44,7 +50,7 @@ void kernel_main() {
     const uint32_t P_tiles = get_arg_val<uint32_t>(2);
     const uint32_t num_experts = get_arg_val<uint32_t>(3);
     // Per expert (packed sequentially starting at arg 4):
-    //   out_buf_addr, M_e, token_row[0..M_e-1], weight_bf16[0..M_e-1]
+    //   out_buf_addr, M_e, rw[0..M_e-1]
     // When enable_fabric_reduce: last 3 args are reduce_core_noc_x, reduce_core_noc_y, sem_combine_done_l1
 
     constexpr uint32_t cb_out = 4;  // output tile (read-modify-write)
@@ -74,8 +80,7 @@ void kernel_main() {
         uint32_t out_buf_addr = get_arg_val<uint32_t>(arg_idx);
         uint32_t M_e = get_arg_val<uint32_t>(arg_idx + 1);
 
-        uint32_t tokens_base = arg_idx + 2;
-        uint32_t weights_base = arg_idx + 2 + M_e;
+        uint32_t rw_base = arg_idx + 2;  // base index for packed (row, weight) pairs
 
         if (M_e == 0) {
             arg_idx += 2;
@@ -90,6 +95,22 @@ void kernel_main() {
                 uint32_t row_lo = tr * 32;
                 uint32_t row_hi = row_lo + 32;
 
+                // Check if any of this expert's tokens fall in this tile row.
+                // We need to scan the token list since rows may be non-contiguous.
+                bool has_tokens = false;
+                for (uint32_t i = 0; i < M_e; ++i) {
+                    uint32_t rw = get_arg_val<uint32_t>(rw_base + i);
+                    uint32_t t = rw & 0xFFFF;
+                    if (t >= row_lo && t < row_hi) {
+                        has_tokens = true;
+                        break;
+                    }
+                }
+
+                if (!has_tokens) {
+                    continue;
+                }
+
                 // Read output tile into L1
                 noc_async_read_page(page_idx, out_accessor, out_l1);
                 noc_async_read_barrier();
@@ -100,16 +121,16 @@ void kernel_main() {
 
                 // Weighted accumulate for tokens in this tile row
                 for (uint32_t i = 0; i < M_e; ++i) {
-                    uint32_t t = get_arg_val<uint32_t>(tokens_base + i);
+                    uint32_t rw = get_arg_val<uint32_t>(rw_base + i);
+                    uint32_t t = rw & 0xFFFF;    // row index
+                    uint32_t w_bf16 = rw >> 16;  // bf16 weight
 
                     // Only process tokens that fall in this tile row
                     if (t < row_lo || t >= row_hi) {
                         continue;
                     }
 
-                    uint32_t w_bf16 = get_arg_val<uint32_t>(weights_base + i);
-
-                    // BF16 weight → float32
+                    // BF16 weight -> float32
                     union {
                         uint32_t u;
                         float f;
@@ -129,7 +150,7 @@ void kernel_main() {
                         uint16_t* ep = reinterpret_cast<uint16_t*>(exp_l1 + face_off);
 
                         for (uint32_t c = 0; c < 16; ++c) {
-                            // BF16 → float32 → accumulate → BF16
+                            // BF16 -> float32 -> accumulate -> BF16
                             union {
                                 uint32_t u;
                                 float f;
@@ -148,7 +169,7 @@ void kernel_main() {
             }
         }
 
-        arg_idx += 2 + 2 * M_e;
+        arg_idx += 2 + M_e;
     }
 
     // Signal fabric_reduce_dm that local combine is complete

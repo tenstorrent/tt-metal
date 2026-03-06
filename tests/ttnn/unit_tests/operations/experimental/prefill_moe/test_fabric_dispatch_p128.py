@@ -105,6 +105,33 @@ def test_p128():
         ttnn.close_mesh_device(full_mesh)
 
 
+def pack_combine_metadata(old_meta, num_experts):
+    """Convert old-format combine metadata to packed (row, weight) pair format.
+
+    Old format per expert: [addr, M_e, row0..rowM, w0..wM]
+    New format per expert: [addr, M_e, rw0..rw_{M_e-1}]
+      where rw_i = (row_i & 0xFFFF) | (weight_bf16_i << 16)
+    """
+    packed = []
+    idx = 0
+    for e in range(num_experts):
+        addr = old_meta[idx]
+        m_e = old_meta[idx + 1]
+        packed.append(addr)
+        packed.append(m_e)
+        if m_e == 0:
+            idx += 2
+            continue
+        rows = old_meta[idx + 2 : idx + 2 + m_e]
+        weights = old_meta[idx + 2 + m_e : idx + 2 + 2 * m_e]
+        for i in range(m_e):
+            row = rows[i] & 0xFFFF
+            w = weights[i] & 0xFFFF
+            packed.append(row | (w << 16))
+        idx += 2 + 2 * m_e
+    return packed
+
+
 def _run_test(
     mesh_device,
     D_tiles,
@@ -270,7 +297,10 @@ def _run_test(
         meta.extend([w_1_bf16] * 128)
         return meta
 
-    per_device_combine_metadata = [make_combine_meta(), make_combine_meta()]
+    per_device_combine_metadata = [
+        pack_combine_metadata(make_combine_meta(), NUM_EXPERTS_PER_DEVICE),
+        pack_combine_metadata(make_combine_meta(), NUM_EXPERTS_PER_DEVICE),
+    ]
     logger.info(
         f"Combine metadata: 1 expert, M_e=128, w=1.0, " f"{len(per_device_combine_metadata[0])} args per device"
     )

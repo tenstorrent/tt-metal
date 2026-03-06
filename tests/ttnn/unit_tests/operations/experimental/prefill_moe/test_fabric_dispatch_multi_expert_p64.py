@@ -2,16 +2,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test P=64 (multi-tile-row) fabric dispatch + expert compute.
+"""Test fused fabric dispatch + multi-expert compute with P=64 on 1x2 submesh.
 
-Validates that the tile-row streaming in fabric_dispatch and the M_tiles
-loops in expert reader/compute/writer correctly handle P > 32.
+4 experts total: experts 0,1 on device 0; experts 2,3 on device 1.
+K=2: each token goes to exactly 2 experts (co-located on same device).
+P=64 -> 2 tile rows, M_tiles=2.
 
-P=64 -> 2 tile rows in pkt_buf, inter_buf, out_bufs, and output.
-T_total=128 (64 tokens per device).
-Asymmetric dispatch: 40 local / 24 remote per device.
-
-Dispatch:
+Dispatch (asymmetric 40/24):
   Device 0 tokens (global 0-63, device-local 0-63):
     local_indices 0-39  -> stay on dev0 (40 tokens)
     send_indices 40-63  -> sent to dev1 (24 tokens)
@@ -20,20 +17,13 @@ Dispatch:
     local_indices 0-23  -> sent to dev0 (24 tokens)
     local_indices 24-63 -> stay on dev1 (40 tokens)
 
-  Device 0 pkt_buf (64 rows):
-    rows 0-39:  local tokens (global 0-39)
-    rows 40-63: received tokens (global 64-87)
-
-  Device 1 pkt_buf (64 rows):
-    rows 0-39:  local tokens (global 88-127)
-    rows 40-63: received tokens (global 40-63)
-
-K=1 with 1 expert per device, uniform M_e=64, weight=1.0.
-This exercises the full 2-tile-row pipeline through dispatch, compute, and combine.
+Each device's pkt_buf has 64 tokens (40 local + 24 received).
+Both experts on a device process the same pkt_buf.
+Combine does weighted accumulation: output = 0.6*out_buf[0] + 0.4*out_buf[1].
 
 Run on TG 6U:
     cd /data/sraizada_2/tt-metal
-    python tests/ttnn/unit_tests/operations/experimental/prefill_moe/test_fabric_dispatch_p64.py
+    python tests/ttnn/unit_tests/operations/experimental/prefill_moe/test_fabric_dispatch_multi_expert_p64.py
 """
 
 import torch
@@ -48,8 +38,8 @@ D_FF = 5760
 D_FF_HALF = D_FF // 2
 N_TOKENS_PER_DEVICE = 64
 N_TOKENS_TOTAL = 128
-NUM_EXPERTS_PER_DEVICE = 1
-NUM_EXPERTS_TOTAL = 2
+NUM_EXPERTS_PER_DEVICE = 2
+NUM_EXPERTS_TOTAL = 4
 NUM_CORES = 15
 GRID_X = 5
 GRID_Y = 3
@@ -64,7 +54,7 @@ def swiglu_sfpu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
     return (up_c + 1.0) * gate_c * torch.sigmoid(alpha * gate_c)
 
 
-def test_p64():
+def test_multi_expert_p64():
     # ---- Tile dimension calculations ----
     D_tiles = D // TILE
     n_weight_tiles_gu = D_FF // TILE
@@ -149,11 +139,11 @@ def _run_test(
     # ---- Generate data ----
     all_hs = torch.randn(N_TOKENS_TOTAL, D, dtype=torch.bfloat16)
 
-    # 2 experts: gate_up [D, D_FF], down [D_FF/2, D]
+    # 4 experts: gate_up [D, D_FF], down [D_FF/2, D]
     gate_up_ws_raw = [torch.randn(D, D_FF, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS_TOTAL)]
     down_ws_raw = [torch.randn(D_FF_HALF, D, dtype=torch.bfloat16) for _ in range(NUM_EXPERTS_TOTAL)]
 
-    # Pre-shuffle gate_up weights for per-core SwiGLU (gate|up interleave per core)
+    # Pre-shuffle gate_up weights for per-core SwiGLU
     shuffled_ws = []
     for w in gate_up_ws_raw:
         gate_cols = w[:, :D_FF_HALF]
@@ -167,21 +157,20 @@ def _run_test(
         shuffled_ws.append(s)
 
     # ---- Asymmetric dispatch: 40 local, 24 remote per device ----
-    # Dev0: 40 local (indices 0-39), 24 sent (indices 40-63), 24 received
-    # Dev1: 40 local (indices 24-63), 24 sent (indices 0-23), 24 received
     dev0_dispatch = [40, 24, 24] + list(range(40)) + list(range(40, 64))
     dev1_dispatch = [40, 24, 24] + list(range(24, 64)) + list(range(24))
     dispatch_metadata = [dev0_dispatch, dev1_dispatch]
     logger.info("Dispatch: 40 local + 24 recv per device (asymmetric, P=64)")
 
-    # K=1 weight = 1.0 in BF16
-    w_1_bf16 = int(torch.tensor(1.0, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+    # ---- K=2 weights ----
+    W_EXPERT_0 = 0.6
+    W_EXPERT_1 = 0.4
+    w0_bf16 = int(torch.tensor(W_EXPERT_0, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+    w1_bf16 = int(torch.tensor(W_EXPERT_1, dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
 
-    # All 64 rows assigned to single expert
-    all_rows = list(range(64))
+    all_rows = list(range(P))
 
     # ---- Create mesh tensors ----
-    # hidden_states_rm (ROW_MAJOR, sharded, 64 tokens per device)
     hs_dev0 = all_hs[:64].unsqueeze(0).unsqueeze(0)
     hs_dev1 = all_hs[64:].unsqueeze(0).unsqueeze(0)
     stacked_hs = torch.cat([hs_dev0, hs_dev1], dim=0)
@@ -194,7 +183,6 @@ def _run_test(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # hidden_states (TILE, replicated - for shape derivation)
     hs_tile = ttnn.from_torch(
         torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -204,7 +192,7 @@ def _run_test(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # gate_up_weights: 1 per device, sharded
+    # gate_up_weights: 2 per device, sharded
     gu_mesh_list = []
     for e in range(NUM_EXPERTS_PER_DEVICE):
         dev0_w = shuffled_ws[e].unsqueeze(0).unsqueeze(0)
@@ -220,7 +208,6 @@ def _run_test(
         )
         gu_mesh_list.append(gu_t)
 
-    # down_weights: same pattern
     dn_mesh_list = []
     for e in range(NUM_EXPERTS_PER_DEVICE):
         dev0_w = down_ws_raw[e].unsqueeze(0).unsqueeze(0)
@@ -235,9 +222,9 @@ def _run_test(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         dn_mesh_list.append(dn_t)
-    logger.info("Created weights (1 expert per device, sharded)")
+    logger.info("Created weights (2 experts per device, sharded)")
 
-    # Scratch buffers (replicated, P=64)
+    # Scratch buffers
     pkt_buf = ttnn.from_torch(
         torch.zeros(1, 1, P, D, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -281,7 +268,7 @@ def _run_test(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    logger.info("Created all scratch buffers (P=64)")
+    logger.info("Created all scratch buffers (2 out_bufs, P=64)")
 
     # ---- Build per-device combine metadata ----
     out_buf_addrs = []
@@ -291,21 +278,26 @@ def _run_test(
 
     def make_combine_meta():
         meta = []
-        # Single expert, M_e=64, all rows, weight=1.0
+        # Expert 0: M_e=64, all rows, w=0.6
         meta.append(out_buf_addrs[0])
-        meta.append(64)
+        meta.append(P)
         meta.extend(all_rows)
-        meta.extend([w_1_bf16] * 64)
+        meta.extend([w0_bf16] * P)
+        # Expert 1: M_e=64, all rows, w=0.4
+        meta.append(out_buf_addrs[1])
+        meta.append(P)
+        meta.extend(all_rows)
+        meta.extend([w1_bf16] * P)
         return meta
 
     per_device_combine_metadata = [
         pack_combine_metadata(make_combine_meta(), NUM_EXPERTS_PER_DEVICE),
         pack_combine_metadata(make_combine_meta(), NUM_EXPERTS_PER_DEVICE),
     ]
-    logger.info(f"Combine metadata: 1 expert, M_e=64, w=1.0, " f"{len(per_device_combine_metadata[0])} args per device")
+    logger.info(f"Combine metadata: 2 experts, M_e={P}, w=0.6/0.4, {len(per_device_combine_metadata[0])} args")
 
     # ---- Run the C++ op ----
-    logger.info("Calling prefill_moe_compute with P=64...")
+    logger.info("Calling prefill_moe_compute with P=64, 2 experts...")
     result = ttnn.experimental.prefill_moe_compute(
         hs_tile,
         gate_up_weights=gu_mesh_list,
@@ -327,42 +319,11 @@ def _run_test(
     ttnn.synchronize_device(mesh_device)
     logger.info("Op completed, reading back results...")
 
-    # ---- Read back pkt_buf to check dispatch correctness ----
-    pkt_devs = ttnn.get_device_tensors(pkt_buf)
-    dev0_pkt = ttnn.to_torch(pkt_devs[0]).squeeze().float()[:, :D]
-    dev1_pkt = ttnn.to_torch(pkt_devs[1]).squeeze().float()[:, :D]
-
-    # Expected pkt_buf contents (asymmetric 40/24 dispatch)
-    # Dev0: rows 0-39 = tokens 0-39 (local), rows 40-63 = tokens 64-87 (received)
-    # Dev1: rows 0-39 = tokens 88-127 (local), rows 40-63 = tokens 40-63 (received)
-    dev0_expected_tokens = list(range(40)) + list(range(64, 88))
-    dev1_expected_tokens = list(range(88, 128)) + list(range(40, 64))
-    dev0_expected_pkt = torch.stack([all_hs[t].float() for t in dev0_expected_tokens])
-    dev1_expected_pkt = torch.stack([all_hs[t].float() for t in dev1_expected_tokens])
-
-    def pcc(a, b):
-        return torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
-
-    # Verify pkt_buf row-by-row
-    pkt_ok = True
-    for r in range(64):
-        for label, actual, expected, tokens in [
-            ("Dev0", dev0_pkt, dev0_expected_pkt, dev0_expected_tokens),
-            ("Dev1", dev1_pkt, dev1_expected_pkt, dev1_expected_tokens),
-        ]:
-            row_pcc = pcc(actual[r], expected[r])
-            if row_pcc < 0.99:
-                logger.warning(f"  {label} pkt_buf row {r} (token {tokens[r]}): PCC={row_pcc:.6f}")
-                pkt_ok = False
-    if pkt_ok:
-        logger.info("PKT_BUF: all 64 rows PCC >= 0.99 on both devices")
-
     # ---- Read back results ----
     result_dev_tensors = ttnn.get_device_tensors(result)
     dev0_result = ttnn.to_torch(result_dev_tensors[0]).squeeze().float()[:, :D]
     dev1_result = ttnn.to_torch(result_dev_tensors[1]).squeeze().float()[:, :D]
 
-    # Per-expert out_bufs
     dev0_outs = []
     dev1_outs = []
     for ob in out_buf_list:
@@ -370,7 +331,6 @@ def _run_test(
         dev0_outs.append(ttnn.to_torch(devs[0]).squeeze().float()[:, :D])
         dev1_outs.append(ttnn.to_torch(devs[1]).squeeze().float()[:, :D])
 
-    # Read dequantized weights for reference
     gu_dequant = [[], []]
     dn_dequant = [[], []]
     for e in range(NUM_EXPERTS_PER_DEVICE):
@@ -382,55 +342,71 @@ def _run_test(
         dn_dequant[1].append(ttnn.to_torch(dn_devs[1]).squeeze().float())
 
     # ---- Compute reference ----
-    dev0_pkt_hs = torch.stack([all_hs[t].float() for t in dev0_expected_tokens])
-    dev1_pkt_hs = torch.stack([all_hs[t].float() for t in dev1_expected_tokens])
+    # Dev0 pkt_buf: rows 0-39 = tokens 0-39, rows 40-63 = tokens 64-87
+    dev0_pkt_tokens = list(range(40)) + list(range(64, 88))
+    dev0_pkt_hs = torch.stack([all_hs[t].float() for t in dev0_pkt_tokens])
+
+    # Dev1 pkt_buf: rows 0-39 = tokens 88-127, rows 40-63 = tokens 40-63
+    dev1_pkt_tokens = list(range(88, 128)) + list(range(40, 64))
+    dev1_pkt_hs = torch.stack([all_hs[t].float() for t in dev1_pkt_tokens])
 
     def compute_expert_ref(pkt_hs, gu_w, dn_w):
-        """Reference: gate_up matmul -> SwiGLU -> down matmul."""
-        ref_gu = pkt_hs @ gu_w  # [64, D_FF]
+        ref_gu = pkt_hs @ gu_w
         ref_inter = torch.empty(P, D_FF_HALF_padded, dtype=torch.float32)
         for c in range(NUM_CORES):
             g = ref_gu[:, c * cols_per_core : c * cols_per_core + half_cols]
             u = ref_gu[:, c * cols_per_core + half_cols : (c + 1) * cols_per_core]
             ref_inter[:, c * half_cols : (c + 1) * half_cols] = swiglu_sfpu_reference(g, u)
-        ref_out = ref_inter.bfloat16().float() @ dn_w  # [64, D]
+        ref_out = ref_inter.bfloat16().float() @ dn_w
         return ref_out[:, :D]
 
     ref_d0_e0 = compute_expert_ref(dev0_pkt_hs, gu_dequant[0][0], dn_dequant[0][0])
-    ref_d1_e1 = compute_expert_ref(dev1_pkt_hs, gu_dequant[1][0], dn_dequant[1][0])
+    ref_d0_e1 = compute_expert_ref(dev0_pkt_hs, gu_dequant[0][1], dn_dequant[0][1])
+    ref_d1_e0 = compute_expert_ref(dev1_pkt_hs, gu_dequant[1][0], dn_dequant[1][0])
+    ref_d1_e1 = compute_expert_ref(dev1_pkt_hs, gu_dequant[1][1], dn_dequant[1][1])
 
-    # Combined: single expert with w=1.0, so combined = expert output
-    ref_d0_combined = ref_d0_e0
-    ref_d1_combined = ref_d1_e1
+    w0_actual = torch.tensor(W_EXPERT_0, dtype=torch.bfloat16).float()
+    w1_actual = torch.tensor(W_EXPERT_1, dtype=torch.bfloat16).float()
+    ref_d0_combined = w0_actual * ref_d0_e0 + w1_actual * ref_d0_e1
+    ref_d1_combined = w0_actual * ref_d1_e0 + w1_actual * ref_d1_e1
 
     # ---- PCC checks ----
-    pcc_d0_e0 = pcc(dev0_outs[0], ref_d0_e0)
-    pcc_d1_e1 = pcc(dev1_outs[0], ref_d1_e1)
+    def pcc(a, b):
+        return torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
 
-    logger.info(f"Dev0 Expert 0 (64 tokens, P=64): PCC={pcc_d0_e0:.6f}")
-    logger.info(f"Dev1 Expert 1 (64 tokens, P=64): PCC={pcc_d1_e1:.6f}")
+    pcc_d0_e0 = pcc(dev0_outs[0], ref_d0_e0)
+    pcc_d0_e1 = pcc(dev0_outs[1], ref_d0_e1)
+    pcc_d1_e0 = pcc(dev1_outs[0], ref_d1_e0)
+    pcc_d1_e1 = pcc(dev1_outs[1], ref_d1_e1)
+
+    logger.info(f"Dev0 Expert 0 (P=64): PCC={pcc_d0_e0:.6f}")
+    logger.info(f"Dev0 Expert 1 (P=64): PCC={pcc_d0_e1:.6f}")
+    logger.info(f"Dev1 Expert 2 (P=64): PCC={pcc_d1_e0:.6f}")
+    logger.info(f"Dev1 Expert 3 (P=64): PCC={pcc_d1_e1:.6f}")
 
     pcc_d0_comb = pcc(dev0_result, ref_d0_combined)
     pcc_d1_comb = pcc(dev1_result, ref_d1_combined)
 
-    logger.info(f"Dev0 Combined (P=64): PCC={pcc_d0_comb:.6f}")
-    logger.info(f"Dev1 Combined (P=64): PCC={pcc_d1_comb:.6f}")
+    logger.info(f"Dev0 Combined (0.6*e0 + 0.4*e1, P=64): PCC={pcc_d0_comb:.6f}")
+    logger.info(f"Dev1 Combined (0.6*e2 + 0.4*e3, P=64): PCC={pcc_d1_comb:.6f}")
 
     # ---- Assertions ----
     all_passed = True
     for label, val in [
-        ("D0 Expert 0 (P=64)", pcc_d0_e0),
-        ("D1 Expert 1 (P=64)", pcc_d1_e1),
-        ("D0 Combined (P=64)", pcc_d0_comb),
-        ("D1 Combined (P=64)", pcc_d1_comb),
+        ("D0 Expert 0", pcc_d0_e0),
+        ("D0 Expert 1", pcc_d0_e1),
+        ("D1 Expert 2", pcc_d1_e0),
+        ("D1 Expert 3", pcc_d1_e1),
+        ("D0 Combined", pcc_d0_comb),
+        ("D1 Combined", pcc_d1_comb),
     ]:
         if val < PCC_THRESHOLD:
             logger.error(f"FAIL: {label} PCC {val:.6f} < {PCC_THRESHOLD}")
             all_passed = False
 
     assert all_passed, "One or more PCC checks failed"
-    logger.info("test_p64 PASSED")
+    logger.info("test_multi_expert_p64 PASSED")
 
 
 if __name__ == "__main__":
-    test_p64()
+    test_multi_expert_p64()
