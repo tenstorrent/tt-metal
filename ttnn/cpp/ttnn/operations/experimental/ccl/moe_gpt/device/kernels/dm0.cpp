@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_gpt_ring_common.h"
+#include "api/debug/dprint_pages.h"
 
 // Triple buffering constants
 #define NUM_SLOTS 3  // 3 slots in CB
@@ -96,9 +97,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_w1_tile_size;
     constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_w1_tile_size;
-    DPRINT << "w0_w1_bytes_per_txn" << w0_w1_bytes_per_txn << ENDL();
-    DPRINT << "w0_w1_tiles_per_txn" << w0_w1_tiles_per_txn << ENDL();
-    DPRINT << "w0_w1_tile_size" << w0_w1_tile_size << ENDL();
     constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
@@ -145,6 +143,7 @@ void kernel_main() {
     uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
     bool txns_in_flight = false;
 
+    tt::data_movement::common::print_bf16_pages(get_read_ptr(cb_s2c_in), 1024, 90 * 4);
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
@@ -154,17 +153,13 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
-        DPRINT << "w0_w1_blocks_per_expert" << w0_w1_blocks_per_expert << ENDL();
         for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
             // Issue reads with current trid
-            DPRINT << "READING 0: BLOCK: " << block_id << ENDL();
-            DPRINT << "ADDR 0: " << w0_w1_dram_read_offset << ENDL();
 
             noc_async_read_set_trid(trid_to_issue);
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue], trid_to_issue);
             w0_w1_dram_read_offset += w0_w1_bytes_per_txn;
-            DPRINT << "ADDR 1: " << w0_w1_dram_read_offset << ENDL();
 
             noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
                 dram_noc_addr, w0_w1_dram_read_offset, slot_addr[slot_to_issue] + w0_w1_bytes_per_txn, trid_to_issue);

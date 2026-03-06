@@ -53,19 +53,15 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     Returns:
         torch_input: Tensor of shape (L, in0_num_cores, E, M, K)
     """
-    torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
-    indices = torch.arange(K, dtype=torch.bfloat16)
-    indices = indices.view(1, 1, 1, K).expand_as(torch_input)
-    # torch_input = indices.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
+    torch_input = torch.randn((L, E, M, K), dtype=torch.bfloat16)
+    torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
+
     return torch_input
 
 
 def create_torch_w0(L, E, K, N):
     """Create torch w0 weight tensor of shape (L, E, K, N)."""
-    temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    indices = torch.arange(K, dtype=torch.bfloat16)
-    # indices[-32:] = -1
-    return indices.view(1, 1, K, 1).expand_as(temp)
+    return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
 
 
 def create_torch_b0(L, E, N):
@@ -91,20 +87,13 @@ def create_torch_b2(L, E, N):
 
 def create_torch_w1(L, E, K, N):
     """Create torch w1 weight tensor of shape (L, E, K, N)."""
-    # return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    indices = torch.arange(K, dtype=torch.bfloat16)
-    # indices[-32:] = -1
-    return -1 * (indices.view(1, 1, K, 1).expand_as(temp))
+    return torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
 
 
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
     # return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-    temp = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
-    indices = torch.arange(N, dtype=torch.bfloat16)
-    # indices[-32:] = -1
-    return indices.view(1, 1, N, 1).expand_as(temp)
+    return torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
 
 
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):

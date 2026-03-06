@@ -444,36 +444,17 @@ def _prepare_w2_b2_tensor(
             start_col += 4 * ttnn.TILE_SIZE
 
     w2_b2_reordered = torch.cat(each_shard, dim=-1)
+    print(f"w2_b2_reordered shape: {w2_b2_reordered.shape}")
+
     all_groups_per_bank = w2_b2_reordered.view(L, E, N_new, num_cores, 2, 4 * ttnn.TILE_SIZE)
     all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
+    print(f"all_groups_per_bank shape: {all_groups_per_bank.shape}")
 
-    Nt = N_new // ttnn.TILE_SIZE
-    w2_b2_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
+    torch.set_printoptions(profile="full", sci_mode=False)
+    with open("w2_post_swizzle.txt", "w") as f:
+        f.write(str(all_groups_per_bank[0, 0, 0, 0, :, 0]))
 
-    core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
-    chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
-    chunk_start_positions = torch.cat(
-        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
-    )
-
-    each_shard = []
-    for core_id in range(num_cores):
-        each_chunk = []
-        for chunk_id in core_chunk_order:
-            start_pos = chunk_start_positions[chunk_id]
-            end_pos = chunk_start_positions[chunk_id + 1]
-            this_chunk = w2_b2_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
-            each_chunk.append(this_chunk)
-        each_shard.append(torch.cat(each_chunk, dim=3))
-        core_chunk_order = core_chunk_order.roll(1)
-
-    w2_b2_paired = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
-
-    torch.set_printoptions(profile="full")
-    torch.set_printoptions(sci_mode=False)
-    with open(f"w2.txt", "w") as f:
-        f.write(str(w2_b2_paired[0, 0, 0, 0, :, 0]))
-    return w2_b2_paired
+    return all_groups_per_bank
 
 
 def _build_ring2cores(device) -> dict:

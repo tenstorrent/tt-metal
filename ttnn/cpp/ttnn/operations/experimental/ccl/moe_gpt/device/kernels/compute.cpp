@@ -141,30 +141,15 @@ void kernel_main() {
             // clean up 13 later 91/7 = 13
             for (uint32_t block_id = 0; block_id < 13; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                cb_push_back(cb_debug, 1);
-                cb_reserve_back(cb_debug, 1);
-                cb_wait_front(cb_debug, 1);
-                cb_pop_front(cb_debug, 1);
-                // DPRINT << "new block "<< block_id << ENDL();
                 for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                    // DPRINT <<"k dim: " << k_tracker <<ENDL();
-
-                    // UNPACK(tt::compute::common::print_full_tile(cb_s2c_in,in0_index , true));
-                    // in0_index++;
-                    // copy_tile_init(cb_s2c_in);
-                    // copy_tile(cb_r2c_w0_w1, k,0);
-                    // // copy_tile_init(cb_r2c_w0_w1);
-                    // copy_tile(cb_r2c_w0_w1, k +1,1);
-                    // copy_tile(cb_s2c_in, in0_index,2);
-                    // DPRINT << "W0: "<<ENDL();
-                    // dprint_tensix_dest_reg(0);
-                    // DPRINT << "W1: "<<ENDL();
-                    // dprint_tensix_dest_reg(1);
-                    // DPRINT << "in: "<<ENDL();
-                    // dprint_tensix_dest_reg(2);
+                    DPRINT << "k dim: " << k_tracker << ENDL();
+                    DPRINT << "in0_index " << in0_index << ENDL();
+                    UNPACK(tt::compute::common::print_full_tile(cb_s2c_in, in0_index, true));
                     if (k_tracker == num_w0_w1_tiles_h) {
                         break;
                     }
+                    k_tracker++;
+                    in0_index++;
                     // matmul_block(
                     //     cb_s2c_in,
                     //     cb_r2c_w0_w1,
@@ -175,7 +160,6 @@ void kernel_main() {
                     //     /*ct_dim=*/4,
                     //     /*rt_dim=*/1,
                     //     /*kt_dim=*/1);
-                    // k_tracker++;
                 }
                 if (k_tracker == num_w0_w1_tiles_h) {
                     // add matmul bias logic here
@@ -240,18 +224,15 @@ void kernel_main() {
                     if (k_tracker == num_w0_w1_tiles_h) {
                         break;
                     }
-                    if (dm1_tiles_remaining == 0) {
-                        // cb_pop_front(cb_w2c_rdy, 1);
-                        // cb_wait_front(cb_w2c_rdy, 1);
-                        // dm1_tiles_remaining =
-                        // moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step]; in2_buf = (in2_buf
-                        // >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5 in2_offset = in2_buf * tiles_per_step;
-                        // in2_index = in2_offset;
-                    }
+                    // if (dm1_tiles_remaining == 0) {
+                    //     cb_pop_front(cb_w2c_rdy, 1);
+                    //     cb_wait_front(cb_w2c_rdy, 1);
+                    //     dm1_tiles_remaining =
+                    //     moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step]; in2_buf = (in2_buf
+                    //     >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5 in2_offset = in2_buf * tiles_per_step;
+                    //     in2_index = in2_offset;
+                    // }
                     // dm1_tiles_remaining--;
-                    DPRINT << "k dim: " << k_tracker << ENDL();
-
-                    UNPACK(tt::compute::common::print_full_tile(cb_r2c_w2, k, true));
                     // matmul_block(
                     //     cb_s2c_in2,
                     //     cb_r2c_w2,
