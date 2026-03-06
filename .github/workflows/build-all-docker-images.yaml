@@ -154,6 +154,18 @@ jobs:
             echo "EOJSON"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Debug - Print computed data
+        run: |
+          echo "::group::Tool Data"
+          echo '${{ steps.tool-data.outputs.data }}' | jq .
+          echo "::endgroup::"
+          echo "::group::Ubuntu 22.04 Platform Data"
+          echo '${{ steps.platform-2204.outputs.data }}' | jq .
+          echo "::endgroup::"
+          echo "::group::Ubuntu 24.04 Platform Data"
+          echo '${{ steps.platform-2404.outputs.data }}' | jq .
+          echo "::endgroup::"
+
   # Tool images
   build-tools:
     name: "Build tool images"
@@ -167,6 +179,7 @@ jobs:
   build-2204:
     name: "Ubuntu 22.04"
     needs: [preflight, build-tools]
+    if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       build-manylinux: true
@@ -178,6 +191,7 @@ jobs:
   build-2404:
     name: "Ubuntu 24.04"
     needs: [preflight, build-tools]
+    if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       build-manylinux: false
