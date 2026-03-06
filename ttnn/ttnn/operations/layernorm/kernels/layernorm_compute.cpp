@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
+// Force recompile after binary_op fidelity fix
 
 #include <cstdint>
 
@@ -33,6 +34,8 @@ void kernel_main() {
     constexpr uint32_t num_tile_rows = get_compile_time_arg_val(1);
 
     using namespace compute_kernel_lib;
+
+    // hehe
 
     // Hardware init - first op is tilize from cb_gamma_rm to cb_gamma
     compute_kernel_hw_startup(cb_gamma_rm, cb_gamma);

@@ -181,6 +181,14 @@ ALWI void tilize(
 
         cb_reserve_back(output_cb, block_width_tiles);
 
+        // Assert that the contiguous read from rd_ptr won't wrap past the physical CB buffer.
+        // tilize_block reads input_pages contiguous pages from rd_ptr; if rd_ptr is offset
+        // (e.g. from prior use of the same CB), the read can exceed fifo_limit.
+        UNPACK({
+            auto& in_cb = get_local_cb_interface(input_cb);
+            ASSERT(in_cb.fifo_rd_ptr + input_pages * in_cb.fifo_page_size <= in_cb.fifo_limit);
+        })
+
         if constexpr (use_fast) {
             fast_tilize_block(input_cb, block_width_tiles, output_cb);
         } else {
