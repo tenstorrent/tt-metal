@@ -4,6 +4,7 @@
 
 #include "complex_unary.hpp"
 #include "device/complex_unary_op.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -187,7 +187,7 @@ inline Tensor xielu(
 }
 
 operations::unary::ComplexTensor reciprocal(
-    const operations::unary::ComplexTensor& t, const tt::tt_metal::MemoryConfig& m);
+    const operations::unary::ComplexTensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 inline Tensor unary_fmod(
     const Tensor& t,
@@ -238,7 +238,7 @@ inline Tensor abs(
     return operations::unary::detail::unary_impl(t, {operations::unary::UnaryWithParam{op_type}}, m, o);
 }
 
-Tensor abs(const operations::unary::ComplexTensor& t, const tt::tt_metal::MemoryConfig& m);
+Tensor abs(const operations::unary::ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 inline Tensor eqz(
     const Tensor& t,
@@ -317,14 +317,14 @@ inline Tensor softshrink(
 }
 
 Tensor deg2rad(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor rad2deg(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 inline Tensor clamp_tss(
     const Tensor& t,
@@ -387,11 +387,11 @@ inline Tensor prelu_sfpu(
 }
 
 Tensor where_tss(
-    const Tensor& c,
-    const operations::unary::ScalarVariant& vt,
-    const operations::unary::ScalarVariant& vf,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& condition,
+    const operations::unary::ScalarVariant& value_true,
+    const operations::unary::ScalarVariant& value_false,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 inline Tensor selu(
     const Tensor& t,
@@ -404,17 +404,17 @@ inline Tensor selu(
 }
 
 Tensor bitcast(
-    const Tensor& t,
-    const tt::tt_metal::DataType& dtype,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const tt::tt_metal::DataType& output_dtype,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor rdiv(
-    const Tensor& t,
+    const Tensor& input_tensor,
     float value,
     const std::optional<std::string>& rounding_mode = std::nullopt,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 inline Tensor swish(
     const Tensor& t,

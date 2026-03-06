@@ -71,8 +71,8 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     float alpha,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> rsub_bw(
     const Tensor& grad_tensor,
@@ -80,8 +80,8 @@ std::vector<std::optional<Tensor>> rsub_bw(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> concat_bw(
     const Tensor& grad_tensor_arg,
@@ -90,15 +90,15 @@ std::vector<std::optional<Tensor>> concat_bw(
     int dim,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
     float scalar,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& grad_tensor_arg,
@@ -106,8 +106,8 @@ std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& other_tensor_arg,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<ComplexTensor> mul_bw(
     const ComplexTensor& grad_tensor,
@@ -119,7 +119,7 @@ std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& grad_tensor,
@@ -127,8 +127,8 @@ std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& other_tensor,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
@@ -151,15 +151,15 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     float alpha,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> add_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     float alpha,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> add_bw(
     const Tensor& grad_tensor,
@@ -167,8 +167,8 @@ std::vector<std::optional<Tensor>> add_bw(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<ComplexTensor> add_bw(
     const ComplexTensor& grad_tensor,
@@ -206,7 +206,7 @@ std::vector<std::optional<Tensor>> div_bw(
     float scalar,
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> div_bw(
     const Tensor& grad_tensor,
@@ -215,8 +215,8 @@ std::vector<std::optional<Tensor>> div_bw(
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> input_grad = std::nullopt,
-    std::optional<Tensor> other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    const std::optional<Tensor>& other_grad = std::nullopt);
 
 std::vector<ComplexTensor> div_bw(
     const ComplexTensor& grad_tensor,

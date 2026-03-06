@@ -466,7 +466,7 @@ std::vector<std::optional<ttnn::Tensor>> assign_bw_single_impl(
     const Tensor& grad,
     const Tensor& /*input*/,
     const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt};
     grad_tensor[0] = input_grad.has_value() ? ttnn::assign(grad, input_grad.value()) : grad;
     return grad_tensor;
@@ -926,8 +926,8 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     float alpha,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::detail::subalpha_bw_impl(
         grad_tensor, input_a, other, alpha, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
@@ -938,8 +938,8 @@ std::vector<std::optional<Tensor>> rsub_bw(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::detail::rsub_bw_impl(
         grad_tensor, input_a, other, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
@@ -951,8 +951,8 @@ std::vector<std::optional<Tensor>> concat_bw(
     int dim,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::detail::concat_bw_impl(
         grad_tensor_arg, input_tensor_a_arg, other, dim, are_required_outputs, memory_config, input_grad, other_grad);
 }
@@ -962,7 +962,7 @@ std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& input_tensor_arg,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     return operations::binary_backward::mul_bw_scalar_impl(
         grad_tensor_arg, input_tensor_arg, scalar, output_mem_config, input_grad);
 }
@@ -973,8 +973,8 @@ std::vector<std::optional<Tensor>> mul_bw(
     const Tensor& other_tensor_arg,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::mul_bw_tensor_impl(
         grad_tensor_arg,
         input_tensor_arg,
@@ -997,7 +997,7 @@ std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     return operations::binary_backward::detail::assign_bw_single_impl(
         grad_tensor, input_tensor, output_mem_config, input_grad);
 }
@@ -1008,8 +1008,8 @@ std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& other_tensor,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::detail::assign_bw_tensor_impl(
         grad_tensor, input_tensor, other_tensor, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
@@ -1041,8 +1041,8 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     float alpha,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::detail::addalpha_bw_impl(
         grad_tensor, input_a, other, alpha, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
@@ -1052,7 +1052,7 @@ std::vector<std::optional<Tensor>> add_bw(
     const Tensor& input_tensor,
     float alpha,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     return operations::binary_backward::detail::add_bw_scalar_impl(
         grad_tensor, input_tensor, alpha, output_mem_config, input_grad);
 }
@@ -1063,8 +1063,8 @@ std::vector<std::optional<Tensor>> add_bw(
     const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::detail::add_bw_tensor_impl(
         grad_tensor, input_a, other, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
@@ -1117,7 +1117,7 @@ std::vector<std::optional<Tensor>> div_bw(
     float scalar,
     const std::optional<std::string>& rounding_mode,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     return operations::binary_backward::div_bw_scalar_impl(
         grad_tensor, input_tensor, scalar, rounding_mode, output_mem_config, input_grad);
 }
@@ -1129,8 +1129,8 @@ std::vector<std::optional<Tensor>> div_bw(
     const std::optional<std::string>& rounding_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
     return operations::binary_backward::div_bw_tensor_impl(
         grad_tensor, input_a, other, rounding_mode, are_required_outputs, output_mem_config, input_grad, other_grad);
 }

@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

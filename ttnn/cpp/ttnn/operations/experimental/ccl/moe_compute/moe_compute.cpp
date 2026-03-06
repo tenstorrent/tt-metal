@@ -8,8 +8,7 @@
 #include "moe_compute.hpp"
 #include "device/moe_compute_device_operation.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& tilize_input_tensor,
@@ -38,5 +37,4 @@ std::vector<ttnn::Tensor> moe_compute(
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
     return ttnn::prim::get_moe_combine_cores(mesh_device);
 };
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental
