@@ -59,10 +59,11 @@ class TtBarkModel:
         hf_model = BarkModel.from_pretrained(model_name)
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        # Store generation configs
-        self.semantic_generation_config = hf_model.generation_config.semantic_generation_config
-        self.coarse_generation_config = hf_model.generation_config.coarse_generation_config
-        self.fine_generation_config = hf_model.generation_config.fine_generation_config
+        # Store generation configs (compatible with old + new HF versions)
+        gen = hf_model.generation_config
+        self.semantic_generation_config = getattr(gen, "semantic_generation_config", gen)
+        self.coarse_generation_config = getattr(gen, "coarse_generation_config", gen)
+        self.fine_generation_config = getattr(gen, "fine_generation_config", gen)
 
         # Get device grid size for Stage 3 optimizations
         compute_grid = self.device.compute_with_storage_grid_size()
@@ -153,7 +154,7 @@ class TtBarkModel:
         tokens_torch = [input_ids, next_token_torch.unsqueeze(-1)]
 
         # Autoregressive loop
-        max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", 256)
+        max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", None) or 256
         remaining_tokens = max_new_tokens - 1
         for _ in range(max(remaining_tokens, 0)):
             # Process only the last token with KV cache (next_token is already on device)
@@ -202,7 +203,7 @@ class TtBarkModel:
         tokens_torch = [next_token_torch.unsqueeze(-1)]
 
         # Autoregressive loop
-        max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", 512)
+        max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", None) or 512
         remaining_tokens = max_new_tokens - 1
         for _ in range(max(remaining_tokens, 0)):
             logits, layer_past = self.coarse_model(input_ids=tt_next_token, layer_past=layer_past, use_cache=True)
