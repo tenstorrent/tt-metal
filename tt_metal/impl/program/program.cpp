@@ -43,7 +43,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/hlk_desc.hpp"

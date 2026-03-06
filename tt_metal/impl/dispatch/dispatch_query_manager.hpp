@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
 #include <umd/device/types/xy_pair.hpp>

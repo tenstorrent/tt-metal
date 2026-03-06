@@ -7,7 +7,7 @@
 
 namespace tt::tt_metal {
 
-// Original types defined in data_types.hpp
+// Original types defined in kernel_types.hpp
 flatbuffer::DataMovementProcessor to_flatbuffer(DataMovementProcessor in) {
     switch (in) {
         case DataMovementProcessor::RISCV_0: return flatbuffer::DataMovementProcessor::RISCV_0;
