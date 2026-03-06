@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdlib>
-#include <iostream>
 #include <string>
 
 #include <yaml-cpp/yaml.h>
@@ -158,15 +157,12 @@ void precompile_for_config(
     build_env_manager.add_build_env(0, jit_device_config, rtoptions);
     build_env_manager.build_firmware(0, /*ignore_precompiled=*/true);
 
-    std::cout << jit_device_config << std::endl;
-
     auto dev_build_env = build_env_manager.get_device_build_env(0);
     auto build_key = dev_build_env.build_key();
     auto firmware_out_path = dev_build_env.build_env.get_out_firmware_root_path();
     auto precompiled_firmware_dir =
         rtoptions.get_root_dir() + "tt_metal/pre-compiled/" + std::to_string(build_key) + "/";
 
-    std::cout << "cp -r " << firmware_out_path << " " << precompiled_firmware_dir << std::endl;
     copy_firmware_to_precompiled_dir(firmware_out_path, precompiled_firmware_dir);
 }
 
