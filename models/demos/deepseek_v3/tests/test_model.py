@@ -518,6 +518,38 @@ def run_test_forward_pass_dpmodel(
     ttnn.deallocate(tt_output)
 
 
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+def test_forward_pass_smoke(
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    """Single-layer decode smoke test (~30-40s). Catches topology, weight-loading, and basic
+    forward-pass issues before the full 5-layer suite runs."""
+    hf_config_short.num_hidden_layers = 1
+
+    run_test_forward_pass_dpmodel(
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=USERS_PER_ROW,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+    )
+
+
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     USERS_PER_ROW,
     DEFAULT_PREFILL_SEQ_LEN,
