@@ -287,8 +287,8 @@ def run_test_rotary_embedding_llama(
             tt_inp += [cos, sin]  # Append cos and sin to the input list
 
         elif input_transpose == ttnn.RotaryEmbeddingTranspose.HC:
-            tt_model.input_transpose = ttnn.RotaryEmbeddingTranspose.NONE
-            tt_model.mode = "prefill"
+            # tt_model.input_transpose = ttnn.RotaryEmbeddingTranspose.NONE
+            # tt_model.mode = "prefill"
             cos, sin = compute_gather_cos_sin(
                 dhead=head_dim,
                 end=max_seq_len * 2,

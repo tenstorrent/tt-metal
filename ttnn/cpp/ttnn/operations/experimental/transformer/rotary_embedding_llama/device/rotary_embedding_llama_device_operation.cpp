@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
+#include "rotary_embedding_llama_hc_decode_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include <tt-metalium/constants.hpp>
@@ -15,6 +16,9 @@ namespace ttnn::experimental::prim {
 RotaryEmbeddingLlamaDeviceOperation::program_factory_t RotaryEmbeddingLlamaDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.is_decode_mode) {
+        if (operation_attributes.input_transpose == RotaryEmbeddingTranspose::HC) {
+            return RotaryEmbeddingLlamaHCDecode{};
+        }
         return RotaryEmbeddingLlamaMultiCoreSharded{};
     }
     return RotaryEmbeddingLlamaMultiCore{};
@@ -158,10 +162,6 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 trans_mat.logical_shape()[-1] == TILE_WIDTH,
                 "Transformation matrix must have 4th dim equal to TILE_WIDTH");
-
-            TT_FATAL(
-                (false),
-                "In decode mode, optional input_transpose = RotaryEmbeddingTranspose::HC is currently not supported.");
         }
     } else {  // Prefill mode validation
         TT_FATAL(
