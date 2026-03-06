@@ -7,6 +7,7 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -165,6 +166,18 @@ inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
 
     std::call_once(mpi_once, [&] {
+        const char* ompi_size = std::getenv("OMPI_COMM_WORLD_SIZE");
+        const char* ompi_rank = std::getenv("OMPI_COMM_WORLD_RANK");
+        const char* ompi_uri = std::getenv("OMPI_MCA_orte_hnp_uri");
+        const char* pmix_ns = std::getenv("PMIX_NAMESPACE");
+        const char* pmix_rank = std::getenv("PMIX_RANK");
+        log_info(tt::LogFabric, "DIAG MPI init_env PRE-INIT env: OMPI_COMM_WORLD_SIZE={}, OMPI_COMM_WORLD_RANK={}, OMPI_MCA_orte_hnp_uri={}, PMIX_NAMESPACE={}, PMIX_RANK={}",
+            ompi_size ? ompi_size : "UNSET",
+            ompi_rank ? ompi_rank : "UNSET",
+            ompi_uri ? ompi_uri : "UNSET",
+            pmix_ns ? pmix_ns : "UNSET",
+            pmix_rank ? pmix_rank : "UNSET");
+
         int already_initialized = 0;
         MPI_Initialized(&already_initialized);
         log_info(tt::LogFabric, "DIAG MPI init_env: MPI_Initialized={}", already_initialized);
@@ -184,6 +197,11 @@ inline void init_env(int& argc, char**& argv) {
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
         MPI_Comm_size(MPI_COMM_WORLD, &world_size);
         log_info(tt::LogFabric, "DIAG MPI init_env: MPI_COMM_WORLD rank={}, size={}", world_rank, world_size);
+
+        if (world_size == 1 && ompi_size && std::atoi(ompi_size) > 1) {
+            log_info(tt::LogFabric, "DIAG MPI init_env WARNING: OMPI env says world_size={} but MPI_Init gave size=1. "
+                "Likely cause: MPI OOB channels broken (docker exec? mismatched MPI library?)", ompi_size);
+        }
     });
 }
 
