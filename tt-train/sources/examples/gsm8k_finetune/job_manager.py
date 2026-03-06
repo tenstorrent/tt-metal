@@ -83,8 +83,8 @@ PARTITION_DEVICE_MAPPING = {
 
 # Available Galaxy nodes for non-lb partitions
 GALAXY_NODES = [
-    "bh-glx-c01u02",
-    "bh-glx-c01u08",
+    # "bh-glx-c01u02",
+    # "bh-glx-c01u08",
     "bh-glx-c02u02",
     "bh-glx-c02u08",
 ]
@@ -92,47 +92,47 @@ GALAXY_NODES = [
 # Mesh graph descriptor template for LoudBox (lb) partitions
 LB_MESH_GRAPH_TEMPLATE = """# --- Meshes ---------------------------------------------------------------
 
-mesh_descriptors {{
+mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology {{ dims: [ 8, 1 ] }}
-  host_topology   {{ dims: [ 1, 1 ] }}
-  channels {{
+  device_topology { dims: [ 8, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
     count: 2
     policy: RELAXED
-  }}
-}}
+  }
+}
 
 # --- Instantiation ----------------------------------------------------------
-top_level_instance {{ mesh {{ mesh_descriptor: "M0" mesh_id: 0 }} }}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 """
 
 # Mesh graph descriptor template for Galaxy (non-lb) partitions
 GALAXY_MESH_GRAPH_TEMPLATE = """# --- Meshes ---------------------------------------------------------------
 
-mesh_descriptors {{
+mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology {{ dims: [ 32, 1 ] }}
-  host_topology   {{ dims: [ 1, 1 ] }}
-  channels {{ count: 2 policy: RELAXED }}
-}}
+  device_topology { dims: [ 32, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
 
 # --- Pinnings ---------------------------------------------------------------
 
-pinnings {{
-  logical_fabric_node_id {{
+pinnings {
+  logical_fabric_node_id {
     mesh_id: 0
     chip_id: 0
-  }}
-  physical_asic_position {{
+  }
+  physical_asic_position {
     tray_id: 1
     asic_location: 1
-  }}
-}}
+  }
+}
 
 # --- Instantiation ----------------------------------------------------------
-top_level_instance {{ mesh {{ mesh_descriptor: "M0" mesh_id: 0 }} }}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 """
 
 SLURM_SCRIPT_TEMPLATE = """#!/bin/bash
@@ -144,6 +144,7 @@ SLURM_SCRIPT_TEMPLATE = """#!/bin/bash
 {nodelist_directive}
 
 # Set environmental variables
+export HOME="/data/${{USER}}"
 export TT_METAL_HOME="/data/${{USER}}/tt-metal"
 export TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME
 export PYTHONPATH="${{TT_METAL_HOME}}"

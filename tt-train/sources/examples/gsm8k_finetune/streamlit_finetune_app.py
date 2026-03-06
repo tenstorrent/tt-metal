@@ -446,6 +446,9 @@ def render_jobs_table():
         st.info("No jobs submitted yet. Submit a job using the sidebar.")
         return
 
+    # Build job ID to index mapping for selection handling
+    job_id_to_idx = {job.job_id: idx for idx, job in enumerate(jobs)}
+
     jobs_data = []
     for job in jobs:
         training_data = get_job_training_data(job)
@@ -486,28 +489,6 @@ def render_jobs_table():
 
     col1, col2, col3 = st.columns([2, 1, 1])
 
-    with col1:
-        job_options = ["None"] + [f"{j.job_id} - {j.job_name}" for j in jobs]
-        current_selection = "None"
-        if st.session_state.selected_job_id:
-            for opt in job_options:
-                if opt.startswith(st.session_state.selected_job_id):
-                    current_selection = opt
-                    break
-
-        selected = st.selectbox(
-            "Select Job to Monitor",
-            job_options,
-            index=job_options.index(current_selection)
-            if current_selection in job_options
-            else 0,
-        )
-
-        if selected != "None":
-            st.session_state.selected_job_id = selected.split(" - ")[0]
-        else:
-            st.session_state.selected_job_id = None
-
     with col2:
         if st.button("Refresh Jobs", use_container_width=True):
             st.session_state.job_manager.update_job_statuses()
@@ -529,12 +510,23 @@ def render_jobs_table():
                         st.error(msg)
                     st.rerun()
 
-    st.dataframe(
+    # Use data_editor for interactive checkboxes
+    edited_df = st.data_editor(
         df,
         use_container_width=True,
         hide_index=True,
+        disabled=[
+            "Job ID",
+            "Name",
+            "Partition",
+            "Status",
+            "Step",
+            "Train Loss",
+            "Val Loss",
+            "Submitted",
+        ],
         column_config={
-            "Select": st.column_config.CheckboxColumn("", default=False),
+            "Select": st.column_config.CheckboxColumn("Select", default=False),
             "Job ID": st.column_config.TextColumn("Job ID", width="small"),
             "Name": st.column_config.TextColumn("Name", width="medium"),
             "Partition": st.column_config.TextColumn("Partition", width="small"),
@@ -544,7 +536,24 @@ def render_jobs_table():
             "Val Loss": st.column_config.TextColumn("Val Loss", width="small"),
             "Submitted": st.column_config.TextColumn("Submitted", width="medium"),
         },
+        key="jobs_table_editor",
     )
+
+    # Check if selection changed in the table
+    selected_rows = edited_df[edited_df["Select"] == True]
+    if len(selected_rows) > 0:
+        # Get the most recently selected job (last one if multiple)
+        new_selected_id = selected_rows.iloc[-1]["Job ID"]
+        if new_selected_id != st.session_state.selected_job_id:
+            st.session_state.selected_job_id = new_selected_id
+            st.rerun()
+    elif len(selected_rows) == 0 and st.session_state.selected_job_id is not None:
+        # All checkboxes unchecked - only clear if user explicitly unchecked
+        original_selected = df[df["Select"] == True]
+        if len(original_selected) > 0:
+            # User unchecked the previously selected job
+            st.session_state.selected_job_id = None
+            st.rerun()
 
 
 def render_job_details(job_info: JobInfo, eval_every: int):

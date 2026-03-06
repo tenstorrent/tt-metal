@@ -480,7 +480,7 @@ def train():
     causal_mask = build_causal_mask(max_sequence_length)
 
     causal_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
 
     logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
