@@ -606,84 +606,42 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Unified router interface for both backends.
+
+        Args:
+            x: Input tensor of shape [1, 1, seq_len, hidden_size]
+            cfg: Runtime configuration dict
+
+        Returns:
+            Tuple of (weights, indices) both of shape [1, 1, seq_len, K]
+        """
         backend = cfg.get("backend", "deepseek")
 
-        # Instrumentation: Log input to router
-        from models.tt_moe.utils.tensor_debug import log_tensor_checkpoint
-
-        log_tensor_checkpoint(x, f"MoEBlock_{backend}_1_router_input")
-
         if backend == "deepseek":
+            # Use existing GroupedTopKRouter (already has correct interface)
             weights, indices = MoEGate.forward(x, cfg["moe_gate"])
         else:  # gptoss
-            # Use TopKRouter for GPT-OSS
-            # Input shape handling:
-            # - Decode: [batch, 1, 1, hidden] - already in right shape
-            # - Prefill: [1, 1, seq, hidden] - already in right shape
-            hidden_size = x.shape[-1]
-
-            # Keep input shape as-is for GPT-OSS router
-            x_reshaped = x
-
-            # Create router if not cached in config
+            # Get or create router instance
             if "_gptoss_router" not in cfg:
-                # Create a simple object-like config for TopKRouter
-                # TopKRouter expects an object with attributes, not a dict
-                class RouterConfig:
-                    def __init__(self, num_local_experts, num_experts_per_tok, hidden_size):
-                        self.num_local_experts = num_local_experts
-                        self.num_experts_per_tok = num_experts_per_tok
-                        self.hidden_size = hidden_size
-
-                router_config = RouterConfig(
-                    num_local_experts=cfg["num_experts_per_device"] * cfg["num_devices"],
-                    num_experts_per_tok=cfg["num_experts_per_tok"],
-                    hidden_size=hidden_size,
-                )
-
-                # Get the router state dict from runtime config
-                # For GPT-OSS, state dicts are passed through runtime config
+                # Get router state dict from config
                 experts_config = cfg.get("moe_experts", {})
                 router_state_dict = experts_config.get("router_state_dict", {})
 
-                # Add validation logging
-                if router_state_dict:
-                    logger.info(f"Loading GPT-OSS TopKRouter with state_dict keys: {list(router_state_dict.keys())}")
-                    for key, value in router_state_dict.items():
-                        if hasattr(value, "shape"):
-                            logger.info(f"  Router weight {key}: shape={value.shape}, dtype={value.dtype}")
-                else:
-                    logger.warning("No router weights found in config - creating mock router with random weights")
-
-                # Initialize TopKRouter with actual weights if available
-                if router_state_dict:
-                    cfg["_gptoss_router"] = TopKRouter(
-                        x.device(),
-                        router_config,
-                        router_state_dict,
-                        tensor_cache_path=None,
-                    )
-                else:
-                    # Fallback: create mock router for testing
+                if not router_state_dict:
+                    # Create mock router for testing
                     logger.warning("Creating mock GPT-OSS router with random weights for testing")
-                    cfg["_gptoss_router"] = TopKRouter(
-                        x.device(),
-                        router_config,
-                        {
-                            "weight": torch.randn(router_config.num_local_experts, router_config.hidden_size),
-                            "bias": torch.randn(router_config.num_local_experts),
-                        },
-                    )
+                    num_experts = cfg["num_experts_per_device"] * cfg["num_devices"]
+                    hidden_size = x.shape[-1]
+                    router_state_dict = {
+                        "weight": torch.randn(num_experts, hidden_size),
+                        "bias": torch.randn(num_experts),
+                    }
 
-            # Call GPT-OSS router
-            use_throughput_experts = cfg.get("use_throughput_experts", True)
-            expert_indices, expert_weights = cfg["_gptoss_router"](x_reshaped, use_throughput_experts)
+                # Create router using factory method
+                cfg["_gptoss_router"] = TopKRouter.from_config(cfg, x.device(), router_state_dict)
 
-            weights, indices = expert_weights, expert_indices
-
-        # Instrumentation: Log output of router
-        log_tensor_checkpoint(indices, f"MoEBlock_{backend}_2_router_output_indices")
-        log_tensor_checkpoint(weights, f"MoEBlock_{backend}_3_router_output_weights")
+            # Call unified forward interface
+            weights, indices = cfg["_gptoss_router"].forward(x, cfg)
 
         return weights, indices
 
@@ -727,31 +685,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
 
         total_tokens = batch_size_per_device * seq_len
         output_chunks = []
-
-        # Create expert mapping tensors if not already created
-        if "expert_mapping_tensors" not in cfg:
-            import torch
-
-            num_devices = cfg["num_devices"]
-            num_experts_per_device = cfg["num_experts_per_device"]
-            num_experts = num_devices * num_experts_per_device
-
-            # Create one-hot mapping showing which device owns which expert
-            mapping = (
-                torch.eye(num_devices, dtype=torch.int32)
-                .repeat_interleave(num_experts_per_device, dim=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-
-            cfg["expert_mapping_tensors"] = ttnn.from_torch(
-                mapping,
-                device=x.device(),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()),
-                dtype=ttnn.uint16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
 
         # Determine chunking strategy
         if config.enable_chunking:
@@ -847,14 +780,8 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
             dispatch_reshaped = ttnn.reshape(dispatch_output, [1, 1, total_tokens_global, dispatch_output.shape[-1]])
 
             # Repeat for all experts on device
-            # For DeepSeek/routed experts, use the memory config from moe_experts config
-            # For GPT-OSS, use the intermediate memory config from unified config
-            if config.expert_type == "routed" and "moe_experts" in cfg:
-                # Use memory config from MoEExperts configuration
-                expert_memory_config = cfg["moe_experts"].get("input_memory_config", config.intermediate_memory_config)
-            else:
-                # Use unified config for GPT-OSS
-                expert_memory_config = config.intermediate_memory_config
+            # Use memory config from moe_experts if available, otherwise fall back to intermediate_memory_config
+            expert_memory_config = cfg["moe_experts"].get("input_memory_config", config.intermediate_memory_config)
 
             dispatch_repeated = ttnn.repeat(
                 dispatch_reshaped,
@@ -999,6 +926,13 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                     weights_rm = ttnn.to_layout(weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
                     weights_rm = ttnn.reshape(weights_rm, [1, 1, weights_rm.shape[0], weights_rm.shape[1]])
                     weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0))
+                    weights_prepared = ttnn.to_layout(weights_rm, ttnn.TILE_LAYOUT)
+                    ttnn.deallocate(weights_rm)
+                elif len(weights_chunk.shape) == 4:
+                    # Handle 4D weights from unified router interface
+                    # Input is [1, 1, batch_seq, K], need [K, 1, batch_seq, 1]
+                    weights_rm = ttnn.to_layout(weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
+                    weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0))  # [K, 1, batch_seq, 1]
                     weights_prepared = ttnn.to_layout(weights_rm, ttnn.TILE_LAYOUT)
                     ttnn.deallocate(weights_rm)
                 else:

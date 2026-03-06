@@ -124,6 +124,45 @@ class TopKRouter:
         # )
         self.compute_config = None
 
+    def forward(self, x: ttnn.Tensor, cfg: dict) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Unified forward interface matching GroupedTopKRouter signature.
+
+        Args:
+            x: Input tensor of shape [1, 1, seq_len, hidden_size]
+            cfg: Runtime config dict (used for consistency, not required for TopKRouter)
+
+        Returns:
+            Tuple of (weights, indices) both of shape [1, 1, seq_len, K]
+        """
+        # Extract use_throughput_experts from config if available
+        use_throughput_experts = cfg.get("use_throughput_experts", True)
+
+        # Call existing __call__ method
+        indices, weights = self.__call__(x, use_throughput_experts)
+
+        # Ensure 4D output shape
+        if len(weights.shape) == 2:  # [batch*seq, K]
+            batch_seq, K = weights.shape
+            weights = ttnn.reshape(weights, (1, 1, batch_seq, K))
+            indices = ttnn.reshape(indices, (1, 1, batch_seq, K))
+
+        # Return in unified order (weights, indices)
+        return weights, indices
+
+    @classmethod
+    def from_config(cls, cfg: dict, mesh_device: ttnn.Device, state_dict: dict):
+        """Factory method to create TopKRouter from runtime config."""
+
+        # Create RouterConfig internally
+        class RouterConfig:
+            def __init__(self, cfg_dict):
+                self.num_local_experts = cfg_dict["num_experts_per_device"] * cfg_dict["num_devices"]
+                self.num_experts_per_tok = cfg_dict["num_experts_per_tok"]
+                self.hidden_size = cfg_dict["hidden_size"]
+
+        hf_config = RouterConfig(cfg)
+        return cls(mesh_device, hf_config, state_dict, tensor_cache_path=None)
+
     def __call__(self, hidden_states, use_throughput_experts):
         """
         Route tokens to top-k experts.
