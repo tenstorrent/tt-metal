@@ -169,7 +169,7 @@ void DPrintParser::PrintTileSlice(const uint8_t* ptr) {
         // know that the slice has been truncated.
         if (count_exceeded) {
             intermediate_stream_ << "<TileSlice data truncated due to exceeding max count ("
-                                 << to_string(static_cast<unsigned>(ts->data_count)) << ")>\n";
+                                 << to_string(ts->data_count) << ")>\n";
             break;
         }
 
