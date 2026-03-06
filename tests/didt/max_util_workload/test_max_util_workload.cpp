@@ -68,17 +68,18 @@ struct MaxUtilConfig {
     uint32_t data_transfer_size = 2048;  // 2KB
 
     // L1 buffer addresses (filled by pre-fill phase, passed to main phase).
-    uint32_t l1_buffer0_addr = 0;   // input 0 bfloat16 data
-    uint32_t l1_buffer1_addr = 0;   // input 1 bfloat16 data
-    uint32_t l1_buffer2_addr = 0;   // output bfloat16 data
-    uint32_t l1_buffer3_addr = 0;   // NOC0 send data pattern A
-    uint32_t l1_buffer4_addr = 0;   // NOC0 send data pattern B
-    uint32_t l1_buffer5_addr = 0;   // NOC1 send data pattern A
-    uint32_t l1_buffer6_addr = 0;   // NOC1 send data pattern B
-    uint32_t l1_buffer7_addr = 0;   // rx buffer from left neighbor
-    uint32_t l1_buffer8_addr = 0;   // rx buffer from up neighbor
-    uint32_t l1_buffer9_addr = 0;   // rx buffer from right neighbor
-    uint32_t l1_buffer10_addr = 0;  // rx buffer from down neighbor
+    uint32_t l1_buffer0_addr = 0;     // input 0 bfloat16 data
+    uint32_t l1_buffer1_addr = 0;     // input 1 bfloat16 data
+    uint32_t l1_buffer2_addr = 0;     // output bfloat16 data
+    uint32_t l1_buffer3_addr = 0;     // NOC0 send data pattern A
+    uint32_t l1_buffer4_addr = 0;     // NOC0 send data pattern B
+    uint32_t l1_buffer5_addr = 0;     // NOC1 send data pattern A
+    uint32_t l1_buffer6_addr = 0;     // NOC1 send data pattern B
+    uint32_t l1_buffer7_addr = 0;     // rx buffer from left neighbor
+    uint32_t l1_buffer8_addr = 0;     // rx buffer from up neighbor
+    uint32_t l1_buffer9_addr = 0;     // rx buffer from right neighbor
+    uint32_t l1_buffer10_addr = 0;    // rx buffer from down neighbor
+    uint32_t l1_super_sync_addr = 0;  // super sync semaphore
 
     // FPU utilization target percentage [1, 92].
     // Passed to the compute kernel as compile-time arg 5.
@@ -92,6 +93,10 @@ struct MaxUtilConfig {
     uint32_t eth_page_size = 1024;  // 1KB found to be optimal for BH
     // ETH loop count: 8x fewer loops than compute to match kernel duration.
     uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
+
+    // When true, all kernels perform a super-sync barrier at program start
+    // before entering their main loop.
+    bool super_sync = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -135,13 +140,26 @@ static uint32_t get_fpu_utilization_pct() {
     return 92;
 }
 
+/// Reads MAX_UTIL_SUPER_SYNC from the environment.
+/// Any non-empty value other than "0" or "false" enables super-sync.
+/// Defaults to false.
+static bool get_super_sync() {
+    const char* env = std::getenv("MAX_UTIL_SUPER_SYNC");
+    if (env != nullptr) {
+        std::string val(env);
+        return !val.empty() && val != "0" && val != "false";
+    }
+    return false;
+}
+
 /// Returns a MaxUtilConfig that covers every compute core on @p device.
 static MaxUtilConfig full_grid_config(
     IDevice* device,
     uint32_t num_tiles,
     uint32_t num_iterations,
     uint32_t num_wl_loops,
-    uint32_t num_slow_wl_loops = 0) {
+    uint32_t num_slow_wl_loops = 0,
+    bool super_sync = false) {
     auto grid = device->compute_with_storage_grid_size();
     MaxUtilConfig cfg;
     cfg.grid_start = {0, 0};
@@ -151,6 +169,7 @@ static MaxUtilConfig full_grid_config(
     cfg.num_wl_loops = num_wl_loops;
     cfg.num_slow_wl_loops = num_slow_wl_loops;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
+    cfg.super_sync = super_sync;
     return cfg;
 }
 
@@ -407,6 +426,8 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
     cfg.l1_buffer9_addr = addr;  // rx from right, no init
     addr += rx_buffer_size;
     cfg.l1_buffer10_addr = addr;  // rx from down, no init
+    addr += rx_buffer_size;
+    cfg.l1_super_sync_addr = addr;  // super sync semaphore
 
     // Pre-fill: L1 buf0..10=0x1b200, 0x1f200, 0x21400, 0x25400, 0x27400, 0x29400, 0x2b400, 0x2d400, 0x2f400, 0x31400,
     // 0x33400
@@ -450,6 +471,7 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
                     tile_bytes_bfloat16,      // 10: tile_size_bytes (bfloat16, 2048)
                     buffer_size_uint32,       // 11: data_transfer_size (8KB)
                     cfg.num_tiles,            // 12: num_tiles (8)
+                    cfg.l1_super_sync_addr,   // 13: l1_super_sync_addr
                 },
         });
 
@@ -590,6 +612,14 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
     Program program = CreateProgram();
 
+    auto super_sync_sender_semaphore_id = 0;
+    auto super_sync_receiver_semaphore_id = 0;
+    if (cfg.super_sync) {
+        super_sync_sender_semaphore_id = tt_metal::CreateSemaphore(program, core_range_set, INVALID);
+        super_sync_receiver_semaphore_id = tt_metal::CreateSemaphore(program, core_range_set, INVALID);
+    }
+    log_info(LogTest, "Super sync: {}", cfg.super_sync);
+
     // -- Reader kernel (BRISC / RISCV_0 / NOC0) -----------------------------
     // Top-left core multicasts to entire grid; all other cores are no-ops.
     auto reader_kernel = CreateKernel(
@@ -601,14 +631,19 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .noc = NOC::RISCV_0_default,
             .compile_args =
                 {
-                    cfg.num_wl_loops,        // 0: num_loops (inner loops per dispatch)
-                    cfg.l1_buffer3_addr,     // 1: l1_tx_A_addr – pattern A (0x5555)
-                    cfg.l1_buffer4_addr,     // 2: l1_tx_B_addr – pattern B (0xAAAA)
-                    cfg.l1_buffer7_addr,     // 3: l1_rx_addr – destination on receiving cores
-                    cfg.l1_buffer8_addr,     // 4: (unused)
-                    cfg.l1_buffer9_addr,     // 5: (unused)
-                    cfg.l1_buffer10_addr,    // 6: (unused)
-                    cfg.data_transfer_size,  // 7: transfer_size
+                    cfg.num_wl_loops,                  // 0: num_loops (inner loops per dispatch)
+                    cfg.l1_buffer3_addr,               // 1: l1_tx_A_addr – pattern A (0x5555)
+                    cfg.l1_buffer4_addr,               // 2: l1_tx_B_addr – pattern B (0xAAAA)
+                    cfg.l1_buffer7_addr,               // 3: l1_rx_addr – destination on receiving cores
+                    cfg.l1_buffer8_addr,               // 4: (unused)
+                    cfg.l1_buffer9_addr,               // 5: (unused)
+                    cfg.l1_buffer10_addr,              // 6: (unused)
+                    cfg.data_transfer_size,            // 7: transfer_size
+                    cfg.super_sync,                    // 8: super_sync
+                    super_sync_sender_semaphore_id,    // 9: super_sync_sender_semaphore_id
+                    super_sync_receiver_semaphore_id,  // 10: super_sync_receiver_semaphore_id
+                    cfg.l1_super_sync_addr             // 11: l1_super_sync_addr
+
                 },
         });
 
@@ -654,12 +689,14 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .fp32_dest_acc_en = false,
             .compile_args =
                 {
-                    cfg.l1_buffer0_addr,  // 0: l1_buffer0_addr (bfloat16)
-                    cfg.l1_buffer1_addr,  // 1: l1_buffer1_addr (bfloat16)
-                    cfg.l1_buffer2_addr,  // 2: l1_buffer2_addr (output, 8 float16_b tiles)
-                    cfg.num_tiles,        // 3: num_tiles (8)
-                    cfg.num_wl_loops,     // 4: num_iterations (inner loops per dispatch)
-                    cycles_to_wait,       // 5: cycles_to_wait (derived from fpu_utilization_pct)
+                    cfg.l1_buffer0_addr,    // 0: l1_buffer0_addr (bfloat16)
+                    cfg.l1_buffer1_addr,    // 1: l1_buffer1_addr (bfloat16)
+                    cfg.l1_buffer2_addr,    // 2: l1_buffer2_addr (output, 8 float16_b tiles)
+                    cfg.num_tiles,          // 3: num_tiles (8)
+                    cfg.num_wl_loops,       // 4: num_iterations (inner loops per dispatch)
+                    cycles_to_wait,         // 5: cycles_to_wait (derived from fpu_utilization_pct)
+                    cfg.super_sync,         // 6: super_sync
+                    cfg.l1_super_sync_addr  // 7: l1_super_sync_addr
                 },
         });
 
@@ -676,19 +713,30 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
     uint32_t grid_size = (cfg.grid_end.x - cfg.grid_start.x + 1) * (cfg.grid_end.y - cfg.grid_start.y + 1);
     uint32_t num_dests = grid_size - 1;
 
-    // Runtime arg vectors – sender gets full multicast rectangle info.
-    std::vector<uint32_t> sender_args = {
-        1u,
-        static_cast<uint32_t>(phys_tl.x),
-        static_cast<uint32_t>(phys_tl.y),
-        static_cast<uint32_t>(phys_br.x),
-        static_cast<uint32_t>(phys_br.y),
-        num_dests};
-    std::vector<uint32_t> idle_args = {0u, 0u, 0u, 0u, 0u, 0u};
-
     for (uint32_t y = cfg.grid_start.y; y <= cfg.grid_end.y; ++y) {
         for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
             CoreCoord core = {x, y};
+            CoreCoord worker_core = device->worker_core_from_logical_core(core);
+
+            // Runtime arg vectors for reader and writer kernels
+            std::vector<uint32_t> sender_args = {
+                1u,
+                static_cast<uint32_t>(phys_tl.x),
+                static_cast<uint32_t>(phys_tl.y),
+                static_cast<uint32_t>(phys_br.x),
+                static_cast<uint32_t>(phys_br.y),
+                num_dests,
+                static_cast<uint32_t>(worker_core.x),
+                static_cast<uint32_t>(worker_core.y)};
+            std::vector<uint32_t> idle_args = {
+                0u,
+                static_cast<uint32_t>(phys_tl.x),
+                static_cast<uint32_t>(phys_tl.y),
+                static_cast<uint32_t>(phys_br.x),
+                static_cast<uint32_t>(phys_br.y),
+                num_dests,
+                static_cast<uint32_t>(worker_core.x),
+                static_cast<uint32_t>(worker_core.y)};
 
             bool is_reader_sender = (x == cfg.grid_start.x && y == cfg.grid_start.y);
             bool is_writer_sender = (x == cfg.grid_end.x && y == cfg.grid_end.y);
@@ -786,6 +834,10 @@ static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg)
                     cfg.l1_buffer9_addr,     // 5: (unused)
                     cfg.l1_buffer10_addr,    // 6: (unused)
                     cfg.data_transfer_size,  // 7: transfer_size
+                    0,                       // 8: super_sync
+                    0,                       // 9: super_sync_sender_semaphore_id
+                    0,                       // 10: super_sync_receiver_semaphore_id
+                    0,                       // 11: l1_super_sync_addr
                 },
         });
 
@@ -1012,7 +1064,8 @@ static bool run_all_devices(
     uint32_t num_tiles,
     uint32_t num_iterations,
     uint32_t num_wl_loops,
-    uint32_t num_slow_wl_loops = 0) {
+    uint32_t num_slow_wl_loops = 0,
+    bool super_sync = false) {
     auto& cq = mesh_device->mesh_command_queue();
 
     // Phase 1: Pre-fill on all devices
@@ -1021,7 +1074,8 @@ static bool run_all_devices(
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         IDevice* device = mesh_device->get_device(coord[0], coord[1]);
-        MaxUtilConfig cfg = full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops);
+        MaxUtilConfig cfg =
+            full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops, super_sync);
 
         auto prefill_prog = build_prefill_program(device, cfg);
         device_configs[device] = cfg;
@@ -1134,6 +1188,7 @@ void max_util_smoke(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     cfg.num_iterations = 1;
     cfg.num_wl_loops = 1;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
+    cfg.super_sync = get_super_sync();
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
 
@@ -1144,19 +1199,23 @@ void max_util_stress(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     uint32_t num_wl_loops = get_num_wl_loops();
     uint32_t duty_cycle_pct = get_duty_cycle_pct();
     uint32_t num_slow_wl_loops = duty_cycle_to_slow_loops(duty_cycle_pct, num_wl_loops);
+    bool super_sync = get_super_sync();
     log_info(
         LogTest,
-        "MaxUtilWorkload_Stress: num_iterations={}, num_wl_loops={}, duty_cycle={}%, num_slow_wl_loops={}",
+        "MaxUtilWorkload_Stress: num_iterations={}, num_wl_loops={}, duty_cycle={}%, num_slow_wl_loops={}, "
+        "super_sync={}",
         num_iterations,
         num_wl_loops,
         duty_cycle_pct,
-        num_slow_wl_loops);
+        num_slow_wl_loops,
+        super_sync);
     MaxUtilConfig cfg = full_grid_config(
         device,
         /*num_tiles=*/8,
         /*num_iterations=*/num_iterations,
         /*num_wl_loops=*/num_wl_loops,
-        /*num_slow_wl_loops=*/num_slow_wl_loops);
+        /*num_slow_wl_loops=*/num_slow_wl_loops,
+        /*super_sync=*/super_sync);
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
 
@@ -1166,19 +1225,23 @@ void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device
     uint32_t num_wl_loops = get_num_wl_loops();
     uint32_t duty_cycle_pct = get_duty_cycle_pct();
     uint32_t num_slow_wl_loops = duty_cycle_to_slow_loops(duty_cycle_pct, num_wl_loops);
+    bool super_sync = get_super_sync();
     log_info(
         LogTest,
-        "MaxUtilWorkload_AllDevices: num_iterations={}, num_wl_loops={}, duty_cycle={}%, num_slow_wl_loops={}",
+        "MaxUtilWorkload_AllDevices: num_iterations={}, num_wl_loops={}, duty_cycle={}%, num_slow_wl_loops={}, "
+        "super_sync={}",
         num_iterations,
         num_wl_loops,
         duty_cycle_pct,
-        num_slow_wl_loops);
+        num_slow_wl_loops,
+        super_sync);
     EXPECT_TRUE(run_all_devices(
         mesh_device,
         /*num_tiles=*/8,
         /*num_iterations=*/num_iterations,
         /*num_wl_loops=*/num_wl_loops,
-        /*num_slow_wl_loops=*/num_slow_wl_loops));
+        /*num_slow_wl_loops=*/num_slow_wl_loops,
+        /*super_sync=*/super_sync));
 }
 
 }  // namespace unit_tests::didt::max_util_workload

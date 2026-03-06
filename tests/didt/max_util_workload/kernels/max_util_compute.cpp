@@ -4,6 +4,8 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
+#include "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 // Compute kernel for max-utilization workload.
 // Uses pre-loaded L1 buffers directly - completely decoupled from data movement.
@@ -16,9 +18,17 @@
 //   3: num_tiles           – number of tiles to process per iteration (8)
 //   4: num_loops           – number of workload repetitions (stress-test loop)
 //   5: cycles_to_wait      – number of cycles to wait before running the next inner loop
+//   6: super_sync          - super sync enabled
+//   7: l1_super_sync_addr  - L1 destination for super sync semaphore
 
 #ifdef TRISC_UNPACK
-ALWI void max_util_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr) {
+template <bool super_sync>
+ALWI void max_util_unpack(
+    uint32_t num_loops,
+    uint32_t num_tiles,
+    uint32_t l1_buffer0_addr,
+    uint32_t l1_buffer1_addr,
+    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
     constexpr uint32_t face_r_dim = 16;
@@ -103,7 +113,15 @@ ALWI void max_util_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_bu
     // compute loop
     volatile uint32_t* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
+    if constexpr (super_sync) {
+        (*l1_super_sync_addr_ptr) = 1;
+        do {
+            invalidate_l1_cache();
+        } while ((*l1_super_sync_addr_ptr) != 0);
+    }
+
     for (uint32_t i = 0; i < num_loops; i++) {
+        DeviceZoneScopedN("MATH-BLOCK");
         for (uint32_t j = 0; j < num_tiles; j++) {
             uint32_t address_a = L1_ADDRESS(l1_buffer0_addr);
             uint32_t address_b = L1_ADDRESS(l1_buffer1_addr + j * 2048);
@@ -413,9 +431,14 @@ void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_loops = get_compile_time_arg_val(4);
     constexpr uint32_t cycles_to_wait = get_compile_time_arg_val(5);
+    constexpr uint32_t super_sync = get_compile_time_arg_val(6);
+    constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(7);
+    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
 
     // TRISC0: perform unpack A (float16_b) and unpack B (float16_b) to SRC_A and SRC_B
-    UNPACK((max_util_unpack(num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr)));
+    UNPACK(
+        (max_util_unpack<super_sync>(num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr, l1_super_sync_addr_ptr)));
 
     // TRISC1: perform MVMUL to DST
     MATH((max_util_math<cycles_to_wait>(num_loops, num_tiles)));
