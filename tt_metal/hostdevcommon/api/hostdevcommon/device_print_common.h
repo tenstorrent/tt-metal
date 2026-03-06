@@ -32,9 +32,11 @@ struct DevicePrintMemoryLayout {
         uint32_t wpos;
         uint32_t rpos;
         DevicePrintRiscCoreState risc_state[PROCESSOR_COUNT];  // Has kernel printed since starting
+        uint32_t lock;  // Lock for synchronizing access to the buffer. 0 means free, other values indicate locked by
+                        // that processor.
     } aux;
     static_assert(
-        sizeof(Aux) == 4 + 4 + (PROCESSOR_COUNT * sizeof(DevicePrintRiscCoreState) + 3) / 4 * 4,
+        sizeof(Aux) == 4 + 4 + (PROCESSOR_COUNT * sizeof(DevicePrintRiscCoreState) + 3) / 4 * 4 + 4,
         "Aux struct size must be correct");
     static_assert(sizeof(Aux) % 4 == 0, "Aux struct must be a multiple of 4 bytes for proper alignment of data");
     uint8_t data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(Aux)];

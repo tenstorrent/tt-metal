@@ -70,3 +70,88 @@ TEST_F(DevicePrintOutputFixture, PrintWithFormatSpecified) {
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_with_format_specified.cpp", messages);
 }
+
+TEST_F(DevicePrintOutputFixture, PrintManyIterations) {
+    uint32_t iterations = 1000;
+    std::vector<uint32_t> runtime_args = {iterations};
+    std::vector<std::string> messages;
+
+    messages.reserve(iterations);
+    for (uint32_t i = 0; i < iterations; i++) {
+        messages.push_back("Test iteration: " + std::to_string(i));
+    }
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp", messages, runtime_args);
+}
+
+// Test that printing from multiple RISCs on the same core works and doesn't interleave messages.
+// We detect interleaving by having garbage data in server output.
+// If all messages are present and correctly formatted, we can be reasonably sure that there was no interleaving.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+            // Test currently works only on WH and BH
+            continue;
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        constexpr CoreCoord core = {0, 0};
+        uint32_t iterations_count = 100;
+        std::vector<uint32_t> runtime_args = {iterations_count};
+
+        // BRISC
+        auto kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+        // NCRISC
+        kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+        // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
+        kernel_handle = CreateKernel(
+            program_, "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp", core, ComputeConfig{});
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        // Verify all 5*N messages (5 RISCs x N iterations) are correctly formatted.
+        // Each iteration value must appear exactly 5 times — once per RISC.
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        for (;;) {
+            if (!getline(log_file, line)) {
+                break;
+            }
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < counts.size()) {
+                counts[iter]++;
+            }
+        }
+        for (int i = 0; i < static_cast<int>(counts.size()); i++) {
+            EXPECT_EQ(counts[i], 5 * device_counter) << "Iteration " << i << " appeared " << counts[i]
+                                                     << " times (expected " << 5 * device_counter << " times)";
+        }
+    }
+}

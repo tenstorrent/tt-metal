@@ -1021,11 +1021,13 @@ void release_lock();
 // Takes lock unconditionally. Returns true if caller should proceed with printing,
 // false if caller should not print (either because server is disabled or this core should not print).
 bool acquire_lock() {
-    volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
+    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
     while (true) {
+    again:
         // Wait until lock is free (0)
         while (*lock_ptr != 0) {
+            invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
@@ -1034,19 +1036,16 @@ bool acquire_lock() {
         // Write risc_id to lock to attempt to acquire it
         *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
 
-        // TODO: Figure out how many queries we need here to ensure the write has propagated and other riscs see the
-        // updated value.
-        if (*lock_ptr != PROCESSOR_INDEX + 1) {
-            continue;
-        }
-        if (*lock_ptr != PROCESSOR_INDEX + 1) {
-            continue;
-        }
-        if (*lock_ptr != PROCESSOR_INDEX + 1) {
-            continue;
+        // Loop here to ensure the write has propagated and other riscs see the updated value.
+        for (uint32_t i = 0; i < DevicePrintMemoryLayout::PROCESSOR_COUNT; ++i) {
+            invalidate_l1_cache();
+            if (*lock_ptr != PROCESSOR_INDEX + 1) {
+                goto again;
+            }
         }
 
         // If after several checks the lock value is still what we set, we have successfully acquired the lock.
+        invalidate_l1_cache();
         if (*lock_ptr == PROCESSOR_INDEX + 1) {
             break;  // Successfully acquired lock
         }
@@ -1097,7 +1096,7 @@ void update_kernel_finished() {
 }
 
 void release_lock() {
-    volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
+    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Release lock by setting to 0
@@ -1105,7 +1104,7 @@ void release_lock() {
 }
 
 void initialize_lock() {
-    volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
+    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Ensure lock starts in free state
     asm volatile("" ::: "memory");
@@ -1124,10 +1123,33 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
         return 0;
     }
 
-    // Check if we are wrapped around
+    // Check if we are regular state with write position ahead of read position
     if (write_position > read_position) {
-        // We are writing in front of the read position. Check if we need to wrap around.
-        if (write_position + message_size >= sizeof(device_print_buffer->data)) {
+        // We are writing in front of the read position. Check if there is enough space until end of buffer.
+        // If not we will need to wrap around and wait for reader to catch up.
+        if (write_position + message_size > sizeof(device_print_buffer->data)) {
+            // It is important not to perform wrap around while reader position is at the beginning of the buffer,
+            // as it will be the same state as at the beginning when buffer is empty. So in order to distinguish real
+            // empty state and wrap around state, we will wait for reader to progress from start.
+            if (read_position == 0) {
+                // Reader is at the beginning, we need to wait for it to move before we can safely wrap around.
+                WAYPOINT("DPW");
+                while (read_position == 0) {
+                    invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+                    internal_::risc_context_switch();
+#endif
+                    // If we've closed the device, we've now disabled printing on it, don't hang.
+                    if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                        return 0;
+                    };
+
+                    // Read new read position for next check
+                    read_position = device_print_buffer->aux.rpos;
+                }
+                WAYPOINT("DPD");
+            }
+
             // There is not enough space for our message until end of buffer.
             // Check if we should add wrap around message in the buffer.
             if (write_position <
@@ -1154,7 +1176,7 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
     if (write_position < read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
-        while (write_position < read_position && read_position < write_position + message_size) {
+        while (write_position < read_position && read_position <= write_position + message_size) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
@@ -1162,7 +1184,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
             // If we've closed the device, we've now disabled printing on it, don't hang.
             if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
                 return 0;
-            };  // wait for host to catch up to wpos with it's rpos
+            };
+
+            // Read new read position for next check
             read_position = device_print_buffer->aux.rpos;
         }
         WAYPOINT("DPD");

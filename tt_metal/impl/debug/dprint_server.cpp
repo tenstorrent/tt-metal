@@ -518,6 +518,8 @@ bool DevicePrintImpl::poll_one_core(
     // uint32_t wpos;
     // uint32_t rpos;
     // uint8_t risc_state[num_processors]; // Rounded up to nearest word
+    // uint32_t lock;
+    // byte print_buffer[remaining buffer];
 
     auto buffer_address = GetDevicePrintBufAddr(device_id, virtual_core);
     uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
@@ -526,8 +528,9 @@ bool DevicePrintImpl::poll_one_core(
     auto from_dev =
         MetalContext::instance().get_cluster().read_core(device_id, virtual_core, buffer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
-    uint32_t print_buffer_address = buffer_address + eightbytes + risc_state_bytes;  // Skip wpos, rpos, and risc state
-    uint32_t print_buffer_size = buffer_size - eightbytes - risc_state_bytes;
+    uint32_t print_buffer_address =
+        buffer_address + eightbytes + risc_state_bytes + sizeof(uint32_t);  // Skip wpos, rpos, risc state, and lock
+    uint32_t print_buffer_size = buffer_size - eightbytes - risc_state_bytes - sizeof(uint32_t);
 
     if (wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC || wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
         return false;
