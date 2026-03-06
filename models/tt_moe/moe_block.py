@@ -390,9 +390,20 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
             else:  # gptoss
                 # GPT-OSS-specific configuration
                 # For unified path, we need the expert configs similar to DeepSeek
+                experts_config = MoEExperts._create_model_config(hf_config, mesh_device, mode)
+
+                # Add mock router_state_dict for testing (will be overridden by actual weights in tests)
+                import torch
+
+                num_experts = num_experts_per_device * mesh_device.get_num_devices()
+                experts_config["router_state_dict"] = {
+                    "weight": torch.randn(num_experts, hf_config.hidden_size),
+                    "bias": torch.randn(num_experts),
+                }
+
                 config.update(
                     {
-                        "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+                        "moe_experts": experts_config,
                         "use_throughput_experts": True,
                         "input_memory_config": input_output_memory_config,
                         "output_memory_config": input_output_memory_config,
@@ -445,9 +456,20 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
             else:  # gptoss
                 # GPT-OSS-specific configuration for prefill
                 # For unified path, include expert configs
+                experts_config = MoEExperts._create_model_config(hf_config, mesh_device, mode)
+
+                # Add mock router_state_dict for testing (will be overridden by actual weights in tests)
+                import torch
+
+                num_experts = num_experts_per_device * mesh_device.get_num_devices()
+                experts_config["router_state_dict"] = {
+                    "weight": torch.randn(num_experts, hf_config.hidden_size),
+                    "bias": torch.randn(num_experts),
+                }
+
                 config.update(
                     {
-                        "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
+                        "moe_experts": experts_config,
                         "use_throughput_experts": True,
                         "input_memory_config": memory_config,
                         "output_memory_config": memory_config,
@@ -617,31 +639,18 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         """
         backend = cfg.get("backend", "deepseek")
 
+        # Select router and call forward based on backend
         if backend == "deepseek":
-            # Use existing GroupedTopKRouter (already has correct interface)
-            weights, indices = MoEGate.forward(x, cfg["moe_gate"])
+            router = MoEGate
+            config = cfg["moe_gate"]
         else:  # gptoss
-            # Get or create router instance
-            if "_gptoss_router" not in cfg:
-                # Get router state dict from config
-                experts_config = cfg.get("moe_experts", {})
-                router_state_dict = experts_config.get("router_state_dict", {})
+            # Create GPT-OSS router instance
+            router_state_dict = cfg["moe_experts"]["router_state_dict"]
+            router = TopKRouter.from_config(cfg, x.device(), router_state_dict)
+            config = cfg
 
-                if not router_state_dict:
-                    # Create mock router for testing
-                    logger.warning("Creating mock GPT-OSS router with random weights for testing")
-                    num_experts = cfg["num_experts_per_device"] * cfg["num_devices"]
-                    hidden_size = x.shape[-1]
-                    router_state_dict = {
-                        "weight": torch.randn(num_experts, hidden_size),
-                        "bias": torch.randn(num_experts),
-                    }
-
-                # Create router using factory method
-                cfg["_gptoss_router"] = TopKRouter.from_config(cfg, x.device(), router_state_dict)
-
-            # Call unified forward interface
-            weights, indices = cfg["_gptoss_router"].forward(x, cfg)
+        # Call unified forward interface
+        weights, indices = router.forward(x, config)
 
         return weights, indices
 
