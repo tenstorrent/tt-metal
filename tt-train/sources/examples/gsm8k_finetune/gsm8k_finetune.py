@@ -106,13 +106,13 @@ def gsm8k_collate_fn(
 
     return Batch(
         input_ids=ttml.autograd.Tensor.from_numpy(
-            input_ids_np, ttnn.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+            input_ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
         ),
         labels=ttml.autograd.Tensor.from_numpy(
-            labels_np, ttnn.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+            labels_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
         ),
         loss_mask=ttml.autograd.Tensor.from_numpy(
-            loss_mask_np, ttnn.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+            loss_mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
         ),
     )
 
@@ -181,8 +181,8 @@ def generate_text_tt(
             # [1,1,1,T] -> TT tensor
             padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
                 padded_prompt_tokens,
-                ttml.Layout.ROW_MAJOR,
-                ttml.autograd.DataType.UINT32,
+                ttnn.Layout.ROW_MAJOR,
+                ttnn.DataType.UINT32,
             )
 
             # Forward: logits [1,1,T,V]

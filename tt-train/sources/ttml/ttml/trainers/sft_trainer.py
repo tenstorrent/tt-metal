@@ -225,5 +225,5 @@ class SFTTrainer:
     def _build_causal_mask(self):
         mask_np = build_causal_mask(self.config.max_seq_len)  # [1, 1, T, T]
         return ttml.autograd.Tensor.from_numpy(
-            mask_np, ttnn.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16
+            mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
         )

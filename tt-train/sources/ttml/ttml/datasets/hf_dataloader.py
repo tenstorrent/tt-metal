@@ -123,16 +123,16 @@ def sft_collate_fn(
         input_ids=ttml.autograd.Tensor.from_numpy(
             input_ids_np.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
-            ttml.autograd.DataType.UINT32,
+            ttnn.DataType.UINT32,
         ),
         labels=ttml.autograd.Tensor.from_numpy(
             labels_np,
             ttnn.Layout.ROW_MAJOR,
-            ttml.autograd.DataType.UINT32,
+            ttnn.DataType.UINT32,
         ),
         loss_mask=ttml.autograd.Tensor.from_numpy(
             loss_mask_np,
             ttnn.Layout.TILE,
-            ttml.autograd.DataType.BFLOAT16,
+            ttnn.DataType.BFLOAT16,
         ),
     )
