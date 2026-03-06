@@ -170,8 +170,11 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
-     {PerfCounterType::MATH_INSTRN_AVAILABLE, 4}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 8;
+     {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
+     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
+     {PerfCounterType::UNPACK1_BUSY_THREAD1, 10}}};
+constexpr size_t NUM_UNPACK_COUNTERS = 11;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
