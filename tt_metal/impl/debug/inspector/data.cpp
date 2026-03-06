@@ -20,6 +20,10 @@
 namespace tt::tt_metal::inspector {
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
+    if (tensor_specs.empty()) {
+        return "Not captured";
+    }
+
     constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
     fmt::memory_buffer buf;
     buf.reserve(TENSOR_ARGS_BUFFER_SIZE);

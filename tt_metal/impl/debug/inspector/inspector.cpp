@@ -501,8 +501,8 @@ bool IsEnabled() {
     return Inspector::is_enabled();
 }
 
-bool CaptureRuntimeEntries() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_runtime_entries();
+bool CaptureTensorSpecs() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_tensor_specs();
 }
 
 void EmitMeshWorkloadDebugEntry(

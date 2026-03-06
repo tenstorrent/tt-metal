@@ -194,13 +194,14 @@ void enqueue_mesh_workload(
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
     // Inspector: emit debug entry with tensor parameters
-    if (tt::tt_metal::experimental::inspector::IsEnabled() &&
-        tt::tt_metal::experimental::inspector::CaptureRuntimeEntries()) {
+    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
         std::vector<TensorSpec> spec_copies;
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& t) { spec_copies.push_back(t.tensor_spec()); }, tensor_args);
+        if (tt::tt_metal::experimental::inspector::CaptureTensorSpecs()) {
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&](const Tensor& t) { spec_copies.push_back(t.tensor_spec()); }, tensor_args);
+        }
 
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies));

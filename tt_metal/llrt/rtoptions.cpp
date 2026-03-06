@@ -163,7 +163,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
-    TT_METAL_INSPECTOR_CAPTURE_RUNTIME_ENTRIES,        // Capture runtime entries on op dispatch (default: on)
+    TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
 
     // ========================================
@@ -1196,14 +1196,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
-        // TT_METAL_INSPECTOR_CAPTURE_RUNTIME_ENTRIES
-        // Controls whether runtime entries (tensor specs, operation name) are captured on every op dispatch.
-        // Default: true (enabled)
-        // Usage: export TT_METAL_INSPECTOR_CAPTURE_RUNTIME_ENTRIES=0
-        case EnvVarID::TT_METAL_INSPECTOR_CAPTURE_RUNTIME_ENTRIES:
-            this->inspector_settings.capture_runtime_entries = true;
+        // TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS
+        // Controls whether tensor specs are captured on every op dispatch.
+        // Default: false (disabled). Set to 1 to enable.
+        // Usage: export TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS=1
+        case EnvVarID::TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS:
+            this->inspector_settings.capture_tensor_specs = true;
             if (strcmp(value, "0") == 0) {
-                this->inspector_settings.capture_runtime_entries = false;
+                this->inspector_settings.capture_tensor_specs = false;
             }
             break;
 
