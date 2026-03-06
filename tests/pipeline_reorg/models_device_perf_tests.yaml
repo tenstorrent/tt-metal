@@ -23,8 +23,8 @@
     wh_n150:
       timeout: 10
       tier: 1
-    bh_p150:
+    bh_p300:
       timeout: 10
       tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U08GELBB1AP # Ambrose Ling
   team: models
