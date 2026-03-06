@@ -14,7 +14,6 @@ from functools import partial
 import datasets
 import numpy as np
 import ttnn
-from matplotlib import pyplot as plt
 from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download
 

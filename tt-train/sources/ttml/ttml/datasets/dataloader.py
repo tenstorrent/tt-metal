@@ -6,7 +6,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator
 
 
 @dataclass
@@ -16,8 +16,18 @@ class Batch:
     Shapes follow ttml conventions:
         input_ids:  [B, 1, 1, T]  uint32  — token IDs fed into the model
         labels:     [B, T]        uint32  — next-token targets (shifted from input_ids)
-        loss_mask:  [B, 1, T, 1]  bfloat16 — 0.0 for prompt/padding positions,
-                                              nonzero (normalized) for completion positions
+        loss_mask:  [B, 1, T, 1]  bfloat16 — per-token weights: 0.0 for prompt/padding,
+                                              nonzero for completion positions.
+
+    loss_mask normalization contract:
+        ``mean(cross_entropy * loss_mask)`` must equal the per-completion-token loss.
+        To guarantee this, collate functions must normalize the mask so that::
+
+            loss_mask.sum() == B * T
+
+        i.e. ``loss_mask *= (B * T) / loss_mask.sum()`` after zeroing prompt/pad
+        positions.  Both :func:`~ttml.datasets.sft_collate_fn` and the gsm8k
+        collate function follow this convention.
     """
 
     input_ids: Any
@@ -61,9 +71,9 @@ class TTMLDataloader(ABC):
     @abstractmethod
     def __iter__(self) -> Iterator[Batch]:
         """Yield batches until the dataset is exhausted."""
-        ...
+        pass
 
     @abstractmethod
     def __len__(self) -> int:
         """Total number of batches available in one pass over the dataset."""
-        ...
+        pass

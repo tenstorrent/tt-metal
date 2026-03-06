@@ -4,8 +4,7 @@
 
 """Concrete TTMLDataloader and SFT collate function for HuggingFace datasets."""
 
-from functools import partial
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Iterator
 
 import numpy as np
 import ttnn
