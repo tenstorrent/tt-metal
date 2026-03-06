@@ -90,12 +90,10 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
 PhysicalSystemDescriptor create_physical_system_descriptor() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    return tt::tt_metal::run_physical_system_discovery(
-        driver_ref, distributed_context, &hal, rtoptions.get_target_device());
+    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 }
 
 std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {

@@ -1137,13 +1137,8 @@ void handle_workload_timeout(
         auto& context = tt::tt_metal::MetalContext::instance();
         auto& driver_ref = const_cast<tt::umd::Cluster&>(*context.get_cluster().get_driver());
         ctx.physical_system_descriptor.clear();
-        auto new_psd = run_physical_system_discovery(
-            driver_ref,
-            context.get_distributed_context_ptr(),
-            &context.hal(),
-            context.rtoptions().get_target_device(),
-            true,
-            true);
+        auto new_psd = tt::tt_metal::run_physical_system_discovery(
+            driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device(), true, true);
         ctx.physical_system_descriptor.merge(std::move(new_psd));
 
         log_output_rank0("Generating Global System Descriptor in-memory");

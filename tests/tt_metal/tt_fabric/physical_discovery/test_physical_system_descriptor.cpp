@@ -32,14 +32,13 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc = run_physical_system_discovery(
-        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.clear();
-    auto new_psd = run_physical_system_discovery(
+    auto new_psd = tt::tt_metal::run_physical_system_discovery(
         driver_ref,
         distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
         rtoptions.get_target_device(),
         /*run_global_discovery*/ true,
         /*run_live_discovery*/ true);
@@ -155,8 +154,8 @@ TEST(PhysicalDiscovery, PrintHostTopology) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc = run_physical_system_discovery(
-        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 
     if (*(distributed_context->rank()) == 0) {
         auto all_hostnames = physical_system_desc.get_all_hostnames();
@@ -187,8 +186,8 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
         GTEST_SKIP() << "Splitting a Galaxy into 2x4 Cross-Tray slices is only supported for Blackhole Galaxy Systems.";
     }
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc = run_physical_system_discovery(
-        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 
     // Each rank builds its local PCI device ID -> logical ID mapping.
     // UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs.
@@ -309,8 +308,8 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc = run_physical_system_discovery(
-        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
     auto my_host = physical_system_desc.my_host_name();
     // Build PCI device ID -> logical ID mapping. UMD now interprets TT_VISIBLE_DEVICES integers as
@@ -344,8 +343,8 @@ TEST(PhysicalMappingGeneration, GeneratePCIeToLogicalMapping) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc = run_physical_system_discovery(
-        driver_ref, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions.get_target_device());
+    auto physical_system_desc =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     auto my_host = physical_system_desc.my_host_name();
 
     // Build PCI device ID -> logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs.

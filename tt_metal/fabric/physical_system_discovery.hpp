@@ -30,7 +30,6 @@ namespace tt::tt_metal {
 PhysicalSystemDescriptor run_physical_system_discovery(
     tt::umd::Cluster& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_global_discovery = true,
     bool run_live_discovery = true);
@@ -44,7 +43,6 @@ namespace discovery_impl {
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::Cluster& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_live_discovery);
 }  // namespace discovery_impl

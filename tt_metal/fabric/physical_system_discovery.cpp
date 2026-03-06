@@ -206,67 +206,6 @@ void remove_unresolved_nodes(PhysicalSystemDescriptor& psd) {
     }
 }
 
-void fix_local_global_flags_after_merge(PhysicalSystemDescriptor& psd) {
-    // After merging peer descriptors, update is_local flags to match the merged view of host_name.
-    //
-    // Why this is needed: In run_local_discovery we label using UMD's view — get_ethernet_connections()
-    // => is_local=true (both endpoints visible to this process), get_ethernet_connections_to_remote_devices()
-    // => is_local=false. When multiple ranks run on the same machine, UMD can see both endpoints of a
-    // link between rank 0 and rank 1, so we store that edge with is_local=true. We use hostname_key =
-    // hostname_rank (e.g. "node0_0", "node0_1") when size>1 so the merge has distinct keys per rank.
-    // After merge, that edge connects ASICs with host_name "node0_0" and "node0_1" — different keys —
-    // so the semantic we need for downstream (is_local <=> same host_name) would be wrong without this fix.
-    // Resolving hostname uniqueness before discovery does not remove the need: we still use hostname_rank
-    // when size>1, and we do not know which rank owns the other endpoint at discovery time, so we cannot
-    // label cross-rank same-machine links as non-local until after merge.
-    const auto& asic_descriptors = psd.get_asic_descriptors();
-    auto& system_graph = psd.get_system_graph();
-
-    for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
-        for (auto& [src_asic, edges] : asic_group) {
-            // Skip if src_asic doesn't exist (shouldn't happen after remove_unresolved_nodes, but be defensive)
-            if (!asic_descriptors.contains(src_asic)) {
-                continue;
-            }
-            const auto& src_host = asic_descriptors.at(src_asic).host_name;
-            for (auto& [dst_asic, eth_conns] : edges) {
-                // Skip if dst_asic doesn't exist (shouldn't happen after remove_unresolved_nodes, but be defensive)
-                if (!asic_descriptors.contains(dst_asic)) {
-                    continue;
-                }
-                const auto& dst_host = asic_descriptors.at(dst_asic).host_name;
-
-                // If both ASICs are on the same host, all connections should be local
-                if (src_host == dst_host) {
-                    for (auto& eth_conn : eth_conns) {
-                        eth_conn.is_local = true;
-                    }
-                } else {
-                    // If ASICs are on different hosts, all connections should be global
-                    for (auto& eth_conn : eth_conns) {
-                        eth_conn.is_local = false;
-                    }
-                }
-            }
-        }
-    }
-
-    // Also update exit node connections
-    auto& exit_node_connection_table = psd.get_exit_node_connection_table();
-    for (auto& [host, exit_nodes] : exit_node_connection_table) {
-        for (auto& exit_node : exit_nodes) {
-            // Skip if ASICs don't exist (shouldn't happen after remove_unresolved_nodes, but be defensive)
-            if (!asic_descriptors.contains(exit_node.src_exit_node) ||
-                !asic_descriptors.contains(exit_node.dst_exit_node)) {
-                continue;
-            }
-            const auto& src_host = asic_descriptors.at(exit_node.src_exit_node).host_name;
-            const auto& dst_host = asic_descriptors.at(exit_node.dst_exit_node).host_name;
-            exit_node.eth_conn.is_local = (src_host == dst_host);
-        }
-    }
-}
-
 void generate_cross_host_connections(PhysicalSystemDescriptor& psd) {
     auto& exit_node_connection_table = psd.get_exit_node_connection_table();
     auto& system_graph = psd.get_system_graph();
@@ -300,7 +239,6 @@ void generate_cross_host_connections(PhysicalSystemDescriptor& psd) {
 
 void validate_graphs(PhysicalSystemDescriptor& psd) {
     // Validate that the representation of the system is internally consistent.
-    // Note: This function also fixes any remaining is_local flag mismatches as a safety measure
     const auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
 
@@ -325,20 +263,6 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                 }
                 const auto& dst_host = asic_descriptors.at(dst_asic).host_name;
 
-                // Fix is_local flags based on actual hostnames (safety measure in case
-                // fix_local_global_flags_after_merge missed something)
-                if (src_host == dst_host) {
-                    // Same host - all connections should be local
-                    for (auto& eth_conn : eth_conns) {
-                        eth_conn.is_local = true;
-                    }
-                } else {
-                    // Different hosts - all connections should be global
-                    for (auto& eth_conn : eth_conns) {
-                        eth_conn.is_local = false;
-                    }
-                }
-
                 bool all_local = std::all_of(
                     eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return conn.is_local; });
 
@@ -362,7 +286,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                     continue;  // no need to check further
                 }
 
-                // Global connections must cross hosts (we already fixed flags above, so this should always pass now)
+                // Global connections must cross hosts
                 TT_FATAL(
                     src_host != dst_host,
                     "Physical Discovery Error: Hostnames for connections marked as global should be different. "
@@ -487,10 +411,8 @@ namespace discovery_impl {
 PhysicalSystemDescriptor run_local_discovery(
     tt::umd::Cluster& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_live_discovery) {
-    (void)hal;  // May be used in future
     PhysicalSystemDescriptor psd(target_device_type);
 
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
@@ -595,7 +517,6 @@ PhysicalSystemDescriptor run_local_discovery(
 PhysicalSystemDescriptor run_physical_system_discovery(
     tt::umd::Cluster& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
     bool run_live_discovery) {
@@ -603,7 +524,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     distributed_context->barrier();
 
     auto psd =
-        discovery_impl::run_local_discovery(cluster, distributed_context, hal, target_device_type, run_live_discovery);
+        discovery_impl::run_local_discovery(cluster, distributed_context, target_device_type, run_live_discovery);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
@@ -618,8 +539,6 @@ PhysicalSystemDescriptor run_physical_system_discovery(
         constexpr uint32_t controller_rank = 0;
         if (my_rank_val == controller_rank) {
             remove_unresolved_nodes(psd);
-            // Fix is_local flags based on actual hostnames after merge
-            //fix_local_global_flags_after_merge(psd);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
 

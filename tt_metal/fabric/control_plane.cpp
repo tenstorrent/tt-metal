@@ -465,8 +465,8 @@ void ControlPlane::init_control_plane(
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
-    auto psd = run_physical_system_discovery(
-        driver_ref, distributed_context, &this->hal_.get(), rtoptions.get_target_device());
+    auto psd =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -566,8 +566,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Initialize physical system descriptor
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
-    auto psd = run_physical_system_discovery(
-        driver_ref, distributed_context, &this->hal_.get(), rtoptions.get_target_device());
+    auto psd =
+        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Generate Mesh graph based on physical system descriptor
