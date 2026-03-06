@@ -468,15 +468,13 @@ inline std::string op_meta_data_serialized_json(
     const auto& operation_attributes,
     const auto& tensor_args,
     auto& tensor_return_value,
-    bool program_cache_hit = false,
-    std::optional<tt::stl::hash::hash_t> program_hash_override = std::nullopt) {
+    bool program_cache_hit = false) {
 #if defined(TRACY_ENABLE)
     if (!is_op_profiler_env_var_set()) {
         return {};
     }
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
-    auto program_hash = program_hash_override.value_or(
-        compute_program_hash<device_operation_t>(operation_attributes, tensor_args));
+    auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
 
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
@@ -553,7 +551,7 @@ inline std::string op_meta_data_serialized_json(
     }
 
 #define TracyOpMeshWorkload(                                                                                       \
-    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value, program_cache_hit, program_hash_override)                 \
+    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value, program_cache_hit)                 \
     if (tt::tt_metal::op_profiler::is_op_profiler_env_var_set()) {                                                 \
         for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
             auto base_program_id = program.get_runtime_id();                                                       \
@@ -568,7 +566,7 @@ inline std::string op_meta_data_serialized_json(
                 auto device_id = (mesh_device)->get_device(coord)->id();                                           \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
-                    operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value, program_cache_hit, program_hash_override); \
+                    operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value, program_cache_hit); \
                 std::string op_text = fmt::format("id:{}", op_id);                                                 \
                 ZoneText(op_text.c_str(), op_text.size());                                                         \
                 tt::tt_metal::op_profiler::tracy_message(op_message);                                              \
@@ -582,7 +580,7 @@ inline std::string op_meta_data_serialized_json(
     operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value, program_cache_hit)
 #define TracyOpTTNNExternal(op, input_tensors, base_op_id)
 #define TracyOpMeshWorkload( \
-    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value, program_cache_hit, program_hash_override)
+    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value, program_cache_hit)
 
 #endif
 }  // namespace tt::tt_metal::op_profiler

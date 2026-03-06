@@ -190,8 +190,7 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    bool program_cache_hit = false,
-    tt::stl::hash::hash_t program_hash_override = 0) {
+    bool program_cache_hit = false) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
@@ -205,8 +204,7 @@ void enqueue_mesh_workload(
         operation_attributes,
         tensor_args,
         tensor_return_value,
-        program_cache_hit,
-        program_hash_override);
+        program_cache_hit);
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
@@ -259,8 +257,7 @@ void handle_mesh_adapter_cache_hit(
                 tensor_return_value,
                 mesh_device,
                 cached_mesh_workload.workload,
-                true,
-                program_hash);
+                true);
         });
 }
 
@@ -344,8 +341,7 @@ void create_and_cache_mesh_workload(
                     tensor_return_value,
                     mesh_device,
                     workload,
-                    false,
-                    program_hash);
+                    false);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
                     operation_attributes,
@@ -353,8 +349,7 @@ void create_and_cache_mesh_workload(
                     tensor_return_value,
                     mesh_device,
                     cached_workload.workload,
-                    false,
-                    program_hash);
+                    false);
             }
         });
 }
