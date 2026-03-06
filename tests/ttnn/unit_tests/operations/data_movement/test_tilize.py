@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -267,7 +267,7 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
         ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
-    ttnn_result_tensor = ttnn.from_torch(
+    ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         device=device,
         dtype=ttnn.float32,
@@ -275,9 +275,9 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
         memory_config=memory_config,
     )
 
-    ttnn_output_tensor = ttnn.tilize(ttnn_result_tensor)
+    ttnn_output_tensor = ttnn.tilize(ttnn_input_tensor)
 
     ttnn.synchronize_device(device)
 
-    ttnn_output_tensor = ttnn.to_torch(ttnn_result_tensor)
-    assert_equal(torch_input_tensor, ttnn_output_tensor)
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
+    assert_allclose(torch_input_tensor, ttnn_output_tensor, atol=4e-3, rtol=4e-3)
