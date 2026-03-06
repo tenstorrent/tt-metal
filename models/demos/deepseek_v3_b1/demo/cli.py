@@ -157,6 +157,7 @@ def run_demo(
                 eos_token_id=tokenizer.eos_token_id,
                 return_generated_tokens=True,
             )
+            assert generated_tokens is not None
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 

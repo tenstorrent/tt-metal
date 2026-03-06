@@ -124,7 +124,7 @@ class ModelPipeline:
         """
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("run_inference() should only be called on mesh id 0")
-        assert max_new_tokens >= 2, f"max_new_tokens must be >= 2, got {max_new_tokens}"
+        assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
         next_token_id = self.prefill_forward(prompt_token_ids)
@@ -134,18 +134,20 @@ class ModelPipeline:
             generated_tokens = [next_token_id]
 
         # Generation loop: feed y[t], get output, sample y[t+1].
+        num_decode_steps = 0
         for i in range(max_new_tokens - 1):
             if eos_token_id is not None and next_token_id == eos_token_id:
                 logger.debug("EOS token {} at decode step {}", eos_token_id, i)
                 break
             next_token_id = self.decode_forward(next_token_id)
+            num_decode_steps += 1
             if on_token is not None:
                 on_token(next_token_id)
             if return_generated_tokens:
                 generated_tokens.append(next_token_id)
             logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
 
-        logger.debug("Generation complete ({} tokens generated)", i + 1)
+        logger.debug("Generation complete ({} tokens generated)", 1 + num_decode_steps)
         if return_generated_tokens:
             return generated_tokens
 
