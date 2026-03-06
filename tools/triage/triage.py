@@ -732,20 +732,38 @@ def _patch_risc_debug(context: Context) -> None:
     This patches both risc_debug and debug_hardware instances so that
     cont() is a no-op and ensure_halted() only halts, never continues.
 
+    Also patches halt() to record which cores triage halted, so that
+    dump_broken_components can verify they are still halted at the end.
+
     More info at tt-exalens:#908
     """
 
     from ttexalens.hardware.baby_risc_debug import BabyRiscDebugHardware
+    from triage_session import get_triage_session
+
+    def is_affected_by_cont_bug(device) -> bool:
+        return device.is_wormhole() or device.is_blackhole()
 
     original_hw_cont = BabyRiscDebugHardware.cont
     original_hw_continue_without_debug = BabyRiscDebugHardware.continue_without_debug
+    original_hw_halt = BabyRiscDebugHardware.halt
 
     BabyRiscDebugHardware.cont = (
-        lambda self: original_hw_cont(self) if self.risc_info.noc_block.device.is_quasar() else None
+        lambda self: None if is_affected_by_cont_bug(self.risc_info.noc_block.device) else original_hw_cont(self)
     )
     BabyRiscDebugHardware.continue_without_debug = (
-        lambda self: original_hw_continue_without_debug(self) if self.risc_info.noc_block.device.is_quasar() else None
+        lambda self: None
+        if is_affected_by_cont_bug(self.risc_info.noc_block.device)
+        else original_hw_continue_without_debug(self)
     )
+
+    def patched_halt(self):
+        was_already_halted = self.is_halted()
+        original_hw_halt(self)
+        if not was_already_halted:
+            get_triage_session().add_halted_core(self.risc_info.noc_block.location, self.risc_info.risc_name)
+
+    BabyRiscDebugHardware.halt = patched_halt
 
 
 def _init_ttexalens(args: ScriptArguments) -> Context:

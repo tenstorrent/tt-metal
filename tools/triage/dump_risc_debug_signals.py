@@ -19,6 +19,7 @@ from collections import defaultdict
 import json
 import os
 from triage import ScriptConfig, log_warning, run_script, log_check_location
+from triage_session import get_triage_session
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
@@ -93,11 +94,12 @@ def run(args, context: Context):
 
     all_debug_bus_data = defaultdict(dict)
 
+    session = get_triage_session()
     for device in run_checks.devices:
-        if run_checks.is_device_broken(device) or not run_checks.is_device_in_broken_cores(device):
+        if session.is_device_broken(device) or not session.is_device_in_broken_cores(device):
             continue
 
-        broken_cores = run_checks.get_device_broken_cores(device)
+        broken_cores = session.get_device_broken_cores(device)
 
         # Group broken cores by location
         broken_by_location: dict[OnChipCoordinate, list[str]] = defaultdict(list)
