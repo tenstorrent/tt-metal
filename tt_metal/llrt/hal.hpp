@@ -469,6 +469,8 @@ public:
     bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     DeviceAddr get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
+    // Returns get_dev_addr() + get_l1_noc_offset(): the NOC-visible address for host-side read/write_core calls.
+    DeviceAddr get_dev_noc_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
@@ -609,6 +611,11 @@ inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_ty
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
         "Attempting to read addr of unreserved memory");
     return this->core_info_[index].get_dev_addr(addr_type);
+}
+
+inline DeviceAddr Hal::get_dev_noc_addr(
+    HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
+    return get_dev_addr(programmable_core_type, addr_type) + get_l1_noc_offset(programmable_core_type);
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
