@@ -553,7 +553,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base")>;
+                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
+                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -1329,6 +1330,28 @@ void kernel_main() {
         if constexpr (Core::is_sender_core) {
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
             constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("reduce_sync_num_fabric_cores");
+            volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
+            noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
+            noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
+        }
+#endif
+
+#endif
+#if defined(ENABLE_BCAST) && defined(ENABLE_REDUCE_TO_ONE)
+        // Reduce fabric cores signal sender core that fabric sends are done.
+        // Sender core NCRISC waits before starting next iteration's bcast.
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_reduce_fabric_core) {
+            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("bcast_reduce_sync_sem_addr");
+            constexpr uint32_t sync_noc_x = get_named_compile_time_arg_val("bcast_reduce_sync_noc_x");
+            constexpr uint32_t sync_noc_y = get_named_compile_time_arg_val("bcast_reduce_sync_noc_y");
+            uint64_t sync_sem_noc_addr = get_noc_addr(sync_noc_x, sync_noc_y, sync_sem_addr);
+            noc_semaphore_inc(sync_sem_noc_addr, 1);
+        }
+#elif defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_sender_core) {
+            constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("bcast_reduce_sync_sem_addr");
+            constexpr uint32_t num_fabric_cores = get_named_compile_time_arg_val("bcast_reduce_sync_num_fabric_cores");
             volatile tt_l1_ptr uint32_t* sync_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_sem_addr);
             noc_semaphore_wait(sync_sem_ptr, num_fabric_cores);
             noc_semaphore_set(sync_sem_ptr, 0);  // reset for next iteration
