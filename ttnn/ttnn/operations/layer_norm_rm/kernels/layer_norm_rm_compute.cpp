@@ -41,22 +41,14 @@ void kernel_main() {
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-        // Phase 3: sub<COL> cb_tilized - cb_mean -> cb_centered (cb_tilized persists via NoWaitNoPop)
+        // Phase 3: sub<COL> cb_tilized - cb_mean -> cb_centered
         compute_kernel_lib::sub<
             compute_kernel_lib::BroadcastDim::COL,
-            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
             compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
             cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
 
-        // Stage 2 output: x - (x - mean) = mean broadcast
-        // sub<NONE> cb_tilized - cb_centered -> cb_normed
-        compute_kernel_lib::sub<
-            compute_kernel_lib::BroadcastDim::NONE,
-            compute_kernel_lib::BinaryInputPolicy::NoWaitPopAtEnd,
-            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
-            cb_tilized, cb_centered, cb_normed, compute_kernel_lib::BinaryInputBlockShape::row(Wt));
-
-        // Untilize to output
-        compute_kernel_lib::untilize<Wt, cb_normed, cb_out>(1);
+        // Untilize centered to output
+        compute_kernel_lib::untilize<Wt, cb_centered, cb_out>(1);
     }
 }
