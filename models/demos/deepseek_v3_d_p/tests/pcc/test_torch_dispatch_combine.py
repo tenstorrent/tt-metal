@@ -71,7 +71,7 @@ def test_torch_dispatch_combine(
         expert_dispatch_table=expert_dispatch_table,
     )
     combine_module = TorchCombineModule(
-        num_chips=num_chips,
+        num_chips_sp=num_chips,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
