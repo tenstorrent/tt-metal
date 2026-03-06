@@ -186,7 +186,7 @@ void kernel_main() {
         per_core_N,
         cb_in_rm,
         cb_in,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,  // should have unninit also
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif

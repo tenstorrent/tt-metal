@@ -44,19 +44,10 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
-    // Track previous CBs for reconfiguration in loop
-    uint32_t prev_cb_srca = in_cb;
-    uint32_t prev_cb_output = untilized_in_cb;
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        // Untilize a block from the cache with reconfiguration - DEST limit auto-detected
         compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
-        // Wait on writer to update block. Tilize with reconfiguration
-        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1  // num_blocks
-        );
-
-        // Update previous CBs for next iteration
-        prev_cb_srca = untilized_cache2_cb;
-        prev_cb_output = out_cb;
+        // Wait on writer to update block, then tilize back
+        compute_kernel_lib::tilize<Wt, untilized_cache2_cb, out_cb>(1);
     }
 }
