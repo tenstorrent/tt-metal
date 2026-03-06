@@ -1900,9 +1900,6 @@ void kernel_main() {
     }
 #endif
     DPRINT << " DONE ARGS" << ENDL();
-#ifdef COMPILE_TEST_ONLY
-    return;
-#endif
 
     // ====================================================================
     // Mcast: Initialize persistent mcast
@@ -1918,6 +1915,7 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
+    DPRINT << " DONE MCAST INIT" << ENDL();
 
     // ========================================================================
     // CCL Broadcast (optional, skip if single-device mode)
@@ -1941,6 +1939,10 @@ void kernel_main() {
 #endif
 
     DPRINT << " DONE CCL BROADCAST" << ENDL();
+
+#ifdef COMPILE_TEST_ONLY
+    return;
+#endif
 
     // SP position handling
 #if defined(COMPILE_FOR_BRISC)

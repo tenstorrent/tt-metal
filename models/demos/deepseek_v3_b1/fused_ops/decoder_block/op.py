@@ -18,6 +18,7 @@ Merge strategy:
 from typing import Optional
 
 import ttnn
+from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
@@ -298,6 +299,14 @@ class DecoderBlock:
             noc_mode=noc_mode,
         )
 
+        # Propagate the kv cache running offset to the OverlappedTensor so MoE places
+        # its residual CB at the same address the attention block wrote its output to.
+        if isinstance(attention_block_output_tensor, OverlappedTensor):
+            kv_offset = attn_ctxs[0]["sdpa_kv_cache_running_offset_mcast_core"]
+            attention_block_output_tensor.byte_offset = kv_offset
+            if shared_residual_mcast_src_tensor is not attention_block_output_tensor:
+                shared_residual_mcast_src_tensor.byte_offset = kv_offset
+
         # Phase 2: Build MoE program context with reconfig enabled
         print("Building MoE program context")
         moe = MoeOp(
@@ -334,8 +343,6 @@ class DecoderBlock:
         moe_ctx = moe.ctx
 
         # Build unified IO tensors
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
-
         def _unwrap(t):
             return t.fused_tensor if isinstance(t, OverlappedTensor) else t
 

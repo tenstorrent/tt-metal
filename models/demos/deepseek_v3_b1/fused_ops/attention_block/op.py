@@ -2745,12 +2745,14 @@ class AttentionBlock:
                 sdpa_kv_cache_running_offset_mcast_core += ccl_temp_cb_descriptor.total_size
                 post_sdpa_cb_list.append(ccl_temp_cb_descriptor)
 
-                # CB 12: CCL output (from sharded tensor or overlapped region)
+                # CB 12: CCL output — either a standalone tensor or overlapped into kv cache buffer
                 if attention_block_output_is_overlapped:
-                    attention_block_output_cb_descriptor = cb_descriptor_from_overlapped_tensor(
+                    attn_out_total = attention_block_output_tensor.total_size
+                    attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         attention_block_output_cb,
-                        attention_block_output_tensor,
-                        attention_block_output_fused_device,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=sdpa_kv_cache_running_offset_mcast_core,
+                        total_size=attn_out_total,
                     )
                 else:
                     attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -3696,6 +3698,7 @@ class AttentionBlock:
                         "sdpa_forwarder_cores": sdpa_forwarder_cores,
                         "ccl": ccl_ctx,
                         "sdpa": sdpa_ctx,
+                        "sdpa_kv_cache_running_offset_mcast_core": sdpa_kv_cache_running_offset_mcast_core,
                     }
                 )
 
