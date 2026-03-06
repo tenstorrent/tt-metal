@@ -76,7 +76,7 @@ class TtBarkModel:
             input_vocab_size=hf_model.semantic.config.input_vocab_size,
             output_vocab_size=hf_model.semantic.config.output_vocab_size,
             bias=getattr(hf_model.semantic.config, "bias", False),
-            use_lofi=True,
+            use_lofi=False,
             grid_size=compute_grid,
         )
         semantic_params = preprocess_model_parameters(hf_model.semantic, self.device)
@@ -91,7 +91,7 @@ class TtBarkModel:
             input_vocab_size=hf_model.coarse_acoustics.config.input_vocab_size,
             output_vocab_size=hf_model.coarse_acoustics.config.output_vocab_size,
             bias=getattr(hf_model.coarse_acoustics.config, "bias", False),
-            use_lofi=True,
+            use_lofi=False,
             grid_size=compute_grid,
         )
         coarse_params = preprocess_model_parameters(hf_model.coarse_acoustics, self.device)
@@ -106,7 +106,7 @@ class TtBarkModel:
             input_vocab_size=hf_model.fine_acoustics.config.input_vocab_size,
             output_vocab_size=hf_model.fine_acoustics.config.output_vocab_size,
             bias=True,  # Fine model uses bias for LayerNorm
-            use_lofi=True,
+            use_lofi=False,
             grid_size=compute_grid,
         )
         fine_params = preprocess_fine_model_parameters(hf_model.fine_acoustics, self.device)
