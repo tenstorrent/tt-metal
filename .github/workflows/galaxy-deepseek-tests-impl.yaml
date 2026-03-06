@@ -171,7 +171,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          # Phase 1: Fast, high-signal tests first (~5 min) — get early failure feedback
+          # Fast, high-signal tests first (~5 min) — get early failure feedback
           pytest \
             models/demos/deepseek_v3/tests/test_rms_norm.py \
             models/demos/deepseek_v3/tests/test_moe_gate.py \
@@ -181,7 +181,7 @@ jobs:
             models/demos/deepseek_v3/tests/test_mlp.py \
             models/demos/deepseek_v3/tests/test_mla.py \
             --timeout 600 --durations=0
-          # Phase 2: Heavy integration tests + any remaining files
+          # Heavy integration tests + any remaining files
           pytest models/demos/deepseek_v3/tests \
             --ignore=models/demos/deepseek_v3/tests/unit \
             --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
