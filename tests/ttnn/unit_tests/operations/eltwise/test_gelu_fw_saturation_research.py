@@ -206,7 +206,6 @@ class TestGeluForwardSaturationResearch:
         print("-" * 60)
 
         for x in neg_values:
-            gelu_exact = gelu_reference_mpmath(x)
             gelu_bf16 = gelu_expected_bf16_daz(x)
 
             if gelu_bf16 != 0.0 and last_nonzero_x is None:
@@ -215,7 +214,7 @@ class TestGeluForwardSaturationResearch:
 
             if gelu_bf16 == 0.0 and last_nonzero_x is not None:
                 print(f"... (transition) ...")
-                print(f"{x:12.6f} {gelu_exact:20.12e} {gelu_bf16:15.8e}  <-- FIRST ZERO")
+                print(f"{x:12.6f} {gelu_reference_mpmath(x):20.12e} {gelu_bf16:15.8e}  <-- FIRST ZERO")
                 break
 
             if gelu_bf16 != 0.0:
@@ -300,11 +299,12 @@ class TestGeluForwardSaturationResearch:
         print(f"\n--- Values around identity saturation boundary ---")
         boundary = sorted([v for v in pos_values if 2.0 <= v <= 6.0])
         for x in boundary:
-            gelu_exact = gelu_reference_mpmath(x)
             gelu_bf16 = gelu_expected_bf16_daz(x)
             x_bf16 = round_to_bf16_daz_ftz(x)
             is_id = "YES" if gelu_bf16 == x_bf16 else "no"
-            print(f"  x={x:8.4f}  GELU={gelu_exact:15.8e}  BF16={gelu_bf16:12.6e}  x_bf16={x_bf16:12.6e}  id={is_id}")
+            print(
+                f"  x={x:8.4f}  GELU={gelu_reference_mpmath(x):15.8e}  BF16={gelu_bf16:12.6e}  x_bf16={x_bf16:12.6e}  id={is_id}"
+            )
 
         assert first_identity is not None, "Should find identity region"
 
@@ -392,7 +392,6 @@ class TestGeluForwardSaturationResearch:
 
             gelu = gelu_reference_mpmath(x)
             ratio = gelu / x if x != 0 else 0.5  # GELU(0)/0 = lim = 0.5
-            diff = abs(gelu - x)
 
             notes = ""
             if abs(ratio - 1.0) < 1e-6:
@@ -402,7 +401,7 @@ class TestGeluForwardSaturationResearch:
             elif abs(ratio - 0.5) < 0.01:
                 notes = "~x/2"
 
-            print(f"{x:10.4f} {gelu:15.8e} {ratio:12.6f} {diff:12.6e} {notes:>20s}")
+            print(f"{x:10.4f} {gelu:15.8e} {ratio:12.6f} {abs(gelu - x):12.6e} {notes:>20s}")
 
     def test_near_zero_detailed(self):
         """Detailed analysis of GELU(x) near x=0.
