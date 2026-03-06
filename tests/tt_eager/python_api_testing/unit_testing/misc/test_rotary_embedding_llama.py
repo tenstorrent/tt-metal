@@ -281,8 +281,14 @@ def run_test_rotary_embedding_llama(
             tt_inp += [cos, sin]  # Append cos and sin to the input list
 
         elif input_transpose == ttnn.RotaryEmbeddingTranspose.HC:
+            # Optional: Emulate decode with prefill
             # tt_model.input_transpose = ttnn.RotaryEmbeddingTranspose.NONE
             # tt_model.mode = "prefill"
+
+            # Optional: replicate trans_mat and do a height-sharding as it seems to help a lot!
+            rope_setup_decode = RotarySetup(device, batch, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None)
+            tt_model.transformation_mat = rope_setup_decode.transformation_mat
+
             cos, sin = compute_gather_cos_sin(
                 dhead=head_dim,
                 end=max_seq_len * 2,
