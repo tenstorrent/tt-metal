@@ -44,7 +44,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
 ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto inter_shape = input_tensor.tensor_spec().logical_shape();
+    auto inter_shape = input_tensor.tensor_spec().padded_shape();
 
     // For now default to tt::tt_metal::BufferType::DRAM to prevent CB overflows.
     // TODO: add L1 estimation similar to the one in all_to_all_dispatch and choose to use L1 as an intermediate buffer
