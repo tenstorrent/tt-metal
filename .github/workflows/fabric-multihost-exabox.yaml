@@ -156,11 +156,13 @@ jobs:
       #       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
       #       --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
       #       /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+
       - name: Run Python Interface Test
         timeout-minutes: 15
         env:
           TT_METAL_HOME: /home/user/tt-metal
           PYTHONPATH: /home/user/tt-metal
+          TT_METAL_SLOW_DISPATCH_MODE: "1"
         run: |
           PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
           PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
