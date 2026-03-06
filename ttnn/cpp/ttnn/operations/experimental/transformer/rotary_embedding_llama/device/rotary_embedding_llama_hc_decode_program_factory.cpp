@@ -44,6 +44,11 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     // Whether cos/sin have per-head frequencies (padded shape[1] == num_heads) or shared (shape[1]==1)
     const bool freq_per_head = cos.padded_shape()[1] == num_heads;
 
+    // Whether trans_mat / cos+sin are pre-loaded into per-core L1 shards.
+    // When sharded, CBs are globally-allocated — no NOC reads needed in the reader.
+    const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool cos_sin_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
 
@@ -75,47 +80,33 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     uint32_t output_cb_index = CBIndex::c_16;
 
-    // ---- Decide whether to use the cos/sin cache optimization ----
-    // When !freq_per_head, cos/sin are the same across all heads.  A core that
-    // handles multiple heads can load cos/sin once for its batch-tile range and
-    // reuse them across all heads, avoiding repeated NOC reads.
-    //
-    // The maximum batch tiles any core handles (worst case for CB sizing) is
-    // determined by the work distribution below.  In the !more_cores_than_heads
-    // case every core handles all batch_t tiles; in the more_cores_than_heads
-    // case each core handles ceil(batch_t / cores_per_head) tiles.
+    // ---- Decide reload_cos_sin for the DRAM (non-sharded) cos/sin path ----
+    // When cos/sin are sharded this decision is irrelevant — the sharded path
+    // always signals one Wt-tile batch per (head, bt) iteration with zero NOC reads.
     const bool more_cores_than_heads = (num_cores_used > num_heads);
     const uint32_t max_batch_t_per_core =
         !more_cores_than_heads ? batch_t : (batch_t + (num_cores_used / num_heads) - 1) / (num_cores_used / num_heads);
 
     // Fixed CB budget for non-cos/sin CBs (bytes):
     //   input (2x) + output (2x) + trans_mat (1x) + 3 intermediates (1x each)
-    //   = (2 + 2) * head_dim_t * tile_size + tile_size + 3 * head_dim_t * tile_size
-    //   = (7 * head_dim_t + 1) * tile_size
-    const uint32_t fixed_cb_bytes =
-        (7 * head_dim_t + 1) * input_single_tile_size;  // conservative; all dtypes are the same
+    const uint32_t fixed_cb_bytes = (7 * head_dim_t + 1) * input_single_tile_size;
 
-    // Budget for cos/sin: how many bytes remain from a safe L1 threshold.
-    // We use a conservative 400 KB for kernel binary + stack + other overhead,
-    // leaving ~1060 KB out of 1464 KB for CBs on Wormhole.
+    // Budget for cos/sin cache: conservative 1060 KB out of 1464 KB Wormhole L1.
     constexpr uint32_t l1_cb_budget_bytes = 1060 * 1024;
     const uint32_t cs_budget_bytes = (l1_cb_budget_bytes > fixed_cb_bytes) ? (l1_cb_budget_bytes - fixed_cb_bytes) : 0;
-
-    // Bytes needed to cache all cos/sin tiles for the worst-case core.
     const uint32_t cs_cache_bytes = max_batch_t_per_core * head_dim_t * (cos_single_tile_size + sin_single_tile_size);
 
-    // Enable cache only when it benefits (multiple heads per core, !freq_per_head)
-    // and the cached cos/sin fit in L1 alongside the other CBs.
-    // Cache is beneficial when a core handles >1 head (i.e., !more_cores_than_heads and
-    // num_heads > num_cores_used).  With one head per core there is nothing to reuse
-    // across heads so the fast path saves no NOC reads; fall back to reload mode.
     const bool more_heads_than_cores = !more_cores_than_heads && (num_heads > num_cores_used);
-    const bool reload_cos_sin = freq_per_head || !more_heads_than_cores || (cs_cache_bytes > cs_budget_bytes);
+    const bool reload_cos_sin =
+        cos_sin_sharded || freq_per_head || !more_heads_than_cores || (cs_cache_bytes > cs_budget_bytes);
 
     log_debug(
         tt::LogOp,
-        "RotaryEmbeddingLlamaHCDecode: freq_per_head={}, more_heads_than_cores={}, "
-        "max_batch_t_per_core={}, cs_cache_bytes={}, cs_budget_bytes={}, reload_cos_sin={}",
+        "RotaryEmbeddingLlamaHCDecode: trans_mat_sharded={}, cos_sin_sharded={}, freq_per_head={}, "
+        "more_heads_than_cores={}, max_batch_t_per_core={}, cs_cache_bytes={}, cs_budget_bytes={}, "
+        "reload_cos_sin={}",
+        trans_mat_sharded,
+        cos_sin_sharded,
         freq_per_head,
         more_heads_than_cores,
         max_batch_t_per_core,
@@ -124,13 +115,16 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         reload_cos_sin);
 
     // ---- CB sizes ----
-    // I/O CBs (input, output): double-buffered to overlap NOC and compute.
-    // cos/sin CBs: sized to hold the cached tiles when reload_cos_sin=false,
-    //              otherwise double-buffered (same as input).
-    // Intermediate CBs: single-buffered (produced and consumed within one iteration).
+    // Input/output: double-buffered to overlap NOC and compute.
+    // trans_mat: 1 tile; globally-allocated when sharded (already in L1), otherwise normal.
+    // cos/sin: globally-allocated from shard when sharded; otherwise sized for caching or double-buffering.
+    // Intermediates: single-buffered (produced and consumed within one compute iteration).
     const uint32_t num_io_tiles = 2 * head_dim_t;
     const uint32_t num_interm_tiles = head_dim_t;
-    const uint32_t num_cs_tiles = reload_cos_sin ? num_io_tiles : (max_batch_t_per_core * head_dim_t);
+    // cos/sin CB size in the DRAM path: cache-size when caching, double-buffer otherwise.
+    const uint32_t num_cs_tiles_dram = reload_cos_sin ? num_io_tiles : (max_batch_t_per_core * head_dim_t);
+    // cos/sin CB size in the sharded path: exactly one shard row (head_dim_t tiles).
+    const uint32_t num_cs_tiles = cos_sin_sharded ? head_dim_t : num_cs_tiles_dram;
 
     tt_metal::CreateCircularBuffer(
         program,
@@ -138,23 +132,49 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         tt_metal::CircularBufferConfig(num_io_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_single_tile_size));
 
-    tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,
-        tt_metal::CircularBufferConfig(num_cs_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_cb_index, cos_single_tile_size));
+    // cos/sin CBs: globally-allocated when sharded, otherwise plain.
+    std::optional<CBHandle> cb_cos_handle;
+    std::optional<CBHandle> cb_sin_handle;
+    if (cos_sin_sharded) {
+        auto cos_cb_cfg =
+            tt_metal::CircularBufferConfig(num_cs_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                .set_page_size(cos_cb_index, cos_single_tile_size)
+                .set_globally_allocated_address(*cos_buffer);
+        cb_cos_handle = tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
 
-    tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,
-        tt_metal::CircularBufferConfig(num_cs_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_cb_index, sin_single_tile_size));
+        auto sin_cb_cfg =
+            tt_metal::CircularBufferConfig(num_cs_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                .set_page_size(sin_cb_index, sin_single_tile_size)
+                .set_globally_allocated_address(*sin_buffer);
+        cb_sin_handle = tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
+    } else {
+        tt_metal::CreateCircularBuffer(
+            program,
+            all_cores,
+            tt_metal::CircularBufferConfig(num_cs_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                .set_page_size(cos_cb_index, cos_single_tile_size));
+        tt_metal::CreateCircularBuffer(
+            program,
+            all_cores,
+            tt_metal::CircularBufferConfig(num_cs_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                .set_page_size(sin_cb_index, sin_single_tile_size));
+    }
 
-    tt_metal::CreateCircularBuffer(
-        program,
-        all_cores,
-        tt_metal::CircularBufferConfig(trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
-            .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size));
+    // trans_mat CB: globally-allocated when sharded, otherwise plain.
+    std::optional<CBHandle> cb_trans_mat_handle;
+    if (trans_mat_sharded) {
+        auto tm_cb_cfg =
+            tt_metal::CircularBufferConfig(trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
+                .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size)
+                .set_globally_allocated_address(*trans_mat_buffer);
+        cb_trans_mat_handle = tt_metal::CreateCircularBuffer(program, all_cores, tm_cb_cfg);
+    } else {
+        tt_metal::CreateCircularBuffer(
+            program,
+            all_cores,
+            tt_metal::CircularBufferConfig(trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
+                .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size));
+    }
 
     tt_metal::CreateCircularBuffer(
         program,
@@ -185,6 +205,8 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
             .set_page_size(output_cb_index, output_single_tile_size));
 
     // ---- Reader kernel ----
+    // When a tensor is sharded (globally-allocated CB), no TensorAccessorArgs are
+    // needed for it — the reader does not issue NOC reads for that tensor.
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)input_cb_index,
         (uint32_t)cos_cb_index,
@@ -194,11 +216,17 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         (uint32_t)head_dim_t,
         (uint32_t)freq_per_head,
         (uint32_t)reload_cos_sin,
+        (uint32_t)trans_mat_sharded,
+        (uint32_t)cos_sin_sharded,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
+    if (!cos_sin_sharded) {
+        tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
+    }
+    if (!trans_mat_sharded) {
+        tt::tt_metal::TensorAccessorArgs(trans_mat_buffer).append_to(reader_compile_time_args);
+    }
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -248,6 +276,12 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     const uint32_t heads_per_core_base = num_heads / num_cores_used;
     const uint32_t heads_remainder = num_heads % num_cores_used;
 
+    // Runtime args layout:
+    //   reader [0] = src_addr
+    //   reader [1] = cos_addr   (only used when !cos_sin_sharded; slot always present)
+    //   reader [2] = sin_addr   (only used when !cos_sin_sharded; slot always present)
+    //   reader [3] = trans_mat_addr (only used when !trans_mat_sharded; slot always present)
+    //   reader [4..7] = head_start, head_end, batch_t_start, batch_t_end
     std::vector<uint32_t> default_reader_args = {
         src_buffer->address(), cos_buffer->address(), sin_buffer->address(), trans_mat_buffer->address(), 0, 0, 0, 0};
     std::vector<uint32_t> default_writer_args = {dst_buffer->address(), 0, 0, 0, 0};
@@ -347,6 +381,9 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     shared_variables.compute_kernel_id = compute_kernel_id;
     shared_variables.cores = cores;
     shared_variables.num_active_cores = num_active_cores;
+    shared_variables.cb_trans_mat = cb_trans_mat_handle;
+    shared_variables.cb_cos = cb_cos_handle;
+    shared_variables.cb_sin = cb_sin_handle;
 
     return {std::move(program), std::move(shared_variables)};
 }
@@ -378,6 +415,10 @@ void RotaryEmbeddingLlamaHCDecode::override_runtime_arguments(
         {
             auto& rt = cached_reader_args.at(core.x).at(core.y);
             rt[0] = src_buffer->address();
+            // Slots [1], [2], [3] for cos/sin/trans_mat addresses are always
+            // present in the runtime-args vector so override_runtime_arguments
+            // can update them unconditionally.  The reader kernel only reads
+            // these when the corresponding tensor is not sharded.
             rt[1] = cos_buffer->address();
             rt[2] = sin_buffer->address();
             rt[3] = trans_mat_buffer->address();
@@ -386,6 +427,18 @@ void RotaryEmbeddingLlamaHCDecode::override_runtime_arguments(
             auto& rt = cached_writer_args.at(core.x).at(core.y);
             rt[0] = dst_buffer->address();
         }
+    }
+
+    // For globally-allocated (sharded) CBs, update the CB base address so it
+    // tracks the new buffer allocation on successive invocations.
+    if (shared_variables.cb_trans_mat.has_value()) {
+        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_trans_mat, *trans_mat_buffer);
+    }
+    if (shared_variables.cb_cos.has_value()) {
+        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_cos, *cos_buffer);
+    }
+    if (shared_variables.cb_sin.has_value()) {
+        UpdateDynamicCircularBufferAddress(program, *shared_variables.cb_sin, *sin_buffer);
     }
 }
 
