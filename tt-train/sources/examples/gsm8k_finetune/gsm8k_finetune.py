@@ -18,6 +18,7 @@ from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
+import ttnn
 import ttml
 from ttml.common.config import (
     TrainingConfig,
