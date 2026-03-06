@@ -13,6 +13,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/sgd.hpp"
+#include "optimizers/sgd_composite.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
