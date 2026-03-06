@@ -1,0 +1,93 @@
+name: "Use Precomputed or Compute Data"
+description: "Extract precomputed JSON data or run a compute script if not provided"
+
+inputs:
+  precomputed-data:
+    description: "JSON data from preflight (optional). If empty, compute-script is run."
+    required: false
+    default: ""
+  compute-script:
+    description: "Script to run if precomputed-data is empty. Must output JSON to stdout."
+    required: false
+    default: ""
+  output-mappings:
+    description: |
+      Space-separated list of output mappings in format "output_name:jq_selector".
+      These fields are extracted from the JSON and set as step outputs.
+    required: true
+
+outputs:
+  data:
+    description: "The full JSON data (precomputed or freshly computed)"
+    value: ${{ steps.result.outputs.data }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get data (precomputed or computed)
+      id: get-data
+      shell: bash
+      env:
+        PRECOMPUTED_DATA: ${{ inputs.precomputed-data }}
+        COMPUTE_SCRIPT: ${{ inputs.compute-script }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$PRECOMPUTED_DATA" ]; then
+          echo "Using precomputed data"
+          DATA="$PRECOMPUTED_DATA"
+        elif [ -n "$COMPUTE_SCRIPT" ]; then
+          echo "Running compute script: $COMPUTE_SCRIPT"
+          DATA=$(eval "$COMPUTE_SCRIPT")
+        else
+          echo "Error: Either precomputed-data or compute-script must be provided" >&2
+          exit 1
+        fi
+
+        # Output the data using heredoc for multi-line safety
+        {
+          echo "data<<EOF_DATA"
+          echo "$DATA"
+          echo "EOF_DATA"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Extract outputs
+      id: result
+      shell: bash
+      env:
+        DATA: ${{ steps.get-data.outputs.data }}
+        OUTPUT_MAPPINGS: ${{ inputs.output-mappings }}
+      run: |
+        set -euo pipefail
+
+        # Pass through the full data
+        {
+          echo "data<<EOF_DATA"
+          echo "$DATA"
+          echo "EOF_DATA"
+        } >> "$GITHUB_OUTPUT"
+
+        # Extract each mapped output
+        for mapping in $OUTPUT_MAPPINGS; do
+          output_name="${mapping%%:*}"
+          jq_selector="${mapping#*:}"
+
+          if [ -z "$output_name" ] || [ -z "$jq_selector" ]; then
+            echo "Error: Invalid mapping '$mapping'" >&2
+            continue
+          fi
+
+          value=$(echo "$DATA" | jq -r "$jq_selector" 2>/dev/null || echo "")
+
+          # Handle multi-line values
+          if [[ "$value" == *$'\n'* ]]; then
+            delimiter="EOF_${output_name//[^a-zA-Z0-9_]/_}"
+            {
+              echo "${output_name}<<${delimiter}"
+              echo "$value"
+              echo "${delimiter}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "${output_name}=${value}" >> "$GITHUB_OUTPUT"
+          fi
+        done

@@ -22,6 +22,12 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Python venv images even if they exist in registry"
+      precomputed-venv-data:
+        required: false
+        type: string
+        default: ""
+        description: |
+          JSON from preflight (ci_build_venv_tag, ci_test_venv_tag, ci_build_venv_exists, ci_test_venv_exists, version). When set, skips tag computation.
     outputs:
       ci-build-venv-tag:
         description: "Docker tag for ci-build venv image"
@@ -34,71 +40,93 @@ on:
         value: ${{ jobs.tags.outputs.ubuntu-version }}
 
 jobs:
-  # Compute content-addressed tags and check which venv images already exist
+  # Compute content-addressed tags and check which venv images already exist, or use precomputed data
   tags:
     name: "📋 Compute venv tags"
     runs-on: tt-ubuntu-2204-large-stable
     outputs:
-      ci-build-venv-tag: ${{ steps.tags.outputs.ci-build-venv-tag }}
-      ci-build-venv-exists: ${{ steps.check.outputs.ci-build-venv-exists }}
-      ci-test-venv-tag: ${{ steps.tags.outputs.ci-test-venv-tag }}
-      ci-test-venv-exists: ${{ steps.check.outputs.ci-test-venv-exists }}
-      any-missing: ${{ steps.check.outputs.any-missing }}
-      ubuntu-version: ${{ steps.platform.outputs.version }}
+      ci-build-venv-tag: ${{ steps.data.outputs.ci-build-venv-tag }}
+      ci-build-venv-exists: ${{ steps.data.outputs.ci-build-venv-exists }}
+      ci-test-venv-tag: ${{ steps.data.outputs.ci-test-venv-tag }}
+      ci-test-venv-exists: ${{ steps.data.outputs.ci-test-venv-exists }}
+      any-missing: ${{ steps.data.outputs.any-missing }}
+      ubuntu-version: ${{ steps.data.outputs.ubuntu-version }}
     steps:
       - name: Checkout repo
+        if: inputs.precomputed-venv-data == ''
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Parse platform
+        if: inputs.precomputed-venv-data == ''
         id: platform
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
 
-      - name: Compute Python venv image tags
-        id: tags
+      - name: Get venv data
+        id: data
+        env:
+          PRECOMPUTED: ${{ inputs.precomputed-venv-data }}
+          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.platform.outputs.version }}
         run: |
           set -euo pipefail
-          # Tags are always GHCR paths (no harbor prefix) - we push to GHCR
-          # Consumers prepend harbor-prefix when pulling through Harbor
-          VERSION="${{ steps.platform.outputs.version }}"
-          VERSION_NODOT="${VERSION//.}"
 
-          VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
+          if [ -n "$PRECOMPUTED" ]; then
+            echo "Using precomputed venv data"
+            # Extract venv-specific fields from platform data
+            # and compute any-missing from the existence flags
+            ci_build_exists=$(echo "$PRECOMPUTED" | jq -r '.ci_build_venv_exists')
+            ci_test_exists=$(echo "$PRECOMPUTED" | jq -r '.ci_test_venv_exists')
 
-          BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
-          echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
-
-      - name: Check if Python venv images exist
-        id: check
-        run: |
-          set -euo pipefail
-          FORCE_REBUILD="${{ inputs.force-rebuild }}"
-          any_missing=false
-          check_image() {
-            local tag="$1"
-            local name="$2"
-            if [ "$FORCE_REBUILD" = "true" ]; then
-              echo "Force rebuild enabled: treating $tag as missing"
-              echo "${name}-exists=false" >> $GITHUB_OUTPUT
-              any_missing=true
-            elif docker manifest inspect "$tag" > /dev/null 2>&1; then
-              echo "$tag exists"
-              echo "${name}-exists=true" >> $GITHUB_OUTPUT
+            if [ "$ci_build_exists" = "true" ] && [ "$ci_test_exists" = "true" ]; then
+              any_missing="false"
             else
-              echo "$tag does not exist"
-              echo "${name}-exists=false" >> $GITHUB_OUTPUT
-              any_missing=true
+              any_missing="true"
             fi
-          }
 
-          check_image "${{ steps.tags.outputs.ci-build-venv-tag }}" "ci-build-venv"
-          check_image "${{ steps.tags.outputs.ci-test-venv-tag }}" "ci-test-venv"
+            # Build a venv-specific JSON for extraction
+            DATA=$(echo "$PRECOMPUTED" | jq -c --arg any_missing "$any_missing" '. + {any_missing: $any_missing}')
+          else
+            echo "Computing venv data..."
+            VERSION_NODOT="${VERSION//.}"
+            VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
+            BASE="ghcr.io/${REPO}/tt-metalium/python-venv"
 
-          echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
+            CI_BUILD_VENV_TAG="${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}"
+            CI_TEST_VENV_TAG="${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}"
+
+            any_missing="false"
+            if [ "$FORCE_REBUILD" = "true" ]; then
+              ci_build_venv_exists="false"
+              ci_test_venv_exists="false"
+              any_missing="true"
+            else
+              docker manifest inspect "$CI_BUILD_VENV_TAG" > /dev/null 2>&1 && ci_build_venv_exists="true" || { ci_build_venv_exists="false"; any_missing="true"; }
+              docker manifest inspect "$CI_TEST_VENV_TAG" > /dev/null 2>&1 && ci_test_venv_exists="true" || { ci_test_venv_exists="false"; any_missing="true"; }
+            fi
+
+            DATA=$(jq -cn \
+              --arg ci_build_venv_tag "$CI_BUILD_VENV_TAG" \
+              --arg ci_test_venv_tag "$CI_TEST_VENV_TAG" \
+              --arg ci_build_venv_exists "$ci_build_venv_exists" \
+              --arg ci_test_venv_exists "$ci_test_venv_exists" \
+              --arg any_missing "$any_missing" \
+              --arg version "$VERSION" \
+              '{ci_build_venv_tag: $ci_build_venv_tag, ci_test_venv_tag: $ci_test_venv_tag, ci_build_venv_exists: $ci_build_venv_exists, ci_test_venv_exists: $ci_test_venv_exists, any_missing: $any_missing, version: $version}')
+          fi
+
+          # Extract outputs
+          .github/scripts/extract-outputs.sh "$DATA" \
+            "ci-build-venv-tag:.ci_build_venv_tag" \
+            "ci-test-venv-tag:.ci_test_venv_tag" \
+            "ci-build-venv-exists:.ci_build_venv_exists" \
+            "ci-test-venv-exists:.ci_test_venv_exists" \
+            "any-missing:.any_missing" \
+            "ubuntu-version:.version"
 
   # Build any venv images that don't exist yet using manual docker bake
   build:

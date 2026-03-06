@@ -68,6 +68,12 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Docker images even if they exist in registry"
+      precomputed-platform-data:
+        required: false
+        type: string
+        default: ""
+        description: |
+          JSON from preflight (main image tags and existence for this platform). When set, skips tag computation.
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -87,17 +93,15 @@ on:
       manylinux-tag:
         description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
         value: ${{ jobs.image-tags.outputs.manylinux-tag }}
-      # Tool image tags as JSON bundle
       tool-tags:
         description: "JSON object containing all tool image tags"
         value: ${{ inputs.tool-tags || jobs.tools.outputs.tool-tags }}
-      # Python venv image tags
       python-ci-build-venv-tag:
         description: "Docker tag for the Python CI Build venv image"
-        value: ${{ jobs.venvs.outputs.ci-build-venv-tag }}
+        value: ${{ jobs.venvs.outputs.ci-build-venv-tag || jobs.image-tags.outputs.ci-build-venv-tag }}
       python-ci-test-venv-tag:
         description: "Docker tag for the Python CI Test venv image"
-        value: ${{ jobs.venvs.outputs.ci-test-venv-tag }}
+        value: ${{ jobs.venvs.outputs.ci-test-venv-tag || jobs.image-tags.outputs.ci-test-venv-tag }}
   workflow_dispatch:
     inputs:
       platform:
@@ -135,173 +139,110 @@ jobs:
     secrets: inherit
 
   # =============================================================================
-  # PYTHON VENV IMAGES: Pre-built Python virtual environments
+  # PYTHON VENV IMAGES: Pre-built Python virtual environments (builds missing venvs)
   # =============================================================================
   venvs:
     name: "🐍 Python venvs"
+    needs: [image-tags]
+    if: |
+      needs.image-tags.outputs.dev-exists != 'true' ||
+      needs.image-tags.outputs.basic-dev-exists != 'true' ||
+      needs.image-tags.outputs.basic-ttnn-runtime-exists != 'true'
     uses: ./.github/workflows/build-docker-python-venvs.yaml
     with:
       platform: ${{ inputs.platform }}
       force-rebuild: ${{ inputs.force-rebuild }}
+      precomputed-venv-data: ${{ inputs.precomputed-platform-data }}
     secrets: inherit
 
   # =============================================================================
-  # MAIN DOCKER IMAGES: Compute tags and check existence
+  # MAIN DOCKER IMAGES: Compute tags and check existence, or use precomputed data
   # =============================================================================
   image-tags:
     name: "📋 Compute image tags"
     runs-on: ubuntu-latest
     outputs:
-      ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
-      ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
-      ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
-      dev-exists: ${{ steps.images.outputs.dev-exists }}
-      dev-tag: ${{ steps.tags.outputs.dev-tag }}
-      basic-dev-exists: ${{ steps.images.outputs.basic-dev-exists }}
-      basic-dev-tag: ${{ steps.tags.outputs.basic-dev-tag }}
-      basic-ttnn-runtime-exists: ${{ steps.images.outputs.basic-ttnn-runtime-exists }}
-      basic-ttnn-runtime-tag: ${{ steps.tags.outputs.basic-ttnn-runtime-tag }}
-      manylinux-exists: ${{ steps.images.outputs.manylinux-exists }}
-      manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
-      distro: ${{ steps.platform.outputs.distro }}
-      version: ${{ steps.platform.outputs.version }}
-      python-version: ${{ steps.python-version.outputs.version }}
+      ci-build-exists: ${{ steps.data.outputs.ci-build-exists }}
+      ci-build-tag: ${{ steps.data.outputs.ci-build-tag }}
+      ci-test-exists: ${{ steps.data.outputs.ci-test-exists }}
+      ci-test-tag: ${{ steps.data.outputs.ci-test-tag }}
+      dev-exists: ${{ steps.data.outputs.dev-exists }}
+      dev-tag: ${{ steps.data.outputs.dev-tag }}
+      basic-dev-exists: ${{ steps.data.outputs.basic-dev-exists }}
+      basic-dev-tag: ${{ steps.data.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-exists: ${{ steps.data.outputs.basic-ttnn-runtime-exists }}
+      basic-ttnn-runtime-tag: ${{ steps.data.outputs.basic-ttnn-runtime-tag }}
+      manylinux-exists: ${{ steps.data.outputs.manylinux-exists }}
+      manylinux-tag: ${{ steps.data.outputs.manylinux-tag }}
+      distro: ${{ steps.data.outputs.distro }}
+      version: ${{ steps.data.outputs.version }}
+      python-version: ${{ steps.data.outputs.python-version }}
+      ci-build-venv-tag: ${{ steps.data.outputs.ci-build-venv-tag }}
+      ci-test-venv-tag: ${{ steps.data.outputs.ci-test-venv-tag }}
     steps:
       - name: Checkout repo
+        if: inputs.precomputed-platform-data == ''
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Parse platform
+        if: inputs.precomputed-platform-data == ''
         id: platform
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
 
-      - name: Determine Python version
-        id: python-version
+      - name: Get platform data
+        id: data
+        env:
+          PRECOMPUTED: ${{ inputs.precomputed-platform-data }}
+          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.platform.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.platform.outputs.version }}"
-          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
-          if [ "$VERSION" = "24.04" ]; then
-            PYTHON_VERSION="3.12"
+
+          if [ -n "$PRECOMPUTED" ]; then
+            echo "Using precomputed platform data"
+            DATA="$PRECOMPUTED"
           else
-            PYTHON_VERSION="3.10"
-          fi
-          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
-
-      - name: Set environment variables
-        run: |
-          set -euo pipefail
-          DISTRO="${{ steps.platform.outputs.distro }}"
-          VERSION="${{ steps.platform.outputs.version }}"
-          ARCH="${{ inputs.architecture || 'amd64' }}"
-
-          echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
-          echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
-          echo "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> $GITHUB_ENV
-          echo "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> $GITHUB_ENV
-          echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
-          echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
-
-      - name: Compute tags
-        id: tags
-        run: |
-          set -euo pipefail
-          # Tags are always GHCR paths (no harbor prefix) - we push to GHCR
-          # Consumers prepend harbor-prefix when pulling through Harbor
-
-          # Include workflow and Dockerfile.tools. The hash script extracts COPY sources from
-          # any Dockerfile passed as extra, so Dockerfile.tools brings in all tool install
-          # scripts (install-sfpi.sh, etc.). When a tool is updated, both tool image tag and
-          # main image hash change, triggering a rebuild.
-          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/Dockerfile.tools"
-
-          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-
-          # basic-dev uses tool images (cmake, sfpi, openmpi, ccache), so include tool-related files in hash
-          BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
-          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
-
-          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
-
-          # Manylinux image uses tool images (ccache, mold, sfpi, openmpi). EXTRA_FILES
-          # already includes all tool install scripts, so manylinux hash updates when any
-          # tool changes (e.g. OpenMPI build method change affecting library SONAMEs).
-          MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
-          MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
-
-      # Assume if dev-tag exists, the others will exist too
-      - name: Query images exist
-        id: images
-        run: |
-          set -euo pipefail
-          FORCE_REBUILD="${{ inputs.force-rebuild }}"
-
-          if [ "$FORCE_REBUILD" = "true" ]; then
-            echo "Force rebuild enabled: treating all images as missing"
-            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
-            echo "dev-exists=false" >> $GITHUB_OUTPUT
-            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
-            echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
-            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
-            exit 0
+            echo "Computing platform data..."
+            ARGS="$VERSION $REPO"
+            [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
+            DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
           fi
 
-          if docker manifest inspect "${{ steps.tags.outputs.dev-tag }}" > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.dev-tag }} exists"
-            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=true" >> $GITHUB_OUTPUT
-            echo "dev-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.dev-tag }} does not exist"
-            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
-            echo "dev-exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          if docker manifest inspect "${{ steps.tags.outputs.basic-dev-tag }}" > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
-            echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
-            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
-          fi
-          if docker manifest inspect "${{ steps.tags.outputs.basic-ttnn-runtime-tag }}" > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} exists"
-            echo "basic-ttnn-runtime-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} does not exist"
-            echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          if docker manifest inspect "${{ steps.tags.outputs.manylinux-tag }}" > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.manylinux-tag }} exists"
-            echo "manylinux-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.manylinux-tag }} does not exist"
-            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
-          fi
+          # Extract outputs
+          .github/scripts/extract-outputs.sh "$DATA" \
+            "ci-build-exists:.ci_build_exists" \
+            "ci-build-tag:.ci_build_tag" \
+            "ci-test-exists:.ci_test_exists" \
+            "ci-test-tag:.ci_test_tag" \
+            "dev-exists:.dev_exists" \
+            "dev-tag:.dev_tag" \
+            "basic-dev-exists:.basic_dev_exists" \
+            "basic-dev-tag:.basic_dev_tag" \
+            "basic-ttnn-runtime-exists:.basic_ttnn_exists" \
+            "basic-ttnn-runtime-tag:.basic_ttnn_tag" \
+            "manylinux-exists:.manylinux_exists" \
+            "manylinux-tag:.manylinux_tag" \
+            "distro:.distro" \
+            "version:.version" \
+            "python-version:.python_version" \
+            "ci-build-venv-tag:.ci_build_venv_tag" \
+            "ci-test-venv-tag:.ci_test_venv_tag"
 
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
   # Uses docker buildx bake CLI with context overrides for pre-built GHCR tool/venv images.
   ubuntu:
     name: "🐳 Ubuntu images"
     needs: [image-tags, tools, venvs]
-    # Run if distro is ubuntu AND (main images missing OR basic images missing)
-    # Use always() to run even when tools job is skipped (tool-tags provided via input)
+    # Run if distro is ubuntu AND (main images missing OR basic images missing).
+    # When precomputed, venvs is skipped; allow run when venvs skipped or succeeded.
     if: |
       always() && !failure() && !cancelled() &&
+      (needs.venvs.result == 'success' || needs.venvs.result == 'skipped') &&
       needs.image-tags.outputs.distro == 'ubuntu' &&
       (needs.image-tags.outputs.dev-exists != 'true' ||
        needs.image-tags.outputs.basic-dev-exists != 'true' ||
@@ -323,8 +264,8 @@ jobs:
         id: bake
         env:
           TOOL_TAGS: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
-          CI_BUILD_VENV_TAG: ${{ needs.venvs.outputs.ci-build-venv-tag }}
-          CI_TEST_VENV_TAG: ${{ needs.venvs.outputs.ci-test-venv-tag }}
+          CI_BUILD_VENV_TAG: ${{ needs.venvs.outputs.ci-build-venv-tag || needs.image-tags.outputs.ci-build-venv-tag }}
+          CI_TEST_VENV_TAG: ${{ needs.venvs.outputs.ci-test-venv-tag || needs.image-tags.outputs.ci-test-venv-tag }}
         run: |
           set -euo pipefail
 
@@ -491,43 +432,44 @@ jobs:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false
 
+      # Tag as latest if image existed before or we built it in this run (ubuntu/manylinux succeeded).
       - name: "Push latest CI Build tag"
-        if: needs.image-tags.outputs.ci-build-exists == 'true'
+        if: needs.image-tags.outputs.ci-build-exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.image-tags.outputs.ci-build-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest CI Test tag"
-        if: needs.image-tags.outputs.ci-test-exists == 'true'
+        if: needs.image-tags.outputs.ci-test-exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.image-tags.outputs.ci-test-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"
-        if: needs.image-tags.outputs.dev-exists == 'true'
+        if: needs.image-tags.outputs.dev-exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.image-tags.outputs.dev-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic Dev tag"
-        if: needs.image-tags.outputs.basic-dev-exists == 'true'
+        if: needs.image-tags.outputs.basic-dev-exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.image-tags.outputs.basic-dev-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic TTNN Runtime tag"
-        if: needs.image-tags.outputs.basic-ttnn-runtime-exists == 'true'
+        if: needs.image-tags.outputs.basic-ttnn-runtime-exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.image-tags.outputs.basic-ttnn-runtime-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Manylinux tag"
-        if: needs.image-tags.outputs.manylinux-exists == 'true' && inputs.build-manylinux != false
+        if: (needs.image-tags.outputs.manylinux-exists == 'true' || needs.manylinux.result == 'success') && inputs.build-manylinux != false
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.image-tags.outputs.manylinux-tag }}

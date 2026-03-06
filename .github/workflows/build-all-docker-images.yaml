@@ -72,23 +72,85 @@ permissions:
   packages: write
 
 jobs:
-  # Check Harbor availability first
+  # Check Harbor availability (runs in parallel with preflight)
   check-harbor:
     name: "Check Harbor"
     uses: ./.github/workflows/check-harbor.yaml
 
-  # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share.
+  # Preflight: compute tool and platform data on a single runner
+  # This avoids spinning up multiple runners for hash computation
+  preflight:
+    name: "Preflight (compute tags)"
+    runs-on: tt-ubuntu-2204-small-stable
+    outputs:
+      tool-data: ${{ steps.tool-data.outputs.data }}
+      ubuntu-2204-data: ${{ steps.platform-2204.outputs.data }}
+      ubuntu-2404-data: ${{ steps.platform-2404.outputs.data }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute tool data
+        id: tool-data
+        env:
+          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+        run: |
+          set -euo pipefail
+          ARGS="${{ github.repository }}"
+          [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
+          DATA=$(.github/scripts/compute-tool-data.sh $ARGS)
+          {
+            echo "data<<EOJSON"
+            echo "$DATA"
+            echo "EOJSON"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute Ubuntu 22.04 platform data
+        id: platform-2204
+        env:
+          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+        run: |
+          set -euo pipefail
+          ARGS="22.04 ${{ github.repository }}"
+          [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
+          DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
+          {
+            echo "data<<EOJSON"
+            echo "$DATA"
+            echo "EOJSON"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute Ubuntu 24.04 platform data
+        id: platform-2404
+        env:
+          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+        run: |
+          set -euo pipefail
+          ARGS="24.04 ${{ github.repository }}"
+          [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
+          DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
+          {
+            echo "data<<EOJSON"
+            echo "$DATA"
+            echo "EOJSON"
+          } >> "$GITHUB_OUTPUT"
+
+  # Tool images: use preflight tool-data
   build-tools:
     name: "Build tool images"
+    needs: [preflight]
     uses: ./.github/workflows/build-docker-tools.yaml
     with:
       force-rebuild: ${{ inputs.force-rebuild }}
+      precomputed-tool-data: ${{ needs.preflight.outputs.tool-data }}
     secrets: inherit
 
-  # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms.
+  # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms
   build-2204:
     name: "Ubuntu 22.04"
-    needs: [build-tools]
+    needs: [preflight, build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 22.04"
@@ -96,12 +158,13 @@ jobs:
       build-manylinux: true
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       force-rebuild: ${{ inputs.force-rebuild }}
+      precomputed-platform-data: ${{ needs.preflight.outputs.ubuntu-2204-data }}
     secrets: inherit
 
-  # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here.
+  # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here
   build-2404:
     name: "Ubuntu 24.04"
-    needs: [build-tools]
+    needs: [preflight, build-tools]
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 24.04"
@@ -109,15 +172,22 @@ jobs:
       build-manylinux: false
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       force-rebuild: ${{ inputs.force-rebuild }}
+      precomputed-platform-data: ${{ needs.preflight.outputs.ubuntu-2404-data }}
     secrets: inherit
 
-  # Prewarm cache by pulling images from GHCR through HARBOR
+  # Prewarm Harbor cache after all image-producing jobs complete
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
     needs: [check-harbor, build-tools, build-2204, build-2404]
     if: always() && !failure() && !cancelled() && needs.check-harbor.outputs.harbor-prefix != ''
     runs-on: tt-ubuntu-2204-large-stable
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/prewarm-images
+          sparse-checkout-cone-mode: false
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -133,89 +203,52 @@ jobs:
           password: ${{ secrets.HARBOR_PUSH_PASSWORD }}
 
       - name: Prewarm tool images cache
-        env:
-          TOOL_TAGS: ${{ needs.build-tools.outputs.tool-tags }}
-          HARBOR_PREFIX: ${{ needs.check-harbor.outputs.harbor-prefix }}
+        uses: ./.github/actions/prewarm-images
+        with:
+          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          images: ${{ needs.build-tools.outputs.tool-tags }}
+          title: "tool images"
+          json-keys: "ccache-tag mold-tag doxygen-tag cba-tag gdb-tag cmake-tag yq-tag sfpi-tag openmpi-tag"
+
+      - name: Build Ubuntu 22.04 image list
+        id: images-2204
         run: |
-          set -euo pipefail
-          echo "Prewarming tool images from GHCR via HARBOR..."
-          for key in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
-            ghcr_tag=$(echo "$TOOL_TAGS" | jq -r ".\"${key}-tag\"")
-            harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
-            echo "Pulling $harbor_tag (to warm Harbor cache)..."
-            if docker pull "$harbor_tag" 2>/dev/null; then
-              echo "  ✓ Successfully pulled through Harbor"
-            else
-              echo "  ⚠ Harbor pull failed, trying direct GHCR: $ghcr_tag"
-              if docker pull "$ghcr_tag" 2>/dev/null; then
-                echo "  ✓ Successfully pulled from GHCR"
-              else
-                echo "  ✗ Failed to pull (may not exist yet)"
-              fi
-            fi
-          done
+          IMAGES=$(jq -n \
+            --arg ci_build '${{ needs.build-2204.outputs.ci-build-tag }}' \
+            --arg ci_test '${{ needs.build-2204.outputs.ci-test-tag }}' \
+            --arg dev '${{ needs.build-2204.outputs.dev-tag }}' \
+            --arg basic_dev '${{ needs.build-2204.outputs.basic-dev-tag }}' \
+            --arg basic_ttnn '${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}' \
+            --arg manylinux '${{ needs.build-2204.outputs.manylinux-tag }}' \
+            --arg venv_build '${{ needs.build-2204.outputs.python-ci-build-venv-tag }}' \
+            --arg venv_test '${{ needs.build-2204.outputs.python-ci-test-venv-tag }}' \
+            '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $manylinux, $venv_build, $venv_test ] | map(select(. != ""))')
+          echo "list=$IMAGES" >> $GITHUB_OUTPUT
 
       - name: Prewarm Ubuntu 22.04 images cache
-        env:
-          HARBOR_PREFIX: ${{ needs.check-harbor.outputs.harbor-prefix }}
+        uses: ./.github/actions/prewarm-images
+        with:
+          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          images: ${{ steps.images-2204.outputs.list }}
+          title: "Ubuntu 22.04 images"
+
+      - name: Build Ubuntu 24.04 image list
+        id: images-2404
         run: |
-          set -euo pipefail
-          echo "Prewarming Ubuntu 22.04 images from GHCR via HARBOR..."
-          images=(
-            "${{ needs.build-2204.outputs.ci-build-tag }}"
-            "${{ needs.build-2204.outputs.ci-test-tag }}"
-            "${{ needs.build-2204.outputs.dev-tag }}"
-            "${{ needs.build-2204.outputs.basic-dev-tag }}"
-            "${{ needs.build-2204.outputs.basic-ttnn-runtime-tag }}"
-            "${{ needs.build-2204.outputs.manylinux-tag }}"
-            "${{ needs.build-2204.outputs.python-ci-build-venv-tag }}"
-            "${{ needs.build-2204.outputs.python-ci-test-venv-tag }}"
-          )
-          for ghcr_tag in "${images[@]}"; do
-            if [ -n "$ghcr_tag" ]; then
-              harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
-              echo "Pulling $harbor_tag (to warm Harbor cache)..."
-              if docker pull "$harbor_tag" 2>/dev/null; then
-                echo "  ✓ Successfully pulled through Harbor"
-              else
-                echo "  ⚠ Harbor pull failed, trying direct GHCR: $ghcr_tag"
-                if docker pull "$ghcr_tag" 2>/dev/null; then
-                  echo "  ✓ Successfully pulled from GHCR"
-                else
-                  echo "  ✗ Failed to pull (may not exist yet)"
-                fi
-              fi
-            fi
-          done
+          IMAGES=$(jq -n \
+            --arg ci_build '${{ needs.build-2404.outputs.ci-build-tag }}' \
+            --arg ci_test '${{ needs.build-2404.outputs.ci-test-tag }}' \
+            --arg dev '${{ needs.build-2404.outputs.dev-tag }}' \
+            --arg basic_dev '${{ needs.build-2404.outputs.basic-dev-tag }}' \
+            --arg basic_ttnn '${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}' \
+            --arg venv_build '${{ needs.build-2404.outputs.python-ci-build-venv-tag }}' \
+            --arg venv_test '${{ needs.build-2404.outputs.python-ci-test-venv-tag }}' \
+            '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $venv_build, $venv_test ] | map(select(. != ""))')
+          echo "list=$IMAGES" >> $GITHUB_OUTPUT
 
       - name: Prewarm Ubuntu 24.04 images cache
-        env:
-          HARBOR_PREFIX: ${{ needs.check-harbor.outputs.harbor-prefix }}
-        run: |
-          set -euo pipefail
-          echo "Prewarming Ubuntu 24.04 images from GHCR via HARBOR..."
-          images=(
-            "${{ needs.build-2404.outputs.ci-build-tag }}"
-            "${{ needs.build-2404.outputs.ci-test-tag }}"
-            "${{ needs.build-2404.outputs.dev-tag }}"
-            "${{ needs.build-2404.outputs.basic-dev-tag }}"
-            "${{ needs.build-2404.outputs.basic-ttnn-runtime-tag }}"
-            "${{ needs.build-2404.outputs.python-ci-build-venv-tag }}"
-            "${{ needs.build-2404.outputs.python-ci-test-venv-tag }}"
-          )
-          for ghcr_tag in "${images[@]}"; do
-            if [ -n "$ghcr_tag" ]; then
-              harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
-              echo "Pulling $harbor_tag (to warm Harbor cache)..."
-              if docker pull "$harbor_tag" 2>/dev/null; then
-                echo "  ✓ Successfully pulled through Harbor"
-              else
-                echo "  ⚠ Harbor pull failed, trying direct GHCR: $ghcr_tag"
-                if docker pull "$ghcr_tag" 2>/dev/null; then
-                  echo "  ✓ Successfully pulled from GHCR"
-                else
-                  echo "  ✗ Failed to pull (may not exist yet)"
-                fi
-              fi
-            fi
-          done
+        uses: ./.github/actions/prewarm-images
+        with:
+          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          images: ${{ steps.images-2404.outputs.list }}
+          title: "Ubuntu 24.04 images"
