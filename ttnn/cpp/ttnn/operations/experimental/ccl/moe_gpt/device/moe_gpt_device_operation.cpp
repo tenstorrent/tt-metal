@@ -92,6 +92,19 @@ void MoEGPTDeviceOperation::validate_on_program_cache_miss(
     // --- Expert indices validation ---
     const auto& indices_shape = tensor_args.expert_indices.logical_shape();
     TT_FATAL(indices_shape.rank() >= 2, "expert_indices must be at least rank 2, got {}", indices_shape.rank());
+
+    // --- Memory config validation ---
+    // moe_gpt uses CB aliasing for indices/scores: the drain tilize core is set to the dispatch
+    // drain core, and the CBs are backed directly by the HEIGHT_SHARDED L1 buffers.
+    TT_FATAL(
+        tensor_args.expert_indices.memory_config().memory_layout() ==
+                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            tensor_args.expert_indices.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
+        "expert_indices must be HEIGHT_SHARDED L1 (produced by all_to_all_dispatch_metadata)");
+    TT_FATAL(
+        tensor_args.expert_scores.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            tensor_args.expert_scores.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
+        "expert_scores must be HEIGHT_SHARDED L1 (produced by all_to_all_dispatch_metadata)");
 }
 
 MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output_specs(
