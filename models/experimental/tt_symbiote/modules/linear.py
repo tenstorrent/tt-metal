@@ -286,6 +286,92 @@ class TTNNLinearLLamaBFloat16(TTNNLinear):
         return super().forward(input_tensor)
 
 
+class TTNNLinearDRAMSharded(TTNNLinear):
+    """TTNN linear layer with DRAM-sharded weight placement for decode performance.
+
+    Ported from agent's layer_weights.py _maybe_dram_shard_linear_weight() and
+    decoder_layer_tt.py _dram_sharded_linear(). Distributes weight's N dimension
+    across all DRAM banks for full bandwidth utilization on M=1 decode matmuls.
+
+    Uses MatmulMultiCoreReuseMultiCast1DProgramConfig with fuse_batch=True
+    for optimal decode throughput (from agent's decoder_layer_tt.py).
+    """
+
+    def preprocess_weights_impl(self):
+        self.tt_weight_host = preprocess_linear_weight(self.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.tt_bias_host = None
+        if self.bias is not None:
+            self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def move_weights_to_device_impl(self):
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+
+        # DRAM-sharded weight placement (from agent's layer_weights.py)
+        grid = self.device.compute_with_storage_grid_size()
+        K = self.in_features
+        N = self.out_features
+        K_tiles = K // ttnn.TILE_SIZE
+        N_tiles = N // ttnn.TILE_SIZE
+        num_cores = int(grid.x) * int(grid.y)
+        per_core_N = max(1, (N_tiles + num_cores - 1) // num_cores)
+
+        dram_shard_config = ttnn.create_sharded_memory_config(
+            shape=(K, per_core_N * ttnn.TILE_SIZE),
+            core_grid=ttnn.CoreGrid(y=int(grid.y), x=int(grid.x)),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        try:
+            self.tt_weight = ttnn.to_memory_config(self.tt_weight, dram_shard_config)
+            self._is_dram_sharded = True
+        except RuntimeError:
+            self._is_dram_sharded = False
+
+        # 1D matmul program config for decode (from agent's decoder_layer_tt.py)
+        self._decode_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(grid.x), int(grid.y)),
+            in0_block_w=min(8, K_tiles),
+            out_subblock_h=1,
+            out_subblock_w=min(per_core_N, 4),
+            out_block_h=1,
+            out_block_w=per_core_N,
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        # LoFi for decode speed, HiFi4 for attention accuracy (from agent)
+        self._decode_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            bias=self.tt_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self._decode_program_config,
+            compute_kernel_config=self._decode_compute_config,
+        )
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
+        return tt_output
+
+
 class PytorchLinearActivation(nn.Module):
     def __init__(self, dense, act_fn) -> None:
         super().__init__()

@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for GLM 4.7 Flash model with TTNN backend."""
+"""Test for GLM 4.7 Flash model with TTNN backend.
+
+Performance targets (from agent's PLAN_GLM47_FLASH.md):
+  - Prefill (TTFT): < 3.0s for 128-token prompts
+  - Decode: > 30 T/S/U per user on Wormhole x4
+"""
 
 import json
 import os
@@ -31,6 +36,7 @@ from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
+from models.experimental.tt_symbiote.modules.config import Glm4MoeLiteHParams
 
 assert transformers.__version__.startswith(
     "5."
@@ -39,7 +45,6 @@ assert transformers.__version__.startswith(
 
 def load_glm4_moe_config():
     """Load tt-moe GLM-4 config from models/tt-moe/configs/glm4.json."""
-    # test file: .../models/experimental/tt_symbiote/tests/test_glm_flash.py
     models_dir = Path(__file__).resolve().parents[3]
     config_path = models_dir / "tt-moe" / "configs" / "glm4.json"
     if not config_path.is_file():
@@ -48,19 +53,36 @@ def load_glm4_moe_config():
         return json.load(f)["moe_block"]
 
 
-def create_paged_kv_cache(model_config, device, batch_size=1):
+def create_paged_kv_cache(model_config, device, batch_size=1, use_kvpe=True):
+    """Create paged KV cache, defaulting to KVPE mode for FlashMLA decode.
+
+    KVPE mode stores [kv_lora_rank + qk_rope_head_dim] per position instead
+    of separate K/V heads, reducing per-position cache memory by ~10x.
+    """
+    hparams = Glm4MoeLiteHParams.from_hf_config(model_config)
     config = PagedAttentionConfig(
         block_size=64,
         max_num_blocks=32,
         batch_size=batch_size,
     )
-    return TTNNPagedAttentionKVCache(
-        num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
-        head_dim=model_config.qk_head_dim,
-        config=config,
-        device=None,
-    ).to_device(device)
+    if use_kvpe:
+        return TTNNPagedAttentionKVCache(
+            num_layers=hparams.num_hidden_layers,
+            num_kv_heads=1,
+            head_dim=hparams.kvpe_dim,
+            config=config,
+            device=None,
+            kvpe_mode=True,
+            kv_lora_rank=hparams.kv_lora_rank,
+        ).to_device(device)
+    else:
+        return TTNNPagedAttentionKVCache(
+            num_layers=model_config.num_hidden_layers,
+            num_kv_heads=model_config.num_key_value_heads,
+            head_dim=model_config.qk_head_dim,
+            config=config,
+            device=None,
+        ).to_device(device)
 
 
 MESH_DEVICE_MAP = {
@@ -90,14 +112,21 @@ MESH_DEVICE_MAP = {
 @pytest.mark.parametrize("use_paged_attention", [True], ids=["paged"])
 @pytest.mark.parametrize("max_new_tokens", [128], ids=["128tok"])
 def test_glm(mesh_device, use_paged_attention, max_new_tokens):
-    """Test GLM model with TTNN acceleration."""
+    """Test GLM model with TTNN acceleration.
 
-    # Load tt-moe GLM-4 config (unified MoE architecture description)
+    Uses FlashMLA decode with KVPE cache (from agent's decoder_layer_tt.py),
+    fused SiLU*mul + fused gate+up in MoE (from agent's moe_tt.py),
+    and BFP8 expert quantization (from agent's layer_weights.py).
+    """
+
     moe_cfg = load_glm4_moe_config()
     params = moe_cfg["model_params"]
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
+
+    hparams = Glm4MoeLiteHParams.from_hf_config(model.config)
+    hparams.validate()
 
     if model.config.hidden_size == params["hidden_size"]:
         assert model.config.n_routed_experts == params["num_experts"]
@@ -138,16 +167,18 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     model.eval()
     torch.set_grad_enabled(False)
 
+    use_kvpe = os.environ.get("GLM4_USE_KVPE", "1").strip() == "1"
+
     cache_kwargs = {}
     if use_paged_attention:
-        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device, use_kvpe=use_kvpe)
 
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, **cache_kwargs)
     DispatchManager.clear_timings()
 
     cache_kwargs = {}
     if use_paged_attention:
-        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+        cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device, use_kvpe=use_kvpe)
 
     prompt_tokens = inputs["input_ids"].shape[-1]
 
@@ -159,7 +190,7 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
 
     cache_kwargs2 = {}
     if use_paged_attention:
-        cache_kwargs2["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
+        cache_kwargs2["past_key_values"] = create_paged_kv_cache(model.config, mesh_device, use_kvpe=use_kvpe)
 
     start_time = time.perf_counter()
     outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, use_cache=True, **cache_kwargs2)
@@ -179,12 +210,15 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     print(f"\nPERFORMANCE METRICS:")
     print(f"  Prompt tokens:        {prompt_tokens}")
     print(f"  Generated tokens:     {generated_tokens}")
-    print(f"  Prefill time:         {prefill_time:.3f}s")
+    print(f"  Prefill time:         {prefill_time:.3f}s  (target: < 3.0s)")
     print(f"  Total time:           {total_time:.3f}s")
     print(f"  Decode time:          {decode_time:.3f}s")
     print(f"  E2E throughput:       {e2e_throughput:.2f} tokens/s")
-    print(f"  Decode throughput:    {decode_throughput:.2f} tokens/s")
+    print(f"  Decode throughput:    {decode_throughput:.2f} tokens/s  (target: > 30 T/S/U)")
     print(f"  Decode ms/token:      {(decode_time / generated_tokens * 1000):.2f}ms")
+    print(f"  KVPE mode:            {use_kvpe}")
+    print(f"  Expert dtype:         {os.environ.get('GLM4_EXPERTS_DTYPE', 'bf8 (default)')}")
+    print(f"  Fused gate+up:        {os.environ.get('GLM4_FUSE_GATE_UP', '1 (default)')}")
     print(f"{'='*80}\n")
 
     DispatchManager.save_stats_to_file("glm_timing_stats.csv")

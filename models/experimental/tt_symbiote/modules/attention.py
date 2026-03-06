@@ -70,6 +70,16 @@ class PagedAttentionConfig:
 
 
 class TTNNPagedAttentionKVCache(Cache):
+    """Paged KV cache supporting both standard K/V and KVPE (combined latent) modes.
+
+    KVPE mode (from agent's FlashMLA pattern): stores a single combined
+    [kv_lora_rank + qk_rope_head_dim] vector per position instead of
+    separate K and V. This enables FlashMLA decode and reduces per-position
+    cache memory by ~10x.
+
+    Standard mode: separate K and V caches (original framework behavior).
+    """
+
     def __init__(
         self,
         num_layers: int,
@@ -78,6 +88,8 @@ class TTNNPagedAttentionKVCache(Cache):
         config: PagedAttentionConfig,
         device=None,
         dtype: torch.dtype = torch.bfloat16,
+        kvpe_mode: bool = False,
+        kv_lora_rank: int = 0,
     ):
         if Cache is not object:
             super().__init__(layer_class_to_replicate=_PagedCacheLayer)
@@ -92,12 +104,15 @@ class TTNNPagedAttentionKVCache(Cache):
         self._device = device
         self._seq_lengths: list[int] = [0] * num_layers
         self._seen_tokens = 0
+        self.kvpe_mode = kvpe_mode
+        self.kv_lora_rank = kv_lora_rank
 
         page_table = torch.arange(config.max_num_blocks, dtype=torch.int32)
         self.page_table = page_table.reshape(config.batch_size, config.blocks_per_sequence)
 
         self._tt_key_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
         self._tt_value_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
+        self._tt_kvpe_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
         self._tt_page_table: Optional[ttnn.Tensor] = None
         self._is_on_device = False
 
@@ -108,28 +123,43 @@ class TTNNPagedAttentionKVCache(Cache):
         self._device = device
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
 
-        cache_shape = (
-            self.config.max_num_blocks,
-            self.num_kv_heads,
-            self.config.block_size,
-            self.head_dim,
-        )
-
-        for layer_idx in range(self.num_layers):
-            self._tt_key_cache[layer_idx] = ttnn.zeros(
-                cache_shape,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        if self.kvpe_mode:
+            kvpe_shape = (
+                self.config.max_num_blocks,
+                1,
+                self.config.block_size,
+                self.head_dim,
             )
-            self._tt_value_cache[layer_idx] = ttnn.zeros(
-                cache_shape,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            for layer_idx in range(self.num_layers):
+                self._tt_kvpe_cache[layer_idx] = ttnn.zeros(
+                    kvpe_shape,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+        else:
+            cache_shape = (
+                self.config.max_num_blocks,
+                self.num_kv_heads,
+                self.config.block_size,
+                self.head_dim,
             )
+            for layer_idx in range(self.num_layers):
+                self._tt_key_cache[layer_idx] = ttnn.zeros(
+                    cache_shape,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                self._tt_value_cache[layer_idx] = ttnn.zeros(
+                    cache_shape,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         self._tt_page_table = ttnn.from_torch(
             self.page_table,
@@ -142,6 +172,85 @@ class TTNNPagedAttentionKVCache(Cache):
 
         self._is_on_device = True
         return self
+
+    def paged_fill_kvpe_on_device(
+        self,
+        kvpe_states: ttnn.Tensor,
+        layer_idx: int,
+        batch_idx: int = 0,
+    ):
+        """Fill KVPE cache (combined latent mode). Agent pattern from decoder_layer_tt.py."""
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+
+        kvpe_cache = self._tt_kvpe_cache[layer_idx]
+        page_table = self._tt_page_table
+
+        max_len = self.config.blocks_per_sequence * self.config.block_size
+        seq_len = kvpe_states.shape[2]
+        if seq_len > max_len:
+            kvpe_states = kvpe_states[:, :, :max_len, :]
+            seq_len = max_len
+
+        ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_states, page_table, batch_idx=batch_idx)
+
+        self._seq_lengths[layer_idx] += seq_len
+        if layer_idx == 0:
+            self._seen_tokens += seq_len
+
+    def paged_update_kvpe_on_device(
+        self,
+        kvpe_states: ttnn.Tensor,
+        layer_idx: int,
+        current_pos: ttnn.Tensor,
+    ):
+        """Update KVPE cache for decode step. Agent pattern from decoder_layer_tt.py."""
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+
+        kvpe_cache = self._tt_kvpe_cache[layer_idx]
+        page_table = self._tt_page_table
+
+        ttnn.experimental.paged_update_cache(
+            kvpe_cache,
+            kvpe_states,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
+        )
+
+        seq_len = kvpe_states.shape[0]
+        self._seq_lengths[layer_idx] += seq_len
+        if layer_idx == 0:
+            self._seen_tokens += seq_len
+
+    def paged_flash_mla_decode(
+        self,
+        query: ttnn.Tensor,
+        layer_idx: int,
+        current_pos: ttnn.Tensor,
+        kv_lora_rank: int,
+        scale: float = 1.0,
+        program_config=None,
+        compute_kernel_config=None,
+    ) -> ttnn.Tensor:
+        """FlashMLA decode using KVPE cache. Ported from agent's decoder_layer_tt.py."""
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+
+        kvpe_cache = self._tt_kvpe_cache[layer_idx]
+        page_table = self._tt_page_table
+
+        return ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            query,
+            kvpe_cache,
+            head_dim_v=kv_lora_rank,
+            page_table_tensor=page_table,
+            cur_pos_tensor=current_pos,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def paged_fill_on_device(
         self,
@@ -1011,6 +1120,14 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
     Supports both standard DynamicCache and TTNNPagedAttentionKVCache
     for paged attention with on-device KV storage.
+
+    When use_flash_mla=True (default), the decode path uses:
+    - kv_b decomposition (from agent's layer_weights.py): splits kv_b_proj
+      into kv_b1 [H, qk_nope, kv_lora] for Q absorption and kv_b2
+      [H, kv_lora, v] for post-SDPA value extraction
+    - KVPE combined cache: stores [kv_lora_rank + qk_rope_head_dim] per position
+    - FlashMLA decode kernel: paged_flash_multi_latent_attention_decode
+    - HiFi4 compute config for attention accuracy (from agent's decoder_layer_tt.py)
     """
 
     def __init__(self):
@@ -1024,6 +1141,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         self.num_heads = None
         self.scaling = None
         self.is_causal = True
+        self.use_flash_mla = True
 
         self.q_a_proj = None
         self.q_a_layernorm = None
@@ -1034,6 +1152,9 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         self.o_proj = None
         self.rope = None
         self.sdpa = None
+
+        self._kv_b1_weight = None
+        self._kv_b2_weight = None
 
     @classmethod
     def from_torch(cls, torch_attn: "Glm4MoeLiteAttention", distributed: bool = True):
@@ -1066,6 +1187,19 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         new_attn.kv_a_layernorm = NormCls.from_torch(torch_attn.kv_a_layernorm)
         new_attn.kv_b_proj = LinearClsOut.from_torch(torch_attn.kv_b_proj)
 
+        # kv_b decomposition (from agent's layer_weights.py):
+        # Split kv_b_proj.weight [H*(qk_nope+v), kv_lora] into:
+        #   kv_b1: [H, qk_nope, kv_lora] -- absorbs nope into Q-space for FlashMLA
+        #   kv_b2: [H, kv_lora, v] -- extracts values post-attention
+        kv_b_weight = torch_attn.kv_b_proj.weight  # [H*(qk_nope+v), kv_lora]
+        kv_b_reshaped = kv_b_weight.view(
+            torch_attn.num_heads,
+            torch_attn.qk_nope_head_dim + torch_attn.v_head_dim,
+            torch_attn.kv_lora_rank,
+        )
+        new_attn._kv_b1_torch = kv_b_reshaped[:, : torch_attn.qk_nope_head_dim, :].contiguous()
+        new_attn._kv_b2_torch = kv_b_reshaped[:, -torch_attn.v_head_dim :, :].transpose(1, 2).contiguous()
+
         new_attn.o_proj = LinearClsOut.from_torch(torch_attn.o_proj)
 
         new_attn.rope = TTNNDistributedRotaryPositionEmbedding() if distributed else TTNNRotaryPositionEmbedding()
@@ -1076,7 +1210,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         return new_attn
 
     def move_weights_to_device_impl(self):
-        """Initialize SDPA config when device is available."""
+        """Initialize SDPA config and FlashMLA weights when device is available."""
         super().move_weights_to_device_impl()
         if self.sdpa.program_config is None:
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
@@ -1085,6 +1219,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
                 k_chunk_size=256,
                 exp_approx_mode=False,
             )
+            # HiFi4 for attention accuracy (from agent's decoder_layer_tt.py)
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1125,15 +1260,57 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         tile_size = 32
         shard_h = ((self.num_heads + tile_size - 1) // tile_size) * tile_size
-        self._decode_shard_cfg = ttnn.create_sharded_memory_config(
-            shape=(shard_h, self.qk_head_dim),
-            core_grid=ttnn.CoreGrid(y=1, x=1),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+
+        # KVPE dimension for FlashMLA (from agent's config.py)
+        kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+
+        if self.use_flash_mla:
+            self._decode_shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(shard_h, kvpe_dim),
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+        else:
+            self._decode_shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(shard_h, self.qk_head_dim),
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+        # kv_b decomposition weights for FlashMLA (from agent's layer_weights.py)
+        if self.use_flash_mla and hasattr(self, "_kv_b1_torch"):
+            self._kv_b1_weight = ttnn.from_torch(
+                self._kv_b1_torch.to(torch.bfloat16).unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._kv_b2_weight = ttnn.from_torch(
+                self._kv_b2_torch.to(torch.bfloat16).unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # FlashMLA-specific compute config (from agent's decoder_layer_tt.py)
+        self._flash_mla_compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         if self.device.get_num_devices() > 1:
-            buf_shape = (1, 1, self.num_heads, self.qk_head_dim)
+            if self.use_flash_mla:
+                buf_shape = (1, 1, self.num_heads, kvpe_dim)
+            else:
+                buf_shape = (1, 1, self.num_heads, self.qk_head_dim)
             buf_torch = torch.zeros(buf_shape, dtype=torch.bfloat16)
             self._q_decode_buf = ttnn.from_torch(
                 buf_torch,
@@ -1404,6 +1581,167 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _forward_decode_paged_flash_mla(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor],
+        past_key_values: "TTNNPagedAttentionKVCache",
+        cache_position: Optional[torch.LongTensor],
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        """FlashMLA decode path with KVPE cache and kv_b decomposition.
+
+        Ported from agent's decoder_layer_tt.py. Uses absorbed attention:
+        1. Project Q through kv_b1 to absorb nope into KVPE space
+        2. Concat absorbed Q_nope with Q_rope to form Q_kvpe
+        3. Update KVPE cache (single combined cache, not separate K/V)
+        4. FlashMLA decode: fused attention in KVPE space
+        5. Post-multiply attn_latent by kv_b2 to extract values
+        """
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Q projection (same as _project_qkv but we need intermediate q_nope/q_rope)
+        if self.q_lora_rank is not None:
+            q_latent = self.q_a_proj(hidden_states)
+            q_latent = self.q_a_layernorm(q_latent)
+            q_states = self.q_b_proj(q_latent)
+        else:
+            q_states = self.q_proj(hidden_states)
+
+        q_states = self._maybe_all_gather(q_states)
+        q_states = ttnn.reshape(q_states, (batch_size, seq_length, self.num_heads, -1))
+        q_states = ttnn.permute(q_states, (0, 2, 1, 3))
+
+        q_nope = ttnn.slice(q_states, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
+        q_rope = ttnn.slice(
+            q_states, (0, 0, 0, self.qk_nope_head_dim), (batch_size, self.num_heads, seq_length, self.qk_head_dim)
+        )
+
+        # KV-A projection (compressed_kv contains kv_lora_rank + qk_rope_head_dim)
+        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
+        compressed_kv = self._maybe_all_gather(compressed_kv)
+
+        kv_latent = ttnn.slice(compressed_kv, (0, 0, 0), (batch_size, seq_length, self.kv_lora_rank))
+        k_rope = ttnn.slice(
+            compressed_kv,
+            (0, 0, self.kv_lora_rank),
+            (batch_size, seq_length, self.kv_lora_rank + self.qk_rope_head_dim),
+        )
+
+        # RMSNorm on the KV latent
+        if len(kv_latent.shape) == 3:
+            kv_latent = ttnn.unsqueeze(kv_latent, 1)
+        kv_latent = ttnn.rms_norm(kv_latent, weight=self._kv_a_ln_weight, epsilon=self._kv_a_ln_eps)
+        kv_latent = ttnn.squeeze(kv_latent, 1)
+
+        # RoPE
+        k_rope = ttnn.reshape(k_rope, (batch_size, 1, seq_length, self.qk_rope_head_dim))
+        cos, sin = position_embeddings
+        if len(cos.shape) == 3:
+            cos = ttnn.unsqueeze(cos, 1)
+        if self._is_distributed:
+            cos = self._maybe_all_gather(cos)
+        if len(sin.shape) == 3:
+            sin = ttnn.unsqueeze(sin, 1)
+        if self._is_distributed:
+            sin = self._maybe_all_gather(sin)
+        cos, sin = self._permute_cos_sin_to_meta_format(cos, sin)
+        q_rope, k_rope = self.rope(q_rope, k_rope, cos, sin)
+        k_rope_tt = k_rope.to_ttnn if hasattr(k_rope, "to_ttnn") else k_rope
+
+        # Absorb q_nope through kv_b1: q_nope [B,H,1,qk_nope] x kv_b1 [1,H,qk_nope,kv_lora] -> [B,H,1,kv_lora]
+        q_nope_absorbed = ttnn.matmul(q_nope, self._kv_b1_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Concat absorbed Q with Q_rope to form Q_kvpe [B,H,1,kv_lora_rank+qk_rope_head_dim]
+        q_rope_expanded = ttnn.repeat(
+            q_rope.to_ttnn if hasattr(q_rope, "to_ttnn") else q_rope, (1, self.num_heads, 1, 1)
+        )
+        q_kvpe = ttnn.concat([q_nope_absorbed, q_rope_expanded], dim=-1)
+
+        # Form KVPE vector: concat kv_latent with k_rope [B,1,1,kv_lora_rank+qk_rope_head_dim]
+        kv_latent_2d = ttnn.reshape(kv_latent, (batch_size, 1, seq_length, self.kv_lora_rank))
+        kvpe = ttnn.concat([kv_latent_2d, k_rope_tt], dim=-1)
+
+        layer_idx = self._fallback_torch_layer.layer_idx
+
+        # Resolve cache position
+        if cache_position is None:
+            cur_pos = past_key_values.get_seq_length(layer_idx)
+            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
+        else:
+            cp = cache_position
+            if isinstance(cp, TorchTTNNTensor):
+                cp = cp.to_torch
+            if isinstance(cp, ttnn.Tensor):
+                cp = ttnn.to_torch(cp, mesh_composer=self._cos_sin_mesh_composer)
+            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
+
+        cur_pos_tt = ttnn.from_torch(
+            cache_position_tensor,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Permute to paged layout: B H S D -> S B H D
+        q_kvpe = ttnn.permute(q_kvpe, (2, 0, 1, 3))
+        kvpe = ttnn.permute(kvpe, (2, 0, 1, 3))
+
+        # Multi-device replication
+        if self.device.get_num_devices() > 1:
+            q_buf = getattr(self, "_q_decode_buf", None)
+            k_buf = getattr(self, "_k_decode_buf", None)
+            q_kvpe = self._to_replicated(q_kvpe, buf=q_buf)
+            kvpe = self._to_replicated(kvpe, buf=k_buf)
+
+        # Shard KVPE for cache update
+        kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+        kvpe_shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(32, kvpe_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        kvpe_sharded = ttnn.to_memory_config(kvpe, kvpe_shard_cfg)
+
+        # Update KVPE cache (single combined cache)
+        past_key_values.paged_update_kvpe_on_device(
+            kvpe_sharded,
+            layer_idx=layer_idx,
+            current_pos=cur_pos_tt,
+        )
+        ttnn.deallocate(kvpe_sharded)
+
+        # FlashMLA decode (from agent's decoder_layer_tt.py)
+        attn_latent = past_key_values.paged_flash_mla_decode(
+            q_kvpe,
+            layer_idx,
+            current_pos=cur_pos_tt,
+            kv_lora_rank=self.kv_lora_rank,
+            scale=self.scaling,
+            program_config=self.sdpa.program_config,
+            compute_kernel_config=self._flash_mla_compute_config,
+        )
+        ttnn.deallocate(q_kvpe)
+        # attn_latent: [1, B, H, kv_lora_rank]
+
+        # Slice to kv_lora_rank (FlashMLA may pad heads)
+        attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [1, batch_size, self.num_heads, self.kv_lora_rank])
+
+        # Post-multiply by kv_b2 to extract values: [1,B,H,kv_lora] x [1,H,kv_lora,v] -> [1,B,H,v]
+        attn_latent = ttnn.permute(attn_latent, (1, 0, 2, 3))  # [B,1,H,kv_lora]
+        attn_output = ttnn.matmul(attn_latent, self._kv_b2_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None
+
     def _forward_decode_paged(
         self,
         hidden_states: ttnn.Tensor,
@@ -1414,25 +1752,22 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
     ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
         """Decode path using paged attention with on-device KV cache.
 
-        TTNN paged kernels require tensors in [1, batch, heads, head_dim]
-        layout (``S B H D``) whereas ``_project_qkv`` returns the standard
-        [batch, heads, seq, head_dim] (``B H S D``).  This method handles
-        the permute, L1 sharding required by ``paged_update_cache``, and
-        the MLA-aware SDPA decode call.
+        Routes to FlashMLA path when use_flash_mla=True and cache is in KVPE mode,
+        otherwise falls back to standard paged SDPA decode.
         """
+        if self.use_flash_mla and past_key_values.kvpe_mode:
+            return self._forward_decode_paged_flash_mla(
+                hidden_states, position_embeddings, attention_mask, past_key_values, cache_position
+            )
+
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
         query_states, key_states, value_states, cos, sin = self._project_qkv(
             hidden_states, batch_size, seq_length, position_embeddings
         )
-        # _project_qkv returns [B, H, S, D]:
-        #   Q : [B, num_heads, 1, qk_head_dim]
-        #   K : [B, num_heads, 1, qk_head_dim]
-        #   V : [B, num_heads, 1, v_head_dim]
 
         layer_idx = self._fallback_torch_layer.layer_idx
 
-        # --- resolve cache position to a 1-D torch int32 tensor [batch] ---
         if cache_position is None:
             cur_pos = past_key_values.get_seq_length(layer_idx)
             cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
@@ -1454,17 +1789,14 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # --- permute B H S D  →  S B H D  (the layout paged kernels expect) ---
         query_states = ttnn.permute(query_states, (2, 0, 1, 3))
         key_states = ttnn.permute(key_states, (2, 0, 1, 3))
         value_states = ttnn.permute(value_states, (2, 0, 1, 3))
 
-        # --- pad V to qk_head_dim so K/V caches share the same last dim ---
         if self.qk_head_dim != self.v_head_dim:
             pad_size = self.qk_head_dim - self.v_head_dim
             value_states = ttnn.pad(value_states, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
 
-        # --- multi-device: convert all-gathered topology → replicated ---
         if self.device.get_num_devices() > 1:
             q_buf = getattr(self, "_q_decode_buf", None)
             k_buf = getattr(self, "_k_decode_buf", None)
@@ -1476,7 +1808,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         key_states = ttnn.to_memory_config(key_states, self._decode_shard_cfg)
         value_states = ttnn.to_memory_config(value_states, self._decode_shard_cfg)
 
-        # --- update the on-device paged KV cache ---
         past_key_values.paged_update_on_device(
             key_states,
             value_states,
@@ -1486,7 +1817,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)
 
-        # --- paged SDPA decode (Q stays in DRAM) ---
         attn_output = past_key_values.paged_sdpa_decode(
             query_states,
             layer_idx,
@@ -1495,10 +1825,8 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             program_config=self.sdpa.program_config,
             compute_kernel_config=self.sdpa.compute_kernel_config,
         )
-        # attn_output: [1, B, H, qk_head_dim]
 
-        # --- convert back to [B, S, H*D_v] for the output projection ---
-        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, qk_head_dim]
+        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))
         if self.qk_head_dim != self.v_head_dim:
             attn_output = attn_output[:, :, :, : self.v_head_dim]
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))

@@ -5,6 +5,7 @@
 """Mixture of Experts implementations for TTNN."""
 
 
+import os
 import torch
 from torch import nn
 import ttnn
@@ -20,6 +21,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearIColShardedWRowSharded,
 )
 from models.experimental.tt_symbiote.core.run_config import disable_trace
+from models.experimental.tt_symbiote.modules.config import get_experts_dtype
 import math
 
 
@@ -49,7 +51,7 @@ def even_int_div(a: int, b: int) -> int:
 def _make_sparse_matmul_program_config(
     device,
     out_features: int,
-    in0_block_w: int,
+    in0_block_w: int = 8,
     out_subblock_h: int = 1,
     out_subblock_w: int = None,
     per_core_M: int = 1,
@@ -654,9 +656,7 @@ class TTNNGlm4MoeMLP(TTNNModule):
         """Create a TTNNGlm4MoeMLP from a PyTorch Glm4MoeMLP layer."""
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_layer
-        tt_module.gate_proj = TTNNLinearSilu.from_torch(
-            torch_layer.gate_proj, linear_class=TTNNLinearIColShardedWRowSharded
-        )
+        tt_module.gate_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.gate_proj)
         tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.up_proj)
         tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
         return tt_module
@@ -664,7 +664,8 @@ class TTNNGlm4MoeMLP(TTNNModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x_gate = self.gate_proj(x)
         x_up = self.up_proj(x)
-        x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn)
+        # Fused SiLU*mul: single kernel launch (from agent's moe_tt.py/decoder_layer_tt.py)
+        x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         x = self.down_proj(x)
         return x
 
@@ -851,8 +852,12 @@ class TTNNMoERouterDecode(TTNNModule):
     def preprocess_weights_impl(self):
         r = self._fallback_torch_layer
 
-        # Cache the torch tensors.
-        self._bias_torch = r.e_score_correction_bias.reshape(1, 1, 1, -1).to(torch.bfloat16)
+        # Bias centering for BF16 precision (from agent's layer_weights.py):
+        # Center the correction bias near 0 where BF16 has finest resolution.
+        # Subtracting a constant from all experts doesn't change topk selection.
+        e_bias_f32 = r.e_score_correction_bias.to(torch.float32)
+        e_bias_centered = e_bias_f32 - float(e_bias_f32.min().item())
+        self._bias_torch = e_bias_centered.reshape(1, 1, 1, -1).to(torch.bfloat16)
         self._scatter_input_torch = torch.zeros(1, 1, 1, r.n_group, dtype=torch.bfloat16)
         self._scatter_src_torch = torch.ones(1, 1, 1, r.topk_group, dtype=torch.bfloat16)
         self._scale_torch = torch.full((1, 1, 1, r.top_k), r.routed_scaling_factor, dtype=torch.bfloat16)
@@ -1065,41 +1070,68 @@ class TTNNExperts(TTNNModule):
         return module
 
     def preprocess_weights_impl(self):
-        """Preprocess expert weights: convert to bfloat16 and TILE_LAYOUT."""
-        self.tt_w1_proj = ttnn.from_torch(
-            self.torch_w1_proj.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
-        )
-        self.tt_w3_proj = ttnn.from_torch(
-            self.torch_w3_proj.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
-        )
+        """Preprocess expert weights with BFP8/BFP4 quantization and optional gate+up fusion.
+
+        BFP8/BFP4 quantization ported from agent's layer_weights.py _env_experts_dtype().
+        Fused gate+up ported from agent's moe_tt.py GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP pattern.
+        """
+        expert_dtype = get_experts_dtype()
+        mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=0)
+
+        self.fuse_gate_up = os.environ.get("GLM4_FUSE_GATE_UP", "1").strip() == "1"
+
+        if self.fuse_gate_up:
+            w1w3_torch = torch.cat([self.torch_w1_proj, self.torch_w3_proj], dim=-1)
+            self.tt_w1w3_proj = ttnn.from_torch(
+                w1w3_torch.to(torch.bfloat16),
+                dtype=expert_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.tt_w1_proj = None
+            self.tt_w3_proj = None
+        else:
+            self.tt_w1_proj = ttnn.from_torch(
+                self.torch_w1_proj.to(torch.bfloat16),
+                dtype=expert_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.tt_w3_proj = ttnn.from_torch(
+                self.torch_w3_proj.to(torch.bfloat16),
+                dtype=expert_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.tt_w1w3_proj = None
+
         self.tt_w2_proj = ttnn.from_torch(
             self.torch_w2_proj.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=expert_dtype,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            mesh_mapper=mesh_mapper,
         )
         del self.torch_w1_proj
         del self.torch_w3_proj
         del self.torch_w2_proj
 
     def move_weights_to_device_impl(self):
-        """Move preprocessed weights to device and create mapping tensors."""
+        """Move preprocessed weights to device and create mapping tensors.
 
+        Optimized sparse matmul configs with in0_block_w=8 ported from agent's moe_tt.py.
+        """
         self.num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
         self.num_devices = self.device.get_num_devices()
         self.num_dispatch_devices = self.device.shape[1]
 
-        self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
-        self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
+        if self.tt_w1w3_proj is not None:
+            self.tt_w1w3_proj = ttnn.to_device(self.tt_w1w3_proj, self.device)
+        if self.tt_w1_proj is not None:
+            self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
+        if self.tt_w3_proj is not None:
+            self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
         self.tt_w2_proj = ttnn.to_device(self.tt_w2_proj, self.device)
 
-        # Create expert mapping tensors for all-to-all ops
         self.expert_mapping_tensors = ttnn.from_torch(
             torch.eye(self.num_devices, dtype=torch.int32)
             .repeat_interleave(self.num_experts_per_device, dim=0)
@@ -1112,7 +1144,6 @@ class TTNNExperts(TTNNModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        # Create remap topk mask for expert token remap
         self.remap_topk_mask = ttnn.from_torch(
             torch.ones((1, self.num_dispatch_devices, 1, self.num_experts), dtype=torch.bfloat16),
             device=self.device,
@@ -1124,16 +1155,25 @@ class TTNNExperts(TTNNModule):
 
         hidden_tiles = self.hidden_size // ttnn.TILE_SIZE
         intermediate_tiles = self.intermediate_size // ttnn.TILE_SIZE
+
+        # Optimized in0_block_w=8 tuned for GLM dimensions (from agent's moe_tt.py)
         self._gate_up_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.intermediate_size),
-            in0_block_w=min(4, hidden_tiles),
+            in0_block_w=min(8, hidden_tiles),
             per_core_M=1,
         )
+        if self.fuse_gate_up:
+            self._gate_up_fused_program_config = _make_sparse_matmul_program_config(
+                device=self.device,
+                out_features=int(self.intermediate_size) * 2,
+                in0_block_w=min(8, hidden_tiles),
+                per_core_M=1,
+            )
         self._down_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.hidden_size),
-            in0_block_w=min(4, intermediate_tiles),
+            in0_block_w=min(8, intermediate_tiles),
             per_core_M=1,
         )
         self._expert_compute_cfg = ttnn.WormholeComputeKernelConfig(
@@ -1234,32 +1274,57 @@ class TTNNExperts(TTNNModule):
         num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
         x_sparse = ttnn.reshape(post_dispatch, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, self.hidden_size))
 
-        w1_out = ttnn.sparse_matmul(
-            x_sparse,
-            self.tt_w1_proj,
-            sparsity=sparsity_t,
-            output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
-            program_config=self._gate_up_program_config,
-            compute_kernel_config=self._expert_compute_cfg,
-            is_input_a_sparse=False,
-            is_input_b_sparse=True,
-        )
-        w3_out = ttnn.sparse_matmul(
-            x_sparse,
-            self.tt_w3_proj,
-            sparsity=sparsity_t,
-            output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
-            program_config=self._gate_up_program_config,
-            compute_kernel_config=self._expert_compute_cfg,
-            is_input_a_sparse=False,
-            is_input_b_sparse=True,
-        )
+        if self.fuse_gate_up and self.tt_w1w3_proj is not None:
+            # Fused gate+up: single sparse matmul -> split -> fused SiLU*mul
+            # Ported from agent's moe_tt.py (GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP pattern)
+            w1w3_out = ttnn.sparse_matmul(
+                x_sparse,
+                self.tt_w1w3_proj,
+                sparsity=sparsity_t,
+                output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
+                program_config=self._gate_up_fused_program_config,
+                compute_kernel_config=self._expert_compute_cfg,
+                is_input_a_sparse=False,
+                is_input_b_sparse=True,
+            )
+            ndim = len(w1w3_out.shape)
+            begin_gate = [0] * ndim
+            end_gate = [int(w1w3_out.shape[i]) for i in range(ndim)]
+            end_gate[-1] = self.intermediate_size
+            begin_up = [0] * ndim
+            begin_up[-1] = self.intermediate_size
+            end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
 
-        w1_activated = ttnn.silu(w1_out)
-        ttnn.deallocate(w1_out)
-        intermediate = ttnn.mul(w1_activated, w3_out)
-        ttnn.deallocate(w1_activated)
-        ttnn.deallocate(w3_out)
+            gate = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            up = ttnn.slice(w1w3_out, begin_up, end_up)
+        else:
+            w1_out = ttnn.sparse_matmul(
+                x_sparse,
+                self.tt_w1_proj,
+                sparsity=sparsity_t,
+                output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
+                program_config=self._gate_up_program_config,
+                compute_kernel_config=self._expert_compute_cfg,
+                is_input_a_sparse=False,
+                is_input_b_sparse=True,
+            )
+            w3_out = ttnn.sparse_matmul(
+                x_sparse,
+                self.tt_w3_proj,
+                sparsity=sparsity_t,
+                output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
+                program_config=self._gate_up_program_config,
+                compute_kernel_config=self._expert_compute_cfg,
+                is_input_a_sparse=False,
+                is_input_b_sparse=True,
+            )
+            gate = w1_out
+            up = w3_out
+
+        # Fused SiLU*mul: single kernel launch (from agent's moe_tt.py)
+        intermediate = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
 
         intermediate = ttnn.squeeze(intermediate, 0)
         intermediate = ttnn.squeeze(intermediate, 1)
