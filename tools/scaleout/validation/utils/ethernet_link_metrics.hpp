@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/reflection.hpp>
 
 struct TrafficParams {

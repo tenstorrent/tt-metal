@@ -16,6 +16,7 @@
 #include <cctype>
 #include <functional>
 #include <optional>
+#include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
 
@@ -25,7 +26,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <map>
 

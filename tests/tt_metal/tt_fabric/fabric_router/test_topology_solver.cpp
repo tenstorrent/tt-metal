@@ -10,8 +10,7 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 
 namespace tt::tt_fabric {

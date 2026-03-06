@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/physical_system_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>
@@ -235,12 +235,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     if (!target_device_type.has_value()) {
         throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
     }
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
-        PhysicalSystemDescriptor::null_cluster,
-        nullptr,
-        nullptr,
-        *target_device_type,
-        false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(*target_device_type);
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();

@@ -4,7 +4,8 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <factory_system_descriptor/utils.hpp>
@@ -62,8 +63,10 @@ protected:
         }
 
         // Initialize physical system descriptor
-        physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-            *driver_, distributed_context_, &context_->hal(), context_->rtoptions(), true /* run_discovery*/);
+        auto& driver_ref = const_cast<tt::umd::Cluster&>(**driver_);
+        auto psd = tt::tt_metal::run_physical_system_discovery(
+            driver_ref, distributed_context_, context_->rtoptions().get_target_device());
+        physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
         // Populate asic_id_to_chip_id map
         for (const auto& [chip_id, asic_id] : cluster_->get_unique_chip_ids()) {
@@ -168,7 +171,12 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
             EXPECT_EQ(get_link_training_status(get_cluster(), chip_id, coord), 1);
         });
 
-    get_physical_system_descriptor().run_discovery();
+    // Re-run discovery
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
+    get_physical_system_descriptor().clear();
+    auto new_psd = tt::tt_metal::run_physical_system_discovery(
+        driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
+    get_physical_system_descriptor().merge(std::move(new_psd));
 
     // Validate connectivity after link reset
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
@@ -214,7 +222,12 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     }
 
     distributed_context_->barrier();
-    get_physical_system_descriptor().run_discovery();
+    // Re-run discovery
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*get_driver());
+    get_physical_system_descriptor().clear();
+    auto new_psd = tt::tt_metal::run_physical_system_discovery(
+        driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
+    get_physical_system_descriptor().merge(std::move(new_psd));
 }
 
 [[nodiscard]] std::vector<LinkDescriptors> collect_mmio_link_params(
