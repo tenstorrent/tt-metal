@@ -245,8 +245,21 @@ class FlashMLAProgramConfig:
     """Program config for FlashMLADecode operation."""
 
     k_chunk_size: int = 128
+    device_chunk_size: int = None
     exp_approx_mode: bool = True
     grid: type = FlashMLAOptimalGridNOC0  # Grid layout class (NOC0 optimized by default)
+    device_chunk_size: int = None
+
+    def __post_init__(self):
+        expected = self.grid.CORES_PER_BLOCK * self.k_chunk_size
+        if self.device_chunk_size is None:
+            self.device_chunk_size = expected
+        else:
+            assert self.device_chunk_size == expected, (
+                f"device_chunk_size must equal grid.CORES_PER_BLOCK * k_chunk_size "
+                f"({self.grid.CORES_PER_BLOCK} * {self.k_chunk_size} = {expected}), "
+                f"got {self.device_chunk_size}"
+            )
 
 
 class FlashMLADecode:

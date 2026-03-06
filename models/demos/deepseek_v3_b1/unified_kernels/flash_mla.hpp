@@ -102,7 +102,7 @@ struct FlashMLADecode {
 
     struct ReaderArgs {
         uint32_t k_addr;
-        uint32_t pos_addr;
+        uint32_t local_cur_pos;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_mcast_sender;
@@ -125,7 +125,7 @@ struct FlashMLADecode {
     };
 
     struct WriterArgs {
-        uint32_t pos_addr;
+        uint32_t local_cur_pos;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_output_core;
@@ -164,7 +164,7 @@ struct FlashMLADecode {
     };
 
     struct ComputeArgs {
-        uint32_t pos_addr;
+        uint32_t local_cur_pos;
         uint32_t do_reduce;
         uint32_t do_output;
         uint32_t cur_batch;
@@ -190,6 +190,8 @@ struct FlashMLADecode {
             }
         }
 
+        void set_local_cur_pos(RTArgs& args, uint32_t local_cur_pos) { args.local_cur_pos = local_cur_pos; }
+
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
 // ====================================================================
@@ -202,8 +204,7 @@ struct FlashMLADecode {
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
 
-            volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-            uint32_t cur_pos = pos_ptr[0];
+            uint32_t cur_pos = args.local_cur_pos;
 
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
@@ -391,8 +392,7 @@ struct FlashMLADecode {
                 noc_semaphore_set(q_input_mcast_semaphore_ptr, 0);
             }
 
-            volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-            uint32_t cur_pos = pos_ptr[0];
+            uint32_t cur_pos = args.local_cur_pos;
 
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
@@ -577,8 +577,8 @@ struct FlashMLADecode {
             static_assert(out_chunk_tiles % 2 == 0, "out_chunk_tiles must be even");
 
             const bool do_reduce = args.do_reduce == 1;
-            const bool do_output = args.do_output == 1;
-            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;
+            const bool do_output = args.do_output == 1;                            // set to 0 in fused
+            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;  // set to 1 in fused
 
             constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
@@ -593,8 +593,7 @@ struct FlashMLADecode {
             PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
             sdpa_custom_mm_block_init_short<transpose_k>(cb_q_in, cb_k_in, cb_out_o, Sk_chunk_t);
 
-            volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-            uint32_t cur_pos = pos_ptr[0];
+            uint32_t cur_pos = args.local_cur_pos;
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
             if (k_chunk_start == k_chunk_end) {
@@ -635,6 +634,7 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_interm_out;
                 sdpa_ms_cb = cb_interm_ms;
             } else {
+                // Fused with sdpa reduce worker
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
