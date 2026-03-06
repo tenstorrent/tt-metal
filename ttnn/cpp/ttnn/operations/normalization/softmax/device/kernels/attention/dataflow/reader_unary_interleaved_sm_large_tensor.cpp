@@ -19,8 +19,9 @@ void kernel_main() {
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
     const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
     uint32_t cb_length_t = get_arg_val<uint32_t>(11);
+#if CAUSAL_MASK
     uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
-    uint32_t mask_offset = get_arg_val<uint32_t>(13);
+#endif
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
@@ -70,7 +71,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
-        // We need to pass once in order to calcualte the sum and then to calculate the final value.
+        // We need to pass once in order to calculate the sum and then to calculate the final value.
         for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             uint32_t tile_index = tile_offset + (ncht * Wt);

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"

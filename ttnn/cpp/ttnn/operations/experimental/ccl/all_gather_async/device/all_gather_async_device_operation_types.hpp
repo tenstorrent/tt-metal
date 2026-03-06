@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -28,6 +29,7 @@ struct AllGatherAsyncParams {
     std::optional<uint32_t> cluster_axis;
     bool use_all_gather_async_llama_sharded = false;
     bool use_optimal_ccl_for_llama = false;
+    bool use_all_gather_async_via_broadcast = true;
     std::optional<GlobalSemaphore> barrier_semaphore;
     bool using_persistent_buffers = false;
     std::optional<uint32_t> chunks_per_sync;
@@ -47,6 +49,7 @@ struct AllGatherAsyncParams {
         std::optional<uint32_t> cluster_axis,
         bool use_all_gather_async_llama_sharded,
         bool use_optimal_ccl_for_llama,
+        bool use_all_gather_async_via_broadcast,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
         std::optional<uint32_t> chunks_per_sync,
@@ -64,6 +67,7 @@ struct AllGatherAsyncParams {
         cluster_axis(cluster_axis),
         use_all_gather_async_llama_sharded(use_all_gather_async_llama_sharded),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
+        use_all_gather_async_via_broadcast(use_all_gather_async_via_broadcast),
         barrier_semaphore(barrier_semaphore),
         using_persistent_buffers(using_persistent_buffers),
         chunks_per_sync(chunks_per_sync),
@@ -86,6 +90,7 @@ struct AllGatherAsyncParams {
         attrs.emplace_back("sub_device_id", sub_device_id);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("use_all_gather_async_llama_sharded", use_all_gather_async_llama_sharded);
+        attrs.emplace_back("use_all_gather_async_via_broadcast", use_all_gather_async_via_broadcast);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);

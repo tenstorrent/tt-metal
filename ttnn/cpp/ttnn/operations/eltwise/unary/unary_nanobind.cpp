@@ -1108,6 +1108,63 @@ void bind_softplus(nb::module_& mod) {
 }
 
 template <typename unary_operation_t>
+void bind_xielu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies xIELU (Expanded Integral of the Exponential Linear Unit) to :attr:`input_tensor` element-wise.
+        This is a custom piecewise trainable activation function derived from "Deriving Activation Functions Using Integration" paper:
+        https://arxiv.org/abs/2411.13010
+
+        With beta = 0.5 and eps = -1e-6:
+            x > 0 :  alpha_p * x^2 + beta * x
+            x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            alpha_p (float, optional): Alpha positive constant. Defaults to `0.8`.
+            alpha_n (float, optional): Alpha negative constant. Defaults to `0.8`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+        )doc");
+
+    bind_registered_operation(
+        mod,
+        ttnn::xielu,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input,
+               const float alpha_p,
+               const float alpha_n,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input, alpha_p, alpha_n, memory_config, output_tensor);
+            },
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("alpha_p") = 0.8f,
+            nb::arg("alpha_n") = 0.8f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
+}
+
+template <typename unary_operation_t>
 void bind_tanh_like(nb::module_& mod, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -2321,6 +2378,7 @@ void py_module(nb::module_& mod) {
 
     // Other unaries (unary chain operations)
     bind_softplus<decltype(ttnn::softplus)>(mod);
+    bind_xielu<decltype(ttnn::xielu)>(mod);
     bind_tanh_like(mod, ttnn::tanh);
     bind_tanh_like(mod, ttnn::tanhshrink);
     bind_sigmoid_accurate<decltype(ttnn::sigmoid_accurate)>(mod);

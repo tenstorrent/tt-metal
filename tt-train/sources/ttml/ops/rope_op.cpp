@@ -12,6 +12,11 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttml::ops {
 
@@ -135,9 +140,9 @@ autograd::TensorPtr rope(
 
     if (token_position > 0U) {
         auto pos = token_position;
-        ttnn::SmallVector<uint32_t> start = {0, 0, pos, 0};
-        ttnn::SmallVector<uint32_t> end = {1, 1, pos + seq_len, head_dim};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> start = {0, 0, pos, 0};
+        ttsl::SmallVector<uint32_t> end = {1, 1, pos + seq_len, head_dim};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
 
         cos_cache_to_use = ttnn::slice(params.cos_cache, start, end, step);
         sin_cache_to_use = ttnn::slice(params.sin_cache, start, end, step);
@@ -185,7 +190,11 @@ autograd::TensorPtr rope(
 }
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
-    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& p) {
+    uint32_t head_dim,
+    uint32_t sequence_length,
+    float theta,
+    const RopeScalingParams& p,
+    const ttnn::distributed::TensorToMesh* mesh_mapper) {
     // pair indices: 0,0,1,1,2,2,... size=head_dim
     xt::xarray<uint32_t> pair_idx_u = xt::arange<uint32_t>(head_dim) / 2u;  // integer divide
     xt::xarray<float> pair_idx = xt::cast<float>(pair_idx_u);
@@ -221,7 +230,9 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     xt::xarray<float> cos_freqs = xt::cos(theta_4d);
 
     auto* device = &autograd::ctx().get_device();
-    return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
+    return {
+        core::from_xtensor(sin_freqs, device, ttnn::Layout::TILE, mesh_mapper),
+        core::from_xtensor(cos_freqs, device, ttnn::Layout::TILE, mesh_mapper)};
 }
 
 ttnn::Tensor gen_trans_mat() {
@@ -249,7 +260,30 @@ RotaryEmbeddingParams build_rope_params(
     if (head_dim == 0U) {
         throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
-    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, scaling_params);
+
+    // If ParallelismContext is initialized and CP is enabled, shard freqs across the CP axis.
+    std::shared_ptr<ttnn::distributed::TensorToMesh> mapper;
+    uint32_t local_seq_len = sequence_length;
+
+    if (autograd::ctx().is_parallelism_context_initialized()) {
+        auto& pctx = autograd::ctx().get_parallelism_context();
+        std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
+        const uint32_t cp_size = pctx.get_cp_size();
+
+        if (cp_axis.has_value() && cp_size > 1) {
+            TT_FATAL(
+                sequence_length % cp_size == 0,
+                "sequence_length ({}) must be divisible by cp_size ({})",
+                sequence_length,
+                cp_size);
+            local_seq_len = sequence_length / cp_size;
+
+            auto* device = &autograd::ctx().get_device();
+            mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis.value());
+        }
+    }
+
+    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, scaling_params, mapper.get());
     auto trans_mat = gen_trans_mat();
     return {
         .cos_cache = cos_freqs,
@@ -258,7 +292,7 @@ RotaryEmbeddingParams build_rope_params(
         .neg_sin_cache = ttnn::neg(sin_freqs),  // sin(-θ) = -sin(θ)
         .trans_mat = trans_mat,
 
-        .sequence_length = sequence_length,
+        .sequence_length = local_seq_len,
         .head_dim = head_dim,
 
         .rope_scaling_params = scaling_params,

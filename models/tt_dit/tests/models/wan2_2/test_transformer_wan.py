@@ -274,6 +274,7 @@ def test_wan_transformer_model(
     spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
     prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
 
     tt_model = _make_wan_transformer(
         mesh_device=mesh_device,
@@ -294,7 +295,7 @@ def test_wan_transformer_model(
     )
     tt_spatial_out = tt_model(
         spatial=spatial_input,
-        prompt=prompt_input,
+        prompt=tt_prompt,
         timestep=timestep_input,
     )
     del tt_model

@@ -131,7 +131,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Paged attention setup
         self.batch_size_per_row = USERS_PER_ROW
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
-        self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
+        self.paged_config = MLA2D.get_valid_paged_config(
+            self.hf_config.max_seq_len, self.batch_size_per_row, self.dp_factor
+        )
 
         self.random_weights = random_weights
         self.single_layer = single_layer
@@ -462,7 +464,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             MLA2D.create_page_table(
                 paged_config=self.paged_config,
                 mesh_device=self.mesh_device,
-                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
+                batch_size=self.batch_size_per_row,
             )
             for _ in range(self.hf_config.num_hidden_layers)
         )
@@ -1118,6 +1120,21 @@ class DeepseekGenerator(WarmupForwardMixin):
         Returns:
             Tuple of TTNN tensors, one per layer
         """
+        if getattr(self, "kv_cache_shape", None) is not None:
+            expected_blocks = int(self.kv_cache_shape[0])
+            expected_block_size = int(self.kv_cache_shape[2])
+            if (
+                self.paged_config.max_num_blocks != expected_blocks
+                or self.paged_config.block_size != expected_block_size
+            ):
+                logger.warning(
+                    "KVDBG paged_config mismatch with kv_cache_shape: paged_max_blocks={} kv_max_blocks={} "
+                    "paged_block_size={} kv_block_size={}",
+                    self.paged_config.max_num_blocks,
+                    expected_blocks,
+                    self.paged_config.block_size,
+                    expected_block_size,
+                )
         # Calculate expected shape: [batch_per_shard, blocks_per_user]
         batch_per_shard = even_int_div(self.batch_size_per_row, self.dp_factor)
         blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
@@ -1141,7 +1158,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             paged_config=self.paged_config,
             mesh_device=self.mesh_device,
             page_table=full_page_table,
-            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
+            batch_size=self.batch_size_per_row,
         )
 
         num_layers = self.hf_config.num_hidden_layers
