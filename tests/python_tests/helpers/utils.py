@@ -28,6 +28,7 @@ tolerances = {
     DataFormat.Float32: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Int32: Tolerance(atol=0, rtol=0),
     DataFormat.UInt32: Tolerance(atol=0, rtol=0),
+    DataFormat.Int16: Tolerance(atol=0, rtol=0),
     DataFormat.UInt16: Tolerance(atol=0, rtol=0),
     DataFormat.Int8: Tolerance(atol=0, rtol=0),
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),

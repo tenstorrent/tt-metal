@@ -114,7 +114,7 @@ inline constexpr std::uint32_t _sfpu_stochround_conversion_()
     {
         return ckernel::p_sfpu::sfp_stochrnd_mod::FP32_TO_FP16B;
     }
-    else if constexpr (SRC_FMT == DataFormat::Float32 && CAST_FMT == DataFormat::Uint8)
+    else if constexpr (SRC_FMT == DataFormat::Float32 && CAST_FMT == DataFormat::UInt8)
     {
         return ckernel::p_sfpu::sfp_stochrnd_mod::FP32_TO_UINT8;
     }
@@ -122,7 +122,7 @@ inline constexpr std::uint32_t _sfpu_stochround_conversion_()
     {
         return ckernel::p_sfpu::sfp_stochrnd_mod::FP32_TO_INT8;
     }
-    else if constexpr (SRC_FMT == DataFormat::Int32 && CAST_FMT == DataFormat::Uint8)
+    else if constexpr (SRC_FMT == DataFormat::Int32 && CAST_FMT == DataFormat::UInt8)
     {
         return ckernel::p_sfpu::sfp_stochrnd_mod::INT32_TO_UINT8;
     }

@@ -15,6 +15,7 @@ format_dict = {
     DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
     DataFormat.Int32: torch.int32,
     DataFormat.UInt32: torch.int64,
+    DataFormat.Int16: torch.int16,
     DataFormat.UInt16: torch.int32,
     DataFormat.Int8: torch.int8,
     DataFormat.UInt8: torch.uint8,
@@ -355,6 +356,7 @@ format_tile_sizes = {
     DataFormat.Int32: 4096,
     DataFormat.Tf32: 3072,  # 3 bytes * 1024 elements
     DataFormat.UInt32: 4096,
+    DataFormat.Int16: 2048,
     DataFormat.UInt16: 2048,
     DataFormat.Int8: 1024,  # 1 byte * 1024 elements
     DataFormat.UInt8: 1024,  # 1 byte * 1024 elements

@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -27,10 +28,23 @@ void run_kernel(const volatile struct RuntimeParams* params)
     const std::uint32_t num_tiles_per_unpack = params->TILE_CNT;
 
     // Setup data valid scheme
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+
+        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
+        }
+        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
+        }
+        else
+        {
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+        }
     }
     else
     {
@@ -39,7 +53,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     buffer_descriptor_u bd_val = {0};
 
-    bd_val.f.l1_addr_16B = params->buffer_A[0] / 16;
+    bd_val.f.l1_addr_16B = L1_ADDRESS(params->buffer_A[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params->TEST_FACE_R_DIM;
@@ -50,7 +64,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-    if (is_fp32_dest_acc_en && !unpack_to_dest)
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // If Dst fmt is 32b and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
@@ -62,7 +76,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
     _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0);
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_dvalid_section_done_();
     }
@@ -71,12 +85,6 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #endif
 
 #ifdef LLK_TRISC_MATH
-
-#ifdef FORMAT_INT32
-const bool is_int_fpu_en = true;
-#else
-const bool is_int_fpu_en = false;
-#endif
 
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
@@ -89,12 +97,24 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
 #endif
-    if (!unpack_to_dest)
+    if constexpr (!unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
+        DataFormat math_format     = static_cast<DataFormat>(formats.math);
+        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        }
+        else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+        }
+        else
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        }
 
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
             params->num_faces * params->TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -122,7 +142,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = params->TILE_CNT;
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
     }
@@ -134,7 +154,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     buffer_descriptor_u bd_val = {0};
     tdma_descriptor_t tdma_desc;
 
-    bd_val.f.l1_addr_16B = params->buffer_Res[0] / 16;
+    bd_val.f.l1_addr_16B = L1_ADDRESS(params->buffer_Res[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params->TEST_FACE_R_DIM;

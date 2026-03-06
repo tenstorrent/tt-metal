@@ -298,16 +298,16 @@ enum class DataFormat : std::uint8_t
     Int32     = 8,
     Int8      = 14,
     Int16     = 9,
-    Uint8     = 17,  // Unsigned INT with 8-bit magnitude
-    Uint16    = 130, // Unsigned INT with 16-bit magnitude
+    UInt8     = 17,  // Unsigned INT with 8-bit magnitude
+    UInt16    = 130, // Unsigned INT with 16-bit magnitude
     // Special-case encodings used only for MXFP4 2x-packed Src Reg Storage :
     MxFp4_2x_A = 27, // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp
     MxFp4_2x_B = 24, // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp
     Int4       = 23,
-    Uint4      = 25,
+    UInt4      = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :
     Int8_2x  = 26,
-    Uint8_2x = 28,
+    UInt8_2x = 28,
 
     automatic = 0xfe, // Not a valid HW enum value, but useful to have it here for SW
     Invalid   = 0xff  // Not a valid HW enum value, but useful to have it here for SW

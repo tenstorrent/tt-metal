@@ -1037,6 +1037,30 @@ class DataCopyGolden:
 
         # Ensure result is in correct format if not already
         if result.dtype != torch_format:
+            # Apply saturation for integer format conversions to match hardware behavior
+            # Hardware saturates (clamps) values instead of wrapping around
+            if data_format.is_integer():
+                iinfo = torch.iinfo(torch_format)
+                is_unsigned = str(data_format).startswith("U")
+                if is_unsigned:
+                    min_val, max_val = iinfo.min, iinfo.max
+                else:
+                    min_val, max_val = iinfo.min + 1, iinfo.max
+
+                # Convert to intermediate type (int64 or int32) to avoid overflow during clamping
+                # Use int64 when source can hold values outside int32 range (e.g. UInt32 is torch.int64)
+                intermediate_type = (
+                    torch.int64
+                    if result.dtype in (torch.uint32, torch.int64)
+                    else torch.int32
+                )
+                result = result.to(intermediate_type)
+
+                # Apply saturation to clamp values to destination range
+                # This handles downsizing (Int32->Int8), signed/unsigned conversions (UInt8->Int8),
+                # and any case where source values might exceed destination range
+                result = torch.clamp(result, min_val, max_val)
+
             result = result.to(torch_format)
 
         return result

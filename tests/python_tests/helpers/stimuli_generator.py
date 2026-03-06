@@ -68,14 +68,19 @@ def generate_random_face(
         return _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu)
     elif stimuli_format != DataFormat.Bfp8_b:
         if stimuli_format.is_integer():
-            max_value = 127 if stimuli_format == DataFormat.Int8 else 255
-            min_value = -(max_value + 1) if negative_values else 0
-            srcA_face = torch.randint(
-                low=min_value,
-                high=max_value,
-                size=(size,),
-                dtype=format_dict[stimuli_format],
-            )
+            if const_face:
+                srcA_face = (
+                    torch.ones(size, dtype=format_dict[stimuli_format]) * const_value
+                )
+            else:
+                max_value = 127 if stimuli_format == DataFormat.Int8 else 255
+                min_value = -(max_value + 1) if negative_values else 0
+                srcA_face = torch.randint(
+                    low=min_value,
+                    high=max_value,
+                    size=(size,),
+                    dtype=format_dict[stimuli_format],
+                )
         else:
             if const_face:
                 srcA_face = (

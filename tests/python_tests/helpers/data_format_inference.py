@@ -14,6 +14,70 @@ from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
 from .llk_params import DestAccumulation
 
+VALID_QUASAR_SRC_REG_FORMATS = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
+    DataFormat.Float32,
+    DataFormat.Tf32,
+    DataFormat.Int32,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+    DataFormat.Int16,
+]
+
+VALID_QUASAR_DEST_REG_FORMATS = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
+    DataFormat.Float32,
+    DataFormat.Int32,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+    DataFormat.Int16,
+]
+
+
+def validate_quasar_data_formats(
+    unpack_out_A: DataFormat,
+    unpack_out_B: DataFormat,
+    pack_in: DataFormat,
+    unpacking_to_dest: bool,
+):
+    """
+    Checks if the given unpack_out and pack_in formats are supported as source or destination register formats on the Quasar architecture.
+
+    Args:
+        unpack_out_A: The unpack_out_A data format, also the source register A format, or destination register format if unpacking to dest
+        unpack_out_B: The unpack_out_B data format, also the source register B format
+        pack_in: The pack_in data format, also the destination register format
+        unpacking_to_dest: Flag indicating if unpacking targets the destination register
+
+    Returns:
+        None if the formats are valid; raises a ValueError otherwise
+    """
+    if unpacking_to_dest:
+        if unpack_out_A not in VALID_QUASAR_DEST_REG_FORMATS:
+            raise ValueError(
+                f"Unpack_out_A format {unpack_out_A.name} is not a supported Dest register format"
+            )
+    else:
+        if unpack_out_A not in VALID_QUASAR_SRC_REG_FORMATS:
+            raise ValueError(
+                f"Unpack_out_A format {unpack_out_A.name} is not a supported SrcA register format"
+            )
+        if unpack_out_B not in VALID_QUASAR_SRC_REG_FORMATS:
+            raise ValueError(
+                f"Unpack_out_B format {unpack_out_B.name} is not a supported SrcB register format"
+            )
+        if pack_in not in VALID_QUASAR_DEST_REG_FORMATS:
+            raise ValueError(
+                f"Pack_in format {pack_in.name} is not a supported Dest register format"
+            )
+
+
+def _check_register_format(data_format: DataFormat, valid_formats: list, role: str):
+    if data_format not in valid_formats:
+        raise ValueError(f"Inferred {role} format {data_format.name} is not supported")
+
 
 def is_format_combination_outlier(
     input_format: DataFormat,
@@ -120,24 +184,37 @@ def infer_pack_in(
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
 
     if is_quasar:
-        if (
-            unpack_out in (DataFormat.Float16, DataFormat.Float16_b)
-            and output_format == DataFormat.Float32
-            and is_fp32_dest_acc_en == DestAccumulation.No
-        ):
+        if output_format.is_32_bit() and is_fp32_dest_acc_en == DestAccumulation.No:
             # When the dest register is in 32-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is valid
             # because pack_in=pack_out=Fp32, which is a supported packer conversion.
             # When dest register is in 16-bit mode, input_fmt=Fp16/16_b -> output_fmt=Fp32 is not valid
             # because pack_in=Fp16/16_b and pack_out=Fp32, which is not a supported packer conversion.
+            # Similarly, input_fmt=Int8/UInt8 -> output_fmt=Int32 is not valid when the dest register is in 16-bit mode.
             raise ValueError(
-                f"Quasar packer does not support {unpack_out.name} to Float32 conversion when the dest register is in 16-bit mode"
+                f"Quasar packer does not support {input_format.name} to {output_format.name} conversion when the dest register is in 16-bit mode"
             )
-        # When the dest register is in 32-bit mode, the packer input format is 32-bit
-        return (
-            DataFormat.Float32
-            if is_fp32_dest_acc_en == DestAccumulation.Yes
-            else unpack_out
-        )
+
+        if unpack_out.is_integer():
+            if (
+                unpack_out == DataFormat.Int16
+                and is_fp32_dest_acc_en == DestAccumulation.Yes
+            ):
+                raise ValueError(
+                    f"If the input format is Int16, 32-bit dest is not supported and the packer input format must be Int16"
+                )
+            # When the dest register is in 32-bit mode, the packer input format is 32-bit
+            return (
+                DataFormat.Int32
+                if is_fp32_dest_acc_en == DestAccumulation.Yes
+                else unpack_out
+            )
+        else:
+            # When the dest register is in 32-bit mode, the packer input format is 32-bit
+            return (
+                DataFormat.Float32
+                if is_fp32_dest_acc_en == DestAccumulation.Yes
+                else unpack_out
+            )
 
     # Wormhole + FP32 dest reg datums + Float16 output: keep Float32 for packer input for conversion to desired output format
     if (
@@ -264,6 +341,12 @@ def infer_data_formats(
 
     same_src_format = input_format == input_format_B
 
+    # Check if unpack_out (src or dest reg) and pack_in (dest reg) formats are valid for Quasar
+    if chip_arch == ChipArchitecture.QUASAR:
+        validate_quasar_data_formats(
+            unpack_out_A, unpack_out_B, pack_in, unpacking_to_dest
+        )
+
     return FormatConfig(
         unpack_A_src=input_format,
         unpack_A_dst=unpack_out_A,
@@ -375,14 +458,18 @@ def data_formats(
             )
         ]  # No final config for single iteration
 
-    intermediate_config = infer_data_formats(
-        input_format,
-        input_format,
-        is_fp32_dest_acc_en,
-        unpacking_to_dest,
-        chip_arch,
-        input_format_B,
-    )
+    if num_iterations > 1:
+        intermediate_config = infer_data_formats(
+            input_format,
+            input_format,
+            is_fp32_dest_acc_en,
+            unpacking_to_dest,
+            chip_arch,
+            input_format_B,
+        )
+    else:
+        intermediate_config = None
+
     final_config = infer_data_formats(
         input_format,
         output_format,
