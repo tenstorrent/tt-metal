@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 
 namespace ttml::metal {
 
-ttnn::Tensor sgd_fused(
+ttnn::Tensor sgd(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,
     const float lr,
