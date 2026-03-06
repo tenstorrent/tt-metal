@@ -62,16 +62,24 @@ def coordinate_to_encoding_ttnn(coord_tensor, num_feats=128, temperature=10000):
 
     scale = 2 * math.pi
 
-    # create dim_t same as torch.arange
-    dim_t = ttnn.arange(num_feats, dtype=ttnn.float32)
-    dim_t = temperature ** (2 * (dim_t // 2) / num_feats)
+    # create dim_t same as torch.arange - compute entirely in TTNN with L1 memory for speed
+    device = coord_tensor.device()
+    dim_t = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
+    dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
+    dim_t = ttnn.to_memory_config(dim_t, ttnn.L1_MEMORY_CONFIG)
 
-    dim_t = ttnn.from_torch(
-        dim_t,
-        device=coord_tensor.device(),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
+    # Compute dim_t // 2 using floor division (all in L1 for faster computation)
+    dim_t_floor_div_2 = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG))
+
+    # Compute 2 * (dim_t // 2) / num_feats
+    exponent = ttnn.divide(
+        ttnn.multiply(dim_t_floor_div_2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG),
+        float(num_feats),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+
+    # Compute temperature ** exponent
+    dim_t = ttnn.pow(float(temperature), exponent, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # split coords
     x_embed = ttnn.multiply(coord_tensor[:, :, 0:1], scale)
