@@ -138,7 +138,8 @@ class TtBarkModel:
         """
         inputs = self.processor(text, voice_preset=voice_preset, return_tensors="pt")
         input_ids = inputs["input_ids"].to(torch.long)
-        assert input_ids.shape[0] == 1, "Bark TTNN implementation currently only supports batch size 1"
+        if input_ids.shape[0] != 1:
+            raise ValueError("Bark TTNN implementation currently only supports batch size 1")
 
         # Initial pre-fill (process entire prompt)
         logits, layer_past = self.semantic_model(input_ids=input_ids, use_cache=True)
@@ -188,7 +189,8 @@ class TtBarkModel:
         # We simplify here for this bring-up demo to focus on transformer throughput.
         # This may impact fine-grained correctness vs reference but is sufficient for demo.
         input_ids = semantic_tokens.to(torch.long)
-        assert input_ids.shape[0] == 1, "Bark TTNN implementation currently only supports batch size 1"
+        if input_ids.shape[0] != 1:
+            raise ValueError("Bark TTNN implementation currently only supports batch size 1")
 
         # Initial pre-fill
         logits, layer_past = self.coarse_model(input_ids=input_ids, use_cache=True)
@@ -212,7 +214,9 @@ class TtBarkModel:
             next_token_torch = ttnn.to_torch(tt_next_token).squeeze().view(-1)[-1:]
             tokens_torch.append(next_token_torch.unsqueeze(-1))
 
-            if next_token_torch.item() == 10_047:  # End of codebook marker for Bark
+            # End of codebook marker: output_vocab_size - 1 for Bark coarse model
+            eos_token = self.coarse_model.config.output_vocab_size - 1
+            if next_token_torch.item() == eos_token:
                 break
 
         ttnn.deallocate(tt_next_token)

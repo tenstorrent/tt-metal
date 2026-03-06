@@ -83,6 +83,14 @@ class TtBarkFineModel:
             weight = preprocess_linear_weight(parameters["lm_heads"][str(i)]["weight"], device)
             self.lm_heads.append(weight)
 
+        # Optimization kernel config (Stage 3) — created once, reused for all calls
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi if config.use_lofi else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=not config.use_lofi,
+            packer_l1_acc=True,
+        )
+
     def __call__(
         self,
         codebook_idx: int,
@@ -101,13 +109,7 @@ class TtBarkFineModel:
         if codebook_idx < self.n_codes_given:
             raise ValueError(f"Cannot predict codebook {codebook_idx}")
 
-        # Optimization kernel config (Stage 3)
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi if self.config.use_lofi else ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=not self.config.use_lofi,
-            packer_l1_acc=True,
-        )
+        compute_kernel_config = self.compute_kernel_config
 
         # Sum embeddings of codebooks 0..codebook_idx
         tt_hidden = None

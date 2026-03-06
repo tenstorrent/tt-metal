@@ -29,12 +29,8 @@ from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, prepro
 from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
 
 
-@pytest.fixture(scope="module")
-def device():
-    """Create a TTNN device for testing."""
-    dev = ttnn.open_device(device_id=0)
-    yield dev
-    ttnn.close_device(dev)
+# Device fixture is provided by the conftest.py in the repo root.
+# It handles --device-id, TG gateway, and device lifecycle automatically.
 
 
 @pytest.fixture(scope="module")
