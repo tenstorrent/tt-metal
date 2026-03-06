@@ -8,10 +8,12 @@
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
 #include "llk_math_reduce_custom_api.h"
+#include "experimental/llk_math_reduce_custom_runtime_api.h"
 #endif
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_reduce_custom_api.h"
+#include "experimental/llk_unpack_AB_reduce_custom_runtime_api.h"
 #endif
 
 #ifdef TRISC_PACK
@@ -82,6 +84,17 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
 
+ALWI void reduce_block_max_row_init_runtime(uint32_t block_ct_dim) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+}
+
+ALWI void reduce_block_max_row_runtime(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(icb, icb_scaler, row_start_index)));
+    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst)));
+}
+
 #ifdef ARCH_BLACKHOLE
 /**
  * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
@@ -129,6 +142,16 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 #endif
     PACK((llk_pack_reduce_mask_clear()));
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
+}
+
+ALWI void reduce_block_max_row_uninit_runtime(uint32_t icb) {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_reduce_uninit<false>()));
+#else
+    MATH((llk_math_reduce_uninit<false>(icb)));
+#endif
+    PACK((llk_pack_reduce_mask_clear()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit_runtime()));
 }
 
 }  // namespace ckernel

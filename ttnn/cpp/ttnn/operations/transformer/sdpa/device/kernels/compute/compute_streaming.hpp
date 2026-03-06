@@ -151,12 +151,12 @@ void reduce_c_row_group(
     // with in0_cb data arrival.
     cb_wait_front(in0_cb, cumulative_input_tiles);
 
-    reduce_block_max_row_init<cols>();
+    reduce_block_max_row_init_runtime(cols);
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row<cols>(in0_cb, scale_cb, input_tile_start, i);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i);
     }
-    reduce_block_max_row_uninit(in0_cb);
+    reduce_block_max_row_uninit_runtime(in0_cb);
 
     tile_regs_commit();
     tile_regs_wait();
