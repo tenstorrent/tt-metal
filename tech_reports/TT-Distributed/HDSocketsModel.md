@@ -1,4 +1,6 @@
-# H2D / D2H PCIe Socket  -  Technical Report
+# H2D / D2H PCIe Socket: Technical Report
+
+<!-- pyml disable MD013 -->
 
 > **Scope:** This report covers Host-to-Device (`H2DSocket`) and Device-to-Host (`D2HSocket`) PCIe sockets only. Device-to-Device communication via `MeshSocket` is out of scope (see the `MeshSocket` paragraph in S.1).
 >
@@ -9,33 +11,33 @@
 
 ## Table of Contents
 
-1. [Background  -  H2D / D2H PCIe Sockets](#1-background---h2d--d2h-pcie-sockets)
-   - 1.1 Blackhole Hardware Facts Relevant to This Guide
-   - 1.2 Training & Inference Use Cases for PCIe Sockets
+1. [Background: H2D / D2H PCIe Sockets](#1-background-h2d--d2h-pcie-sockets)
+   - [1.1 Blackhole Hardware Facts Relevant to This Guide](#11-blackhole-hardware-facts-relevant-to-this-guide)
+   - [1.2 Training & Inference Use Cases for PCIe Sockets](#12-training--inference-use-cases-for-pcie-sockets)
 2. [Transfer Modes and Flow Control](#2-transfer-modes-and-flow-control)
-   - 2.1 H2D  -  HOST\_PUSH
-   - 2.2 H2D  -  DEVICE\_PULL
-   - 2.3 D2H
-   - 2.4 Flow control (shared)
+   - [2.1 H2D: HOST\_PUSH](#21-h2d-host_push)
+   - [2.2 H2D: DEVICE\_PULL](#22-h2d-device_pull)
+   - [2.3 D2H](#23-d2h)
+   - [2.4 Flow control (shared)](#24-flow-control-shared)
 3. [API Walkthrough](#3-api-walkthrough)
-   - 3.1 Host Side  -  Setup
-   - 3.2 Device Side  -  Initialization
-   - 3.3 D2H Kernel: pcie\_socket\_sender.cpp
-   - 3.4 H2D HOST\_PUSH Kernel: h2d\_throughput\_host\_push.cpp
-   - 3.5 H2D DEVICE\_PULL Kernel: h2d\_throughput\_device\_pull.cpp
+   - [3.1 Host Side: Setup](#31-host-side-setup)
+   - [3.2 Device Side: Initialization](#32-device-side-initialization)
+   - [3.3 D2H Kernel: pcie\_socket\_sender.cpp](#33-d2h-kernel-pcie_socket_sendercpp)
+   - [3.4 H2D HOST\_PUSH Kernel: h2d\_throughput\_host\_push.cpp](#34-h2d-host_push-kernel-h2d_throughput_host_pushcpp)
+   - [3.5 H2D DEVICE\_PULL Kernel: h2d\_throughput\_device\_pull.cpp](#35-h2d-device_pull-kernel-h2d_throughput_device_pullcpp)
 4. [Performance Results](#4-performance-results)
-   - 4.1 D2H Throughput
-   - 4.2 D2H Latency
-   - 4.3 H2D Throughput
-   - 4.4 H2D Latency
-   - 4.5 Multi-Chip Throughput
+   - [4.1 D2H Throughput](#41-d2h-throughput)
+   - [4.2 D2H Latency](#42-d2h-latency)
+   - [4.3 H2D Throughput](#43-h2d-throughput)
+   - [4.4 H2D Latency](#44-h2d-latency)
+   - [4.5 Multi-Chip Throughput](#45-multi-chip-throughput)
 5. [Interpreting Results](#5-interpreting-results)
 6. [Running the Benchmarks](#6-running-the-benchmarks)
 7. [Benchmark Suite Reference](#7-benchmark-suite-reference)
 
 ---
 
-## 1. Background  -  H2D / D2H PCIe Sockets
+## 1. Background: H2D / D2H PCIe Sockets
 
 > **"Socket" here is not a POSIX/network socket.** Tenstorrent uses the term for hardware-level streaming FIFOs. This report covers only the PCIe variants: `H2DSocket` (host to device) and `D2HSocket` (device to host), both in `tt_metal/api/tt-metalium/experimental/sockets/`. Device-to-device communication uses `MeshSocket` over TT-Fabric (Ethernet) and is out of scope; see `mesh_socket.hpp` and the TT-Fabric tech report.
 
@@ -89,7 +91,7 @@ Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`
 
 ## 2. Transfer Modes and Flow Control
 
-### 2.1 H2D  -  HOST\_PUSH
+### 2.1 H2D: HOST\_PUSH
 
 The host writes data directly into the device's L1 FIFO through a TLB-mapped PCIe posted write. The device kernel polls for new pages and acknowledges consumption by writing `bytes_acked` back to host-pinned memory.
 
@@ -98,7 +100,7 @@ Host CPU  --[TLB PCIe write]--->  Device L1 FIFO  --->  Device kernel
            (posted, no completion required)
 ```
 
-### 2.2 H2D  -  DEVICE\_PULL
+### 2.2 H2D: DEVICE\_PULL
 
 The host writes data to a pinned host buffer and updates `bytes_sent` in worker SRAM. The device kernel detects the notification, then issues a **NOC read** (non-posted; requires PCIe completion TLPs - Transaction Layer Packets that carry the read response back from host RAM) to pull the data from host RAM into its own L1.
 
@@ -147,7 +149,7 @@ This section walks through the benchmark kernels and their host-side counterpart
 
 ---
 
-### 3.1 Host Side  -  Setup
+### 3.1 Host Side: Setup
 
 The host side is identical for all socket directions and modes. The workflow is:
 
@@ -209,7 +211,7 @@ For **D2H** the pattern is symmetric  -  construct `D2HSocket`, dispatch the sen
 
 ---
 
-### 3.2 Device Side  -  Initialization
+### 3.2 Device Side: Initialization
 
 Every device kernel begins with the same two calls, regardless of direction or mode:
 
@@ -447,24 +449,30 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 **Throughput vs page size at maximum FIFO size.** Each line is one total-transfer-data size. Shows how throughput saturates as pages get larger and as more data is transferred in a single run.
 
 ![D2H Throughput vs Page Size - Gen 4 x8](asdasd/x8_d2h_throughput.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![D2H Throughput vs Page Size - Gen 4 x1](asdasd/x1_d2h_throughput.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs page size at maximum total-data size, spread across all FIFO sizes.** The shaded band shows the min-max range; solid line is median, dashed is mean. Use this to see how sensitive throughput is to FIFO size at each page size.
 
 ![D2H Throughput Mean/Spread vs Page Size - Gen 4 x8](asdasd/x8_d2h_throughput_mean.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![D2H Throughput Mean/Spread vs Page Size - Gen 4 x1](asdasd/x1_d2h_throughput_mean.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs socket FIFO size at maximum total-data size.** Each line is one page size. The key chart for choosing a FIFO size: throughput climbs steeply then plateaus once the FIFO is large enough that the sender is never back-pressured.
 
 ![D2H Throughput vs FIFO Size - Gen 4 x8](asdasd/x8_d2h_tp_vs_fifo.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![D2H Throughput vs FIFO Size - Gen 4 x1](asdasd/x1_d2h_tp_vs_fifo.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
@@ -473,8 +481,10 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 **Round-trip latency (us) vs page size, showing min/median/max across all FIFO sizes.** Log-log scale makes both the protocol-overhead floor (small pages) and the DMA-time slope (large pages) visible.
 
 ![D2H Round-Trip Latency - Gen 4 x8](asdasd/x8_d2h_latency.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![D2H Round-Trip Latency - Gen 4 x1](asdasd/x1_d2h_latency.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
@@ -483,32 +493,40 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 **Throughput vs page size, `HOST_PUSH` vs `DEVICE_PULL` overlaid.** Measured at the maximum FIFO size and maximum total-data size (median across repeated configurations). The primary chart for comparing the two transfer modes head-to-head.
 
 ![H2D Throughput vs Page Size - Gen 4 x8](asdasd/x8_h2d_throughput.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![H2D Throughput vs Page Size - Gen 4 x1](asdasd/x1_h2d_throughput.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs page size at maximum total-data size, `HOST_PUSH` and `DEVICE_PULL` in separate panels.** The shaded band shows min-max across all FIFO sizes; solid line is median, dashed is mean. Shows how much FIFO size matters for each mode.
 
 ![H2D Throughput Mean/Spread vs Page Size - Gen 4 x8](asdasd/x8_h2d_throughput_mean.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![H2D Throughput Mean/Spread vs Page Size - Gen 4 x1](asdasd/x1_h2d_throughput_mean.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs socket FIFO size at maximum total-data size, `HOST_PUSH` (left) and `DEVICE_PULL` (right).** Each line is one page size. Shows whether the two modes need the same FIFO depth to reach their respective throughput plateaus.
 
 ![H2D Throughput vs FIFO Size - Gen 4 x8](asdasd/x8_h2d_tp_vs_fifo.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![H2D Throughput vs FIFO Size - Gen 4 x1](asdasd/x1_h2d_tp_vs_fifo.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
 **Throughput vs page size at maximum FIFO size, `HOST_PUSH` (left) and `DEVICE_PULL` (right).** Each line is one total-transfer-data size. Analogous to the D2H throughput chart but split by mode so the convergence of throughput with transfer size is visible for each.
 
 ![H2D Throughput at Max FIFO vs Page Size - Gen 4 x8](asdasd/x8_h2d_tp_at_max_fifo.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![H2D Throughput at Max FIFO vs Page Size - Gen 4 x1](asdasd/x1_h2d_tp_at_max_fifo.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
@@ -517,8 +535,10 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 **Round-trip latency (us) vs page size, `HOST_PUSH` (left) and `DEVICE_PULL` (right) in separate panels.** Each panel shows min/median/max across all FIFO sizes on a log-log scale. The primary chart for mode selection: lower latency at small pages favours `HOST_PUSH`; the gap narrows as page size grows.
 
 ![H2D Round-Trip Latency - Gen 4 x8](asdasd/x8_h2d_latency.png)
+*Gen 4 x8 - high-bandwidth chip (ASIC 6)*
 
 ![H2D Round-Trip Latency - Gen 4 x1](asdasd/x1_h2d_latency.png)
+*Gen 4 x1 - low-bandwidth chip*
 
 ---
 
