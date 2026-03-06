@@ -44,6 +44,17 @@ class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 i
     memory_config: ttnn.MemoryConfig | None = None
 
 
+@dataclass
+class DeepseekSamplingArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    max_batch_size: int
+    sampling_dp: int
+    cluster_shape: tuple[int, int]
+    sampling_all_gather_axis: int = 1
+
+
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
 ConfigWeight = ttnn.Tensor | FromWeightConfig
 
