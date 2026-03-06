@@ -431,26 +431,10 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               }
               core.info(`[OTHER LOGS] Using ${jobsMap.size} job name(s) from GitHub API for run ${runId} (no URLs - old format)`);
             } else {
-              // Fallback: extract job names from file paths (legacy method, less reliable)
-              const files = Array.isArray(logsListData.files) ? logsListData.files : [];
-              core.info(`[OTHER LOGS] No API job names found, falling back to file path extraction: ${files.length} files`);
-              for (const filePath of files) {
-                try {
-                  // Parse the path to extract job name
-                  // Expected format: extract/<step>_<job-name>/<file>.txt
-                  const parts = filePath.split(path.sep);
-                  if (parts.length >= 2) {
-                    const folderName = parts[1];
-                    let jobName = folderName.replace(/^\d+_/, '');
-                    jobName = jobName.replace(/\.txt$/i, '');
-                    jobName = jobName.replace(/\s+_\s+/g, ' / ').trim();
-                    if (jobName) {
-                      jobsMap.set(jobName, '');
-                    }
-                  }
-                } catch (_) { /* ignore */ }
-              }
-              core.info(`[OTHER LOGS] Extracted ${jobsMap.size} job name(s) from file paths for run ${runId}`);
+              // No API job names available - skip file path extraction as it cannot
+              // distinguish passing from failing jobs and produces false positives.
+              // Fall through to the annotations path instead.
+              core.info(`[OTHER LOGS] No API job names found for run ${runId}, skipping file path extraction (unreliable). Will fall through to annotations.`);
             }
 
             // Create snippets with job names and URLs
