@@ -87,6 +87,7 @@ struct KVCacheUpdate {
         void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
+                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 constexpr uint8_t MCAST_NOC = 0;
                 uint64_t sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
                     args.full_grid_mcast_start_x,
@@ -104,7 +105,6 @@ struct KVCacheUpdate {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
                 uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
                 uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
