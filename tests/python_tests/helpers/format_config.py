@@ -57,17 +57,18 @@ class DataFormat(Enum):
 
     Float16 = DataFormatInfo("Float16", 2)
     Float16_b = DataFormatInfo("Float16_b", 2)
-    Bfp8 = DataFormatInfo("Bfp8", 1)
-    Bfp8_b = DataFormatInfo("Bfp8_b", 1)
+    Bfp8 = DataFormatInfo("Bfp8", 1)  # WH/BH specific
+    Bfp8_b = DataFormatInfo("Bfp8_b", 1)  # WH/BH specific
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
     Tf32 = DataFormatInfo("Tf32", 3)
-    UInt32 = DataFormatInfo("UInt32", 4)
-    UInt16 = DataFormatInfo("UInt16", 2)
+    UInt32 = DataFormatInfo("UInt32", 4)  # WH/BH specific
+    Int16 = DataFormatInfo("Int16", 2)  # QSR specific
+    UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
     Int8 = DataFormatInfo("Int8", 1)
     UInt8 = DataFormatInfo("UInt8", 1)
-    MxFp8R = DataFormatInfo("MxFp8R", 1)
-    MxFp8P = DataFormatInfo("MxFp8P", 1)
+    MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
+    MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
 
     @property
     def size(self) -> int:
@@ -83,6 +84,7 @@ class DataFormat(Enum):
         return self in {
             DataFormat.Int32,
             DataFormat.UInt32,
+            DataFormat.Int16,
             DataFormat.UInt16,
             DataFormat.Int8,
             DataFormat.UInt8,
@@ -368,6 +370,7 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,
     DataFormat.UInt16: 130,
+    DataFormat.Int16: 9,
 }
 
 
