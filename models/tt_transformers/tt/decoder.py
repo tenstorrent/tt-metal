@@ -371,7 +371,9 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
-        assert x.memory_config() == skip_mem_cfg, f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        assert (
+            x.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         rot_mats = (
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
@@ -380,6 +382,14 @@ class TransformerBlock(LightweightModule):
         # Phi-1 uses a single input layer norm and parallel residual (residual + attn + mlp).
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         normed_input = self.input_norm(x, mode, norm_config=attn_norm_config)
+
+        # Phi runs attention and MLP from the same normalized input. Attention frees its input
+        # internally, so keep an explicit clone alive for the parallel MLP branch.
+        mlp_input = ttnn.clone(
+            normed_input,
+            dtype=normed_input.dtype,
+            memory_config=normed_input.memory_config(),
+        )
 
         attn_out = self.attention.forward(
             normed_input,
@@ -394,7 +404,6 @@ class TransformerBlock(LightweightModule):
         )
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
-        mlp_input = normed_input
         if TG and is_decode:
             mlp_input = ttnn.to_memory_config(mlp_input, memory_config=self.args.get_mlp_act_mem_config(mode))
         mlp_out = self.feed_forward.forward(mlp_input, mode)
