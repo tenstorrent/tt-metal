@@ -194,6 +194,9 @@ def dict_to_compute_kernel_config(cfg):
     """
     if cfg is None:
         return None
+    # If already a WormholeComputeKernelConfig, return as-is
+    if hasattr(cfg, "__class__") and "ComputeKernelConfig" in cfg.__class__.__name__:
+        return cfg
     if not isinstance(cfg, dict):
         return None
 
@@ -229,8 +232,11 @@ def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_confi
     - Has compute_with_storage_grid_size + fuse_batch -> MultiCast1D
     - Has compute_with_storage_grid_size only -> Reuse
     """
-    if cfg is None or not isinstance(cfg, dict):
-        return cfg if cfg is None else None
+    if cfg is None:
+        return None
+    # If already a program config object, return as-is
+    if not isinstance(cfg, dict):
+        return cfg
 
     required_keys = {"in0_block_w", "per_core_M", "per_core_N"}
     if not required_keys.issubset(cfg.keys()):

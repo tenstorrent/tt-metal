@@ -81,9 +81,6 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
-
     if isinstance(input_a_shape, dict) and "self" in input_a_shape:
         shape = input_a_shape["self"] if isinstance(input_a_shape["self"], tuple) else tuple(input_a_shape["self"])
     elif isinstance(input_a_shape, (tuple, list)):
