@@ -71,7 +71,7 @@ def run(
     input_a_memory_config,
     num_heads,
     num_kv_heads,
-    output_memory_config,
+    output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,

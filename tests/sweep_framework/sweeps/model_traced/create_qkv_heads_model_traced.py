@@ -82,7 +82,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
+    output_memory_config=None,
     num_heads,
     num_kv_heads,
     transpose_k_heads=False,

@@ -83,7 +83,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
+    output_memory_config=None,
     end_shape,
     storage_type="StorageType::DEVICE",
     *,

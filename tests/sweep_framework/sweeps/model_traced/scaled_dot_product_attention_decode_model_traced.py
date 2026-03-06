@@ -104,6 +104,7 @@ def run(
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    output_memory_config = kwargs.get("output_memory_config", None)
     parsed_op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Handle both sample suite (tuple/list) and model_traced suite (dict with keys for multi-input ops)

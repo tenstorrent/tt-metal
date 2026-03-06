@@ -72,7 +72,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
+    output_memory_config=None,
     batch_size=None,
     input_h=None,
     input_w=None,

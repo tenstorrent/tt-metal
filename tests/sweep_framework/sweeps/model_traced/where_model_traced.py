@@ -65,7 +65,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
+    output_memory_config=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,

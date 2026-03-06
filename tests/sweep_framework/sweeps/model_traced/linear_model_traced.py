@@ -122,13 +122,6 @@ def run(
     if input_b_shape is None:
         raise ValueError("Weight shape (input_b_shape or input_tensor_b_shape) is required")
 
-    # Use build_op_kwargs to parse dict values for op kwargs (memory_config, core_grid,
-    # compute_kernel_config, dtype). Exclude program_config since it needs special handling
-    # with input_b_memory_config. Also exclude activation since it's used for golden too.
-    parsed_op_kwargs = build_op_kwargs(
-        kwargs, exclude={"program_config", "activation"}, output_memory_config=output_memory_config
-    )
-
     # Parse named op params that were in the function signature (not in **kwargs)
     from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
@@ -154,6 +147,13 @@ def run(
     )
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
+
+    # Use build_op_kwargs to parse dict values for op kwargs (memory_config, core_grid,
+    # compute_kernel_config, dtype). Exclude program_config since it needs special handling
+    # with input_b_memory_config. Also exclude activation since it's used for golden too.
+    parsed_op_kwargs = build_op_kwargs(
+        kwargs, exclude={"program_config", "activation"}, output_memory_config=output_memory_config
+    )
 
     # When program_config can't be reconstructed (incomplete traced data), the
     # shard_spec in memory_config/output_memory_config was computed by the

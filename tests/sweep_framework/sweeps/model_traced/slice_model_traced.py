@@ -77,7 +77,9 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
-        kwargs, exclude={"starts", "ends", "steps", "arg1", "arg2", "arg3"}, output_memory_config=output_memory_config
+        kwargs,
+        exclude={"starts", "ends", "steps", "arg1", "arg2", "arg3", "slice_dim", "num_devices"},
+        output_memory_config=output_memory_config,
     )
 
     if output_memory_config is None and memory_config is not None:

@@ -95,7 +95,7 @@ def run(
     input_a_shape,
     input_a_dtype,
     input_a_layout,
-    output_memory_config,
+    output_memory_config=None,
     num_groups,
     epsilon=1e-5,
     storage_type="StorageType::DEVICE",

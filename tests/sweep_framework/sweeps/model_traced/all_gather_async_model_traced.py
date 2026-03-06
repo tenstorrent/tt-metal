@@ -237,7 +237,6 @@ def run(
     **kwargs,
 ) -> list:
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
@@ -271,6 +270,8 @@ def run(
                 output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
             output_memory_config = memory_config
+
+        op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
         if num_links is None:
             num_links = 1

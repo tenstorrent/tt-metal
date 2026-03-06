@@ -44,8 +44,21 @@ _INFRA_KEYS = frozenset(
 )
 
 # Keys for positional tensor inputs — handled by sweep test tensor creation code
-_TENSOR_SUFFIXES = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement")
-_TENSOR_PREFIXES = ("input_a", "input_b", "input_c", "input_d", "input_e", "input_f")
+_TENSOR_SUFFIXES = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement", "_activations")
+_TENSOR_PREFIXES = (
+    "input_a",
+    "input_b",
+    "input_c",
+    "input_d",
+    "input_e",
+    "input_f",
+    # Alternative naming convention from traced JSON (input_tensor, input_tensor_a, etc.)
+    "input_tensor",
+    "input_tensor_a",
+    "input_tensor_b",
+    "input_tensor_c",
+    "input_tensor_d",
+)
 
 
 def _is_infrastructure_key(key: str) -> bool:
@@ -56,6 +69,10 @@ def _is_infrastructure_key(key: str) -> bool:
     for prefix in _TENSOR_PREFIXES:
         if key.startswith(prefix) and any(key.endswith(suffix) for suffix in _TENSOR_SUFFIXES):
             return True
+    # Positional arg keys (arg0, arg1, ...) from V2 JSON — these are positional
+    # parameters already handled by the sweep test's tensor creation code
+    if key.startswith("arg") and key[3:].isdigit():
+        return True
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
         return True
