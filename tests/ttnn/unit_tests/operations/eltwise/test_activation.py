@@ -526,4 +526,4 @@ def test_lgamma_bfloat16(device):
     tt_result = ttnn.lgamma(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert torch.allclose(golden, result, rtol=1e-1, atol=1e-1)
+    assert_with_pcc(golden, result, 0.999)
