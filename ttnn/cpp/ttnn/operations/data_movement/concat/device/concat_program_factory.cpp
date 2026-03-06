@@ -41,6 +41,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const auto& output_nd_shard_spec = output.nd_shard_spec();  // can be nullopt if no nd sharding
     const bool nd_sharded = output_nd_shard_spec.has_value();
 
+    uint32_t num_pages_in_row = 1;  // interleaved - always 1
+    uint32_t size_of_valid_data_in_last_page_in_row = dst_buffer->page_size();
     uint32_t num_output_pages;
     uint32_t single_page_size;
     const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), dst_buffer->alignment());
@@ -197,7 +199,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_input_tensors};
+    std::vector<uint32_t> reader_compile_time_args = {
+        src0_cb_index, num_input_tensors, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {

@@ -15,9 +15,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size_base_idx = 2;
-    constexpr auto tensor_accessor_args =
-        make_tensor_accessor_args_tuple<num_tensors, page_size_base_idx + num_tensors>();
+    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(2);
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(3);
+    constexpr uint32_t page_size_base_idx = 4;
+    constexpr uint32_t tensor_accessor_args_base_idx = page_size_base_idx + num_tensors;
+    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, tensor_accessor_args_base_idx>();
 
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 1;
