@@ -350,10 +350,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     )
 
     # Output: L1 width-sharded (shard spec computed by the op)
-    out_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-    )
+    out_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
     # Program config
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
