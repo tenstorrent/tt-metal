@@ -83,6 +83,9 @@ static inline void build_chains_for_heads(
         std::optional<std::size_t> chain_start_idx;
         for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
             const auto& seg = segments[idx];
+            if (seg.core_idx >= core_work.size()) {
+                continue;
+            }
             const auto& work = core_work[seg.core_idx];
             if (work.global_q_count == 0) {
                 continue;
@@ -101,6 +104,9 @@ static inline void build_chains_for_heads(
         if (!chain_start_idx.has_value()) {
             for (std::size_t idx = 0; idx + 1 < segments.size(); ++idx) {
                 const auto& seg = segments[idx];
+                if (seg.core_idx >= core_work.size()) {
+                    continue;
+                }
                 if (core_work[seg.core_idx].global_q_count == 0) {
                     continue;
                 }
@@ -233,16 +239,21 @@ static inline void build_chains_for_heads(
             // Set prev core coordinates (previous in wrap order)
             if (pos > 0) {
                 const uint32_t prev_core_idx = segments[chain_order[pos - 1]].core_idx;
-                chain.prev_physical = core_work[prev_core_idx].physical_core;
+                if (prev_core_idx < core_work.size()) {
+                    chain.prev_physical = core_work[prev_core_idx].physical_core;
+                }
             }
 
             // Set next core coordinates and q_chunk count (next in wrap order)
             if (pos + 1 < chain_order.size()) {
                 const std::size_t next_idx = chain_order[pos + 1];
                 const uint32_t next_core_idx = segments[next_idx].core_idx;
-                chain.next_physical = core_work[next_core_idx].physical_core;
-                const auto& next_hw = core_work[next_core_idx].head_work[segments[next_idx].head_work_index];
-                chain.next_core_q_chunks = next_hw.q_chunk_count;
+                if (next_core_idx < core_work.size() &&
+                    segments[next_idx].head_work_index < core_work[next_core_idx].head_work.size()) {
+                    chain.next_physical = core_work[next_core_idx].physical_core;
+                    const auto& next_hw = core_work[next_core_idx].head_work[segments[next_idx].head_work_index];
+                    chain.next_core_q_chunks = next_hw.q_chunk_count;
+                }
             }
 
             log_debug(
@@ -447,8 +458,27 @@ static inline uint32_t configure_mcast_for_chains(
                 receiver_chain.next_core_q_chunks = 0;
                 receiver_chain.is_sink = true;
             }
+
+            log_debug(
+                tt::LogOp,
+                "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect ({},{}) to "
+                "({},{})",
+                num_receivers,
+                injector_idx,
+                core_work[injector_idx].physical_core.x,
+                mcast_num_dests,
+                rect_start.x,
+                rect_start.y,
+                rect_end.x,
+                rect_end.y);
         }
     }
+
+    log_info(
+        tt::LogOp,
+        "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
+        mcast_chains,
+        static_cast<uint32_t>(candidates.size()));
 
     return mcast_chains;
 }
