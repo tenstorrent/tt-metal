@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "optimizers/optimizer_registry.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
@@ -148,9 +149,9 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
             ss << "transformer";
         }
         ss << "_bs_" << batch_size;
-        ss << "_lr_" << config.learning_rate;
-        ss << "_wd_" << config.weight_decay;
-        if (config.use_kahan_summation) {
+        ss << "_lr_" << config.optimizer.lr;
+        ss << "_wd_" << config.optimizer.weight_decay;
+        if (config.optimizer.kahan_summation) {
             ss << "_kahan";
         }
 
@@ -175,6 +176,4 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     return ss.str();
 }
 
-void initialize_device(
-    const tt::tt_metal::distributed::MeshShape &mesh_shape,
-    const std::vector<int> &device_ids);
+void initialize_device(const tt::tt_metal::distributed::MeshShape &mesh_shape, const std::vector<int> &device_ids);

@@ -9,7 +9,7 @@
 
 namespace ttml::optimizers {
 
-struct SGDConfig {
+struct SGDCompositeConfig {
     float lr{1e-3F};
     float momentum{0.0F};
     float dampening{0.0F};
@@ -17,13 +17,13 @@ struct SGDConfig {
     bool nesterov{false};
 };
 
-class SGD : public OptimizerBase {
+class SGDComposite : public OptimizerBase {
 public:
     [[nodiscard]] std::string get_name() const override {
-        return "SGD";
+        return "SGDComposite";
     }
 
-    explicit SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config);
+    explicit SGDComposite(ttml::serialization::NamedParameters parameters, const SGDCompositeConfig& config);
 
     void zero_grad() override;
 
@@ -35,27 +35,18 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override;
+    [[nodiscard]] float get_lr() const override {
+        return m_config.lr;
+    }
 
-    void set_lr(float lr) override;
-
-    [[nodiscard]] float get_momentum() const;
-    void set_momentum(float momentum);
-
-    [[nodiscard]] float get_dampening() const;
-    void set_dampening(float dampening);
-
-    [[nodiscard]] float get_weight_decay() const;
-    void set_weight_decay(float weight_decay);
-
-    [[nodiscard]] bool get_nesterov() const;
-    void set_nesterov(bool nesterov);
+    void set_lr(float lr) override {
+        m_config.lr = lr;
+    }
 
 private:
-    void validate_config() const;
     size_t m_steps{0};
-    SGDConfig m_config;
-    ttml::serialization::NamedParameters m_momentum;
+    SGDCompositeConfig m_config;
+    ttml::serialization::NamedParameters m_theta;
 };
 
 }  // namespace ttml::optimizers
