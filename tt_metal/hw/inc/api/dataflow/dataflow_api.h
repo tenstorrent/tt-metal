@@ -553,8 +553,6 @@ inline void noc_async_read(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    DPRINT << "src_noc_addr     : 0x" << HEX() << src_noc_addr << ENDL();
-    DPRINT << "dst_local_l1_addr: 0x" << HEX() << dst_local_l1_addr << ENDL();
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false, noc);
     }

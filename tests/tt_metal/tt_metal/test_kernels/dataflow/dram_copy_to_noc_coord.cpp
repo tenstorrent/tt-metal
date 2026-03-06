@@ -7,6 +7,7 @@
 #include "experimental/core_local_mem.h"
 #include "experimental/endpoints.h"
 #include "internal/firmware_common.h"
+#include "api/compile_time_args.h"
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
@@ -17,10 +18,18 @@
  * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
+#if defined(COMPILE_FOR_DM)
+    constexpr uint32_t dm_id = get_compile_time_arg_val(0);
+    uint64_t cpu_index = 0;
+    asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
+    // On Quasar since all 8 kernels are launched: execute only the processor matching dm_id ; skip others
+    if (cpu_index == 0) {
+        return;
+    }
+#endif
     std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
 
     std::uint32_t buffer_src_addr = get_arg_val<uint32_t>(1);
-    DPRINT << HEX() << buffer_src_addr << ENDL();
     std::uint32_t src_noc_x = get_arg_val<uint32_t>(2);
     std::uint32_t src_noc_y = get_arg_val<uint32_t>(3);
 
@@ -44,7 +53,10 @@ void kernel_main() {
     // Dispatcher Kernel is able to finish.
     // Device Close () requires fast dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
+    // Signal completion to dispatcher before assert hangs the kernel
+    // SD signaling: IDLE_ERISC (all archs) and Quasar DM require RUN_MSG_DONE
+    // TODO: Remove COMPILE_FOR_DM once FD is enabled on Quasar
+#if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DM)
     go_message_in->signal = RUN_MSG_DONE;
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
