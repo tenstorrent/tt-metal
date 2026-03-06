@@ -100,8 +100,9 @@ def _capture_python_stack_trace() -> list[str]:
             path_for_match = path
         if any(path_for_match.match(p) for p in _STACK_TRACE_INTERNAL_PATTERNS):
             continue
-        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}')
-    return result
+        result.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}\n    {frame.line}\n')
+
+    return result[::-1]
 
 
 def _collect_tensor_ids(value) -> list:
