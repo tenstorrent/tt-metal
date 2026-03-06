@@ -10,12 +10,14 @@
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t grad_query_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t u_scaler_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices
-    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_7;  // Matmul row reduce tile
-    constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;     // Output: grad_Q
+    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_7;    // Matmul row reduce tile
+    constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;       // Output: grad_Q
+    constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;  // Output: u_scaler for KV kernel
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
@@ -31,12 +33,24 @@ void kernel_main() {
 #endif
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_query);
+    const uint32_t u_scaler_tile_bytes = get_tile_size(cb_u_scaler_output);
 
     // TensorAccessor definitions
     constexpr auto grad_query_args = TensorAccessorArgs<2>();
+    constexpr auto u_scaler_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
 
-    // Create TensorAccessor generator for output gradient
+    // Create TensorAccessor generators
     const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr, tile_bytes);
+    const auto u_scaler_addr_generator = TensorAccessor(u_scaler_args, u_scaler_output_addr, u_scaler_tile_bytes);
+
+    auto write_u_scaler_for_row = [&](const uint32_t global_row_idx) {
+        // u_scaler tensor: one tile per query row, indexed by global_row_idx
+        cb_wait_front(cb_u_scaler_output, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_u_scaler_output);
+        noc_async_write_page(global_row_idx, u_scaler_addr_generator, l1_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_u_scaler_output, onetile);
+    };
 
 #ifdef BALANCED_PARALLELISM
     constexpr uint32_t pairs_per_seq = Ht / 2;
@@ -54,21 +68,26 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
-        // Write light row
+        // Write light row grad_query + u_scaler
         const uint32_t light_start_idx = light_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, light_start_idx, qWt, tile_bytes, qWt);
+        write_u_scaler_for_row(light_global_row);
 
-        // Write heavy row
+        // Write heavy row grad_query + u_scaler
         const uint32_t heavy_start_idx = heavy_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, heavy_start_idx, qWt, tile_bytes, qWt);
+        write_u_scaler_for_row(heavy_global_row);
     }
 #else
     const uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         const uint32_t q_start_idx = r * qWt;
 
-        // Write grad_query row on same position as read(same output shape)
+        // Write grad_query row
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+        // Write u_scaler tile for this row
+        write_u_scaler_for_row(r);
     }
 #endif
 }

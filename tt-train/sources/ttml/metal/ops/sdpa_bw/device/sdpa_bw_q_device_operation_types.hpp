@@ -25,10 +25,12 @@ struct tensor_args_t {
 
     // Preallocated gradient tensor (optional)
     std::optional<ttnn::Tensor> preallocated_grad_query;
+    // Preallocated u_scaler tensor for sharing with KV kernel (optional)
+    std::optional<ttnn::Tensor> preallocated_u_scaler;
 };
 
-using tensor_return_value_t = ttnn::Tensor;  // [grad_Q]
+using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_Q, u_scaler]
 
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>;
 
 }  // namespace ttml::metal::ops::sdpa_bw::device::q

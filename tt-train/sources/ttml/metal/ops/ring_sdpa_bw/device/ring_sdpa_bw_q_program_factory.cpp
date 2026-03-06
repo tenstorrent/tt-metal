@@ -8,6 +8,7 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp"
 #include "ring_sdpa_bw_factory_utils.hpp"
@@ -102,9 +103,15 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
             .value = value_tensor,
             .attn_mask = std::nullopt,  // No explicit mask - using mask_type
             .intermediates = intermediates_tensor,
-            .preallocated_grad_query = grad_query_tensor};
+            .preallocated_grad_query = grad_query_tensor,
+            .preallocated_u_scaler = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query_tensor};
+        // Let the Q device operation create u_scaler output tensor
+        auto [_, u_scaler_spec] =
+            sdpa_bw::device::SDPABackwardQDeviceOperation::compute_output_specs(sdpa_attrs, sdpa_tensor_args);
+        auto u_scaler_tensor = create_device_tensor(u_scaler_spec, query.device());
+
+        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query_tensor, u_scaler_tensor};
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardQProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -211,9 +218,15 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
             .value = value_tensor,
             .attn_mask = std::nullopt,
             .intermediates = intermediates_tensor,
-            .preallocated_grad_query = grad_query_tensor};
+            .preallocated_grad_query = grad_query_tensor,
+            .preallocated_u_scaler = std::nullopt};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query_tensor};
+        // Reuse u_scaler from the original create call (same device tensor)
+        auto [u_scaler_grad_spec, u_scaler_spec] =
+            sdpa_bw::device::SDPABackwardQDeviceOperation::compute_output_specs(sdpa_attrs, sdpa_tensor_args);
+        auto u_scaler_tensor = create_device_tensor(u_scaler_spec, query.device());
+
+        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query_tensor, u_scaler_tensor};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardQProgramFactory::shared_variables_t sdpa_shared_vars{
