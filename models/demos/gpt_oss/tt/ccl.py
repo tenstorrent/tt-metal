@@ -15,7 +15,6 @@ class CCLManager:
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
-        print("Use model parallelism:", self.use_model_parallelism)
         if self.use_model_parallelism:
             self._init_submeshes()
         else:
@@ -47,9 +46,6 @@ class CCLManager:
             self.mp_submeshes.append(
                 self.mesh_device.create_submesh(ttnn.MeshShape(self.mesh_shape[0], 1), ttnn.MeshCoordinate(0, i))
             )
-
-        for x in self.mp_submeshes:
-            print(f"Submesh shape={x.shape}, id={x.id()}")
 
         # Create socket pairs between submeshes for copying hidden_states in _forward_layers_and_head.
         # One pair per (from_id, to_id) with from_id != to_id; reused for all forward passes.

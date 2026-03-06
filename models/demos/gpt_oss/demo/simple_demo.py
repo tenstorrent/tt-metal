@@ -10,6 +10,8 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.model import Model
 from models.demos.gpt_oss.tt.model_config import ModelArgs
 from models.demos.gpt_oss.tt.model_mp import ModelWithMP
+from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
+from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -29,7 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_fo
     [
         ("Give me instructions to make the best birthday gift in the world. It must be unique.", 100),
         (
-            "Write an essay desribing how LLMs work. Talk about how they are trained & can be fine tuned. Make it as detailed as possible.",
+            "Write an essay desribing how LLMs work. Talk about how they are trained & can be fine tuned.",
             200,
         ),
     ],
@@ -38,6 +40,11 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_fo
 def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, prompt, iters):
     tokenizer = AutoTokenizer.from_pretrained("openai/gpt-oss-120b")
     use_model_parallelism = True
+    paged_attention = True
+    page_params = {
+        "page_block_size": 64,
+        "page_max_num_blocks": 128,
+    }
     setup = TestFactory.setup_test(
         mesh_device, mesh_shape=mesh_shape, use_real_weights=False, use_model_parallelism=use_model_parallelism
     )
@@ -52,6 +59,20 @@ def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, pro
 
     dtype = ttnn.bfloat8_b
 
+    paged_attention_config = (
+        PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+        if paged_attention
+        else None
+    )
+    page_table = create_tt_page_table(
+        1,
+        1,
+        paged_attention_config,
+    )
+
     # Create model with model parallelism enabled
     tt_model = ModelWithMP(
         mesh_device=mesh_device,
@@ -60,7 +81,7 @@ def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, pro
         ccl_manager=ccl_manager,
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=str(model_args.weight_cache_path(dtype)),
-        paged_attention_config=None,
+        paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,
         create_kv_cache=True,
         max_local_batch_size=batch_size,
@@ -73,12 +94,9 @@ def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, pro
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
     current_seq_len = input_ids.shape[1]
 
-    (
-        tt_embeds,
-        rot_mats_global,
-    ) = tt_model.prepare_inputs_prefill(
-        tokens=input_ids
-    )[:2]
+    (tt_embeds, rot_mats_global, _, tt_page_table, _) = tt_model.prepare_inputs_prefill(
+        tokens=input_ids, page_table=page_table
+    )
     if tt_embeds.shape[2] % 32 != 0:
         # Pad to next multiple of 32 for non-row-sharded b<32
         pad_length = 32 - (tt_embeds.shape[2] % 32)
@@ -87,9 +105,7 @@ def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, pro
     signpost("prefill_start")
     # Run prefill
     tt_logits = tt_model.ttnn_prefill_forward(
-        tt_embeds,
-        user_id=0,
-        rot_mats_global=rot_mats_global,
+        tt_embeds, user_id=0, rot_mats_global=rot_mats_global, page_table=tt_page_table
     )
     signpost("prefill_end")
     tt_logits_torch = ttnn.to_torch(tt_logits)
@@ -101,7 +117,9 @@ def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, pro
         logger.info(f"Decode iteration {iter}, next token ID: {next_token}, str = {tokenizer.decode(next_token[0])}")
         current_pos_torch = torch.tensor([[current_seq_len + iter]], dtype=torch.int32)
         tokens, current_pos_tt, rope_idx, _ = tt_model.prepare_inputs_decode(next_token, current_pos_torch)
-        tt_logits = tt_model.ttnn_decode_forward(tokens, current_pos_tt, rot_mat_idxs=rope_idx)[0]
+        tt_logits = tt_model.ttnn_decode_forward(
+            tokens, current_pos_tt, page_table=tt_page_table, rot_mat_idxs=rope_idx
+        )[0]
         tt_logits_torch = ttnn.to_torch(tt_logits)
         signpost("decode_iteration_end")
         next_token = tt_logits_torch.argmax(dim=-1)[:, :, 0]
@@ -125,7 +143,7 @@ def test_gpt_oss_120b_mp(mesh_device, mesh_shape, batch_size, device_params, pro
     [
         ("Give me instructions to make the best birthday gift in the world. It must be unique.", 100),
         (
-            "Write an essay desribing how LLMs work. Talk about how they are trained & can be fine tuned. Make it as detailed as possible.",
+            "Write an essay desribing how LLMs work. Talk about how they are trained & can be fine tuned. Make it as detailed as possible. ",
             200,
         ),
     ],

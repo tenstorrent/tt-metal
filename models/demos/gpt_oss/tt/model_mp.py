@@ -426,12 +426,13 @@ class ModelWithMP:
 
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
             this_rope_mats = rope_mats[current_submesh_id]
+            this_page_table = page_table[current_submesh_id] if page_table is not None else None
             # logger.info(f"Running layer {i} on submesh {current_submesh_id}, kv_device = {layer_kv_cache[0].device().id()}, rope_device = {this_rope_mats[0].device().id()}, position_device = {current_pos[current_submesh_id].device().id() if current_pos is not None else None}")
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=this_rope_mats,
                 position_idx=current_pos[current_submesh_id] if current_pos is not None else None,
-                page_table=page_table,
+                page_table=this_page_table,
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
                 user_id=user_id,
@@ -674,7 +675,9 @@ class ModelWithMP:
 
         # Prepare page table if provided
         if page_table is not None:
-            page_table = ttnn.from_torch(page_table, device=self.mp_submeshes[0], dtype=ttnn.int32)
+            page_table = [
+                ttnn.from_torch(page_table, device=submesh, dtype=ttnn.int32) for submesh in self.mp_submeshes
+            ]
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
@@ -795,13 +798,15 @@ class ModelWithMP:
                 )
             else:
                 # Single-user prefill or non-row-sharded: replicate page table
-                tt_page_table = ttnn.from_torch(
-                    page_table,
-                    device=device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
+                tt_page_table = [
+                    ttnn.from_torch(
+                        page_table,
+                        device=submesh,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    for submesh in self.mp_submeshes
+                ]
 
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(

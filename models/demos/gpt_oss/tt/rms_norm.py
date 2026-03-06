@@ -15,7 +15,6 @@ class RMSNorm(nn.Module):
             torch_weight = state_dict["weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
         else:
             torch_weight = None
-        print(f"Init RMS Norm with device {mesh_device.shape}")
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         self.is_distributed = False  # self.mesh_config.tp > 1
