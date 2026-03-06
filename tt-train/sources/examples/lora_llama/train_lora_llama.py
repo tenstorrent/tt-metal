@@ -5,6 +5,7 @@
 """Minimal single-device Llama fine-tuning with LoRA on Shakespeare."""
 
 import argparse
+import os
 import time
 
 import numpy as np
@@ -31,7 +32,7 @@ MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BATCH_SIZE = 13
+BATCH_SIZE = 12
 STEPS = 500
 LR = 3e-4
 WEIGHT_DECAY = 0.01
@@ -42,6 +43,7 @@ LORA_ALPHA = 16
 LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
 LORA_IS_BIAS_TRAINABLE = False
 LORA_TRAINABLE_MODULES: list[str] = []
+LORA_DROPOUT = 0.05
 
 
 def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
@@ -84,6 +86,46 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
     )
 
 
+def save_lora_checkpoint(model: LoraModel, path: str, step: int) -> None:
+    """Save only the trainable (LoRA) parameters to a safetensors file."""
+    from safetensors.numpy import save_file
+
+    tensors = {}
+    for name, param in model.parameters().items():
+        if param.get_requires_grad():
+            tensors[name] = param.to_numpy(ttnn.DataType.FLOAT32)
+
+    filepath = os.path.join(path, f"lora_step_{step}.safetensors")
+    save_file(tensors, filepath)
+    print(f"Saved {len(tensors)} LoRA parameters to {filepath}")
+
+
+def load_lora_checkpoint(model: LoraModel, filepath: str) -> None:
+    """Restore LoRA parameters from a previously saved safetensors checkpoint."""
+    import ml_dtypes
+    from safetensors.numpy import load_file
+
+    saved = load_file(filepath)
+    parameters = model.parameters()
+
+    loaded, skipped = 0, []
+    for name, arr in saved.items():
+        if name not in parameters:
+            skipped.append(name)
+            continue
+        restored = ttml.autograd.Tensor.from_numpy(
+            arr.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+        )
+        parameters[name].assign(restored)
+        loaded += 1
+
+    print(f"Resumed {loaded} LoRA parameters from {filepath}")
+    if skipped:
+        print(f"Warning: {len(skipped)} saved tensors not found in model:")
+        for n in skipped:
+            print(f"  - {n}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Llama LoRA fine-tuning on Shakespeare"
@@ -103,6 +145,24 @@ def parse_args():
         help="HuggingFace repo ID (e.g. TinyLlama/TinyLlama-1.1B-Chat-v1.0) or "
         "local path to a directory with .safetensors files. "
         "When set, uses the HF BPE tokenizer and loads pretrained weights.",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to a LoRA checkpoint .safetensors file to resume training from.",
+    )
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=0,
+        help="Save LoRA checkpoint every N steps (0 = disabled). Also saves at the final step.",
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default="checkpoints",
+        help="Directory for LoRA checkpoints (default: checkpoints/).",
     )
     parser.add_argument(
         "--track_memory",
@@ -197,8 +257,12 @@ def main():
         target_modules=LORA_TARGET_MODULES,
         is_bias_trainable=LORA_IS_BIAS_TRAINABLE,
         trainable_modules=LORA_TRAINABLE_MODULES,
+        lora_dropout=LORA_DROPOUT,
     )
     model = LoraModel(model, lora_config)
+
+    if args.resume:
+        load_lora_checkpoint(model, args.resume)
 
     if args.track_memory:
         MemoryUsageTracker.snapshot("LORA_INJECTION")
@@ -212,6 +276,10 @@ def main():
 
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
+
+    # ── Checkpointing setup ────────────────────────────────────────────────────
+    if args.save_every > 0:
+        os.makedirs(args.save_dir, exist_ok=True)
 
     # ── Training loop ─────────────────────────────────────────────────────────
     model.train()
@@ -259,6 +327,9 @@ def main():
             MemoryUsageTracker.clear()
             if memory_guard:
                 memory_guard.release()
+
+        if args.save_every > 0 and (step % args.save_every == 0 or step == STEPS):
+            save_lora_checkpoint(model, args.save_dir, step)
 
     ttml.autograd.AutoContext.get_instance().close_device()
 

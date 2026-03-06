@@ -16,6 +16,7 @@ import ttml
 from .linear import LinearLayer
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
+from .._ttml.modules import RunMode
 
 
 @dataclass
@@ -26,6 +27,7 @@ class LoraConfig:
     use_rslora: bool = False
     is_bias_trainable: bool = False
     trainable_modules: list[str] = field(default_factory=list)
+    lora_dropout: float = 0.0
 
 
 def _create_lora_A(in_features: int, rank: int):
@@ -67,6 +69,8 @@ class LoraLinear(AbstractModuleBase):
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
 
+        self.dropout_prob = config.lora_dropout
+
         self.scaling = (
             config.alpha / math.sqrt(config.rank)
             if config.use_rslora
@@ -76,7 +80,10 @@ class LoraLinear(AbstractModuleBase):
     def forward(self, x: Any) -> Any:
         bias = self.bias.tensor if self.bias is not None else None
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias)
-        h = ttml.ops.linear.linear(x, self.lora_A.tensor, None)
+        lora_input = x
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
+            lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
+        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         return base + lora_update * self.scaling
 
