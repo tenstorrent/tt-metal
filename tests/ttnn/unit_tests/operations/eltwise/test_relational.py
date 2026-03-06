@@ -307,18 +307,14 @@ def test_isclose(device, h, w, atol, rtol):
         ttnn.ge,
     ],
 )
-@pytest.mark.parametrize(
-    "use_legacy",
-    [False, True],
-)
-def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use_legacy, device):
+def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, device):
     low1, high1 = range1
     low2, high2 = range2
     in_data1 = torch.randint(low1, high1, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     in_data2 = torch.randint(low2, high2, input_shapes, dtype=torch.int32)
     input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=None)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -346,11 +342,7 @@ def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use
         ttnn.ge,
     ],
 )
-@pytest.mark.parametrize(
-    "use_legacy",
-    [False, True],
-)
-def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legacy, device):
+def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -368,7 +360,7 @@ def test_binary_relational_edge_case_ttnn(input_shapes, ttnn_function, use_legac
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=None)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, in_data2)
 

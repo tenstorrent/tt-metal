@@ -108,11 +108,11 @@ class TtCustomMSDeformableAttention:
             offset_normalizer_xy = ttnn.squeeze(offset_normalizer_xy, 0)
             offset_normalizer_xy = ttnn.squeeze(offset_normalizer_xy, 0)
 
-            sampling_locations = ttnn.divide(sampling_offsets, offset_normalizer_xy, use_legacy=False)
+            sampling_locations = ttnn.divide(sampling_offsets, offset_normalizer_xy, use_legacy=None)
 
             sampling_locations = ttnn.unsqueeze(sampling_locations, 2)
             sampling_locations = ttnn.unsqueeze(sampling_locations, 0)
-            sampling_locations = ttnn.add(reference_xy, sampling_locations, use_legacy=False)
+            sampling_locations = ttnn.add(reference_xy, sampling_locations, use_legacy=None)
 
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(

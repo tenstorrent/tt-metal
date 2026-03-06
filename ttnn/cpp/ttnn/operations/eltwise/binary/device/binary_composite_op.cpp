@@ -257,10 +257,7 @@ Tensor ExecuteDiv::invoke(
             sub_core_grids);
     }
 
-    if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
+    if (!(use_legacy ? *use_legacy : has_legacy_only_args)) {
         TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
@@ -388,10 +385,7 @@ Tensor ExecuteDiv::invoke(
             sub_core_grids);
     }
 
-    if (!(use_legacy ? *use_legacy
-                     : (has_legacy_only_args ||
-                        binary::is_legacy_only(
-                            input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
+    if (!(use_legacy ? *use_legacy : has_legacy_only_args)) {
         TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
         return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
@@ -910,14 +904,7 @@ Tensor ExecuteRsub::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
             input_tensor_a,
             input_b,
@@ -944,14 +931,7 @@ Tensor ExecuteBitwiseAnd::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -964,7 +944,7 @@ Tensor ExecuteBitwiseAnd::invoke(
             use_legacy);
     }
 
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
+    return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
         input_tensor_a,
         input_tensor_b,
         std::nullopt,
@@ -985,14 +965,7 @@ Tensor ExecuteBitwiseAnd::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
             input_tensor_a,
             input_b,
@@ -1020,14 +993,7 @@ Tensor ExecuteBitwiseOr::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -1053,14 +1019,7 @@ Tensor ExecuteBitwiseOr::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
             input_tensor_a,
             input_b,
@@ -1088,14 +1047,7 @@ Tensor ExecuteBitwiseXor::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -1121,14 +1073,7 @@ Tensor ExecuteBitwiseXor::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
             input_tensor_a,
             input_b,
@@ -1156,14 +1101,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -1189,14 +1127,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
             input_tensor_a,
             input_b,
@@ -1224,14 +1155,7 @@ Tensor ExecuteBitwiseRightShift::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_tensor_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -1257,14 +1181,7 @@ Tensor ExecuteBitwiseRightShift::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not(use_legacy ? *use_legacy
-                       : binary::is_legacy_only(
-                             input_tensor_a,
-                             input_b,
-                             memory_config,
-                             optional_output_tensor,
-                             lhs_activations,
-                             rhs_activations))) {
+    if (not(use_legacy ? *use_legacy : false)) {
         return BinaryOperation<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
             input_tensor_a,
             input_b,

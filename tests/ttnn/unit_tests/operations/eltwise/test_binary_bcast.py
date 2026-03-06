@@ -197,10 +197,9 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     (
         [torch.bfloat16, ttnn.bfloat16],
         # works, but time consuming
-        # [torch.float32, ttnn.float32],
-        # currently handled by legacy, and it does not work
-        # [torch.bfloat16, ttnn.bfloat8_b],
-        # [torch.bfloat16, ttnn.bfloat4_b],
+        # [torch.float32, ttnn.float32]
+        [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat4_b],
     ),
 )
 def test_binary_sharded_bcast_no_identical(
@@ -316,7 +315,10 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
         (ttnn.bfloat8_b, 0.999),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul", "add_", "sub_", "mul_"])
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    ["add", "sub", "mul", "add_", "sub_", "mul_"],
+)
 def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
 
@@ -344,7 +346,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=False)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
     output_tensor = ttnn.to_torch(input_tensor_a if ttnn_fn.endswith("_") else output_tensor)
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
@@ -354,7 +356,6 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work for binary_ng yet
         # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
@@ -1384,12 +1385,12 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=dst_config, use_legacy=False)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=dst_config, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=False)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
@@ -1488,8 +1489,7 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work fro binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value(
@@ -1560,8 +1560,7 @@ def test_binary_sharded_bcast_scalar_value(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        # does not work fro binary_ng yet
-        # [torch.bfloat16, ttnn.bfloat8_b],
+        [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value_uneven(
@@ -3698,8 +3697,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
 
 
 @pytest.mark.parametrize("input_shape", [(1, 4096, 640)])
-@pytest.mark.parametrize("is_legacy", [True, False])
-def test_add_sharded(device, input_shape, is_legacy):
+def test_add_sharded(device, input_shape):
     torch_input_tensor_a = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
@@ -3717,7 +3715,7 @@ def test_add_sharded(device, input_shape, is_legacy):
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
     )
-    output = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=is_legacy)
+    output = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=None)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)

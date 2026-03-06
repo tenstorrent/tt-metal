@@ -20,7 +20,7 @@ def rotate_half(x):
     x1 = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], half))
     x2 = ttnn.slice(x, (0, 0, 0, half), (x.shape[0], x.shape[1], x.shape[2], last_dim))
 
-    neg_x2 = ttnn.mul(x2, -1, use_legacy=False)
+    neg_x2 = ttnn.mul(x2, -1, use_legacy=None)
     return ttnn.concat([neg_x2, x1], dim=-1)
 
 
@@ -28,7 +28,7 @@ def apply_rotary_pos_emb_vision_tt(q, k, cos, sin):
     cos = ttnn.unsqueeze(cos, 0)
     sin = ttnn.unsqueeze(sin, 0)
 
-    q_embed = ttnn.add(ttnn.mul(q, cos, use_legacy=True), ttnn.mul(rotate_half(q), sin, use_legacy=True))
+    q_embed = ttnn.add(ttnn.mul(q, cos), ttnn.mul(rotate_half(q), sin))
     k_embed = ttnn.add(ttnn.mul(k, cos), ttnn.mul(rotate_half(k), sin))
     return q_embed, k_embed
 
