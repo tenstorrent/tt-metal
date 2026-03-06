@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/fmt.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +13,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>

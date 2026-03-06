@@ -28,7 +28,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt_stl/fmt.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
