@@ -853,6 +853,7 @@ uint32_t per_core_rta_arg_idx = 0;
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
+
     // ========================================================================
     // SP position handling.
     // Read the global position from L1 and decide whether this device has
