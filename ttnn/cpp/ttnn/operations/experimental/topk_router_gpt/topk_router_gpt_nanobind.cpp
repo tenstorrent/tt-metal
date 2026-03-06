@@ -23,7 +23,6 @@ void bind_topk_router_gpt(nb::module_& mod) {
             input_tensor: [B, hidden_dim] bf16 input hidden states
             weight_tensor: [hidden_dim, num_experts] bf16 router weight in DRAM
             bias_tensor: [1, num_experts] bf16 router bias in DRAM
-            output_tensor: [B, num_experts] bf16 pre-allocated output
             k: Number of top experts (metadata)
             num_experts: Total number of experts
         )doc",
@@ -32,11 +31,9 @@ void bind_topk_router_gpt(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("weight_tensor"),
             nb::arg("bias_tensor"),
-            nb::arg("output_tensor"),
             nb::arg("k") = 4,
             nb::arg("num_experts") = 128,
             nb::arg("untilize_output") = false,
-            nb::arg("produce_hidden_rm") = false,
         });
 }
 

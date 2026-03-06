@@ -85,7 +85,6 @@ class TopKRouter:
         # Enable via TOPK_FUSED_OP=1 environment variable
         self.use_fused_op = os.environ.get("TOPK_FUSED_OP", "0") == "1"
         self._fused_bias = None
-        self._fused_output = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
         # needs the full [1, num_experts] bias replicated on every device)
@@ -100,10 +99,10 @@ class TopKRouter:
             self._bias_torch = None
 
     def _init_fused_op(self, device, B):
-        """Lazily initialize fused op tensors (bias broadcast + output buffer)."""
+        """Lazily initialize fused op tensors (bias broadcast)."""
         # On a MeshDevice, from_torch must explicitly replicate — without a
         # mesh_mapper the default 2D-shard splits columns across devices,
-        # corrupting the bias and output buffers.
+        # corrupting the bias buffer.
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
 
         if self._fused_bias is None:
@@ -112,15 +111,6 @@ class TopKRouter:
             bias_bcast = self._bias_torch.expand(B, -1).contiguous()
             self._fused_bias = ttnn.from_torch(
                 bias_bcast,
-                dtype=ttnn.bfloat16,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
-        if self._fused_output is None:
-            self._fused_output = ttnn.from_torch(
-                torch.zeros(B, 64, dtype=torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
@@ -173,29 +163,25 @@ class TopKRouter:
         self._init_fused_op(device, B)
 
         # Run fused matmul + topk + softmax
-        result, _, indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
+        indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
             hidden_states_bf16,
             weight_tensor=self.weight,
             bias_tensor=self._fused_bias,
-            output_tensor=self._fused_output,
             k=self.top_k,
             num_experts=self.num_experts,
-            produce_hidden_rm=use_throughput_experts,
         )
 
         if needs_typecast:
             ttnn.deallocate(hidden_states_bf16)
 
+        # Kernel produced uint16 RM indices and bf16 RM weights (padded to k_padded).
+        # Slice to the actual k columns.
+        expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
+        expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
+
         if use_throughput_experts:
-            # Kernel produced uint16 RM indices and bf16 RM weights (padded to k_padded).
-            # Just slice to the actual k columns.
-            expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
-            expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
             return expert_indices, expert_weights
         else:
-            # Unpack: tile 0 (cols 0..k-1) = softmax weights, tile 1 (cols 32..32+k-1) = indices
-            expert_weights = ttnn.slice(result, [0, 0], [B, self.top_k])
-            expert_indices = ttnn.slice(result, [0, 32], [B, 32 + self.top_k])
             # Non-throughput: scatter weights to dense [B, num_experts] format
             zeros = ttnn.zeros(
                 [B, self.num_experts],

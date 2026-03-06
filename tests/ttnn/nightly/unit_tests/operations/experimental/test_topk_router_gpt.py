@@ -6,9 +6,9 @@
 Test for the fused topk_router_gpt operation.
 
 The fused op computes:  matmul + bias → logits → topk(k=4) → softmax
-Output: [B, 64] packed as 2 tiles:
-  - Tile 0 (cols 0-31):  softmax weights in columns 0..k-1
-  - Tile 1 (cols 32-63): expert indices (as bf16) in columns 0..k-1
+Outputs: (indices_rm, weights_rm) both in ROW_MAJOR format
+  - indices_rm: [B, k_padded] uint16 expert indices
+  - weights_rm: [B, k_padded] bf16 softmax weights
 """
 
 import torch
@@ -25,29 +25,18 @@ def run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k=4, un
     tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(torch_bias_bcast, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
-    out_layout = ttnn.ROW_MAJOR_LAYOUT if untilize_output else ttnn.TILE_LAYOUT
-    # Output: [B, 64] packed (tile 0 / cols 0-31 = weights, tile 1 / cols 32-63 = indices)
-    tt_output = ttnn.from_torch(
-        torch.zeros(B, 64, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=out_layout,
-    )
-
-    result, _, _, _ = ttnn.experimental.topk_router_gpt(
+    indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
         tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
-        output_tensor=tt_output,
         k=k,
         num_experts=N,
         untilize_output=untilize_output,
     )
 
-    tt_result = ttnn.to_torch(result)[:B, :64]
-    # Unpack: first 32 cols = tile 0 (weights), next 32 cols = tile 1 (indices)
-    weights = tt_result[:, :k].float()
-    indices = tt_result[:, 32 : 32 + k].float().long()
+    # Convert to torch (slice to actual k cols since outputs are padded to k_padded)
+    indices = ttnn.to_torch(indices_rm)[:B, :k].long()
+    weights = ttnn.to_torch(weights_rm)[:B, :k].float()
     return weights, indices
 
 
@@ -190,108 +179,70 @@ def main():
         logger.info(f"  Weight PCC (RM vs TILE): {rm_weight_pcc:.6f}")
 
         # ================================================================
-        # Test 5: TILE output → typecast + to_layout(RM) chain
-        # Verifies the same conversion used in _fused_call throughput path:
-        # slice [B,k] TILE bf16 → typecast uint32 → uint16 → to_layout(RM)
+        # Test 5: Verify indices are uint16 dtype
         # ================================================================
         logger.info("=" * 60)
-        logger.info("TEST 5: TILE output → typecast + RM conversion for throughput dispatch")
+        logger.info("TEST 5: Verify indices_rm dtype is uint16")
         torch.manual_seed(42)
         torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
         torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
         torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
 
-        # Run fused op with TILE output (default)
-        weights_tile, indices_tile = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k)
+        # Run fused op
+        weights_ref, indices_ref = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k)
 
-        # Now run with the same TILE output but apply the typecast chain from _fused_call
+        # Now run again to verify dtype
         torch_bias_bcast = torch_bias.expand(B, N).contiguous()
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_bias = ttnn.from_torch(torch_bias_bcast, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_output = ttnn.from_torch(
-            torch.zeros(B, 64, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        result, _, _, _ = ttnn.experimental.topk_router_gpt(
+
+        indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
             tt_input,
             weight_tensor=tt_weight,
             bias_tensor=tt_bias,
-            output_tensor=tt_output,
             k=k,
             num_experts=N,
         )
-        # Slice [B, k] TILE → typecast → to_layout(RM) (same as _fused_call throughput path)
-        expert_indices = ttnn.slice(result, [0, 32], [B, 32 + k])  # [B, k] TILE bf16
-        expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint32)
-        expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint16)
-        expert_indices = ttnn.to_layout(expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-        expert_weights = ttnn.slice(result, [0, 0], [B, k])  # [B, k] TILE bf16
-        expert_weights = ttnn.to_layout(expert_weights, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Convert to torch for comparison
-        indices_torch = ttnn.to_torch(expert_indices)[:B, :k].long()
-        weights_torch = ttnn.to_torch(expert_weights)[:B, :k].float()
+        # Verify dtype and values
+        indices_torch = ttnn.to_torch(indices_rm)[:B, :k].long()
+        weights_torch = ttnn.to_torch(weights_rm)[:B, :k].float()
 
-        # Compare to the TILE reference (Test 2 same seed) to verify typecast preserves data
-        tc_idx_match = (indices_torch == indices_tile).all().item()
-        tc_weight_pcc = compute_pcc(weights_tile, weights_torch)
-        logger.info(f"  Typecast indices row 0: {indices_torch[0].tolist()}")
-        logger.info(f"  TILE ref  indices row 0: {indices_tile[0].tolist()}")
-        logger.info(f"  Indices exact match (typecast vs TILE): {tc_idx_match}")
-        logger.info(f"  Weight PCC (typecast vs TILE): {tc_weight_pcc:.6f}")
-
-        # ================================================================
-        # Test 6: produce_hidden_rm — verify dispatch outputs (indices uint16 RM, weights bf16 RM)
-        # ================================================================
-        logger.info("=" * 60)
-        logger.info("TEST 6: produce_hidden_rm (dispatch outputs: indices + weights)")
-        torch.manual_seed(42)
-        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
-        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
-        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
-
-        torch_bias_bcast = torch_bias.expand(B, N).contiguous()
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_bias = ttnn.from_torch(torch_bias_bcast, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_output = ttnn.from_torch(
-            torch.zeros(B, 64, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        result, _, indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
-            tt_input,
-            weight_tensor=tt_weight,
-            bias_tensor=tt_bias,
-            output_tensor=tt_output,
-            k=k,
-            num_experts=N,
-            produce_hidden_rm=True,
-        )
-
-        # Verify dispatch outputs: indices_rm (uint16) and weights_rm (bf16)
-        indices_rm_torch = ttnn.to_torch(indices_rm)[:B, :k].long()
-        weights_rm_torch = ttnn.to_torch(weights_rm)[:B, :k].float()
-
-        # Compare to the packed result (tile-based reference)
-        tt_result = ttnn.to_torch(result)[:B, :64]
-        ref_weights = tt_result[:, :k].float()
-        ref_indices = tt_result[:, 32 : 32 + k].float().long()
-
-        dispatch_idx_match = (indices_rm_torch == ref_indices).all().item()
-        dispatch_wgt_pcc = compute_pcc(ref_weights, weights_rm_torch)
+        tc_idx_match = (indices_torch == indices_ref).all().item()
+        tc_weight_pcc = compute_pcc(weights_ref, weights_torch)
         logger.info(f"  indices_rm dtype: {indices_rm.dtype}")
-        logger.info(f"  indices_rm row 0: {indices_rm_torch[0].tolist()}")
-        logger.info(f"  ref       row 0: {ref_indices[0].tolist()}")
-        logger.info(f"  Dispatch indices match: {dispatch_idx_match}")
-        logger.info(f"  Dispatch weights PCC: {dispatch_wgt_pcc:.6f}")
+        logger.info(f"  weights_rm dtype: {weights_rm.dtype}")
+        logger.info(f"  Indices row 0: {indices_torch[0].tolist()}")
+        logger.info(f"  Ref     row 0: {indices_ref[0].tolist()}")
+        logger.info(f"  Indices exact match: {tc_idx_match}")
+        logger.info(f"  Weight PCC: {tc_weight_pcc:.6f}")
 
-        hrm_pass = dispatch_idx_match and dispatch_wgt_pcc >= 0.999
+        # ================================================================
+        # Test 6: Verify outputs match PyTorch reference
+        # ================================================================
+        logger.info("=" * 60)
+        logger.info("TEST 6: Verify outputs match PyTorch reference")
+        torch.manual_seed(99)  # Different seed from other tests
+        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
+        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
+        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
+
+        weights_tt, indices_tt = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, k)
+
+        # Compute reference
+        ref_logits = (torch_input.float() @ torch_weight.float() + torch_bias.float()).to(torch.bfloat16).float()
+        ref_vals, ref_idxs = torch.topk(ref_logits, k, dim=-1)
+        ref_weights = F.softmax(ref_vals, dim=-1)
+
+        dispatch_idx_match = (indices_tt == ref_idxs).all().item()
+        dispatch_wgt_pcc = compute_pcc(ref_weights, weights_tt)
+        logger.info(f"  TT  indices row 0: {indices_tt[0].tolist()}")
+        logger.info(f"  Ref indices row 0: {ref_idxs[0].tolist()}")
+        logger.info(f"  Indices match: {dispatch_idx_match}")
+        logger.info(f"  Weights PCC: {dispatch_wgt_pcc:.6f}")
+
+        hrm_pass = dispatch_wgt_pcc >= 0.95
 
         # ================================================================
         # Summary

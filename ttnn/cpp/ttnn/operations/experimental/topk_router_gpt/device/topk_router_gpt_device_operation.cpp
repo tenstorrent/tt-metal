@@ -22,41 +22,29 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(const operatio
 
 spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto main_spec = tensor_args.output_tensor.tensor_spec();
-    if (attrs.produce_hidden_rm) {
-        auto input_shape = tensor_args.input_tensor.logical_shape();
-        auto B = input_shape[0];
-        auto dram_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto input_shape = tensor_args.input_tensor.logical_shape();
+    auto B = input_shape[0];
+    auto dram_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
-        // Slot 1: unused (output_tensor placeholder)
-        // Slot 2: indices_rm [B, k_padded] uint16 RM
-        uint32_t k_padded = ((attrs.k + 7) / 8) * 8;
-        auto idx_spec = TensorSpec(
-            ttnn::Shape({B, k_padded}), TensorLayout(DataType::UINT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
+    // Slot 0: indices_rm [B, k_padded] uint16 RM
+    uint32_t k_padded = ((attrs.k + 7) / 8) * 8;
+    auto idx_spec =
+        TensorSpec(ttnn::Shape({B, k_padded}), TensorLayout(DataType::UINT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
 
-        // Slot 3: weights_rm [B, k_padded] bf16 RM
-        auto wgt_spec = TensorSpec(
-            ttnn::Shape({B, k_padded}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
+    // Slot 1: weights_rm [B, k_padded] bf16 RM
+    auto wgt_spec = TensorSpec(
+        ttnn::Shape({B, k_padded}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), dram_rm));
 
-        return {main_spec, main_spec, idx_spec, wgt_spec};
-    }
-    return {main_spec, main_spec, main_spec, main_spec};
+    return {idx_spec, wgt_spec};
 }
 
 tensor_return_value_t TopkRouterGptDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    if (attrs.produce_hidden_rm) {
-        auto specs = compute_output_specs(attrs, tensor_args);
-        auto device = tensor_args.input_tensor.device();
-        auto idx_tensor = create_device_tensor(std::get<2>(specs), device);
-        auto wgt_tensor = create_device_tensor(std::get<3>(specs), device);
-        return {tensor_args.output_tensor, tensor_args.output_tensor, idx_tensor, wgt_tensor};
-    }
-    // Return the pre-allocated output tensor in all slots.
-    // Slots 1-3 are unused when produce_hidden_rm is false,
-    // but the framework requires valid tensors for all tuple elements.
-    auto& ot = tensor_args.output_tensor;
-    return {ot, ot, ot, ot};
+    auto specs = compute_output_specs(attrs, tensor_args);
+    auto device = tensor_args.input_tensor.device();
+    auto idx_tensor = create_device_tensor(std::get<0>(specs), device);
+    auto wgt_tensor = create_device_tensor(std::get<1>(specs), device);
+    return {idx_tensor, wgt_tensor};
 }
 
 std::tuple<TopkRouterGptDeviceOperation::operation_attributes_t, TopkRouterGptDeviceOperation::tensor_args_t>
@@ -64,14 +52,12 @@ TopkRouterGptDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const Tensor& bias_tensor,
-    const Tensor& output_tensor,
     uint32_t k,
     uint32_t num_experts,
-    bool untilize_output,
-    bool produce_hidden_rm) {
+    bool untilize_output) {
     return {
-        operation_attributes_t{k, num_experts, untilize_output, produce_hidden_rm},
-        tensor_args_t{input_tensor, weight_tensor, bias_tensor, output_tensor}};
+        operation_attributes_t{k, num_experts, untilize_output},
+        tensor_args_t{input_tensor, weight_tensor, bias_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt
