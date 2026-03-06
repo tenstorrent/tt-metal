@@ -63,10 +63,9 @@ class MoeSem:
     DOWN_PROJ_MCAST_RECEIVER = 11
     REDUCE_WORKER_FABRIC_BASE = 12  # 12, 13, 14, 15 per worker slot
     REDUCE_SYNC = 16
-    BCAST_REDUCE_SYNC = 17
-    REDUCE_AGG_SYNC = 18
-    REDUCE_PERSISTENT_FABRIC_SIGNAL = 19
-    NUM_SEMAPHORES = 20
+    REDUCE_AGG_SYNC = 17
+    REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
+    NUM_SEMAPHORES = 19
 
 
 @dataclass
@@ -811,7 +810,6 @@ class MoeRoutedExpertOp:
         expert_scale_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.EXPERT_SCALE_MCAST_RECEIVER]
         index_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.INDEX_MCAST_RECEIVER]
         down_proj_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_MCAST_RECEIVER]
-        bcast_reduce_sync_semaphore_addr = sem_addrs[MoeSem.BCAST_REDUCE_SYNC]
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
@@ -1738,7 +1736,6 @@ class MoeRoutedExpertOp:
             ("reduce_brisc_rt_arg_base", 0),
             ("reduce_brisc_fabric_rt_arg_base", 0),
             ("reduce_persistent_fabric_rt_arg_base", 18),
-            ("reduce_persistent_fabric_signal_enable", 0),
             # Broadcast (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb),
         ]
@@ -4224,23 +4221,6 @@ class MoeOp:
                 self.ncrisc_args[i] = ("bcast_ncrisc_common_rt_arg_base", bcast_ncrisc_base)
                 break
         self.ncrisc_common_rt_args.extend(bcast_ncrisc_common_rt_args)
-
-        if ctx.enable_reduce_to_one:
-            num_reduce_fabric_cores = len(ctx.reduce_params["fabric_cores"])
-            bcast_reduce_sync_sem_addr = self.sem_addrs[MoeSem.BCAST_REDUCE_SYNC]
-            self.ncrisc_args.extend(
-                [
-                    ("bcast_reduce_sync_sem_addr", bcast_reduce_sync_sem_addr),
-                    ("bcast_reduce_sync_num_fabric_cores", num_reduce_fabric_cores),
-                ]
-            )
-            self.brisc_args.extend(
-                [
-                    ("bcast_reduce_sync_sem_addr", bcast_reduce_sync_sem_addr),
-                    ("bcast_reduce_sync_noc_x", bcast_data_core_physical.x),
-                    ("bcast_reduce_sync_noc_y", bcast_data_core_physical.y),
-                ]
-            )
 
         if bcast_num_connections > 0:
             bcast_ncrisc_per_core = [(routed_ctx.sender_core, [])]
