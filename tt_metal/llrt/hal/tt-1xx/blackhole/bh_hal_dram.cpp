@@ -81,7 +81,7 @@ HalCoreInfoType create_dram_mem_map() {
              .local_init_addr = MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = DRISC_RESET_PC,
              .fw_launch_addr_value = MEM_DRISC_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS,
              .l1_noc_offset = DRAM_L1_NOC_OFFSET},
         },
     };
