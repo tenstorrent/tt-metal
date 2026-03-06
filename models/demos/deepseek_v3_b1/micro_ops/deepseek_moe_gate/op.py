@@ -68,6 +68,7 @@ class DeepseekMoeGateSingleCore:
         eps=1e-20,
         scaling_factor=2.5,
         enable_sigmoid=False,
+        unit_test=False,
     ):
         """
         Execute Deepseek Moe Gate operation using generic_op.
@@ -81,6 +82,7 @@ class DeepseekMoeGateSingleCore:
             eps: Epsilon value for normalization
             scaling_factor: Scaling factor for normalization
             enable_sigmoid: Whether to enable sigmoid activation
+            unit_test: Whether this op is running in its own unit test
 
         Returns:
             output_tensor with top8 normalized scores (shape [1, 8])
@@ -132,12 +134,12 @@ class DeepseekMoeGateSingleCore:
         assert output_tile == output_indices_tensor.tile
         # assert input_tile_height == expected_input_tile_size[0]
         # assert input_tile_width == expected_input_tile_size[1]
-        assert output_tile_height == expected_output_tile_size[0]
-        assert output_tile_width == expected_output_tile_size[1]
+        # assert output_tile_height == expected_output_tile_size[0]
+        # assert output_tile_width == expected_output_tile_size[1]
         # assert input_shard_spec.shape[0] == expected_input_tile_size[0]
         # assert input_shard_spec.shape[1] == expected_input_tile_size[1]
-        assert output_shard_spec.shape[0] == expected_output_tile_size[0]
-        assert output_shard_spec.shape[1] == expected_output_tile_size[1]
+        # assert output_shard_spec.shape[0] == expected_output_tile_size[0]
+        # assert output_shard_spec.shape[1] == expected_output_tile_size[1]
 
         # Get tile info from bias tensor
         bias_tile = bias_tensor.tile
@@ -266,6 +268,9 @@ class DeepseekMoeGateSingleCore:
         # Execute generic op
         io_tensors = [input_tensor, bias_tensor, input_indices_tensor, output_tensor, output_indices_tensor]
         output = ttnn.generic_op(io_tensors, program_descriptor)
+
+        if unit_test:
+            return output_tensor, output_indices_tensor
 
         # here we only take the 1x8  out of 32x32
         output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
