@@ -127,11 +127,16 @@ def run_demo(
     moe_layer_id_override: int | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
-    iterations = max_new_tokens
-    logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
+    # All ranks tokenize so they can agree on total_iterations.
+    tokenizer = load_tokenizer(tokenizer_name_or_path)
+    prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
+    if not prompt_ids:
+        prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
+
+    total_iterations = len(prompt_ids) + max_new_tokens
+    logger.info(f"Starting DeepSeek V3 B1 demo (total_iterations={total_iterations})")
 
     with open_mesh_device() as mesh_device:
-        # Initialize model pipeline
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             cache_path=cache_path,
@@ -142,22 +147,17 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
         )
 
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        if my_mesh_id == 0:
-            tokenizer = load_tokenizer(tokenizer_name_or_path)
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
-            logger.debug(f"Encoded prompt: {prompt_ids}")
-            if not prompt_ids:
-                prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
+        is_input_rank = model_pipeline.pipeline.is_input_rank
 
-            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
-                prompt_token_ids=prompt_ids,
-                max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
-                return_generated_tokens=True,
-            )
-            assert generated_tokens is not None
+        generated_tokens = model_pipeline.run_inference(
+            total_iterations=total_iterations,
+            prompt_token_ids=prompt_ids if is_input_rank else None,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=tokenizer.eos_token_id,
+            return_generated_tokens=is_input_rank,
+        )
+
+        if is_input_rank and generated_tokens:
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
