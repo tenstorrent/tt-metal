@@ -93,7 +93,8 @@ struct ReduceToOneB1 {
         uint32_t fabricRtArgBase = 0,
         uint32_t totalNumWorkers = 0,
         uint32_t aggOutputSizeBytes = 0,
-        uint32_t persistentFabricRtArgBase = 0>
+        uint32_t persistentFabricRtArgBase = 0,
+        uint32_t persistentFabricSignalEnable = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -115,6 +116,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
         static constexpr bool enable_downstream_socket = totalNumWorkers > 0;
         static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
+        static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
     };
 
     // Compute (TRISC) compile-time args
@@ -204,32 +206,6 @@ struct ReduceToOneB1 {
             }
         }
 
-        static FORCE_INLINE void send_persistent_next_iter_inc_via_fabric(const WorkerWriterArgs& args) {
-            if (args.persistent_enable == 0) {
-                return;
-            }
-
-            constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
-            PacketHeaderPool::reset();
-            auto route_id = PacketHeaderPool::allocate_header_n(1);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
-            set_unicast_route(
-                hdr,
-                static_cast<uint16_t>(args.persistent_dst_chip_id),
-                static_cast<uint16_t>(args.persistent_dst_mesh_id),
-                1);
-            hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                get_noc_addr(args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr), 1});
-
-            size_t arg_idx = CTArgs::persistent_fabric_rt_arg_base;
-            auto sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-            sender.open();
-            sender.wait_for_empty_write_slot();
-            sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
-            sender.close();
-            noc_async_full_barrier();
-        }
 #endif
 
         void impl([[maybe_unused]] const RTArgs& args) {
@@ -291,8 +267,42 @@ struct ReduceToOneB1 {
             // ================================================================
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
-                // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                    if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
+                        // Persistent fabric core: wait for aggregator signal, then send
+                        // cross-device atomic inc to bcast sender on entry device.
+                        // Persistent args start after the worker sem addrs.
+                        size_t p_idx = CTArgs::fabric_rt_arg_base + CTArgs::num_workers;
+                        uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_noc_x = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_noc_y = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_mesh_id = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_chip_id = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_sem_addr = get_arg_val<uint32_t>(p_idx++);
+
+                        volatile tt_l1_ptr uint32_t* wait_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
+                        noc_semaphore_wait_min(wait_sem_ptr, 1);
+                        unified_kernels::semaphore_dec(wait_sem_ptr);
+
+                        constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
+                        PacketHeaderPool::reset();
+                        auto route_id = PacketHeaderPool::allocate_header_n(1);
+                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
+                        set_unicast_route(
+                            hdr, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
+                        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr), 1});
+
+                        auto sender =
+                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                                p_idx);
+                        sender.open();
+                        sender.wait_for_empty_write_slot();
+                        sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
+                        sender.close();
+                        noc_async_full_barrier();
+                    }
                     return;
                 }
 
@@ -395,9 +405,12 @@ struct ReduceToOneB1 {
                         socket_barrier(sender_socket);
                         noc_async_write_barrier();
                         update_socket_config(sender_socket);
-                        DPRINT << "Aggregator update socket config done" << ENDL();
-                        send_persistent_next_iter_inc_via_fabric(args);
-                        DPRINT << "Aggregator send persistent next iter inc via fabric done" << ENDL();
+                        if (args.persistent_enable != 0) {
+                            uint64_t fc_sem = get_noc_addr(
+                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                            noc_semaphore_inc(fc_sem, 1);
+                            noc_async_write_barrier();
+                        }
                     } else if (args.agg_sem_l1_addr != 0) {
                         // Non-aggregator worker: signal the aggregator that our shard is ready.
                         uint64_t agg_sem_noc =
