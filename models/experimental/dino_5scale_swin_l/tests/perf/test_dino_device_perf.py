@@ -16,7 +16,7 @@ import pytest
 from models.perf.device_perf_utils import prep_device_perf_report, run_device_perf
 
 
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_dino_5scale():
     """
@@ -30,8 +30,7 @@ def test_perf_device_bare_metal_dino_5scale():
     num_iterations = 1
 
     command = (
-        "pytest --timeout=0 models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_dino_e2e.py"
-        "::test_ttnn_dino_e2e_pcc -sv"
+        "pytest  models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_dino_e2e.py" "::test_ttnn_dino_e2e_pcc -sv"
     )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
