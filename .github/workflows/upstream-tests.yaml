@@ -139,9 +139,11 @@ jobs:
 
           # Cabling descriptor configs referenced by cluster validation tests
           mkdir -p _extra_sources/tools/tests/scaleout/cabling_descriptors
-          cp -r tools/tests/scaleout/cabling_descriptors/ _extra_sources/tools/tests/scaleout/cabling_descriptors/ || true
+          cp tools/tests/scaleout/cabling_descriptors/* _extra_sources/tools/tests/scaleout/cabling_descriptors/ || true
           mkdir -p _extra_sources/tt_metal/fabric/cabling_descriptors
-          cp -r tt_metal/fabric/cabling_descriptors/ _extra_sources/tt_metal/fabric/cabling_descriptors/ || true
+          cp tt_metal/fabric/cabling_descriptors/* _extra_sources/tt_metal/fabric/cabling_descriptors/ || true
+          mkdir -p _extra_sources/tt_metal/soc_descriptors
+          cp tt_metal/soc_descriptors/*.yaml _extra_sources/tt_metal/soc_descriptors/ || true
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:

@@ -37,7 +37,7 @@ COPY _tests/ ./tests/
 COPY _extra_sources/tools/ ./tools/
 COPY _extra_sources/tt_metal/ ./tt_metal/
 
-RUN uv pip install $(ls -1 *.whl)
+RUN uv pip install tt-smi $(ls -1 *.whl)
 
 RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 \
     ./build/test/tt_metal/unit_tests_dispatch \
