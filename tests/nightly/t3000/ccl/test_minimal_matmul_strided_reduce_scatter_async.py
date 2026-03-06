@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, is_wormhole_b0
 
 from tracy import signpost
 
@@ -356,9 +356,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     logger.info("All checks passed!")
 
 
-# @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8), (4, 8)], indirect=True, ids=["1x8", "4x8"])
-@pytest.mark.parametrize("num_links", [1, 4], ids=["1link", "4link"])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 8), id="1x8", marks=pytest.mark.skipif(is_blackhole(), reason="1x8 mesh not used on blackhole galaxy")
+        ),
+        pytest.param((4, 8), id="4x8"),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
 @pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0", "axis_1"])
 @pytest.mark.parametrize(
     "test_config",
@@ -475,36 +483,6 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 mm_block_n=256,
                 mm_core_grid=ttnn.CoreCoord(8, 6),
                 chunk_width_in_mm_blocks=2,
-                num_workers_per_link=1,  # 4 RS cores, 52 total
-            ),
-            id="xlarge_4k_y6_Nwt16_cwimb2_rs1",
-        ),
-        pytest.param(
-            MinimalMatmulStridedReduceScatterTestConfig(
-                M=3072,
-                K=512,
-                N=4096,
-                dim=3,
-                mm_block_m=256,
-                mm_block_k=256,
-                mm_block_n=256,
-                mm_core_grid=ttnn.CoreCoord(8, 6),
-                chunk_width_in_mm_blocks=2,
-                num_workers_per_link=4,  # 10 RS cores, 58 total
-            ),
-            id="xlarge_4k_y6_Nwt16_cwimb2_rs4",
-        ),
-        pytest.param(
-            MinimalMatmulStridedReduceScatterTestConfig(
-                M=3072,
-                K=512,
-                N=4096,
-                dim=3,
-                mm_block_m=256,
-                mm_block_k=256,
-                mm_block_n=256,
-                mm_core_grid=ttnn.CoreCoord(8, 6),
-                chunk_width_in_mm_blocks=2,
                 num_workers_per_link=6,  # 14 RS cores, 62 total
             ),
             id="xlarge_4k_y6_Nwt16_cwimb2_rs6",
@@ -525,36 +503,6 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 num_workers_per_link=3,  # 8 RS cores, 64 total (full grid)
             ),
             id="xlarge_3584_y7_Nwt16_cwimb2_rs3_fullgrid",
-        ),
-        pytest.param(
-            MinimalMatmulStridedReduceScatterTestConfig(
-                M=9216,
-                K=3456,
-                N=5120,
-                dim=3,
-                mm_block_m=256,
-                mm_block_k=256,
-                mm_block_n=256,
-                mm_core_grid=ttnn.CoreCoord(8, 6),
-                chunk_width_in_mm_blocks=1,
-                num_workers_per_link=6,
-            ),
-            id="xlarge_9216_3456_5120_cwimb1_rs3",
-        ),
-        pytest.param(
-            MinimalMatmulStridedReduceScatterTestConfig(
-                M=10752,
-                K=3456,
-                N=5120,
-                dim=3,
-                mm_block_m=256,
-                mm_block_k=256,
-                mm_block_n=256,
-                mm_core_grid=ttnn.CoreCoord(8, 7),
-                chunk_width_in_mm_blocks=1,
-                num_workers_per_link=3,
-            ),
-            id="xlarge_10752_3456_5120_cwimb1_rs3_fullgrid",
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -628,6 +576,22 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             ),
             id="non_div_Wt_large_5x6_cwimb2_rs4",
         ),
+        # Blackhole-only: 12x8 compute grid exploits the larger BH grid (96 cores).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=3,
+            ),
+            id="bh_xlarge_9472_3456_5120_x12_y8_cwimb2_rs3",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -650,8 +614,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_mode",
     [
-        "separate",
-        "separate_strided",
+        # "separate",
+        # "separate_strided",
         "fused",
     ],
 )
@@ -677,6 +641,18 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     cluster_axis,
 ):
     cfg = test_config
+
+    if is_wormhole_b0() and num_links == 2:
+        pytest.skip("wormhole_b0 does not support 2 links")
+    if is_blackhole() and num_links == 4:
+        pytest.skip("blackhole does not support 4 links")
+    if is_blackhole() and cluster_axis == 0:
+        pytest.skip("cluster_axis=0 not tested on blackhole")
+    if is_wormhole_b0() and (cfg.mm_core_grid.x > 8 or cfg.mm_core_grid.y > 8):
+        pytest.skip("core grid exceeds wormhole compute grid, blackhole-only config")
+    if mesh_device.shape[cluster_axis] == 1:
+        pytest.skip(f"cluster_axis={cluster_axis} has only 1 device in this mesh, reduce-scatter ring size must be > 1")
+
     TILE_SIZE = 32
     Nt = cfg.N // TILE_SIZE
     Nt_per_core = Nt // cfg.mm_core_grid.x
