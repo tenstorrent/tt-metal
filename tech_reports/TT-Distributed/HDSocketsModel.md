@@ -422,10 +422,10 @@ noc_async_write_barrier();
 Not all chips on a Tenstorrent tray are equal from a host-connectivity standpoint. In a 32-chip Blackhole Galaxy system, **all 32 chips are directly MMIO-mapped**  -  each has its own physical PCIe connection to the host root complex. However, chips fall into two classes based on the **bandwidth** of that connection:
 
 - **High-bandwidth chips (ASIC 6 per tray, 4 total):** Gen 4 x8 PCIe link to the host root complex.
-- **Low-bandwidth chips (all others, 28 total):** Gen 4 x1 PCIe link (requires KMD >= 2.7 for correct link speed; see note below). Measured peak throughput values for these chips are presented in S.4.5.
+- **Low-bandwidth chips (all others, 28 total):** Gen 4 x1 PCIe link. Measured peak throughput values for these chips are presented in S.4.5.
 
 > **KMD >= 2.7 required for correct PCIe link speeds on low-bandwidth chips.**
-> Linux kernels 6.5 through 6.12 contain a quirk that can force all PCIe links to **Gen 1 (2.5 GT/s, ~250 MB/s)** during hot-plug enumeration on Blackhole Galaxy systems. KMD 2.7 detects this condition and retrains each link to its full speed. Linux 6.13+ does not have this quirk. Benchmark results for the 28 low-bandwidth chips in this report are only valid when running KMD >= 2.7; numbers collected on earlier KMD versions reflect Gen 1 performance (~250 MB/s) rather than the true Gen 4 x1 ceiling (~2 GB/s). See [ttkmd-2.7.0 release notes](https://github.com/tenstorrent/tt-kmd/releases/tag/ttkmd-2.7.0) for details.
+> Linux kernels 6.5 through 6.12 contain a quirk that can force PCIe links to Gen 1 speed during hot-plug enumeration on Blackhole Galaxy systems. KMD 2.7 detects this condition and retrains each link to full Gen 4 speed. Linux 6.13+ does not have this quirk. All results in this report were collected with KMD >= 2.7. See [ttkmd-2.7.0 release notes](https://github.com/tenstorrent/tt-kmd/releases/tag/ttkmd-2.7.0) for details.
 
 The **4 high-bandwidth chips** (one per tray, ASIC Location 6) have a full Gen 4 x8 link to the host PCIe root complex. Data written by the device kernel over NOC reaches host RAM in a single PCIe hop at full link bandwidth.
 
@@ -524,7 +524,15 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 ### 4.5 Multi-Chip Throughput
 
-> **Charts pending re-run with KMD >= 2.7.** Initial measurements for the 28 low-bandwidth chips were collected while those links were running at **Gen 1 (2.5 GT/s)** due to a Linux kernel 6.5-6.12 quirk (see S.4 hardware overview). KMD 2.7 retrains all links to Gen 4 speed; results will be updated once benchmarks are re-run on a KMD 2.7 system.
+All 32 chips are swept by `BM_D2HSocketMultiChipThroughput` and `BM_H2DSocketMultiChipThroughput` (see S.7) at 256 KB pages and 1 GB total transfer. The bar charts show peak throughput (GB/s) per chip, grouped by FIFO size, making it easy to spot which chips plateau earlier or hit a lower ceiling.
+
+**D2H  -  all chips x FIFO size (256 KB pages, 1 GB total):**
+
+![D2H Multi-Chip Throughput by Chip](asdasd/d2h_mc_throughput_bar.png)
+
+**H2D (DEVICE\_PULL)  -  all chips x FIFO size (256 KB pages, 1 GB total):**
+
+![H2D Multi-Chip Throughput by Chip](asdasd/h2d_mc_throughput_bar.png)
 
 ---
 
@@ -567,7 +575,7 @@ Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  s
 
 All benchmarks require a system with vIOMMU enabled. They will skip automatically on unsupported systems via the `GetMemoryPinningParameters` check (`state.SkipWithMessage`).
 
-> **Prerequisite  -  KMD >= 2.7:** Linux kernels 6.5-6.12 force all Blackhole Galaxy PCIe links to Gen 1 during hot-plug enumeration. KMD 2.7 retrains them to full Gen 4 speed. Results collected on earlier KMD versions will show ~250 MB/s for the 28 low-bandwidth chips instead of the true ~2 GB/s Gen 4 x1 ceiling. Verify with `cat /sys/bus/pci/devices/<bdf>/current_link_speed` before benchmarking.
+> **Prerequisite  -  KMD >= 2.7:** Linux kernels 6.5-6.12 contain a quirk that forces PCIe links to Gen 1 speed during hot-plug enumeration on Blackhole Galaxy systems. KMD 2.7 corrects this. Verify link speed with `cat /sys/bus/pci/devices/<bdf>/current_link_speed` before benchmarking.
 
 Single-chip benchmarks target **Tray 1, ASIC Location 6**  -  one of the 4 chips with PCIe Gen 4 x8  -  as a fixed reference for peak numbers. The multi-chip benchmark sweeps all 32 chips to capture the full spread of performance regimes.
 
