@@ -22,10 +22,12 @@ from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
 from ttml.modules import LoraConfig, LoraModel
 
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BATCH_SIZE = 1
-STEPS = 2000
+STEPS = 20
 LR = 3e-4
 WEIGHT_DECAY = 0.01
 PRINT_INTERVAL = 1
@@ -87,11 +89,22 @@ def parse_args():
         help="Path to model config YAML (e.g. configs/model_configs/nanollama3.yaml). "
         "Resolved relative to tt-train/ if not absolute.",
     )
+    parser.add_argument(
+        "--track_memory",
+        action="store_true",
+        help="Enable memory usage tracking (prints memory stats after first iteration)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    # ── Memory tracking ───────────────────────────────────────────────────────
+    memory_guard = None
+    if args.track_memory:
+        print("\nMemory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
 
     # ── Data ──────────────────────────────────────────────────────────────────
     set_seed(42)
@@ -133,28 +146,38 @@ def main():
 
     model = Llama(llama_cfg)
 
+    if args.track_memory:
+        MemoryUsageTracker.snapshot("MODEL_CREATION")
+
     lora_config = LoraConfig(
         rank=LORA_RANK, alpha=LORA_ALPHA, target_modules=LORA_TARGET_MODULES
     )
     model = LoraModel(model, lora_config)
 
-    # ── Train only LoRA parameters ────────────────────────────────────────────
+    if args.track_memory:
+        MemoryUsageTracker.snapshot("LORA_INJECTION")
+
+    # ── Trainable parameters ──────────────────────────────────────────────────
     all_params = model.parameters()
-    lora_params = {
+    train_params = {
         k: v for k, v in all_params.items() if "lora_A" in k or "lora_B" in k
     }
 
     print(f"Total params: {len(all_params)}")
-    print(f"Trainable (LoRA): {len(lora_params)}")
+    print(f"Trainable (LoRA): {len(train_params)}")
     for name, tensor in sorted(all_params.items()):
-        print(f"  {'*' if name in lora_params else ' '} {name}: {tensor.shape()}")
+        print(f"  {'*' if name in train_params else ' '} {name}: {tensor.shape()}")
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
     adamw_cfg = ttml.optimizers.AdamWConfig.make(LR, 0.9, 0.999, 1e-8, WEIGHT_DECAY)
-    optimizer = ttml.optimizers.AdamW(lora_params, adamw_cfg)
+    optimizer = ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
+
+    if args.track_memory:
+        MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
     # ── Training loop ─────────────────────────────────────────────────────────
     model.train()
+    is_first_step = True
 
     for step in range(1, STEPS + 1):
         t0 = time.perf_counter()
@@ -172,16 +195,32 @@ def main():
         optimizer.zero_grad()
         logits = model(tt_x, None)
         loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
+        loss_val = float(loss.get_value().item())
+
+        if args.track_memory and is_first_step:
+            MemoryUsageTracker.snapshot("FORWARD_PASS")
+
         loss.backward(retain_graph=False)
+
+        if args.track_memory and is_first_step:
+            MemoryUsageTracker.snapshot("BACKWARD_PASS")
+
         ttml.autograd.AutoContext.get_instance().reset_graph()
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000
 
         if step % PRINT_INTERVAL == 0 or step == 1:
-            loss_val = loss.to_numpy(ttnn.DataType.FLOAT32).item()
             print(
                 f"step {step:>4}/{STEPS}  loss={loss_val:.4f}  step_time={step_ms:.1f}ms"
             )
+
+        if args.track_memory and is_first_step:
+            is_first_step = False
+            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+            MemoryUsageTracker.print_memory_usage()
+            MemoryUsageTracker.clear()
+            if memory_guard:
+                memory_guard.release()
 
     ttml.autograd.AutoContext.get_instance().close_device()
 
