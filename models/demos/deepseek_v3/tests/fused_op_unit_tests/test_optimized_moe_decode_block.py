@@ -32,36 +32,36 @@ def tt_to_torch_dtype(tt_dtype):
 
 
 def create_torch_w0_tensors(L, E, H, N):
-    # torch_w0_tensors = []
-    # for e in range(E):
-    #     torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    #     torch_w0_tensors.append(torch_w0)
-    torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    torch_w0_tensors = [torch_w0.clone() for _ in range(E)]
+    torch_w0_tensors = []
+    for e in range(E):
+        torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+        torch_w0_tensors.append(torch_w0)
+    # torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    # torch_w0_tensors = [torch_w0.clone() for _ in range(E)]
 
     # TODO: (GR)
     return torch_w0_tensors
 
 
 def create_torch_w1_tensors(L, E, H, N):
-    # torch_w1_tensors = []
-    # for e in range(E):
-    #     torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    #     torch_w1_tensors.append(torch_w1)
-    torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
-    torch_w1_tensors = [torch_w1.clone() for _ in range(E)]
+    torch_w1_tensors = []
+    for e in range(E):
+        torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+        torch_w1_tensors.append(torch_w1)
+    # torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    # torch_w1_tensors = [torch_w1.clone() for _ in range(E)]
 
     # TODO: (GR)
     return torch_w1_tensors
 
 
 def create_torch_w2_tensors(L, E, N, H):
-    # torch_w2_tensors = []
-    # for e in range(E):
-    #     torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
-    #     torch_w2_tensors.append(torch_w2)
-    torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
-    torch_w2_tensors = [torch_w2.clone() for _ in range(E)]
+    torch_w2_tensors = []
+    for e in range(E):
+        torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
+        torch_w2_tensors.append(torch_w2)
+    # torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
+    # torch_w2_tensors = [torch_w2.clone() for _ in range(E)]
 
     # TODO: (GR)
     return torch_w2_tensors
@@ -462,7 +462,7 @@ def gen_combine_golden(
 
                 if e >= lower_expert and e < upper_expert:
                     # TODO: (GR) use actual expert index
-                    contrib = gen_matmul_golden(token, torch_w0_tensors[0], torch_w1_tensors[0], torch_w2_tensors[0])
+                    contrib = gen_matmul_golden(token, torch_w0_tensors[e], torch_w1_tensors[e], torch_w2_tensors[e])
 
                     torch_combine_ref_tensor[k, global_b, :] = contrib[0, 0, 0, :]
 
@@ -581,9 +581,9 @@ def gen_output_reference(
             # get the output
             matmul_golden = gen_matmul_golden(
                 torch_dispatch_input_tensor[token, :, :, :],
-                torch_w0_tensors[0],
-                torch_w1_tensors[0],
-                torch_w2_tensors[0],
+                torch_w0_tensors[expert],
+                torch_w1_tensors[expert],
+                torch_w2_tensors[expert],
             )
 
             # TODO: (GR)
@@ -743,14 +743,14 @@ def test_optimized_moe_decode_block(
     # ------------------------------------------------------------------------
     ring2cores, compute_matmul_dram_core_range_set = gen_compute_matmul_cores(mesh_device)
     torch_w0_tensors, torch_w1_tensors, torch_w2_tensors = gen_torch_compute_matmul_weight_tensors(
-        num_layers, 2, hidden_size, matmul_N
+        num_layers, experts, hidden_size, matmul_N
     )
 
     # Merge the weight tensors that belong to different experts on the same device
     # Then reorder the merged weights into their sharded format
-    torch_w0_w1_reordered_tensors = []
-    torch_w2_reordered_tensors = []
-    for i in range(0, 2, 2):
+    torch_w0_w1_reordered_tensors = [None] * 128
+    torch_w2_reordered_tensors = [None] * 128
+    for i in range(0, experts, 2):
         torch_w0 = torch.cat([torch_w0_tensors[i], torch_w0_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
         torch_w1 = torch.cat([torch_w1_tensors[i], torch_w1_tensors[i + 1]], dim=1)  # (L, 1, H, N) -> (L, E/D, H, N)
         torch_w2 = torch.cat([torch_w2_tensors[i], torch_w2_tensors[i + 1]], dim=1)  # (L, 1, N, H) -> (L, E/D, N, H)
@@ -759,12 +759,14 @@ def test_optimized_moe_decode_block(
             torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, matmul_N, ring2cores
         )
 
-        torch_w0_w1_reordered_tensors.append(torch_w0_w1_reordered)
-        torch_w2_reordered_tensors.append(torch_w2_reordered)
+        iteration = i // 2
+        mapped_index = (iteration % 16) * 8 + (iteration // 16)
+        torch_w0_w1_reordered_tensors[mapped_index] = torch_w0_w1_reordered
+        torch_w2_reordered_tensors[mapped_index] = torch_w2_reordered
 
     # concat before sending to device
-    torch_w0_w1_reordered_tensor = torch_w0_w1_reordered_tensors[0]  # torch.cat(torch_w0_w1_reordered_tensors, dim=0)
-    torch_w2_reordered_tensor = torch_w2_reordered_tensors[0]  # torch.cat(torch_w2_reordered_tensors, dim=0)
+    torch_w0_w1_reordered_tensor = torch.cat(torch_w0_w1_reordered_tensors, dim=0)  # torch_w0_w1_reordered_tensors[0]
+    torch_w2_reordered_tensor = torch.cat(torch_w2_reordered_tensors, dim=0)  # torch_w2_reordered_tensors[0]
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
@@ -785,7 +787,7 @@ def test_optimized_moe_decode_block(
         layout=ttnn.TILE_LAYOUT,
         dtype=w0_w1_dtype,
         memory_config=w0_w1_memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
     # ------------------------------------------------------------------------
@@ -805,7 +807,7 @@ def test_optimized_moe_decode_block(
         layout=ttnn.TILE_LAYOUT,
         dtype=w2_dtype,
         memory_config=w2_memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
     logger.info(f"Done creating constant input tensors")
