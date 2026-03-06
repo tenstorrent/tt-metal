@@ -93,7 +93,7 @@ CoreType: TypeAlias = Literal[CORE_TYPES]
 class CheckResult:
     result: object = recurse_field()
 
-    # Hack to make result the last filed to perserve header order
+    # Hack to make result the last field to preserve header order
     def __post_init__(cls):
         cls.__dataclass_fields__["result"] = cls.__dataclass_fields__.pop("result")
 

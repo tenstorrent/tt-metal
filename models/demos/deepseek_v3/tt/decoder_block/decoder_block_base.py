@@ -67,7 +67,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
             "mla_norm": mla_norm_config,
-            "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
+            "mla_reshard": mla_config["mla1d"]["wq_kv_a_in0_memory_config"],
             "mla": mla_config,
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,

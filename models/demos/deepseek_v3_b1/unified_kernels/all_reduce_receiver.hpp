@@ -110,15 +110,10 @@ struct AllReduceReceiver {
     template <typename ReaderCT, typename ComputeCT>
     class Op {
     public:
-        void operator()(const RTArgs& args) {
-            size_t unused = 0;
-            impl(args, unused);
-        }
-
-        void operator()(const RTArgs& args, size_t& fabric_arg_idx) { impl(args, fabric_arg_idx); }
+        void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] size_t& fabric_arg_idx) {
+        void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Reader) - waits for remote data, pushes to compute

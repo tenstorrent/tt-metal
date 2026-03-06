@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ""
+      enable-tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Whether Tracy profiling is enabled in the build"
 
 jobs:
   generate-matrix:
@@ -45,6 +50,7 @@ jobs:
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
+            { "name": "(Galaxy) DeepSeek final-op-unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "final-op-unit", "timeout": 150, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" }
           ]')
 
@@ -86,6 +92,11 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
+        # Required for BenchmarkData to save to Superset
+        CI: true
+        GITHUB_ACTIONS: true
+        # Indicate if Tracy profiling is available in this build
+        TT_METAL_TRACY_BUILD: ${{ inputs.enable-tracy && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -147,7 +158,7 @@ jobs:
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
-        if: ${{ matrix.test-group.test-type == 'module' }}
+        if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: 10
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
@@ -156,7 +167,51 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
+      - name: Run DeepSeek op unit tests
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          echo "Skipping separate functional fused-op run for final-op-unit."
+          echo "final-op-unit now uses Tracy-backed device perf tests as the single execution path."
+      - name: Check device performance test availability
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        run: |
+          if [ "${{ inputs.enable-tracy }}" != "true" ]; then
+            echo "ERROR: final-op-unit requires Tracy-enabled execution for fused-op device perf tests."
+            echo "Set enable-tracy: true in workflow dispatch/caller."
+            exit 1
+          fi
+          echo "✓ Tracy profiling ENABLED - final-op-unit device perf tests will run"
+      - name: Run DeepSeek op unit tests (Device Performance)
+        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+
+          echo "=============================================="
+          echo "Device Performance Tests"
+          echo "=============================================="
+          echo "DeepSeek fused-op device perf tests (CI-curated selection)"
+          CI_FUSED_OP_DEVICE_PERF_K_EXPR='
+          (
+            (test_ds_embedding_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_all_gather_embedding_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_lm_head_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_rms_norm_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_distributed_norm_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_ff1_3_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_mul_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_reduce_scatter_post_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
+            (test_ds_all_gather_preff1_3_device_perf and ((decode and 1) or (prefill and 128)))
+          )'
+          CI_FUSED_OP_DEVICE_PERF_K_EXPR="$(printf '%s' "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests -k "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" --timeout 600 --durations=0
+
+          echo "=============================================="
+          echo "All device perf tests completed!"
+          echo "=============================================="
       - name: Run DeepSeek long seq len module tests
         if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
