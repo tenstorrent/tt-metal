@@ -302,9 +302,9 @@ TEST_F(GeluFwUlpTest, NearZeroRegion) {
 //   x <= -13.1875: saturation to 0
 //   (-13.1875, -5]: exp-based asymptotic
 //   [-5, -3): left CDF polynomial
-//   [-3, 3): core CDF polynomial
-//   x >= 3.0: identity (return x)
-//   With RNE rounding, GELU(x) rounds to x for all BF16 x >= ~2.78
+//   [-3, 2.78125): core CDF polynomial
+//   x >= 2.78125: identity (return x)
+//   2.78125 (BF16 0x4032) is the exact boundary where GELU rounds to x with RNE
 TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     std::vector<float> input_values;
     input_values.reserve(70000);
@@ -370,8 +370,8 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
         {"Saturation to 0 (x <= -13.1875)"},
         {"Exp-based (-13.1875, -5]"},
         {"Left CDF poly [-5, -3)"},
-        {"Core CDF poly [-3, 3)"},
-        {"Identity (x >= 3)"},
+        {"Core CDF poly [-3, 2.78125)"},
+        {"Identity (x >= 2.78125)"},
     };
 
     int overall_max_ulp = 0;
@@ -396,10 +396,10 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
             region_idx = 1;
         } else if (x < -3.0f) {
             region_idx = 2;
-        } else if (x < 3.0f) {
+        } else if (x < 2.78125f) {
             region_idx = 3;
         } else {
-            region_idx = 4;  // Identity (x >= 3.0)
+            region_idx = 4;  // Identity (x >= 2.78125)
         }
 
         regions[region_idx].count++;
@@ -445,7 +445,7 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
         2,  // Exp-based: allow 2 for hardware precision
         2,  // Left CDF poly: allow 2
         2,  // Core CDF poly: allow 2
-        0,  // Identity (x >= 3.0): exact (GELU rounds to x with RNE)
+        0,  // Identity (x >= 2.78125): exact (GELU rounds to x with RNE)
     };
 
     for (size_t r = 0; r < regions.size(); ++r) {
@@ -589,6 +589,193 @@ TEST_F(GeluFwUlpTest, ReferenceImplementationVerification) {
     std::cout << "GELU(100) = " << gelu_100 << " (expected: ~100)\n";
     std::cout << "GELU(-100) = " << gelu_neg100 << " (expected: ~0)\n";
     std::cout << "GELU(-0.751) = " << gelu_min << " (expected: local minimum ~-0.177)\n";
+}
+
+// Saturation boundary verification: finds the golden reference's natural
+// saturation boundaries and verifies the kernel gives ULP=0 in both tails.
+//
+// The golden's boundaries are where GELU(x) naturally rounds to 0 (negative
+// tail) or to x (positive tail) in BF16 with RNE rounding. These may differ
+// from the kernel's hardcoded thresholds (-13.1875 and 3.0).
+TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
+    // Collect all valid BF16 values, sorted
+    std::vector<float> all_values;
+    for (uint32_t bits = 0; bits <= 0xFFFF; ++bits) {
+        uint16_t bf16_bits = static_cast<uint16_t>(bits);
+        if ((bf16_bits & bf16_ulp_fw::BF16_EXP_MASK) == bf16_ulp_fw::BF16_EXP_MASK &&
+            (bf16_bits & bf16_ulp_fw::BF16_MANTISSA_MASK) != 0) {
+            continue;
+        }
+        if (bf16_bits == bf16_ulp_fw::BF16_POS_INF || bf16_bits == bf16_ulp_fw::BF16_NEG_INF) {
+            continue;
+        }
+        if (bf16_ulp_fw::is_bf16_denormal(bf16_bits)) {
+            continue;
+        }
+        all_values.push_back(bf16_ulp_fw::bf16_bits_to_float(bf16_bits));
+    }
+    std::sort(all_values.begin(), all_values.end());
+
+    // --- Find golden saturation boundaries ---
+    // There are TWO zero regions for negative x:
+    //   1. Deep negative saturation: x < ~-13 where GELU(x) mathematically -> 0
+    //   2. Near-zero FTZ: tiny |x| where GELU(x) is a BF16 denormal -> flushed to 0
+    // We want the deep negative boundary (region 1), not the near-zero FTZ.
+
+    // Negative tail: scan from most negative toward zero.
+    // The deep saturation region has GELU == 0. At some point it becomes non-zero.
+    float neg_sat_boundary_zero = 0;     // least negative x still in deep zero region
+    float neg_sat_boundary_nonzero = 0;  // first x past boundary (GELU != 0)
+    bool found_neg_transition = false;
+    for (float x : all_values) {
+        if (x >= 0.0f) {
+            break;
+        }
+        float expected = bf16_ulp_fw::gelu_expected_bf16_daz(x);
+        if (!found_neg_transition) {
+            if (expected == 0.0f) {
+                neg_sat_boundary_zero = x;
+            } else {
+                neg_sat_boundary_nonzero = x;
+                found_neg_transition = true;
+            }
+        }
+    }
+
+    // Positive tail: scan from smallest positive upward.
+    // Find the first x where GELU(x) == x in BF16, and the last where it doesn't.
+    float pos_first_identity = 0;
+    float pos_last_non_identity = 0;
+    bool found_pos_identity = false;
+    for (float x : all_values) {
+        if (x <= 0.0f) {
+            continue;
+        }
+        float expected = bf16_ulp_fw::gelu_expected_bf16_daz(x);
+        float x_bf16 = bf16_ulp_fw::bf16_bits_to_float(bf16_ulp_fw::float_to_bf16_bits(x));
+        if (expected == x_bf16) {
+            if (!found_pos_identity) {
+                pos_first_identity = x;
+                found_pos_identity = true;
+            }
+        } else {
+            pos_last_non_identity = x;
+        }
+    }
+
+    std::cout << "\n============================================================\n";
+    std::cout << "GELU FORWARD SATURATION BOUNDARY VERIFICATION\n";
+    std::cout << "============================================================\n";
+    std::cout << "\nGolden reference saturation boundaries (BF16 RNE model):\n";
+    std::cout << "  Negative zero tail (deep saturation):\n";
+    std::cout << "    Last x in zero region:     " << std::fixed << std::setprecision(4) << neg_sat_boundary_zero
+              << " (0x" << std::hex << bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_zero) << std::dec << ")\n";
+    std::cout << "    First x past boundary:     " << std::fixed << std::setprecision(4) << neg_sat_boundary_nonzero
+              << " (0x" << std::hex << bf16_ulp_fw::float_to_bf16_bits(neg_sat_boundary_nonzero) << std::dec << ")\n";
+    std::cout << "    Kernel threshold:           -13.1875\n";
+    std::cout << "  Positive identity tail:\n";
+    std::cout << "    First x with GELU(x) == x: " << std::fixed << std::setprecision(4) << pos_first_identity << " (0x"
+              << std::hex << bf16_ulp_fw::float_to_bf16_bits(pos_first_identity) << std::dec << ")\n";
+    std::cout << "    Last x with GELU(x) != x:  " << std::fixed << std::setprecision(4) << pos_last_non_identity
+              << " (0x" << std::hex << bf16_ulp_fw::float_to_bf16_bits(pos_last_non_identity) << std::dec << ")\n";
+    std::cout << "    Kernel threshold:           2.78125\n";
+
+    // --- Collect tail values for hardware verification ---
+    // Negative tail: only deep saturation region (x <= neg_sat_boundary_zero)
+    std::vector<float> neg_tail_values;
+    // Positive tail: golden says identity (x >= pos_first_identity)
+    std::vector<float> pos_tail_values;
+    for (float x : all_values) {
+        if (x < 0.0f && x <= neg_sat_boundary_zero) {
+            neg_tail_values.push_back(x);
+        }
+        if (x > 0.0f && x >= pos_first_identity) {
+            pos_tail_values.push_back(x);
+        }
+    }
+
+    std::cout << "\n  Negative zero tail: " << neg_tail_values.size() << " BF16 values\n";
+    std::cout << "  Positive identity tail: " << pos_tail_values.size() << " BF16 values\n";
+
+    // Combine both tails for a single device run
+    std::vector<float> tail_values;
+    tail_values.insert(tail_values.end(), neg_tail_values.begin(), neg_tail_values.end());
+    size_t neg_count = neg_tail_values.size();
+    tail_values.insert(tail_values.end(), pos_tail_values.begin(), pos_tail_values.end());
+
+    const size_t tile_size = tt::constants::TILE_HW;
+    size_t padded_size = ((tail_values.size() + tile_size - 1) / tile_size) * tile_size;
+    tail_values.resize(padded_size, 0.0f);
+
+    uint32_t num_tiles = static_cast<uint32_t>(padded_size / tile_size);
+    std::array<uint32_t, 4> dims = {1, 1, num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+
+    std::vector<::bfloat16> bf16_inputs;
+    for (float x : tail_values) {
+        bf16_inputs.push_back(::bfloat16(x));
+    }
+
+    tt::tt_metal::TensorSpec tensor_spec(
+        tt::tt_metal::Shape(dims),
+        tt::tt_metal::TensorLayout(
+            DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), tt::tt_metal::MemoryConfig{}));
+
+    auto input_tensor = tt::tt_metal::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
+    auto result_tensor = ttnn::gelu(input_tensor, false);
+    auto output_cpu = ttnn::from_device(result_tensor);
+    auto output_vec = output_cpu.to_vector<::bfloat16>();
+
+    // Verify negative tail: all should produce 0
+    int neg_tail_max_ulp = 0;
+    float neg_tail_worst_x = 0;
+    int neg_tail_nonzero_count = 0;
+    for (size_t i = 0; i < neg_count; ++i) {
+        float actual = static_cast<float>(output_vec[i]);
+        if (actual != 0.0f) {
+            neg_tail_nonzero_count++;
+            float expected = bf16_ulp_fw::gelu_expected_bf16_daz(neg_tail_values[i]);
+            int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
+            if (ulp > neg_tail_max_ulp) {
+                neg_tail_max_ulp = ulp;
+                neg_tail_worst_x = neg_tail_values[i];
+            }
+        }
+    }
+
+    // Verify positive tail: all should produce identity (actual == x)
+    int pos_tail_max_ulp = 0;
+    float pos_tail_worst_x = 0;
+    int pos_tail_non_identity_count = 0;
+    for (size_t i = 0; i < pos_tail_values.size(); ++i) {
+        float actual = static_cast<float>(output_vec[neg_count + i]);
+        float x_bf16 = bf16_ulp_fw::bf16_bits_to_float(bf16_ulp_fw::float_to_bf16_bits(pos_tail_values[i]));
+        if (actual != x_bf16) {
+            pos_tail_non_identity_count++;
+            float expected = bf16_ulp_fw::gelu_expected_bf16_daz(pos_tail_values[i]);
+            int32_t ulp = bf16_ulp_fw::ulp_distance_bf16_daz(actual, expected);
+            if (ulp > pos_tail_max_ulp) {
+                pos_tail_max_ulp = ulp;
+                pos_tail_worst_x = pos_tail_values[i];
+            }
+        }
+    }
+
+    std::cout << "\nHardware verification:\n";
+    std::cout << "  Negative zero tail:     " << neg_tail_values.size() << " values, " << neg_tail_nonzero_count
+              << " non-zero, max ULP=" << neg_tail_max_ulp << "\n";
+    std::cout << "  Positive identity tail: " << pos_tail_values.size() << " values, " << pos_tail_non_identity_count
+              << " non-identity, max ULP=" << pos_tail_max_ulp << "\n";
+    std::cout << "============================================================\n";
+
+    EXPECT_EQ(neg_tail_max_ulp, 0) << "Negative saturation tail should have ULP=0 (worst at x=" << neg_tail_worst_x
+                                   << ")";
+    EXPECT_EQ(neg_tail_nonzero_count, 0) << neg_tail_nonzero_count << " negative tail values returned non-zero";
+    // Positive identity tail: kernel threshold (2.78125) matches golden boundary exactly.
+    // All values x >= 2.78125 should return x with ULP=0.
+    EXPECT_EQ(pos_tail_max_ulp, 0) << "Positive identity tail should have ULP=0 (worst at x=" << pos_tail_worst_x
+                                   << ")";
+    EXPECT_EQ(pos_tail_non_identity_count, 0)
+        << pos_tail_non_identity_count << " positive tail values returned non-identity";
 }
 
 // Correctness guard: key points spanning all 6 kernel code paths.
