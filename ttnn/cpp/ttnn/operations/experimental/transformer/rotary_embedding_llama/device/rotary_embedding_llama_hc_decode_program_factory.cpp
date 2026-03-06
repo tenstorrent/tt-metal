@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_llama_hc_decode_program_factory.hpp"
-#include <tt-metalium/work_split.hpp>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -47,13 +48,6 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
 
     // Parallelise over (head, batch_tile) pairs.
-    // For simplicity, distribute whole heads across cores; each core handles
-    // [head_start, head_end) × [0, batch_t).  If more cores are available than
-    // heads, we further split the batch_t tiles within each head.
-    //
-    // total_work_units  = num_heads * batch_t
-    // We use at most total_work_units cores.
-
     const uint32_t total_work_units = num_heads * batch_t;
 
     auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
@@ -81,14 +75,62 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     uint32_t output_cb_index = CBIndex::c_16;
 
-    // CB sizes: I/O CBs are double-buffered to overlap NOC reads/writes with compute.
-    // The reader can begin issuing NOC reads for iteration i+1 while compute
-    // processes iteration i.  The output CB is doubled so the writer can drain
-    // iteration i while compute fills iteration i+1.
-    // Intermediate CBs are single-buffered: they are produced and consumed entirely
-    // within one compute iteration and don't benefit from double-buffering.
+    // ---- Decide whether to use the cos/sin cache optimization ----
+    // When !freq_per_head, cos/sin are the same across all heads.  A core that
+    // handles multiple heads can load cos/sin once for its batch-tile range and
+    // reuse them across all heads, avoiding repeated NOC reads.
+    //
+    // The maximum batch tiles any core handles (worst case for CB sizing) is
+    // determined by the work distribution below.  In the !more_cores_than_heads
+    // case every core handles all batch_t tiles; in the more_cores_than_heads
+    // case each core handles ceil(batch_t / cores_per_head) tiles.
+    const bool more_cores_than_heads = (num_cores_used > num_heads);
+    const uint32_t max_batch_t_per_core =
+        !more_cores_than_heads ? batch_t : (batch_t + (num_cores_used / num_heads) - 1) / (num_cores_used / num_heads);
+
+    // Fixed CB budget for non-cos/sin CBs (bytes):
+    //   input (2x) + output (2x) + trans_mat (1x) + 3 intermediates (1x each)
+    //   = (2 + 2) * head_dim_t * tile_size + tile_size + 3 * head_dim_t * tile_size
+    //   = (7 * head_dim_t + 1) * tile_size
+    const uint32_t fixed_cb_bytes =
+        (7 * head_dim_t + 1) * input_single_tile_size;  // conservative; all dtypes are the same
+
+    // Budget for cos/sin: how many bytes remain from a safe L1 threshold.
+    // We use a conservative 400 KB for kernel binary + stack + other overhead,
+    // leaving ~1060 KB out of 1464 KB for CBs on Wormhole.
+    constexpr uint32_t l1_cb_budget_bytes = 1060 * 1024;
+    const uint32_t cs_budget_bytes = (l1_cb_budget_bytes > fixed_cb_bytes) ? (l1_cb_budget_bytes - fixed_cb_bytes) : 0;
+
+    // Bytes needed to cache all cos/sin tiles for the worst-case core.
+    const uint32_t cs_cache_bytes = max_batch_t_per_core * head_dim_t * (cos_single_tile_size + sin_single_tile_size);
+
+    // Enable cache only when it benefits (multiple heads per core, !freq_per_head)
+    // and the cached cos/sin fit in L1 alongside the other CBs.
+    // Cache is beneficial when a core handles >1 head (i.e., !more_cores_than_heads and
+    // num_heads > num_cores_used).  With one head per core there is nothing to reuse
+    // across heads so the fast path saves no NOC reads; fall back to reload mode.
+    const bool more_heads_than_cores = !more_cores_than_heads && (num_heads > num_cores_used);
+    const bool reload_cos_sin = freq_per_head || !more_heads_than_cores || (cs_cache_bytes > cs_budget_bytes);
+
+    log_debug(
+        tt::LogOp,
+        "RotaryEmbeddingLlamaHCDecode: freq_per_head={}, more_heads_than_cores={}, "
+        "max_batch_t_per_core={}, cs_cache_bytes={}, cs_budget_bytes={}, reload_cos_sin={}",
+        freq_per_head,
+        more_heads_than_cores,
+        max_batch_t_per_core,
+        cs_cache_bytes,
+        cs_budget_bytes,
+        reload_cos_sin);
+
+    // ---- CB sizes ----
+    // I/O CBs (input, output): double-buffered to overlap NOC and compute.
+    // cos/sin CBs: sized to hold the cached tiles when reload_cos_sin=false,
+    //              otherwise double-buffered (same as input).
+    // Intermediate CBs: single-buffered (produced and consumed within one iteration).
     const uint32_t num_io_tiles = 2 * head_dim_t;
     const uint32_t num_interm_tiles = head_dim_t;
+    const uint32_t num_cs_tiles = reload_cos_sin ? num_io_tiles : (max_batch_t_per_core * head_dim_t);
 
     tt_metal::CreateCircularBuffer(
         program,
@@ -99,13 +141,13 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
     tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        tt_metal::CircularBufferConfig(num_io_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_cs_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
             .set_page_size(cos_cb_index, cos_single_tile_size));
 
     tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        tt_metal::CircularBufferConfig(num_io_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_cs_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
             .set_page_size(sin_cb_index, sin_single_tile_size));
 
     tt_metal::CreateCircularBuffer(
@@ -151,6 +193,7 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         (uint32_t)batch_t,
         (uint32_t)head_dim_t,
         (uint32_t)freq_per_head,
+        (uint32_t)reload_cos_sin,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
@@ -190,6 +233,7 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         (uint32_t)sin_interm_cb_index,
         (uint32_t)output_cb_index,
         (uint32_t)head_dim_t,
+        (uint32_t)reload_cos_sin,
     };
 
     tt_metal::KernelHandle compute_kernel_id = tt_metal::CreateKernel(
@@ -201,35 +245,8 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
 
     // ---- Assign work ranges to cores ----
-    // Work units are (head, batch_tile) pairs, indexed as flat = head * batch_t + bt.
-    // We distribute contiguous flat ranges to cores so that each core's range is
-    // head-row-aligned: it always starts at bt=0 of some head and ends at bt=batch_t-1
-    // of some (possibly the same) head.  This is guaranteed when each core receives an
-    // integer number of full head rows.
-    //
-    // When total_work_units % num_cores_used != 0, some cores receive one extra full
-    // head row.  Because total_work_units = num_heads * batch_t and we never split a
-    // head row across two cores, the runtime args express the range as
-    //   [head_start, head_end) x [0, batch_t)
-    // which is always correct.
-    //
-    // NOTE: The kernel already uses two nested loops (head, batch_tile), so passing
-    // head_start/head_end with bt_start=0, bt_end=batch_t covers the full head(s)
-    // assigned to this core.
-
-    // To ensure head-aligned distribution we distribute at the *head* granularity
-    // when batch_t == 1 (the common decode case), or at the work-unit granularity but
-    // always rounded to full head rows.
-    //
-    // Algorithm: assign ceil(total_work_units / num_cores_used) work units per core,
-    // but round up to the nearest multiple of batch_t so each core covers complete
-    // head rows only.  When multiple full head rows don't divide evenly, use the
-    // standard (base, base+1) split at the head granularity.
-
     const uint32_t heads_per_core_base = num_heads / num_cores_used;
     const uint32_t heads_remainder = num_heads % num_cores_used;
-    // If num_cores_used > num_heads, some cores handle partial batch_t slices of a single head.
-    const bool more_cores_than_heads = (num_cores_used > num_heads);
 
     std::vector<uint32_t> default_reader_args = {
         src_buffer->address(), cos_buffer->address(), sin_buffer->address(), trans_mat_buffer->address(), 0, 0, 0, 0};
@@ -277,8 +294,6 @@ RotaryEmbeddingLlamaHCDecode::cached_program_t RotaryEmbeddingLlamaHCDecode::cre
         }
     } else {
         // More cores than heads: further subdivide batch_t within each head.
-        // Each head gets cores_per_head = num_cores_used / num_heads cores.
-        // Assign batch_t tiles to those cores.
         const uint32_t cores_per_head_base = num_cores_used / num_heads;
         const uint32_t cores_per_head_rem = num_cores_used % num_heads;
 

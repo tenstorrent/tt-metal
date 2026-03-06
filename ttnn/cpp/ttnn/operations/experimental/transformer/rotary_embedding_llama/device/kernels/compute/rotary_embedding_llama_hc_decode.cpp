@@ -10,11 +10,14 @@
 //   cos_term = x * cos                 (element-wise)
 //   out      = cos_term + sin_term     (element-wise)
 //
-// Optimizations vs. a naive 4-ACQ/REL implementation:
-//   - mm_init_short and mul_tiles_init are hoisted outside the (h,bt) loop;
-//     the mode is only re-initialized when switching math backend (mm ↔ eltwise).
-//   - Steps 2 (rotated*sin) and 3 (x*cos) share a single ACQ/REL block,
-//     halving math-pipeline flush overhead for those two eltwise muls.
+// Optimizations:
+//   - The two eltwise-mul steps (rotated*sin and x*cos) share a single ACQ/REL.
+//   - mm_init_short / mul_tiles_init / add_tiles_init are hoisted above the loop.
+//   - When reload_cos_sin=false (!freq_per_head, CB large enough): cos/sin tiles
+//     for all assigned batch tiles are pre-loaded by the reader into the CB and
+//     held there for the duration.  The compute kernel reads them with a running
+//     offset (bt_idx * Wt) so the same tile set is reused across all heads,
+//     eliminating repeated NOC reads.
 
 #include <cstdint>
 
@@ -42,6 +45,7 @@ void kernel_main() {
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t Wt = get_compile_time_arg_val(8);  // head_dim_t
+    constexpr bool reload_cos_sin = get_compile_time_arg_val(9) == 1;
 
     // Initialize once: mm mode first, then eltwise common (sets up mul and add).
     mm_init(in_cb, trans_mat_cb, out_cb);
@@ -55,64 +59,132 @@ void kernel_main() {
     // Wait for transformation matrix once — it is reused for every (head, batch_tile).
     cb_wait_front(trans_mat_cb, onetile);
 
-    for (uint32_t h = head_start; h < head_end; ++h) {
-        for (uint32_t bt = batch_t_start; bt < batch_t_end; ++bt) {
-            // Wait for input, cos, sin tiles pushed by the reader.
-            cb_wait_front(in_cb, Wt);
-            cb_wait_front(cos_cb, Wt);
-            cb_wait_front(sin_cb, Wt);
+    const uint32_t my_n_bt = batch_t_end - batch_t_start;
 
-            cb_reserve_back(rotated_in_interm_cb, Wt);
-            cb_reserve_back(sin_interm_cb, Wt);
-            cb_reserve_back(cos_interm_cb, Wt);
-            cb_reserve_back(out_cb, Wt);
+    if constexpr (!reload_cos_sin) {
+        // Fast path: cos/sin tiles for all assigned batch tiles are already loaded
+        // by the reader into the CB.  Wait for the full set, then iterate over heads
+        // reading them with a bt_idx offset so the same tiles are reused per head.
+        const uint32_t my_cs_tiles = my_n_bt * Wt;
+        cb_wait_front(cos_cb, my_cs_tiles);
+        cb_wait_front(sin_cb, my_cs_tiles);
 
-            // ACQ block 1: rotated = x @ trans_mat
-            // mm_init_short re-activates mm mode after the previous eltwise block.
-            mm_init_short(in_cb, trans_mat_cb);
-            ACQ();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
-                pack_tile(j, rotated_in_interm_cb, j);
-            }
-            REL();
-            cb_push_back(rotated_in_interm_cb, Wt);
-            cb_wait_front(rotated_in_interm_cb, Wt);
+        for (uint32_t h = head_start; h < head_end; ++h) {
+            for (uint32_t bt = batch_t_start; bt < batch_t_end; ++bt) {
+                const uint32_t bt_idx = bt - batch_t_start;
+                const uint32_t cs_offset = bt_idx * Wt;
 
-            // ACQ block 2 (merged): sin_term = rotated * sin, then cos_term = x * cos.
-            // Both are eltwise mul — same math mode, no backend switch needed.
-            // mul_tiles_init was called above; no re-init needed here.
-            mul_tiles_init(rotated_in_interm_cb, sin_cb);
-            ACQ();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                mul_tiles(rotated_in_interm_cb, sin_cb, j, j, j);
-                pack_tile(j, sin_interm_cb, j);
-            }
-            for (uint32_t j = 0; j < Wt; ++j) {
-                mul_tiles(in_cb, cos_cb, j, j, j);
-                pack_tile(j, cos_interm_cb, j);
-            }
-            REL();
-            cb_push_back(sin_interm_cb, Wt);
-            cb_push_back(cos_interm_cb, Wt);
-            cb_pop_front(rotated_in_interm_cb, Wt);
-            cb_pop_front(in_cb, Wt);
-            cb_pop_front(cos_cb, Wt);
-            cb_pop_front(sin_cb, Wt);
+                cb_wait_front(in_cb, Wt);
+                cb_reserve_back(rotated_in_interm_cb, Wt);
+                cb_reserve_back(sin_interm_cb, Wt);
+                cb_reserve_back(cos_interm_cb, Wt);
+                cb_reserve_back(out_cb, Wt);
 
-            // ACQ block 3: out = cos_term + sin_term
-            cb_wait_front(sin_interm_cb, Wt);
-            cb_wait_front(cos_interm_cb, Wt);
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
-            ACQ();
-            for (uint32_t j = 0; j < Wt; ++j) {
-                add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-                pack_tile(j, out_cb, j);
+                // ACQ block 1: rotated = x @ trans_mat
+                mm_init_short(in_cb, trans_mat_cb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
+                    pack_tile(j, rotated_in_interm_cb, j);
+                }
+                REL();
+                cb_push_back(rotated_in_interm_cb, Wt);
+                cb_wait_front(rotated_in_interm_cb, Wt);
+
+                // ACQ block 2 (merged): sin_term = rotated * sin, then cos_term = x * cos.
+                mul_tiles_init(rotated_in_interm_cb, sin_cb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles(rotated_in_interm_cb, sin_cb, j, cs_offset + j, j);
+                    pack_tile(j, sin_interm_cb, j);
+                }
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles(in_cb, cos_cb, j, cs_offset + j, j);
+                    pack_tile(j, cos_interm_cb, j);
+                }
+                REL();
+                cb_push_back(sin_interm_cb, Wt);
+                cb_push_back(cos_interm_cb, Wt);
+                cb_pop_front(rotated_in_interm_cb, Wt);
+                cb_pop_front(in_cb, Wt);
+                // Note: cos_cb and sin_cb are NOT popped here — they are held
+                // in the CB across all heads and popped by the reader at the end.
+
+                // ACQ block 3: out = cos_term + sin_term
+                cb_wait_front(sin_interm_cb, Wt);
+                cb_wait_front(cos_interm_cb, Wt);
+                add_tiles_init(cos_interm_cb, sin_interm_cb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+                    pack_tile(j, out_cb, j);
+                }
+                REL();
+                cb_push_back(out_cb, Wt);
+                cb_pop_front(sin_interm_cb, Wt);
+                cb_pop_front(cos_interm_cb, Wt);
             }
-            REL();
-            cb_push_back(out_cb, Wt);
-            cb_pop_front(sin_interm_cb, Wt);
-            cb_pop_front(cos_interm_cb, Wt);
+        }
+        // Pop the full cos/sin cache now that all heads have been processed.
+        cb_pop_front(cos_cb, my_cs_tiles);
+        cb_pop_front(sin_cb, my_cs_tiles);
+    } else {
+        // Fallback path: cos/sin are pushed/popped per (head, batch_tile) pair.
+        for (uint32_t h = head_start; h < head_end; ++h) {
+            for (uint32_t bt = batch_t_start; bt < batch_t_end; ++bt) {
+                cb_wait_front(in_cb, Wt);
+                cb_wait_front(cos_cb, Wt);
+                cb_wait_front(sin_cb, Wt);
+
+                cb_reserve_back(rotated_in_interm_cb, Wt);
+                cb_reserve_back(sin_interm_cb, Wt);
+                cb_reserve_back(cos_interm_cb, Wt);
+                cb_reserve_back(out_cb, Wt);
+
+                // ACQ block 1: rotated = x @ trans_mat
+                mm_init_short(in_cb, trans_mat_cb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
+                    pack_tile(j, rotated_in_interm_cb, j);
+                }
+                REL();
+                cb_push_back(rotated_in_interm_cb, Wt);
+                cb_wait_front(rotated_in_interm_cb, Wt);
+
+                // ACQ block 2 (merged): sin_term = rotated * sin, then cos_term = x * cos.
+                mul_tiles_init(rotated_in_interm_cb, sin_cb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles(rotated_in_interm_cb, sin_cb, j, j, j);
+                    pack_tile(j, sin_interm_cb, j);
+                }
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles(in_cb, cos_cb, j, j, j);
+                    pack_tile(j, cos_interm_cb, j);
+                }
+                REL();
+                cb_push_back(sin_interm_cb, Wt);
+                cb_push_back(cos_interm_cb, Wt);
+                cb_pop_front(rotated_in_interm_cb, Wt);
+                cb_pop_front(in_cb, Wt);
+                cb_pop_front(cos_cb, Wt);
+                cb_pop_front(sin_cb, Wt);
+
+                // ACQ block 3: out = cos_term + sin_term
+                cb_wait_front(sin_interm_cb, Wt);
+                cb_wait_front(cos_interm_cb, Wt);
+                add_tiles_init(cos_interm_cb, sin_interm_cb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+                    pack_tile(j, out_cb, j);
+                }
+                REL();
+                cb_push_back(out_cb, Wt);
+                cb_pop_front(sin_interm_cb, Wt);
+                cb_pop_front(cos_interm_cb, Wt);
+            }
         }
     }
 
