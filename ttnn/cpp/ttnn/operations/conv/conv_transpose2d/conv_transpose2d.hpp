@@ -81,4 +81,28 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
     MeshDevice* device,
     bool mirror_kernel);
 
+// Metadata-only overload: does not require device tensor allocation for weight/bias
+std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    Layout input_layout,
+    DataType input_dtype,
+    DataType conv_output_dtype,
+    DataType weight_dtype,
+    uint32_t weight_logical_shape_3,
+    bool has_bias,
+    const Conv2dConfig& conv_config_,
+    const DeviceComputeKernelConfig& compute_config,
+    MeshDevice* device,
+    bool mirror_kernel);
+
 }  // namespace ttnn::operations::conv::conv_transpose2d

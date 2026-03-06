@@ -376,13 +376,19 @@ message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
 ##################################################
-# Precompiled headers for ttml
-# The ttml library includes massive TTNN/Metalium headers across 100+ source files.
-# Precompiling them once dramatically reduces compile time.
+# Dedicated PCH provider for ttml
+# A tiny static library whose only job is to compile the precompiled header.
+# ttml (and ttml_tests) REUSE_FROM this target.
+# ccache is disabled only for this target so the .pch is always built fresh
+# while all real source files still benefit from ccache.
 ##################################################
 
+add_library(ttml_pch STATIC)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttml_pch.cpp CONTENT "/*dummy ttml pch file*/\n")
+target_sources(ttml_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttml_pch.cpp)
+
 target_precompile_headers(
-    ttml
+    ttml_pch
     PRIVATE
         # Standard library headers (widely used across tt-train)
         <algorithm>
@@ -408,6 +414,37 @@ target_precompile_headers(
         "core/ttnn_all_includes.hpp"
         "metal/ttnn_all_includes.hpp"
 )
+
+# Mirror ttml's link libraries so the PCH and consuming TUs see identical
+# include paths.  Mismatched -I / -isystem ordering causes ODR violations
+# (e.g. tt-logger fetched locally vs system metalium copy).
+target_link_libraries(
+    ttml_pch
+    PRIVATE
+        TT::Metalium
+        TTNN::TTNN
+        Python3::Python
+        fmt::fmt-header-only
+        nlohmann_json::nlohmann_json
+        enchantum::enchantum
+        yaml-cpp::yaml-cpp
+        xtensor
+        xtensor-blas
+        xtl
+        Boost::core
+        Boost::container
+        tt-logger
+        simde::simde
+        FlatBuffers::FlatBuffers
+)
+
+target_include_directories(ttml_pch PRIVATE ${PROJECT_SOURCE_DIR})
+
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(ttml_pch)
+endif()
+
+target_precompile_headers(ttml REUSE_FROM ttml_pch)
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

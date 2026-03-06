@@ -264,7 +264,7 @@ jobs:
       - name: Run dual teacher forced accuracy test
         if: ${{ (inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -297,9 +297,9 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -322,7 +322,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
@@ -335,7 +335,7 @@ jobs:
       - name: Run dual demo test (256 prompts, 1 batch)
         if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 40
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -368,9 +368,9 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 60
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -393,7 +393,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
-        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: ${{ always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-output-${{ github.run_id }}
@@ -406,7 +406,7 @@ jobs:
       - name: Run dual demo stress test (56 prompts, 20 batches)
         if: ${{ (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 90
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -441,7 +441,7 @@ jobs:
       - name: Run quad demo stress test (56 prompts, 20 batches)
         if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 90
+        timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}

@@ -248,7 +248,7 @@ void MeshGraph::initialize_from_mgd(
 
     this->inter_mesh_connectivity_.resize(total_mesh_count);
 
-    // This is to make sure emtpy elements are filled
+    // This is to make sure empty elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
         this->inter_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
