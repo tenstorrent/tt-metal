@@ -77,8 +77,7 @@ jobs:
 
           if [ -n "$PRECOMPUTED" ]; then
             echo "Using precomputed venv data"
-            # Extract venv-specific fields from platform data
-            # and compute any-missing from the existence flags
+            # Extract directly with jq (no checkout needed)
             ci_build_exists=$(echo "$PRECOMPUTED" | jq -r '.ci_build_venv_exists')
             ci_test_exists=$(echo "$PRECOMPUTED" | jq -r '.ci_test_venv_exists')
 
@@ -88,8 +87,12 @@ jobs:
               any_missing="true"
             fi
 
-            # Build a venv-specific JSON for extraction
-            DATA=$(echo "$PRECOMPUTED" | jq -c --arg any_missing "$any_missing" '. + {any_missing: $any_missing}')
+            echo "ci-build-venv-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
+            echo "ci-test-venv-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
+            echo "ci-build-venv-exists=$ci_build_exists" >> "$GITHUB_OUTPUT"
+            echo "ci-test-venv-exists=$ci_test_exists" >> "$GITHUB_OUTPUT"
+            echo "any-missing=$any_missing" >> "$GITHUB_OUTPUT"
+            echo "ubuntu-version=$(echo "$PRECOMPUTED" | jq -r '.version')" >> "$GITHUB_OUTPUT"
           else
             echo "Computing venv data..."
             VERSION_NODOT="${VERSION//.}"
@@ -109,24 +112,13 @@ jobs:
               docker manifest inspect "$CI_TEST_VENV_TAG" > /dev/null 2>&1 && ci_test_venv_exists="true" || { ci_test_venv_exists="false"; any_missing="true"; }
             fi
 
-            DATA=$(jq -cn \
-              --arg ci_build_venv_tag "$CI_BUILD_VENV_TAG" \
-              --arg ci_test_venv_tag "$CI_TEST_VENV_TAG" \
-              --arg ci_build_venv_exists "$ci_build_venv_exists" \
-              --arg ci_test_venv_exists "$ci_test_venv_exists" \
-              --arg any_missing "$any_missing" \
-              --arg version "$VERSION" \
-              '{ci_build_venv_tag: $ci_build_venv_tag, ci_test_venv_tag: $ci_test_venv_tag, ci_build_venv_exists: $ci_build_venv_exists, ci_test_venv_exists: $ci_test_venv_exists, any_missing: $any_missing, version: $version}')
+            echo "ci-build-venv-tag=$CI_BUILD_VENV_TAG" >> "$GITHUB_OUTPUT"
+            echo "ci-test-venv-tag=$CI_TEST_VENV_TAG" >> "$GITHUB_OUTPUT"
+            echo "ci-build-venv-exists=$ci_build_venv_exists" >> "$GITHUB_OUTPUT"
+            echo "ci-test-venv-exists=$ci_test_venv_exists" >> "$GITHUB_OUTPUT"
+            echo "any-missing=$any_missing" >> "$GITHUB_OUTPUT"
+            echo "ubuntu-version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
-
-          # Extract outputs
-          .github/scripts/extract-outputs.sh "$DATA" \
-            "ci-build-venv-tag:.ci_build_venv_tag" \
-            "ci-test-venv-tag:.ci_test_venv_tag" \
-            "ci-build-venv-exists:.ci_build_venv_exists" \
-            "ci-test-venv-exists:.ci_test_venv_exists" \
-            "any-missing:.any_missing" \
-            "ubuntu-version:.version"
 
   # Build any venv images that don't exist yet using manual docker bake
   build:

@@ -12,8 +12,10 @@ inputs:
     default: ""
   output-mappings:
     description: |
-      Space-separated list of output mappings in format "output_name:jq_selector".
-      These fields are extracted from the JSON and set as step outputs.
+      Space-separated list of output names to extract from JSON.
+      Names auto-convert to jq selectors (kebab-case → snake_case, prepend '.').
+      For custom mappings, use "output_name:jq_selector" format.
+      Example: "tool-tags any-missing ubuntu-version:.version"
     required: true
 
 outputs:
@@ -68,12 +70,19 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
         # Extract each mapped output
-        for mapping in $OUTPUT_MAPPINGS; do
-          output_name="${mapping%%:*}"
-          jq_selector="${mapping#*:}"
+        for arg in $OUTPUT_MAPPINGS; do
+          # Check if explicit mapping is provided (contains ':')
+          if [[ "$arg" == *":"* ]]; then
+            output_name="${arg%%:*}"
+            jq_selector="${arg#*:}"
+          else
+            # Auto-derive: convert kebab-case to snake_case and prepend '.'
+            output_name="$arg"
+            jq_selector=".${arg//-/_}"
+          fi
 
-          if [ -z "$output_name" ] || [ -z "$jq_selector" ]; then
-            echo "Error: Invalid mapping '$mapping'" >&2
+          if [ -z "$output_name" ]; then
+            echo "Error: Empty output name in '$arg'" >&2
             continue
           fi
 

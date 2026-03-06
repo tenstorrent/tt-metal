@@ -72,17 +72,13 @@ permissions:
   packages: write
 
 jobs:
-  # Check Harbor availability (runs in parallel with preflight)
-  check-harbor:
-    name: "Check Harbor"
-    uses: ./.github/workflows/check-harbor.yaml
-
-  # Preflight: compute tool and platform data on a single runner
-  # This avoids spinning up multiple runners for hash computation
+  # Preflight: Harbor check + compute tool and platform data on a single runner
+  # This avoids spinning up multiple runners for precursor work
   preflight:
-    name: "Preflight (compute tags)"
+    name: "Preflight (Harbor + tags)"
     runs-on: tt-ubuntu-2204-small-stable
     outputs:
+      harbor-prefix: ${{ steps.harbor.outputs.harbor-prefix }}
       tool-data: ${{ steps.tool-data.outputs.data }}
       ubuntu-2204-data: ${{ steps.platform-2204.outputs.data }}
       ubuntu-2404-data: ${{ steps.platform-2404.outputs.data }}
@@ -91,6 +87,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Check Harbor availability
+        id: harbor
+        run: |
+          HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null) || true
+          if [ -n "$HEALTH_RESPONSE" ]; then
+            echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
+              echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"
+            done
+            OVERALL_STATUS=$(echo "$HEALTH_RESPONSE" | jq -r '.status')
+            if [ "$OVERALL_STATUS" = "healthy" ]; then
+              echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
+              echo "✓ Harbor is available"
+            else
+              echo "harbor-prefix=" >> $GITHUB_OUTPUT
+              echo "⚠ Harbor unhealthy, falling back to direct GHCR"
+            fi
+          else
+            echo "harbor-prefix=" >> $GITHUB_OUTPUT
+            echo "⚠ Harbor unavailable, falling back to direct GHCR"
+          fi
 
       - name: Compute tool data
         id: tool-data
@@ -178,8 +195,8 @@ jobs:
   # Prewarm Harbor cache after all image-producing jobs complete
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
-    needs: [check-harbor, build-tools, build-2204, build-2404]
-    if: always() && !failure() && !cancelled() && needs.check-harbor.outputs.harbor-prefix != ''
+    needs: [preflight, build-tools, build-2204, build-2404]
+    if: always() && !failure() && !cancelled() && needs.preflight.outputs.harbor-prefix != ''
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: Checkout repo
@@ -205,7 +222,7 @@ jobs:
       - name: Prewarm tool images cache
         uses: ./.github/actions/prewarm-images
         with:
-          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ needs.build-tools.outputs.tool-tags }}
           title: "tool images"
           json-keys: "ccache-tag mold-tag doxygen-tag cba-tag gdb-tag cmake-tag yq-tag sfpi-tag openmpi-tag"
@@ -228,7 +245,7 @@ jobs:
       - name: Prewarm Ubuntu 22.04 images cache
         uses: ./.github/actions/prewarm-images
         with:
-          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ steps.images-2204.outputs.list }}
           title: "Ubuntu 22.04 images"
 
@@ -249,6 +266,6 @@ jobs:
       - name: Prewarm Ubuntu 24.04 images cache
         uses: ./.github/actions/prewarm-images
         with:
-          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ steps.images-2404.outputs.list }}
           title: "Ubuntu 24.04 images"

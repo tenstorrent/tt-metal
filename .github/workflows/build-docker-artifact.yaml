@@ -205,33 +205,39 @@ jobs:
 
           if [ -n "$PRECOMPUTED" ]; then
             echo "Using precomputed platform data"
-            DATA="$PRECOMPUTED"
+            # Extract directly with jq (no checkout needed)
+            echo "ci-build-exists=$(echo "$PRECOMPUTED" | jq -r '.ci_build_exists')" >> "$GITHUB_OUTPUT"
+            echo "ci-build-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
+            echo "ci-test-exists=$(echo "$PRECOMPUTED" | jq -r '.ci_test_exists')" >> "$GITHUB_OUTPUT"
+            echo "ci-test-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
+            echo "dev-exists=$(echo "$PRECOMPUTED" | jq -r '.dev_exists')" >> "$GITHUB_OUTPUT"
+            echo "dev-tag=$(echo "$PRECOMPUTED" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
+            echo "basic-dev-exists=$(echo "$PRECOMPUTED" | jq -r '.basic_dev_exists')" >> "$GITHUB_OUTPUT"
+            echo "basic-dev-tag=$(echo "$PRECOMPUTED" | jq -r '.basic_dev_tag')" >> "$GITHUB_OUTPUT"
+            echo "basic-ttnn-runtime-exists=$(echo "$PRECOMPUTED" | jq -r '.basic_ttnn_exists')" >> "$GITHUB_OUTPUT"
+            echo "basic-ttnn-runtime-tag=$(echo "$PRECOMPUTED" | jq -r '.basic_ttnn_tag')" >> "$GITHUB_OUTPUT"
+            echo "manylinux-exists=$(echo "$PRECOMPUTED" | jq -r '.manylinux_exists')" >> "$GITHUB_OUTPUT"
+            echo "manylinux-tag=$(echo "$PRECOMPUTED" | jq -r '.manylinux_tag')" >> "$GITHUB_OUTPUT"
+            echo "distro=$(echo "$PRECOMPUTED" | jq -r '.distro')" >> "$GITHUB_OUTPUT"
+            echo "version=$(echo "$PRECOMPUTED" | jq -r '.version')" >> "$GITHUB_OUTPUT"
+            echo "python-version=$(echo "$PRECOMPUTED" | jq -r '.python_version')" >> "$GITHUB_OUTPUT"
+            echo "ci-build-venv-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_build_venv_tag')" >> "$GITHUB_OUTPUT"
+            echo "ci-test-venv-tag=$(echo "$PRECOMPUTED" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
           else
             echo "Computing platform data..."
             ARGS="$VERSION $REPO"
             [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
             DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
+            # Extract outputs using script
+            .github/scripts/extract-outputs.sh "$DATA" \
+              ci-build-exists ci-build-tag ci-test-exists ci-test-tag \
+              dev-exists dev-tag basic-dev-exists basic-dev-tag \
+              "basic-ttnn-runtime-exists:.basic_ttnn_exists" \
+              "basic-ttnn-runtime-tag:.basic_ttnn_tag" \
+              manylinux-exists manylinux-tag \
+              distro version python-version \
+              ci-build-venv-tag ci-test-venv-tag
           fi
-
-          # Extract outputs
-          .github/scripts/extract-outputs.sh "$DATA" \
-            "ci-build-exists:.ci_build_exists" \
-            "ci-build-tag:.ci_build_tag" \
-            "ci-test-exists:.ci_test_exists" \
-            "ci-test-tag:.ci_test_tag" \
-            "dev-exists:.dev_exists" \
-            "dev-tag:.dev_tag" \
-            "basic-dev-exists:.basic_dev_exists" \
-            "basic-dev-tag:.basic_dev_tag" \
-            "basic-ttnn-runtime-exists:.basic_ttnn_exists" \
-            "basic-ttnn-runtime-tag:.basic_ttnn_tag" \
-            "manylinux-exists:.manylinux_exists" \
-            "manylinux-tag:.manylinux_tag" \
-            "distro:.distro" \
-            "version:.version" \
-            "python-version:.python_version" \
-            "ci-build-venv-tag:.ci_build_venv_tag" \
-            "ci-test-venv-tag:.ci_test_venv_tag"
 
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
   # Uses docker buildx bake CLI with context overrides for pre-built GHCR tool/venv images.

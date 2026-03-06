@@ -64,27 +64,28 @@ jobs:
 
           if [ -n "$PRECOMPUTED" ]; then
             echo "Using precomputed tool data"
-            DATA="$PRECOMPUTED"
+            # Extract directly with jq (no checkout needed)
+            tool_tags=$(echo "$PRECOMPUTED" | jq -c '.tool_tags')
+            {
+              echo "tool-tags<<EOJSON"
+              echo "$tool_tags"
+              echo "EOJSON"
+            } >> "$GITHUB_OUTPUT"
+            echo "any-missing=$(echo "$PRECOMPUTED" | jq -r '.any_missing')" >> "$GITHUB_OUTPUT"
+            for tool in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
+              echo "${tool}-exists=$(echo "$PRECOMPUTED" | jq -r ".${tool}_exists")" >> "$GITHUB_OUTPUT"
+            done
           else
             echo "Computing tool data..."
             ARGS="$REPO"
             [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
             DATA=$(.github/scripts/compute-tool-data.sh $ARGS)
+            # Extract outputs using script
+            .github/scripts/extract-outputs.sh "$DATA" \
+              tool-tags any-missing \
+              ccache-exists mold-exists doxygen-exists cba-exists \
+              gdb-exists cmake-exists yq-exists sfpi-exists openmpi-exists
           fi
-
-          # Extract outputs using extract-outputs.sh
-          .github/scripts/extract-outputs.sh "$DATA" \
-            "tool-tags:.tool_tags" \
-            "any-missing:.any_missing" \
-            "ccache-exists:.ccache_exists" \
-            "mold-exists:.mold_exists" \
-            "doxygen-exists:.doxygen_exists" \
-            "cba-exists:.cba_exists" \
-            "gdb-exists:.gdb_exists" \
-            "cmake-exists:.cmake_exists" \
-            "yq-exists:.yq_exists" \
-            "sfpi-exists:.sfpi_exists" \
-            "openmpi-exists:.openmpi_exists"
 
   # Build any tool images that don't exist yet using manual docker bake
   build:

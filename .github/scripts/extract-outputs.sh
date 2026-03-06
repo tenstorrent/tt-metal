@@ -1,38 +1,56 @@
 #!/bin/bash
 # Extract fields from JSON and output in GitHub Actions format
 #
-# Usage: extract-outputs.sh <json_data> <field_mapping>...
+# Usage: extract-outputs.sh <json_data> <output_name>...
 #
-# Field mapping format: "output_name:jq_selector"
-#   - output_name: Name of the GitHub Actions output
-#   - jq_selector: jq selector for extracting the value from JSON
+# Output names are automatically converted to jq selectors:
+#   - Kebab-case is converted to snake_case
+#   - A leading '.' is prepended
+#   Example: "tool-tags" becomes ".tool_tags"
 #
-# Example:
-#   extract-outputs.sh "$JSON_DATA" \
-#     "tool-tags:.tool_tags" \
-#     "any-missing:.any_missing" \
-#     "ccache-exists:.ccache_exists"
+# For custom mappings, use "output_name:jq_selector" format:
+#   Example: "basic-ttnn-runtime-exists:.basic_ttnn_exists"
+#
+# Examples:
+#   # Simple (auto-derived selectors)
+#   extract-outputs.sh "$JSON_DATA" tool-tags any-missing ccache-exists
+#
+#   # Custom mapping when names don't match
+#   extract-outputs.sh "$JSON_DATA" "basic-ttnn-runtime-tag:.basic_ttnn_tag"
 #
 # Supports multi-line strings using heredoc format automatically.
+# JSON can be passed via stdin using "-" as the first argument.
 
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-    echo "Usage: $0 <json_data> <field_mapping>..." >&2
-    echo "  Field mapping format: \"output_name:jq_selector\"" >&2
+    echo "Usage: $0 <json_data | -> <output_name>..." >&2
+    echo "  Output names auto-convert to jq selectors (kebab → snake_case)" >&2
+    echo "  Or use explicit mapping: \"output_name:jq_selector\"" >&2
     exit 1
 fi
 
 JSON_DATA="$1"
 shift
 
-for mapping in "$@"; do
-    # Split mapping into output name and jq selector
-    output_name="${mapping%%:*}"
-    jq_selector="${mapping#*:}"
+# Read from stdin if "-" is passed
+if [[ "$JSON_DATA" == "-" ]]; then
+    JSON_DATA=$(cat)
+fi
 
-    if [[ -z "$output_name" || -z "$jq_selector" ]]; then
-        echo "Error: Invalid field mapping '$mapping'. Expected format: 'output_name:jq_selector'" >&2
+for arg in "$@"; do
+    # Check if explicit mapping is provided (contains ':')
+    if [[ "$arg" == *":"* ]]; then
+        output_name="${arg%%:*}"
+        jq_selector="${arg#*:}"
+    else
+        # Auto-derive: convert kebab-case to snake_case and prepend '.'
+        output_name="$arg"
+        jq_selector=".${arg//-/_}"
+    fi
+
+    if [[ -z "$output_name" ]]; then
+        echo "Error: Empty output name in '$arg'" >&2
         exit 1
     fi
 
