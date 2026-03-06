@@ -52,7 +52,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 4096}",
-              "additional-benchmark-args": "--async-scheduling",
+              "additional-server-args": "--async-scheduling",
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
               "co-owner-1-id": "U08E1JCDVNX",
@@ -133,7 +133,8 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
               "multimodal": false,
-              "additional-benchmark-args": "--random-prefix-len 128 --async-scheduling",
+              "additional-benchmark-args": "--random-prefix-len 128",
+              "additional-server-args": "--async-scheduling",
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
             },
