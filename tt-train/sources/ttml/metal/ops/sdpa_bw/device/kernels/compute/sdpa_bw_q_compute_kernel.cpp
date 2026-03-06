@@ -82,6 +82,7 @@ constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_10;  // Gradient w.r.t.
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_11;        // Gradient w.r.t. QK scores
 constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_12;       // u_scalar per row
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
+constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;    // Output: u_scaler to DRAM for KV kernel
 
 const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
 const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
@@ -103,6 +104,21 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
     compute_u_scalar_row(
         cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row, scaler_bits);
+
+    // Duplicate u_scaler to output CB for writer to flush to DRAM (for KV kernel reuse).
+    // Does NOT pop cb_u_scalar_row - compute_grad_scores still needs it.
+    cb_wait_front(cb_u_scalar_row, onetile);
+    cb_reserve_back(cb_u_scaler_output, onetile);
+    pack_reconfig_data_format(cb_u_scaler_output);
+    reconfig_data_format(cb_u_scalar_row, cb_u_scalar_row);
+    copy_tile_init(cb_u_scalar_row);
+    tile_regs_acquire();
+    copy_tile(cb_u_scalar_row, /* tile_idx */ 0, /* register idx */ 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(/* register idx */ 0, cb_u_scaler_output);
+    tile_regs_release();
+    cb_push_back(cb_u_scaler_output, onetile);
 
     const uint32_t q_row_tile = global_row_idx % Ht;
 
