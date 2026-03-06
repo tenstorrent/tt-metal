@@ -8,7 +8,6 @@
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt_stl/tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -19,14 +18,13 @@
 
 #include <tt_stl/assert.hpp>
 #include "base_types.hpp"
-#include "data_types.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"

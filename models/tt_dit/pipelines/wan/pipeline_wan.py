@@ -298,11 +298,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": True,
             }
             device_configs[(2, 2)] = device_configs[(1, 4)]
-            device_configs[(1, 8)] = {
-                "sp_axis": 0,
-                "tp_axis": 1,
+            device_configs[(2, 4)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": False,
+                "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -388,6 +388,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
 
@@ -398,6 +399,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer_2",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 

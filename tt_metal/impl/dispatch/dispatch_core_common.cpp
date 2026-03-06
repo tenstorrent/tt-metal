@@ -37,5 +37,5 @@ DispatchCoreConfig get_dispatch_core_config() {
 
 std::size_t std::hash<tt::tt_metal::DispatchCoreConfig>::operator()(
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) const {
-    return tt::stl::hash::hash_objects_with_default_seed(dispatch_core_config.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(dispatch_core_config.attribute_values());
 }

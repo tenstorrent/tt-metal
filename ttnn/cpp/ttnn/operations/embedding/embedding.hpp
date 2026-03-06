@@ -10,7 +10,7 @@
 namespace ttnn {
 
 ttnn::Tensor embedding(
-    const Tensor& input_tensor_arg,
+    const Tensor& input_tensor,
     const Tensor& weight_arg,
     const std::optional<int>& pad_token = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,

@@ -4,7 +4,6 @@
 
 #include "ops/rope_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <numbers>
 
 #include "autograd/auto_context.hpp"
@@ -13,6 +12,11 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttml::ops {
 
