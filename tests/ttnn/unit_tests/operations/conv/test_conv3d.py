@@ -140,20 +140,21 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
+    config = create_conv3d_config(
+        compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
+    )
 
     w = conv3d_module.weight.data
     tt_weight = ttnn.from_torch(w, dtype=dtype, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=groups, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
-    )
-
-    # Create config and run TTNN conv3d
-    config = create_conv3d_config(
-        compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
     )
 
     tt_output = ttnn.experimental.conv3d(

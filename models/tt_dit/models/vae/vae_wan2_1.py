@@ -275,16 +275,9 @@ class WanCausalConv3d(Module):
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         self.weight = Parameter(
-            total_shape=[
-                self.out_channels,
-                self.unpadded_in_channels,
-                self.kernel_size[0],
-                self.kernel_size[1],
-                self.kernel_size[2],
-            ],
+            total_shape=[d, self.out_channels],
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            on_host=True,
             pad_value=0,
             dtype=dtype,
         )
@@ -303,7 +296,11 @@ class WanCausalConv3d(Module):
 
         if "weight" in state and "bias" in state:
             weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
-            state["weight"], state["bias"] = weight, bias.reshape(1, -1)
+            weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
+            state["weight"] = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+            )
+            state["bias"] = bias.reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -726,16 +723,9 @@ class WanConv2d(Module):
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         self.weight = Parameter(
-            total_shape=[
-                self.out_channels,
-                self.unpadded_in_channels,
-                self.kernel_size[0],
-                self.kernel_size[1],
-                self.kernel_size[2],
-            ],
+            total_shape=[d, self.out_channels],
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            on_host=True,
             pad_value=0,
             dtype=dtype,
         )
@@ -750,7 +740,12 @@ class WanConv2d(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state and "bias" in state:
-            state["weight"], state["bias"] = state["weight"].unsqueeze(2), state["bias"].reshape(1, -1)
+            weight = state["weight"].unsqueeze(2)
+            weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
+            state["weight"] = ttnn.experimental.prepare_conv3d_weights(
+                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+            )
+            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
