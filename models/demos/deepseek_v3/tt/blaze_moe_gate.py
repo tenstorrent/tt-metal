@@ -341,7 +341,7 @@ class BlazeMoeGate(AbstractModule):
         reshaped_input_shape = (batch_size_per_device, 16, 16)
 
         # create the shard spec and memory config for the input, logits and output
-        grid = cfg["mesh_device"].compute_with_storage_grid_size()
+        grid = mesh_device.compute_with_storage_grid_size()
         input_output_shard_shape = (32, 32)
         core_grid = ttnn.num_cores_to_corerangeset(
             batch_size_per_device,
