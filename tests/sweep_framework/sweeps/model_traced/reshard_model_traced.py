@@ -161,7 +161,10 @@ def run(
 
     # Op call
     start_time = start_measuring_time()
-    output_tensor = ttnn.reshard(input_tensor, output_memory_config, **op_kwargs)
+    reshard_mem_config = output_memory_config or op_kwargs.pop("memory_config", None)
+    if reshard_mem_config is None:
+        return [(False, "Missing output_memory_config for reshard"), 0.0]
+    output_tensor = ttnn.reshard(input_tensor, reshard_mem_config, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

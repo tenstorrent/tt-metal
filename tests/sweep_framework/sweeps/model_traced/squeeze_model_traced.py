@@ -71,7 +71,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    dim=0,
+    dim=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -93,6 +93,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    if dim is None:
+        dim = 0
     torch_output_tensor = torch.squeeze(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

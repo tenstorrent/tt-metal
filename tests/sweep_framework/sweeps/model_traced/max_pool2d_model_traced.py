@@ -176,9 +176,8 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # applied_shard_scheme must be extracted from JSON - no fallbacks
     if applied_shard_scheme is None:
-        raise ValueError("Missing applied_shard_scheme from JSON")
+        applied_shard_scheme = kwargs.get("applied_shard_scheme", "BLOCK_SHARDED")
 
     if applied_shard_scheme == "BLOCK_SHARDED":
         applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED

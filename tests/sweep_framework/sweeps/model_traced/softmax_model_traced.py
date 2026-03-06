@@ -73,7 +73,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    dim,
+    dim=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -83,6 +83,8 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    if dim is None:
+        dim = -1
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape

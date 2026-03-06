@@ -104,6 +104,9 @@ def run(
     if isinstance(num_kv_heads, float):
         num_kv_heads = int(num_kv_heads)
 
+    if num_q_heads is None or num_kv_heads is None:
+        return [(False, f"Missing num_q_heads={num_q_heads} or num_kv_heads={num_kv_heads}"), 0.0]
+
     # Calculate head_dim from provided parameters
     # For GQA/MHA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
     head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)

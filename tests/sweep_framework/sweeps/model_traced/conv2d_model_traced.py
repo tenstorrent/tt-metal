@@ -75,7 +75,7 @@ def mesh_device_fixture():
 
 
 def run(
-    input_specs,
+    input_specs=None,
     is_conv1d=False,
     compute_config=None,
     dtype=None,
@@ -86,6 +86,47 @@ def run(
     **kwargs,
 ) -> list:
     op_kwargs = build_op_kwargs(kwargs)
+
+    # Build input_specs from flat kwargs when not provided directly
+    if input_specs is None:
+        batch_size = kwargs.get("batch_size")
+        out_channels = kwargs.get("out_channels")
+        in_channels = kwargs.get("in_channels")
+        input_height = kwargs.get("input_height") or kwargs.get("input_h")
+        input_width = kwargs.get("input_width") or kwargs.get("input_w")
+        kernel_size = kwargs.get("kernel_size")
+        stride = kwargs.get("stride")
+        padding = kwargs.get("padding")
+        dilation = kwargs.get("dilation")
+        groups = kwargs.get("groups")
+        # Check if we have enough params to construct input_specs
+        if batch_size is not None and out_channels is not None and in_channels is not None:
+            kh = kw = kernel_size if isinstance(kernel_size, int) else (kernel_size[0] if kernel_size else 1)
+            sh = sw = stride if isinstance(stride, int) else (stride[0] if stride else 1)
+            ph = pw = padding if isinstance(padding, int) else (padding[0] if padding else 0)
+            dh = dw = dilation if isinstance(dilation, int) else (dilation[0] if dilation else 1)
+            ih = input_height or 4
+            iw = input_width or 4
+            g = groups or 1
+            input_specs = (
+                int(batch_size),
+                int(out_channels),
+                int(in_channels),
+                int(ih),
+                int(iw),
+                int(kh),
+                int(kw),
+                int(sh),
+                int(sw),
+                int(ph),
+                int(pw),
+                int(g),
+                int(dh),
+                int(dw),
+                False,
+            )
+        else:
+            return [(False, "Cannot construct input_specs: missing batch_size/out_channels/in_channels"), 0.0]
 
     # Parse compute_kernel_config from dict to ttnn object via build_op_kwargs or manually
     parsed_compute_config = None

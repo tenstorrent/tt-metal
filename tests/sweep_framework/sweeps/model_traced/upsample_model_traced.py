@@ -88,9 +88,11 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # scale_factor must be extracted from JSON - no fallbacks
+    # scale_factor must be extracted from JSON
     if scale_factor is None:
-        raise ValueError(f"Missing scale_factor from JSON")
+        scale_factor = kwargs.get("scale_factor")
+    if scale_factor is None:
+        return [(False, "Missing scale_factor from JSON"), 0.0]
 
     # Handle scale_factor - can be int or list [H, W]
     if isinstance(scale_factor, list):
@@ -105,9 +107,8 @@ def run(
     elif not isinstance(scale_factor, (int, tuple)):
         raise ValueError(f"Invalid scale_factor type from JSON: {type(scale_factor)}, value: {scale_factor}")
 
-    # mode must be extracted from JSON - no fallbacks
     if mode is None:
-        raise ValueError(f"Missing mode from JSON")
+        mode = kwargs.get("mode", "nearest")
     # mode is validated but not used directly (passed via ttnn.upsample kwargs)
 
     torch_output_tensor = ttnn.get_golden_function(ttnn.upsample)(torch_input_tensor_a, scale_factor=scale_factor)

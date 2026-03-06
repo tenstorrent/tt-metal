@@ -96,8 +96,8 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    padded_shape,
-    pad_value,
+    padded_shape=None,
+    pad_value=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -108,6 +108,9 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    if padded_shape is None or pad_value is None:
+        return [(False, f"Missing padded_shape={padded_shape} or pad_value={pad_value}"), 0.0]
 
     # Handle both sample suite (tuple) and model_traced suite (dict, if ever treated as binary)
     if isinstance(input_a_shape, dict) and "self" in input_a_shape:

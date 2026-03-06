@@ -331,7 +331,7 @@ def run(
     if activation is not None:
         linear_kwargs["activation"] = activation
 
-    linear_kwargs.update(op_kwargs)
+    linear_kwargs.update(parsed_op_kwargs)
     output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

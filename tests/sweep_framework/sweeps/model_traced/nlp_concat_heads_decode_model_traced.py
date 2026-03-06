@@ -68,7 +68,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    num_heads,
+    num_heads=None,
     storage_type="StorageType::DEVICE",
     *,
     device,

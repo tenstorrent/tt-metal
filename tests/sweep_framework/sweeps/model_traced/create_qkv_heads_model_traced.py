@@ -83,8 +83,8 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    num_heads,
-    num_kv_heads,
+    num_heads=None,
+    num_kv_heads=None,
     transpose_k_heads=False,
     storage_type="StorageType::DEVICE",
     *,
@@ -99,6 +99,9 @@ def run(
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    if num_heads is None or num_kv_heads is None:
+        return [(False, f"Missing num_heads={num_heads} or num_kv_heads={num_kv_heads}"), 0.0]
 
     # V2 format provides input_a_shape
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

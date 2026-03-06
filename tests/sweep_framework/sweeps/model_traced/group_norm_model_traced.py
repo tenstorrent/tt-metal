@@ -96,7 +96,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     output_memory_config=None,
-    num_groups,
+    num_groups=None,
     epsilon=1e-5,
     storage_type="StorageType::DEVICE",
     # Optional traced arguments
@@ -128,6 +128,9 @@ def run(
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    if num_groups is None:
+        return [(False, "Missing num_groups"), 0.0]
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape

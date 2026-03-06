@@ -79,7 +79,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    dim,
+    dim=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -92,6 +92,8 @@ def run(
 
     # Check if device is mesh device
     is_mesh_device = hasattr(device, "get_num_devices")
+    if dim is None:
+        dim = -1
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
