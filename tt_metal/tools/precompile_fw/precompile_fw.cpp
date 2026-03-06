@@ -26,7 +26,7 @@ uint32_t dispatch_message_addr(const Hal& hal, DispatchCoreType dispatch_core_ty
         // There are 32 streams.
         stream_index = 16u;
     } else {
-        TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
+        TT_THROW("dispatch_message_addr not implemented for core type");
     }
 
     return hal.get_noc_overlay_start_addr() + (hal.get_noc_stream_reg_space_size() * stream_index) +
@@ -49,7 +49,7 @@ void copy_firmware_to_precompiled_dir(
 }  // namespace
 
 void enumerate_jit_device_configs(
-    tt::ARCH arch, std::string& core_descriptor_path, const std::function<void(const JitDeviceConfig&)>& callback) {
+    tt::ARCH arch, const std::string& core_descriptor_path, const std::function<void(const JitDeviceConfig&)>& callback) {
     // FIXME: hardcoded values
     constexpr uint32_t profiler_dram_bank_size_per_risc_bytes = 0;
     // Only support compiling 2-ERISC mode for Blackhole.

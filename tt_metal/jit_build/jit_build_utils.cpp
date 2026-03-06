@@ -23,7 +23,7 @@ bool run_command(const std::string& cmd, const std::string& log_file, bool verbo
     // ZoneText( cmd.c_str(), cmd.length());
     int ret;
     static std::mutex io_mutex;
-    // Use cached env var from rtoptions instead of calling getenv() on every invocation
+
     if (verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);

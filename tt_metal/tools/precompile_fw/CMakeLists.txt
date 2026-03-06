@@ -20,15 +20,17 @@ target_precompile_headers(precompile_fw REUSE_FROM TT::CommonPCH)
 
 add_custom_command(
     OUTPUT
-        ${PROJECT_SOURCE_DIR}/tt_metal/pre-compiled/.stamp
+        ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
     COMMAND
         $<TARGET_FILE:precompile_fw>
     COMMAND
-        ${CMAKE_COMMAND} -E touch ${PROJECT_SOURCE_DIR}/tt_metal/pre-compiled/.stamp
+        ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled
+    COMMAND
+        ${CMAKE_COMMAND} -E touch ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     DEPENDS
         precompile_fw
     COMMENT "Pre-compiling firmware binaries"
 )
 
-add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_SOURCE_DIR}/tt_metal/pre-compiled/.stamp)
+add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp)
