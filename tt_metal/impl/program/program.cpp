@@ -43,7 +43,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/hlk_desc.hpp"
@@ -76,7 +75,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
@@ -408,7 +407,7 @@ KernelGroup::KernelGroup(
     kernel_config.brisc_noc_mode() = NOC_MODE::DM_DEDICATED_NOC;
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
-    // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
+    // Fast dispatch kernel config management happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         kernel_config.kernel_config_base()[index] =
@@ -1148,7 +1147,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
                 const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
-                // TODO: Pack erisc spans too, and then everthing is
+                // TODO: Pack erisc spans too, and then everything is
                 // one span
                 uint32_t num_spans = kernel_bin.num_spans();
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);

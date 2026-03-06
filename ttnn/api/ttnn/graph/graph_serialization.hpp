@@ -49,6 +49,9 @@ void serialize_member(std::ostringstream& oss, const MemberT& member) {
         oss << ", ";
         serialize_member(oss, member.second);
         oss << "}";
+    } else if constexpr (std::is_same_v<MemberT, int8_t> || std::is_same_v<MemberT, uint8_t>) {
+        // Cast to int so the numeric value is printed, not the raw byte (which may be invalid UTF-8)
+        oss << static_cast<int>(member);
     } else if constexpr (requires { oss << member; }) {
         oss << member;
     } else if constexpr (ttsl::concepts::Reflectable<MemberT>) {
@@ -82,6 +85,9 @@ std::string serialize_tracked_arg(const std::any& a) {
         oss << "<incomplete type>";
     } else if constexpr (ttsl::is_specialization_v<CleanT, std::vector>) {
         ttsl::reflection::operator<<(oss, val);
+    } else if constexpr (std::is_same_v<CleanT, int8_t> || std::is_same_v<CleanT, uint8_t>) {
+        // Cast to int so the numeric value is printed, not the raw byte (which may be invalid UTF-8)
+        oss << static_cast<int>(val);
     } else if constexpr (requires { oss << val; }) {
         oss << val;
     } else if constexpr (ttsl::concepts::Reflectable<CleanT>) {

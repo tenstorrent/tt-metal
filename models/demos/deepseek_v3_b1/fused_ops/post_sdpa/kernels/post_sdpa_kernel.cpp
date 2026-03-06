@@ -315,10 +315,8 @@ void kernel_main() {
             using ReaderCTArgs = Worker::ReaderCTArgs<
                 get_named_compile_time_arg_val("sdpa_cb_local_l"),
                 get_named_compile_time_arg_val("sdpa_cb_local_ms"),
-                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
-                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms"),
-                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l"),
-                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_neighbor_l"),
+                get_named_compile_time_arg_val("sdpa_cb_neighbor_ms"),
                 get_named_compile_time_arg_val("sdpa_ms_tile_size_bytes"),
                 get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
@@ -333,6 +331,16 @@ void kernel_main() {
                 .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             };
+            if constexpr (ReaderCTArgs::position_enabled) {
+                reader_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            }
+
+            unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_l, ReaderCTArgs::out_tiles);
+            unified_kernels::setup_sharded_buffer(ReaderCTArgs::cb_local_ms, 1);
+
             Worker::Op<ReaderCTArgs> sdpa_worker;
             sdpa_worker(reader_args);
 
@@ -380,11 +388,12 @@ void kernel_main() {
                 .r2_fwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
                 .r2_base_slot_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .scatter_dest_l1_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
-                .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx++),
+                .scatter_dest_coords_addr = get_arg_addr(per_core_rta_arg_idx),
                 // scatter_arrival_enabled=1, so we need to pass the semaphore address
                 .scatter_arrival_sem_addr =
                     get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
             };
+            per_core_rta_arg_idx += WriterCTArgs::scatter_num_rows * 2;  // x, y value per dest
             Worker::Op<WriterCTArgs> sdpa_worker;
             sdpa_worker(writer_args);
 
@@ -392,14 +401,11 @@ void kernel_main() {
             using ComputeCTArgs = Worker::ComputeCTArgs<
                 get_named_compile_time_arg_val("sdpa_cb_local_l"),
                 get_named_compile_time_arg_val("sdpa_cb_local_ms"),
-                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_l"),
-                get_named_compile_time_arg_val("sdpa_cb_r1_neighbor_ms"),
+                get_named_compile_time_arg_val("sdpa_cb_neighbor_l"),
+                get_named_compile_time_arg_val("sdpa_cb_neighbor_ms"),
                 get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
                 get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
-                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_l"),
-                get_named_compile_time_arg_val("sdpa_cb_r2_neighbor_ms"),
                 get_named_compile_time_arg_val("sdpa_cb_l_out"),
-                get_named_compile_time_arg_val("sdpa_cb_ms_out"),
                 get_named_compile_time_arg_val("sdpa_scale_fp32"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
@@ -408,7 +414,15 @@ void kernel_main() {
                 1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
-            Worker::ComputeArgs compute_args{};
+            Worker::ComputeArgs compute_args;
+            if constexpr (ComputeCTArgs::position_enabled) {
+                uint32_t per_core_rta_arg_idx = 0;
+                compute_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                compute_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            }
             Worker::Op<ComputeCTArgs> sdpa_worker;
             sdpa_worker(compute_args);
 #endif
@@ -430,6 +444,7 @@ void kernel_main() {
                 .buffer_offset = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
                 .r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(per_core_rta_arg_idx++)),
+                .rta_offset = per_core_rta_arg_idx,
             };
             Fwd::Op<FwdCTArgs> sdpa_forwarder;
             sdpa_forwarder(fwd_args);
@@ -478,7 +493,7 @@ void kernel_main() {
     // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL1");
+        DeviceZoneScopedN("MATMUL4");
         deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
         matmul4(matmul4_args);
     }
@@ -516,7 +531,7 @@ void kernel_main() {
     // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
     // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL2");
+        DeviceZoneScopedN("MATMUL5");
         // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
         deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
         matmul5(matmul5_args);
@@ -573,10 +588,9 @@ void kernel_main() {
 
         deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
         ccl_sender_args.tensor_address = get_common_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
-        ccl_sender_reader(ccl_sender_args, fabric_arg_idx);
+        ccl_sender_reader(ccl_sender_args);
     }
 
     if constexpr (Core::is_ccl_receiver_core) {
@@ -586,10 +600,9 @@ void kernel_main() {
 
         deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
         ccl_receiver_args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
-        ccl_receiver_reader(ccl_receiver_args, fabric_arg_idx);
+        ccl_receiver_reader(ccl_receiver_args);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -601,10 +614,9 @@ void kernel_main() {
         deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
         ccl_sender_args.receiver_base_address = get_common_arg_val<uint32_t>(0);
         ccl_sender_args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
-        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-        ccl_sender_writer(ccl_sender_args, fabric_arg_idx);
+        ccl_sender_writer(ccl_sender_args);
     }
     // CCL Receiver BRISC is no-op
 
@@ -615,10 +627,9 @@ void kernel_main() {
         using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
-        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
-        ccl_receiver_compute(ccl_receiver_args, fabric_arg_idx);
+        ccl_receiver_compute(ccl_receiver_args);
     }
     // CCL Sender TRISC is no-op
 #endif
