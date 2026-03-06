@@ -767,7 +767,7 @@ autograd::TensorPtr mul(
     };
 
     // 4. Register in computation graph
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), out, a, b));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, a, b));
 
     return out;
 }
