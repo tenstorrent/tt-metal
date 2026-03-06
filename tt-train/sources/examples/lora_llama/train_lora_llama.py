@@ -19,15 +19,20 @@ from ttml.common.data import (
 )
 from ttml.common.utils import set_seed, get_tt_metal_home, summary
 from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
+from ttml.models.llama import (
+    Llama,
+    LlamaConfig,
+    LlamaRopeScalingConfig,
+    load_from_safetensors,
+)
 from ttml.modules import LoraConfig, LoraModel
 
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BATCH_SIZE = 1
-STEPS = 20
+BATCH_SIZE = 13
+STEPS = 500
 LR = 3e-4
 WEIGHT_DECAY = 0.01
 PRINT_INTERVAL = 1
@@ -92,6 +97,14 @@ def parse_args():
         "Resolved relative to tt-train/ if not absolute.",
     )
     parser.add_argument(
+        "--pretrained",
+        type=str,
+        default=None,
+        help="HuggingFace repo ID (e.g. TinyLlama/TinyLlama-1.1B-Chat-v1.0) or "
+        "local path to a directory with .safetensors files. "
+        "When set, uses the HF BPE tokenizer and loads pretrained weights.",
+    )
+    parser.add_argument(
         "--track_memory",
         action="store_true",
         help="Enable memory usage tracking (prints memory stats after first iteration)",
@@ -112,10 +125,33 @@ def main():
     set_seed(42)
 
     text = load_shakespeare_text()
-    tokenizer = CharTokenizer(text)
-    vocab_size = (tokenizer.vocab_size + 31) // 32 * 32
+    pretrained_path = None
 
-    ids = np.array(tokenizer.encode(text), dtype=np.uint32)
+    if args.pretrained:
+        from pathlib import Path
+        from transformers import AutoTokenizer
+
+        src = args.pretrained
+        if Path(src).is_dir():
+            pretrained_path = src
+        else:
+            from huggingface_hub import snapshot_download
+
+            print(f"Downloading weights from HuggingFace: {src}")
+            pretrained_path = snapshot_download(src, allow_patterns=["*.safetensors"])
+            print(f"Weights downloaded to: {pretrained_path}")
+
+        hf_tokenizer = AutoTokenizer.from_pretrained(src)
+        vocab_size = (hf_tokenizer.vocab_size + 31) // 32 * 32
+        ids = np.array(hf_tokenizer.encode(text), dtype=np.uint32)
+        print(
+            f"Using HF BPE tokenizer, vocab_size={hf_tokenizer.vocab_size} (padded to {vocab_size})"
+        )
+    else:
+        tokenizer = CharTokenizer(text)
+        vocab_size = (tokenizer.vocab_size + 31) // 32 * 32
+        ids = np.array(tokenizer.encode(text), dtype=np.uint32)
+
     n_train = int(len(ids) * 0.9)
     train_ids = ids[:n_train]
 
@@ -147,6 +183,10 @@ def main():
     )
 
     model = Llama(llama_cfg)
+
+    if pretrained_path is not None:
+        print(f"Loading pretrained weights from: {pretrained_path}")
+        load_from_safetensors(model, pretrained_path, llama_cfg)
 
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
