@@ -17,7 +17,7 @@
 - name: Llama 3.1-8B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export HF_MODEL={hf_model}
     export TT_CACHE_PATH={tt_cache_path}
     pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
   model: llama3.1-8b
@@ -26,13 +26,15 @@
       timeout: 10
       tier: 1
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
       timeout: 10
       tier: 1
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
       timeout: 10
       tier: 1
-      tt_cache_path: /localdev/blackhole_demos/huggingface_data
+      hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
