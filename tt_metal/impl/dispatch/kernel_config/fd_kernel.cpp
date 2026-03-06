@@ -9,7 +9,6 @@
 #include <utility>
 #include <variant>
 
-#include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
