@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -688,11 +689,14 @@ void dump_link_stats(
     uint32_t packet_size_bytes) {
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& context = tt::tt_metal::MetalContext::instance();
 
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
     const auto& asic_descriptors = ctx.physical_system_descriptor.get_asic_descriptors();
-    auto local_ethernet_metrics = ctx.physical_system_descriptor.query_local_ethernet_metrics();
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+    auto local_ethernet_metrics =
+        query_local_ethernet_metrics(ctx.physical_system_descriptor, driver_ref, &context.hal());
     auto port_info_map = generate_port_info(ctx.physical_system_descriptor);
 
     struct LinkInfo {
@@ -1130,7 +1134,12 @@ void handle_workload_timeout(
 
     if (validation_config.cabling_descriptor_path.has_value() || validation_config.fsd_path.has_value()) {
         log_output_rank0("Re-running discovery to check for link failures");
-        ctx.physical_system_descriptor.run_discovery(true, true);
+        auto& context = tt::tt_metal::MetalContext::instance();
+        auto& driver_ref = const_cast<tt::umd::Cluster&>(*context.get_cluster().get_driver());
+        ctx.physical_system_descriptor.clear();
+        auto new_psd = tt::tt_metal::run_physical_system_discovery(
+            driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device(), true, true);
+        ctx.physical_system_descriptor.merge(std::move(new_psd));
 
         log_output_rank0("Generating Global System Descriptor in-memory");
         YAML::Node gsd_yaml_node = ctx.physical_system_descriptor.generate_yaml_node();

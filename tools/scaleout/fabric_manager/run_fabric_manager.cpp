@@ -9,7 +9,7 @@
 #include <sstream>
 
 #include <factory_system_descriptor/utils.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
