@@ -1037,14 +1037,14 @@ struct SenderKernelTrafficConfig {
         // Phase 1: Warmup — send actual headers to fill all buffer slots
         const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
         for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
-            traffic_config->template send_one_packet<BENCHMARK_MODE, false, false>();
+            traffic_config->template send_one_packet<BENCHMARK_MODE, false>();
         }
 
         conn->setup_credit_update_noc_state();
 
         // Phase 2: Steady state — credit-only sends with stateful NOC
         for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
-            traffic_config->template send_one_packet<BENCHMARK_MODE, true, false>();
+            traffic_config->template send_one_packet<BENCHMARK_MODE, true>();
         }
     }
 
