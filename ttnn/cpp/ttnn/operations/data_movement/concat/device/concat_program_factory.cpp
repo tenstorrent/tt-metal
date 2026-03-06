@@ -42,13 +42,20 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const bool nd_sharded = output_nd_shard_spec.has_value();
 
     uint32_t num_pages_in_row = 1;  // interleaved - always 1
-    uint32_t size_of_valid_data_in_last_page_in_row = dst_buffer->page_size();
+    uint32_t size_of_valid_data_in_last_page_in_row = dst_buffer->page_size();  // just page size
     uint32_t num_output_pages;
     uint32_t single_page_size;
     const uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), dst_buffer->alignment());
     if (rm_layout) {
-        num_output_pages = output.physical_volume() / output.padded_shape()[-1];
-        single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
+        if (nd_sharded) {
+            num_output_pages = dst_buffer->num_pages();
+            single_page_size = dst_buffer->aligned_page_size();
+            const uint32_t shard_width = output_nd_shard_spec.value().shard_shape[-1];
+            num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
+        } else {
+            num_output_pages = output.physical_volume() / output.padded_shape()[-1];
+            single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
+        }
     } else {
         if (nd_sharded) {
             num_output_pages = dst_buffer->num_pages();
