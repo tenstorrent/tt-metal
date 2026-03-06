@@ -44,10 +44,11 @@ void kernel_main() {
             get_named_compile_time_arg_val("num_l_chunks"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("position_enabled"),
-            get_named_compile_time_arg_val("per_device_chunk_size")>;
+            get_named_compile_time_arg_val("per_device_chunk_size"),
+            get_named_compile_time_arg_val("single_shot_l")>;
 
         // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
         using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         uint32_t per_core_rta_arg_idx = 0;
@@ -86,7 +87,7 @@ void kernel_main() {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
         // Dummy ReaderCT and ComputeCT - not used by BRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         using WriterCTArgs = Worker::WriterCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),
@@ -101,6 +102,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("l_chunk_size_bytes"),
             get_named_compile_time_arg_val("num_l_chunks"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
+            get_named_compile_time_arg_val("single_shot_l"),
             get_named_compile_time_arg_val("cb_l_out"),
             get_named_compile_time_arg_val("scatter_num_tiles"),
             get_named_compile_time_arg_val("scatter_src_tile_size"),
@@ -165,8 +167,8 @@ void kernel_main() {
         using Worker = deepseek_b1_ops::SdpaReduceWorker;
 
         // Dummy ReaderCT and WriterCT - not used by TRISC but needed for Op template
-        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         using ComputeCTArgs = Worker::ComputeCTArgs<
             get_named_compile_time_arg_val("cb_local_l"),

@@ -277,18 +277,27 @@ class SdpaReduceToAll:
                 tiles_per_l_chunk = out_tiles // num_l_chunks
                 l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
                 ms_tile_size_bytes = aligned_page_size
+                total_l_bytes = out_tiles * input_page_size_bytes
 
-                if l_chunk_size_bytes > max_fabric_payload_size:
-                    raise ValueError("L chunk payload exceeds fabric max payload size")
+                # Determine transfer mode: single-shot if full L fits in one packet
+                single_shot_l = total_l_bytes <= max_fabric_payload_size
 
-                # Slots are sized for the largest payload (L chunk); MS uses slot 0.
+                if single_shot_l:
+                    max_payload_per_slot = total_l_bytes
+                else:
+                    max_payload_per_slot = l_chunk_size_bytes
+                    if l_chunk_size_bytes > max_fabric_payload_size:
+                        raise ValueError("L chunk payload exceeds fabric max payload size")
+
+                # Slots are sized for the largest payload; MS uses slot 0.
                 header_cb_size = _round_up(packet_header_size_bytes, l1_alignment)
-                slot_size = _round_up(packet_header_size_bytes + l_chunk_size_bytes, l1_alignment)
+                slot_size = _round_up(packet_header_size_bytes + max_payload_per_slot, l1_alignment)
 
                 num_links = 2
                 num_workers_per_link = num_shard_cores // num_links
                 workers_per_type = num_workers_per_link // 2
-                slots_per_worker = 1 + num_l_chunks
+                # Single-shot: 2 slots (MS + full_L). Chunked: 1 + num_l_chunks slots.
+                slots_per_worker = 2 if single_shot_l else (1 + num_l_chunks)
                 # Bit-packed forwarder semaphores support up to 32 slots per round.
                 slots_per_round = workers_per_type * slots_per_worker
 
@@ -351,6 +360,7 @@ class SdpaReduceToAll:
                     ("tiles_per_l_chunk", tiles_per_l_chunk),
                     ("position_enabled", 1 if position_enabled else 0),
                     ("per_device_chunk_size", per_device_chunk_size),
+                    ("single_shot_l", 1 if single_shot_l else 0),
                 ]
 
                 writer_named_ct_args = [
@@ -366,6 +376,7 @@ class SdpaReduceToAll:
                     ("l_chunk_size_bytes", l_chunk_size_bytes),
                     ("num_l_chunks", num_l_chunks),
                     ("tiles_per_l_chunk", tiles_per_l_chunk),
+                    ("single_shot_l", 1 if single_shot_l else 0),
                     ("cb_l_out", cb_l_out),
                     ("scatter_num_tiles", scatter_ct_num_tiles),
                     ("scatter_src_tile_size", scatter_ct_src_tile_size),

@@ -324,7 +324,12 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_position_enabled"),
-                get_named_compile_time_arg_val("sdpa_per_device_chunk_size")>;
+                get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
+                get_named_compile_time_arg_val("sdpa_single_shot_l")>;
+
+            // Dummy WriterCT and ComputeCT - not used by NCRISC but needed for Op template
+            using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+            using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
             uint32_t per_core_rta_arg_idx = 0;
             Worker::ReaderArgs reader_args{
@@ -333,10 +338,13 @@ void kernel_main() {
                 .r1_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             };
-            Worker::Op<ReaderCTArgs> sdpa_worker;
+            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
             sdpa_worker(reader_args);
 
 #elif defined(COMPILE_FOR_BRISC)
+            // Dummy ReaderCT and ComputeCT - not used by BRISC but needed for Op template
+            using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+
             using WriterCTArgs = Worker::WriterCTArgs<
                 get_named_compile_time_arg_val("sdpa_cb_local_l"),
                 get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -350,6 +358,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_l_chunk_size_bytes"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
+                get_named_compile_time_arg_val("sdpa_single_shot_l"),
                 get_named_compile_time_arg_val("sdpa_cb_l_out"),
                 get_named_compile_time_arg_val("sdpa_scatter_num_tiles"),
                 get_named_compile_time_arg_val("sdpa_scatter_src_tile_size"),
@@ -358,6 +367,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scatter_row_face_size"),
                 get_named_compile_time_arg_val("sdpa_scatter_num_rows"),
                 1>;  // scatter_arrival_enabled=1 (signal matmul4 cores after each scatter row)
+
+            using ComputeCTArgs = Worker::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
             uint32_t per_core_rta_arg_idx = 0;
             Worker::WriterArgs writer_args{
@@ -385,10 +396,14 @@ void kernel_main() {
                 .scatter_arrival_sem_addr =
                     get_semaphore(get_named_compile_time_arg_val("scatter_arrival_semaphore_id")),
             };
-            Worker::Op<WriterCTArgs> sdpa_worker;
+            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
             sdpa_worker(writer_args);
 
 #elif defined(COMPILE_FOR_TRISC)
+            // Dummy ReaderCT and WriterCT - not used by TRISC but needed for Op template
+            using ReaderCTArgs = Worker::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+            using WriterCTArgs = Worker::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+
             using ComputeCTArgs = Worker::ComputeCTArgs<
                 get_named_compile_time_arg_val("sdpa_cb_local_l"),
                 get_named_compile_time_arg_val("sdpa_cb_local_ms"),
@@ -409,7 +424,7 @@ void kernel_main() {
 
             // Note: compute_kernel_hw_startup already called at top of TRISC block
             Worker::ComputeArgs compute_args{};
-            Worker::Op<ComputeCTArgs> sdpa_worker;
+            Worker::Op<ReaderCTArgs, WriterCTArgs, ComputeCTArgs> sdpa_worker;
             sdpa_worker(compute_args);
 #endif
         }

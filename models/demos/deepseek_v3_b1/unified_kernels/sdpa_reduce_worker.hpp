@@ -86,6 +86,10 @@ struct SdpaRoundConfig {
 /**
  * Packet sender with cached core coordinates and round configuration.
  * Template parameters encode size constants for zero-overhead abstraction.
+ *
+ * When single_shot_l is true, the entire L tensor is sent as a single packet
+ * (slot layout: MS=0, L=1). Otherwise, L is sent in num_l_chunks chunks
+ * (slot layout: MS=0, L_chunk_0=1, L_chunk_1=2, ...).
  */
 template <
     uint32_t cb_packet_slot,
@@ -94,7 +98,8 @@ template <
     uint32_t ms_tile_size_bytes,
     uint32_t l_chunk_size_bytes,
     uint32_t num_l_chunks,
-    uint32_t tiles_per_l_chunk>
+    uint32_t tiles_per_l_chunk,
+    bool single_shot_l>
 struct SdpaChunkSender {
     // Core coordinates (constant across rounds)
     uint32_t current_core_x;
@@ -114,6 +119,7 @@ struct SdpaChunkSender {
 
     // Derived constants
     static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
+    static constexpr uint32_t out_tiles = num_l_chunks * tiles_per_l_chunk;
     static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     // Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
@@ -182,6 +188,14 @@ struct SdpaChunkSender {
         send_packet(fabric_dest, fwd_dest, get_read_ptr(cfg.cb_ms), ms_tile_size_bytes);
     }
 
+    FORCE_INLINE void send_full_l() const {
+        uint32_t dst_addr = cfg.dst_base_addr;
+        uint32_t src_addr = get_read_ptr(cfg.cb_l);
+        auto fabric_dest = get_fabric_dest(dst_addr);
+        auto fwd_dest = get_forwarder_dest<false>(0);
+        send_packet(fabric_dest, fwd_dest, src_addr, total_l_bytes);
+    }
+
     FORCE_INLINE void send_l_chunk(uint32_t l_chunk_idx) const {
         uint32_t dst_addr = cfg.dst_base_addr + l_chunk_idx * l_chunk_size_bytes;
         uint32_t src_addr = get_read_ptr(cfg.cb_l) + l_chunk_idx * l_chunk_size_bytes;
@@ -192,8 +206,12 @@ struct SdpaChunkSender {
 
     FORCE_INLINE void send_all() const {
         send_ms();
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            send_l_chunk(i);
+        if constexpr (single_shot_l) {
+            send_full_l();
+        } else {
+            for (uint32_t i = 0; i < num_l_chunks; i++) {
+                send_l_chunk(i);
+            }
         }
     }
 
@@ -201,9 +219,14 @@ struct SdpaChunkSender {
         cb_wait_front(cfg.cb_ms, 1);
         send_ms();
 
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
-            send_l_chunk(i);
+        if constexpr (single_shot_l) {
+            cb_wait_front(cfg.cb_l, out_tiles);
+            send_full_l();
+        } else {
+            for (uint32_t i = 0; i < num_l_chunks; i++) {
+                cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
+                send_l_chunk(i);
+            }
         }
     }
 };
@@ -407,7 +430,8 @@ struct SdpaReduceWorker {
         uint32_t numLChunks,
         uint32_t tilesPerLChunk,
         uint32_t positionEnabled,
-        uint32_t perDeviceChunkSize>
+        uint32_t perDeviceChunkSize,
+        uint32_t singleShotL>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_local_l = cbLocalL;
         static constexpr uint32_t cb_local_ms = cbLocalMs;
@@ -421,10 +445,14 @@ struct SdpaReduceWorker {
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
         static constexpr uint32_t position_enabled = positionEnabled;
         static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
+        static constexpr bool single_shot_l = singleShotL != 0;
         // Derived constants
         static constexpr uint32_t out_tiles = numLChunks * tilesPerLChunk;
         static constexpr uint32_t total_l_bytes = numLChunks * lChunkSizeBytes;
         static constexpr uint32_t MS_SEM_THRESHOLD = 1;
+        // Single-shot: one signal at threshold 2 for full L.
+        // Chunked: incremental signals starting at base threshold 2 (2, 3, 4, ...).
+        static constexpr uint32_t L_SEM_THRESHOLD = 2;
         static constexpr uint32_t L_SEM_BASE_THRESHOLD = 2;
     };
 
@@ -442,6 +470,7 @@ struct SdpaReduceWorker {
         uint32_t lChunkSizeBytes,
         uint32_t numLChunks,
         uint32_t tilesPerLChunk,
+        uint32_t singleShotL,
         uint32_t cbLOut,
         uint32_t scatterNumTiles,
         uint32_t scatterSrcTileSize,
@@ -463,6 +492,7 @@ struct SdpaReduceWorker {
         static constexpr uint32_t l_chunk_size_bytes = lChunkSizeBytes;
         static constexpr uint32_t num_l_chunks = numLChunks;
         static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
+        static constexpr bool single_shot_l = singleShotL != 0;
         static constexpr uint32_t cb_l_out = cbLOut;
         static constexpr uint32_t scatter_num_tiles = scatterNumTiles;
         static constexpr uint32_t scatter_src_tile_size = scatterSrcTileSize;
@@ -559,8 +589,10 @@ struct SdpaReduceWorker {
     // ========================================================================
     // Op - unified worker operation
     // ========================================================================
-    template <typename CTArgs>
+    template <typename ReaderCTArgsT, typename WriterCTArgsT, typename ComputeCTArgsT>
     class Op {
+        using CTArgs = unified_kernels::SelectByRISCV<ReaderCTArgsT, WriterCTArgsT, ComputeCTArgsT>;
+
     public:
         void operator()([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
@@ -597,8 +629,16 @@ struct SdpaReduceWorker {
             uint32_t cb_l, uint32_t cb_ms, uint32_t sem_addr, uint32_t recv_buffer_addr) {
             volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
             prepare_ms_for_compute(cb_ms, sem_ptr, recv_buffer_addr);
-            for (uint32_t i = 0; i < CTArgs::num_l_chunks; i++) {
-                prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
+            if constexpr (CTArgs::single_shot_l) {
+                // Single-shot: wait for one L signal, push all tiles at once
+                cb_reserve_back(cb_l, CTArgs::out_tiles);
+                noc_semaphore_wait_min(sem_ptr, CTArgs::L_SEM_THRESHOLD);
+                cb_push_back(cb_l, CTArgs::out_tiles);
+            } else {
+                // Chunked: wait for each L chunk incrementally
+                for (uint32_t i = 0; i < CTArgs::num_l_chunks; i++) {
+                    prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
+                }
             }
             noc_semaphore_set(sem_ptr, 0);
         }
@@ -671,7 +711,8 @@ struct SdpaReduceWorker {
                 CTArgs::ms_tile_size_bytes,
                 CTArgs::l_chunk_size_bytes,
                 CTArgs::num_l_chunks,
-                CTArgs::tiles_per_l_chunk>;
+                CTArgs::tiles_per_l_chunk,
+                CTArgs::single_shot_l>;
 
             // Initialize sender with core coordinates
             Sender sender{args.current_core_x, args.current_core_y, args.fwd_core_x, args.fwd_core_y};

@@ -310,6 +310,11 @@ class PostSDPA:
 
             sdpa_tiles_per_l_chunk = sdpa_out_tiles // sdpa_num_l_chunks
             sdpa_l_chunk_size_bytes = sdpa_tiles_per_l_chunk * sdpa_input_page_size_bytes
+            sdpa_total_l_bytes = sdpa_out_tiles * sdpa_input_page_size_bytes
+
+            # Determine transfer mode: single-shot if full L fits in one fabric packet
+            max_fabric_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+            sdpa_single_shot_l = sdpa_total_l_bytes <= max_fabric_payload_size
 
             # Alias for backward compatibility with CB descriptor code
             sdpa_l_tiles_per_worker = sdpa_out_tiles
@@ -348,11 +353,16 @@ class PostSDPA:
             sdpa_num_forwarders = 2
             sdpa_workers_per_forwarder = sdpa_num_workers // sdpa_num_forwarders  # 4
             sdpa_workers_per_type = sdpa_workers_per_forwarder // 2  # 2 (Type A and Type B alternate)
-            sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
-            sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker  # 2 * 5 = 10 slots per direction
-            sdpa_fwd_slot_size = (
-                ttnn.get_tt_fabric_packet_header_size_bytes() + sdpa_l_chunk_size_bytes
-            )  # Header + max payload
+            if sdpa_single_shot_l:
+                sdpa_slots_per_worker = 2  # MS + full L = 2 slots
+                sdpa_max_payload_per_slot = sdpa_total_l_bytes
+            else:
+                sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
+                sdpa_max_payload_per_slot = sdpa_l_chunk_size_bytes
+            sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker
+            sdpa_fwd_slot_size = _round_up(
+                ttnn.get_tt_fabric_packet_header_size_bytes() + sdpa_max_payload_per_slot, sdpa_l1_alignment
+            )
             sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
 
             # SDPA semaphore ID for scatter arrival (new semaphore)
@@ -599,6 +609,8 @@ class PostSDPA:
                             # SDPA position
                             ("sdpa_position_enabled", 1 if sdpa_position_enabled else 0),
                             ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),
+                            # SDPA transfer mode
+                            ("sdpa_single_shot_l", 1 if sdpa_single_shot_l else 0),
                             # SDPA forwarder params
                             ("sdpa_fwd_slots_per_round", sdpa_fwd_slots_per_round),
                             ("sdpa_fwd_slot_size", sdpa_fwd_slot_size),
@@ -677,6 +689,8 @@ class PostSDPA:
                             ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
+                            # SDPA transfer mode
+                            ("sdpa_single_shot_l", 1 if sdpa_single_shot_l else 0),
                             ("sdpa_l1_alignment", l1_alignment),
                             ("sdpa_page_size_bytes", sdpa_l_tile_size),
                             ("sdpa_slot_size", sdpa_fwd_slot_size),

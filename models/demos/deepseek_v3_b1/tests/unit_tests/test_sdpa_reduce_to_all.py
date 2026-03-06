@@ -16,10 +16,18 @@ def _round_up(value: int, alignment: int) -> int:
     return ((value + alignment - 1) // alignment) * alignment
 
 
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 def compute_forwarder_scratch_size(
     batch_size: int,
     l_width: int,
     num_cores: int,
+    max_payload_size: int = 0,
     tile_height: int = 8,
     tile_width: int = 32,
     bytes_per_element: int = 2,
@@ -42,14 +50,27 @@ def compute_forwarder_scratch_size(
 
     tiles_per_l_chunk = out_tiles // num_l_chunks
     l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes
+    total_l_bytes = out_tiles * input_page_size_bytes
+
+    # Use runtime max_fabric_payload_size if max_payload_size not specified
+    if max_payload_size <= 0:
+        max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+
+    single_shot_l = total_l_bytes <= max_payload_size
+
+    if single_shot_l:
+        max_payload_per_slot = total_l_bytes
+        slots_per_worker = 2
+    else:
+        max_payload_per_slot = l_chunk_size_bytes
+        slots_per_worker = 1 + num_l_chunks
 
     header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
     l1_alignment = 16
-    slot_size = _round_up(header_size + l_chunk_size_bytes, l1_alignment)
+    slot_size = _round_up(header_size + max_payload_per_slot, l1_alignment)
 
     num_workers_per_link = num_cores // num_links
     workers_per_type = num_workers_per_link // 2
-    slots_per_worker = 1 + num_l_chunks
     slots_per_round = workers_per_type * slots_per_worker
 
     return 2 * slots_per_round * slot_size * 2
@@ -57,13 +78,27 @@ def compute_forwarder_scratch_size(
 
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}],
+    "device_params, max_payload_size",
+    [
+        pytest.param(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X},
+            0,
+            id="default_chunked",
+        ),
+        pytest.param(
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(15232),
+            },
+            15232,
+            id="single_shot_15232",
+        ),
+    ],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
 @pytest.mark.parametrize("position_id", [500, 1500, 2500, 3500], ids=["pos500", "pos1500", "pos2500", "pos3500"])
-def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
+def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id, max_payload_size):
     num_devices = 4
     num_cores = 8
     l_width = 512
@@ -205,7 +240,13 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     # Per-core scratch size (covers BRISC + NCRISC regions).
     # The shard is split across forwarder cores; each core gets the full per-core size.
     forwarder_buffer_size_bytes = compute_forwarder_scratch_size(
-        batch_size=batch_size, l_width=l_width, num_cores=num_cores, tile_height=8, tile_width=32, bytes_per_element=2
+        batch_size=batch_size,
+        l_width=l_width,
+        num_cores=num_cores,
+        max_payload_size=max_payload_size,
+        tile_height=8,
+        tile_width=32,
+        bytes_per_element=2,
     )
 
     num_forwarder_cores = 2
