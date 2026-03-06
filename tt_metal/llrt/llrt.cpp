@@ -123,8 +123,7 @@ void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
     cluster.write_core_immediate(
         reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_adrr);
     cluster.l1_barrier(chip);
-    uint64_t go_message_index_addr =
-        hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
     cluster.write_core_immediate(
         &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
