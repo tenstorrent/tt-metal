@@ -9,23 +9,29 @@ from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_devi
 
 from .test_config import TestConfig
 
-COUNTER_SLOT_COUNT = 86  # Max counters per thread
-COUNTER_DATA_WORD_COUNT = COUNTER_SLOT_COUNT * 2  # 2 words per counter (cycles + count)
+# Derive all constants from TestConfig (single source of truth)
+COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 86 config slots
+COUNTER_DATA_WORD_COUNT = (
+    TestConfig._PERF_COUNTERS_DATA_WORDS
+)  # 172 data words (86 * 2)
+PERF_COUNTERS_STARTER_SHIFT = 8
+PERF_COUNTERS_STARTER_MASK = 0x3
+PERF_COUNTERS_STOPPER_SHIFT = 10
+PERF_COUNTERS_STOPPER_MASK = 0x3
 
-_THREAD_ADDRESSES = {
-    "UNPACK": (
-        TestConfig.PERF_COUNTER_UNPACK_CONFIG_ADDR,
-        TestConfig.PERF_COUNTER_UNPACK_DATA_ADDR,
-    ),
-    "MATH": (
-        TestConfig.PERF_COUNTER_MATH_CONFIG_ADDR,
-        TestConfig.PERF_COUNTER_MATH_DATA_ADDR,
-    ),
-    "PACK": (
-        TestConfig.PERF_COUNTER_PACK_CONFIG_ADDR,
-        TestConfig.PERF_COUNTER_PACK_DATA_ADDR,
-    ),
-}
+# Single shared buffer addresses (all threads use the same location)
+# These are already computed in TestConfig - use them directly
+PERF_COUNTERS_CONFIG_ADDR = TestConfig.PERF_COUNTERS_CONFIG_ADDR
+PERF_COUNTERS_DATA_ADDR = TestConfig.PERF_COUNTERS_DATA_ADDR
+PERF_COUNTERS_SYNC_CTRL_ADDR = TestConfig.PERF_COUNTERS_SYNC_CTRL_ADDR
+PERF_COUNTERS_START_COUNTER_ADDR = TestConfig.PERF_COUNTERS_SYNC_CTRL_ADDR + 4
+PERF_COUNTERS_THREAD_COUNT = 3
+PERF_COUNTERS_STOP_COUNTER_ADDR = PERF_COUNTERS_START_COUNTER_ADDR + (
+    PERF_COUNTERS_THREAD_COUNT * 4
+)
+PERF_COUNTERS_STOP_ELECT_ADDR = PERF_COUNTERS_STOP_COUNTER_ADDR + (
+    PERF_COUNTERS_THREAD_COUNT * 4
+)
 
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
@@ -194,7 +200,10 @@ def _build_all_counters() -> List[Dict]:
     return counters
 
 
-# Pre-built list of all 66 counters (computed once at module load)
+# Pre-built list of all counters (computed once at module load)
+# Total: 94 counters (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1)
+# Note: L1 has 8 counter IDs × 2 mux settings = 16 entries, but only 8 L1 counters
+# can be active at once (determined by mux setting), so maximum concurrent counters = 86
 ALL_COUNTERS = _build_all_counters()
 
 # All threads that support performance counters
@@ -203,7 +212,15 @@ ALL_THREADS = ["UNPACK", "MATH", "PACK"]
 
 def configure_counters(location: str = "0,0") -> None:
     """
-    Configure all performance counters on all threads (UNPACK, MATH, PACK).
+    Configure performance counters in the shared buffer for all threads (UNPACK, MATH, PACK).
+
+    Writes counter configuration to L1 memory that all threads access. Configures all 94
+    counter definitions (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1).
+    Note: Only 86 slots are available in hardware; L1 counters (16 defs, 8 active at once)
+    require mux configuration before measurement starts.
+
+    The counters are started/stopped by all threads via start_perf_counters()/stop_perf_counters(),
+    but only the last thread to finish (last stopper) reads the hardware and writes results.
 
     Args:
         location: Tensix core coordinates (e.g., "0,0").
@@ -220,92 +237,204 @@ def configure_counters(location: str = "0,0") -> None:
         )
         config_words.append(config_word)
 
-    # Pad and combine with zero data
+    # Pad config words to full slot count
     config_words.extend([0] * (COUNTER_SLOT_COUNT - len(config_words)))
-    combined_data = config_words + [0] * COUNTER_DATA_WORD_COUNT
 
-    # Write to all threads
-    for thread in ALL_THREADS:
-        config_addr, _ = _THREAD_ADDRESSES[thread]
-        write_words_to_device(location=location, addr=config_addr, data=combined_data)
+    # Write config to shared buffer
+    write_words_to_device(
+        location=location, addr=PERF_COUNTERS_CONFIG_ADDR, data=config_words
+    )
+
+    # Clear data buffer completely (remove any stale values from previous runs)
+    write_words_to_device(
+        location=location,
+        addr=PERF_COUNTERS_DATA_ADDR,
+        data=[0] * COUNTER_DATA_WORD_COUNT,
+    )
+
+    # Clear sync state and ATINCGET counters before kernel runs
+    write_words_to_device(
+        location=location,
+        addr=PERF_COUNTERS_SYNC_CTRL_ADDR,
+        data=[0] * (1 + PERF_COUNTERS_THREAD_COUNT * 2 + 1),
+    )
 
 
 def read_counters(location: str = "0,0") -> pd.DataFrame:
     """
-    Read performance counter results from all threads.
+    Read performance counter results from the shared buffer.
+
+    In the shared buffer architecture, whichever thread finishes last (the "last stopper")
+    reads the hardware counters and writes them to the shared buffer. This function returns
+    a single thread's snapshot - the results captured by the last stopper.
 
     Args:
         location: Tensix core coordinates (e.g., "0,0").
 
     Returns:
-        DataFrame with columns: thread, bank, counter_name, counter_id, cycles, count, l1_mux
+        DataFrame containing counter results, with columns:
+        starter_thread, stopper_thread, bank, counter_name, counter_id, cycles, count, l1_mux
     """
     all_results = []
 
-    for thread in ALL_THREADS:
-        config_addr, data_addr = _THREAD_ADDRESSES[thread]
-
-        # Read metadata
-        metadata = read_words_from_device(
-            location=location, addr=config_addr, word_count=COUNTER_SLOT_COUNT
+    # Read from the single shared buffer (last stopper wrote here)
+    sync_ctrl = read_words_from_device(
+        location=location, addr=PERF_COUNTERS_SYNC_CTRL_ADDR, word_count=3
+    )
+    if not sync_ctrl:
+        raise RuntimeError(
+            "Perf counter sync control word not readable; counters may not have been stopped."
         )
 
-        if not metadata:
-            continue
+    sync_word = sync_ctrl[0]
 
-        # Count valid configs (check bit 31)
-        valid_count = sum(1 for m in metadata if (m & 0x80000000) != 0)
+    # Validate that counters were properly started and stopped
+    GLOBAL_STARTED_BIT = 1 << 6
+    GLOBAL_STOPPED_BIT = 1 << 7
+    ALL_START_BITS = 0x7  # Bits 0-2 should all be set
+    ALL_STOP_BITS = 0x7 << 3  # Bits 3-5 should all be set
 
-        if valid_count == 0:
-            continue
-
-        # Read ONLY data for valid counters (no UNKNOWN counters)
-        data = read_words_from_device(
-            location=location, addr=data_addr, word_count=valid_count * 2
+    if sync_word == 0:
+        raise RuntimeError(
+            "Perf counter sync word is zero - counters were never started. "
+            "Ensure start_perf_counters() is called in all threads."
         )
 
-        if not data or len(data) < valid_count * 2:
-            continue
+    if not (sync_word & GLOBAL_STARTED_BIT):
+        raise RuntimeError(
+            f"Perf counters were never started (global started bit not set); sync_ctrl=0x{sync_word:08x}"
+        )
 
-        data_idx = 0
-        for i in range(COUNTER_SLOT_COUNT):
-            config_word = metadata[i]
-            if (config_word & 0x80000000) == 0:  # Check valid bit
-                continue  # Unused slot
+    # Validate that all three threads set their start bits.
+    # This is stricter than before and may surface cache-visibility issues.
+    start_bits = sync_word & 0x7
+    if start_bits != 0x7:
+        missing_threads = []
+        if not (start_bits & 0x1):
+            missing_threads.append("UNPACK")
+        if not (start_bits & 0x2):
+            missing_threads.append("MATH")
+        if not (start_bits & 0x4):
+            missing_threads.append("PACK")
 
-            # Decode metadata: [valid(31), l1_mux(17), counter_id(8-16), bank(0-7)]
-            bank_id = config_word & 0xFF
-            counter_id = (config_word >> 8) & 0x1FF  # 9 bits for counter_id
-            l1_mux = (config_word >> 17) & 0x1
+        raise RuntimeError(
+            f"Not all threads set their start bit in sync_ctrl. "
+            f"Missing start from: {', '.join(missing_threads)}. "
+            f"sync_ctrl=0x{sync_word:08x}"
+        )
 
-            bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
+    if not (sync_word & GLOBAL_STOPPED_BIT):
+        stop_bits = (sync_word >> 3) & 0x7
+        missing_threads = []
+        if not (stop_bits & 0x1):
+            missing_threads.append("UNPACK")
+        if not (stop_bits & 0x2):
+            missing_threads.append("MATH")
+        if not (stop_bits & 0x4):
+            missing_threads.append("PACK")
 
-            # Get counter name
-            if bank_name == "L1":
-                counter_name = COUNTER_NAMES["L1"].get(
-                    (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
-                )
-            else:
-                counter_name = COUNTER_NAMES.get(bank_name, {}).get(
-                    counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
-                )
+        raise RuntimeError(
+            f"Perf counters were not stopped properly (global stopped bit not set). "
+            f"Missing stop_perf_counters() call from: {', '.join(missing_threads)}. "
+            f"sync_ctrl=0x{sync_word:08x}"
+        )
 
-            # Extract results using data_idx
-            cycles = data[data_idx * 2]
-            count = data[data_idx * 2 + 1]
-            data_idx += 1
+    # Check that all three threads set their stop bits
+    stop_bits = (sync_word >> 3) & 0x7
+    if stop_bits != 0x7:
+        missing_threads = []
+        if not (stop_bits & 0x1):
+            missing_threads.append("UNPACK")
+        if not (stop_bits & 0x2):
+            missing_threads.append("MATH")
+        if not (stop_bits & 0x4):
+            missing_threads.append("PACK")
 
-            all_results.append(
-                {
-                    "thread": thread,
-                    "bank": bank_name,
-                    "counter_name": counter_name,
-                    "counter_id": counter_id,
-                    "cycles": cycles,
-                    "count": count,
-                    "l1_mux": l1_mux if bank_name == "L1" else None,
-                }
+        raise RuntimeError(
+            f"Not all threads called stop_perf_counters(). "
+            f"Missing stop from: {', '.join(missing_threads)}. "
+            f"sync_ctrl=0x{sync_word:08x}"
+        )
+
+    starter_id = (sync_word >> PERF_COUNTERS_STARTER_SHIFT) & PERF_COUNTERS_STARTER_MASK
+    stopper_id = (sync_word >> PERF_COUNTERS_STOPPER_SHIFT) & PERF_COUNTERS_STOPPER_MASK
+
+    thread_map = {0: "UNPACK", 1: "MATH", 2: "PACK"}
+
+    if starter_id not in thread_map:
+        raise RuntimeError(
+            f"Invalid starter id {starter_id}; sync_ctrl=0x{sync_word:08x}"
+        )
+    if stopper_id not in thread_map:
+        raise RuntimeError(
+            f"Invalid stopper id {stopper_id}; sync_ctrl=0x{sync_word:08x}"
+        )
+
+    starter_thread = thread_map[starter_id]
+    stopper_thread = thread_map[stopper_id]
+
+    # Read metadata from shared buffer
+    metadata = read_words_from_device(
+        location=location, addr=PERF_COUNTERS_CONFIG_ADDR, word_count=COUNTER_SLOT_COUNT
+    )
+
+    if not metadata:
+        return pd.DataFrame(all_results)
+
+    # Count valid configs (check bit 31)
+    valid_count = sum(1 for m in metadata if (m & 0x80000000) != 0)
+
+    if valid_count == 0:
+        return pd.DataFrame(all_results)
+
+    # Read ONLY data for valid counters from shared buffer
+    data = read_words_from_device(
+        location=location, addr=PERF_COUNTERS_DATA_ADDR, word_count=valid_count * 2
+    )
+
+    if not data or len(data) < valid_count * 2:
+        return pd.DataFrame(all_results)
+
+    data_idx = 0
+    for i in range(COUNTER_SLOT_COUNT):
+        config_word = metadata[i]
+        if (config_word & 0x80000000) == 0:  # Check valid bit
+            continue  # Unused slot
+
+        # Decode metadata: [valid(31), l1_mux(17), counter_id(8-16), bank(0-7)]
+        bank_id = config_word & 0xFF
+        counter_id = (config_word >> 8) & 0x1FF  # 9 bits for counter_id
+        l1_mux = (config_word >> 17) & 0x1
+
+        bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
+
+        # Get counter name
+        if bank_name == "L1":
+            counter_name = COUNTER_NAMES["L1"].get(
+                (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
             )
+        else:
+            counter_name = COUNTER_NAMES.get(bank_name, {}).get(
+                counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
+            )
+
+        # Extract results using data_idx
+        cycles = data[data_idx * 2]
+        count = data[data_idx * 2 + 1]
+        data_idx += 1
+
+        all_results.append(
+            {
+                "starter_thread": starter_thread,
+                "stopper_thread": stopper_thread,
+                "bank": bank_name,
+                "counter_name": counter_name,
+                "counter_id": counter_id,
+                "cycles": cycles,
+                "count": count,
+                "l1_mux": l1_mux if bank_name == "L1" else None,
+            }
+        )
 
     return pd.DataFrame(all_results)
 
@@ -324,40 +453,37 @@ def print_counters(results: pd.DataFrame) -> None:
     print("\n" + "=" * 100)
     print("PERFORMANCE COUNTER RESULTS")
     print("=" * 100)
-    print("NOTE: Each bank has one output register. Counters are read sequentially")
-    print("      after stopping. L1 mux0/mux1 cannot be measured simultaneously.")
-    print("=" * 100)
 
-    for thread in ALL_THREADS:
-        thread_df = results[results["thread"] == thread]
-        if thread_df.empty:
-            continue
-
+    # Get starter and stopper from first row (same for all)
+    if not results.empty:
+        starter = results["starter_thread"].iloc[0]
+        stopper = results["stopper_thread"].iloc[0]
         print(f"\n{'─' * 100}")
-        print(f"  THREAD: {thread}")
+        print(f"  Hardware started by: {starter} thread")
+        print(f"  Hardware stopped by: {stopper} thread")
         print(f"{'─' * 100}")
 
-        for bank in ["INSTRN_THREAD", "FPU", "TDMA_UNPACK", "L1", "TDMA_PACK"]:
-            bank_df = thread_df[thread_df["bank"] == bank]
-            if bank_df.empty:
-                continue
+    for bank in ["INSTRN_THREAD", "FPU", "TDMA_UNPACK", "L1", "TDMA_PACK"]:
+        bank_df = results[results["bank"] == bank]
+        if bank_df.empty:
+            continue
 
-            cycles = bank_df["cycles"].iloc[0] if len(bank_df) > 0 else 0
+        cycles = bank_df["cycles"].iloc[0] if len(bank_df) > 0 else 0
 
-            print(f"\n  ┌─ {bank} (cycles: {cycles:,})")
-            print(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
-            print(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
+        print(f"\n  ┌─ {bank} (cycles: {cycles:,})")
+        print(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
+        print(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
 
-            for _, row in bank_df.iterrows():
-                name = row["counter_name"]
-                # Add mux info for L1 counters
-                if pd.notna(row["l1_mux"]):
-                    name = f"{name} (mux{int(row['l1_mux'])})"
-                count = row["count"]
-                rate = (count / cycles) if cycles else 0.0
-                print(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
+        for _, row in bank_df.iterrows():
+            name = row["counter_name"]
+            # Add mux info for L1 counters
+            if pd.notna(row["l1_mux"]):
+                name = f"{name} (mux{int(row['l1_mux'])})"
+            count = row["count"]
+            rate = (count / cycles) if cycles else 0.0
+            print(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
 
-            print(f"  └{'─' * 70}")
+        print(f"  └{'─' * 70}")
 
     print("\n" + "=" * 100 + "\n")
 

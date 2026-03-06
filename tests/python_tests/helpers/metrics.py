@@ -5,12 +5,38 @@
 Performance metrics calculation from hardware counter data.
 
 Metrics calculated:
-- FPU Utilization: FPU_INSTRUCTION / cycles
-- SFPU Utilization: SFPU_INSTRUCTION / cycles
-- Math Utilization: FPU_OR_SFPU_INSTRN / cycles (combined FPU+SFPU)
-- Unpacker0 Utilization: SRCA_WRITE / UNPACK0_BUSY_THREAD0
-- Unpacker1 Utilization: SRCB_WRITE / UNPACK1_BUSY_THREAD0
-- Packer Utilization: PACKER_BUSY / cycles
+- Unpacker Write Efficiency: Measures how efficiently unpackers write data
+  * SRCA_WRITE / UNPACK0_BUSY_THREAD0: Fraction of unpacker0 busy cycles spent writing data
+  * SRCB_WRITE / UNPACK1_BUSY_THREAD0: Fraction of unpacker1 busy cycles spent writing data
+  * Higher ratio (closer to 1.0) = more efficient, less stalling
+  * Lower ratio = unpacker busy but not writing (stalled on dependencies)
+
+- Packer Efficiency: Measures how efficiently packer uses destination data
+  * PACKER_DEST_READ_AVAILABLE / PACKER_BUSY: Fraction of packer busy time with valid dest data
+  * Higher ratio (closer to 1.0) = packer has data available, less dest stalling
+  * Lower ratio = packer busy but waiting for destination to become valid
+  * Only valid when using HW dvalid-based synchronization (not STALLWAIT)
+
+- FPU Execution Efficiency: Measures how efficiently FPU executes available instructions
+  * FPU_INSTRUCTION / FPU_INSTRN_AVAILABLE_1: Fraction of cycles with FPU work available where FPU executes
+  * Higher ratio (closer to 1.0) = FPU executes whenever work is available (efficient)
+  * Lower ratio = FPU instructions available but not executing (stalled in pipeline)
+
+- Math Pipeline Utilization (EXPERIMENTAL): Measures math pipeline instruction flow efficiency
+  * MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE: Fraction of available math instructions that start execution
+  * Higher ratio (closer to 1.0) = math pipeline efficiently moves instructions (no pipe stalls)
+  * Lower ratio = instructions available in pipe but not starting (pipeline stalled)
+
+- Math-to-Pack Handoff Efficiency (EXPERIMENTAL): Measures pipeline balance between math and pack stages
+  * AVAILABLE_MATH / PACKER_BUSY: Fraction of packer busy time where math has output ready
+  * Higher ratio (closer to 1.0) = math keeps up with packer, good pipeline balance
+  * Lower ratio = packer busy but waiting for math output (math is bottleneck)
+
+- Unpacker-to-Math Data Flow (EXPERIMENTAL): Measures unpacker write availability during busy cycles
+  * SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0: Fraction of unpacker0 busy time with srcA buffer space
+  * SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0: Fraction of unpacker1 busy time with srcB buffer space
+  * Higher ratio (closer to 1.0) = unpacker can write when busy, no backpressure from math
+  * Lower ratio = unpacker busy but srcA/B full, stalled by math not consuming data fast enough
 """
 
 import pandas as pd
@@ -62,80 +88,129 @@ def compute_metrics(df: pd.DataFrame) -> dict:
     if df.empty:
         return {}
 
-    # Get max cycle counts from each bank (wall clock)
-    cycles_fpu = _max_cycles(df, "FPU")
-    cycles_unpack = _max_cycles(df, "TDMA_UNPACK")
-    cycles_pack = _max_cycles(df, "TDMA_PACK")
-
-    # Use max cycles as wall clock reference
-    wall_cycles = max(cycles_fpu, cycles_unpack, cycles_pack, 1)
-
-    # === FPU/SFPU/Math Utilization ===
-    # Average instruction counts across threads / cycles
-    fpu_count = _avg_count(df, "FPU", "FPU_INSTRUCTION")
-    sfpu_count = _avg_count(df, "FPU", "SFPU_INSTRUCTION")
-    math_count = _avg_count(df, "FPU", "FPU_OR_SFPU_INSTRN")
-
-    fpu_util = _safe_div(fpu_count, cycles_fpu)
-    sfpu_util = _safe_div(sfpu_count, cycles_fpu)
-    math_util = _safe_div(math_count, cycles_fpu)
-
-    # === Unpacker Utilization ===
-    # Average writes and busy cycles across all threads, then compute ratio
+    # === Unpacker Write Efficiency ===
+    # Ratio of write cycles to busy cycles - measures how efficiently unpacker uses busy time
+    # SRCA_WRITE: Cycles where unpacker0 wrote data to srcA
+    # UNPACK0_BUSY: Cycles where unpacker0 was busy processing thread 0 instructions
+    # Higher ratio (closer to 1.0) means unpacker spends most busy time writing (efficient)
+    # Lower ratio means unpacker is busy but not writing (stalled/waiting)
     srca_write = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE")
     srcb_write = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE")
     unpack0_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = _avg_count(df, "TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
 
-    unpack0_util = _safe_div(srca_write, unpack0_busy)
-    unpack1_util = _safe_div(srcb_write, unpack1_busy)
+    unpack0_efficiency = _safe_div(srca_write, unpack0_busy)
+    unpack1_efficiency = _safe_div(srcb_write, unpack1_busy)
 
-    # Combined unpacker utilization (average of both)
-    if unpack0_util is not None and unpack1_util is not None:
-        unpack_util = (unpack0_util + unpack1_util) / 2.0
-    elif unpack0_util is not None:
-        unpack_util = unpack0_util
-    elif unpack1_util is not None:
-        unpack_util = unpack1_util
+    # Combined unpacker efficiency (average of both)
+    if unpack0_efficiency is not None and unpack1_efficiency is not None:
+        unpack_efficiency = (unpack0_efficiency + unpack1_efficiency) / 2.0
+    elif unpack0_efficiency is not None:
+        unpack_efficiency = unpack0_efficiency
+    elif unpack1_efficiency is not None:
+        unpack_efficiency = unpack1_efficiency
     else:
-        unpack_util = None
+        unpack_efficiency = None
 
-    # === Packer Utilization ===
-    # Average PACKER_BUSY / cycles
+    # === Packer Efficiency ===
+    # Ratio of destination-available time to packer busy time
+    # PACKER_DEST_READ_AVAILABLE: Cycles where packer could read from destination (data valid)
+    # PACKER_BUSY: Cycles where packer pipeline has active instructions
+    # Higher ratio (closer to 1.0) means packer has data available when busy (efficient)
+    # Lower ratio means packer is busy but waiting for destination data (dest stalling)
+    # NOTE: Only valid with HW dvalid synchronization, not with STALLWAIT
+    packer_dest_available = _avg_count(df, "TDMA_PACK", "PACKER_DEST_READ_AVAILABLE")
     packer_busy = _avg_count(df, "TDMA_PACK", "PACKER_BUSY")
-    pack_util = _safe_div(packer_busy, cycles_pack)
+    pack_efficiency = _safe_div(packer_dest_available, packer_busy)
+
+    # === FPU Execution Efficiency ===
+    # Ratio of actual FPU executions to cycles where FPU instructions were available
+    # FPU_INSTRUCTION: Actual FPU instructions executed by the math engine
+    # FPU_INSTRN_AVAILABLE_1: Cycles where an FPU instruction from MATH thread could start
+    # Higher ratio (closer to 1.0) means FPU executes whenever FPU work is available (efficient)
+    # Lower ratio means FPU instructions are available but not executing (pipeline stalls)
+    fpu_instruction = _avg_count(df, "FPU", "FPU_INSTRUCTION")
+    fpu_instrn_available = _avg_count(df, "INSTRN_THREAD", "FPU_INSTRN_AVAILABLE_1")
+    fpu_efficiency = _safe_div(fpu_instruction, fpu_instrn_available)
+
+    # === Math Pipeline Utilization (EXPERIMENTAL) ===
+    # Ratio of math instructions that started execution to those available in the pipe
+    # MATH_INSTRN_STARTED: Instructions read from the math instruction pipe stage and started
+    # MATH_INSTRN_AVAILABLE: Cycles where a math instruction was present in the pipe stage
+    # Higher ratio (closer to 1.0) means math pipeline efficiently moves instructions (no pipe stalls)
+    # Lower ratio means instructions are in pipe but not starting (pipeline stalled)
+    math_instrn_started = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_STARTED")
+    math_instrn_available = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
+    math_pipeline_util = _safe_div(math_instrn_started, math_instrn_available)
+
+    # === Math-to-Pack Handoff Efficiency (EXPERIMENTAL) ===
+    # Ratio of cycles where math output is available to packer busy cycles
+    # AVAILABLE_MATH: Cycles where a math instruction was available to the packer
+    # PACKER_BUSY: Cycles where packer pipeline has active instructions
+    # Higher ratio (closer to 1.0) means math keeps up with packer demand (good pipeline balance)
+    # Lower ratio means packer is busy but math output isn't ready (math is bottleneck)
+    available_math = _avg_count(df, "TDMA_PACK", "AVAILABLE_MATH")
+    math_to_pack_efficiency = _safe_div(available_math, packer_busy)
+
+    # === Unpacker-to-Math Data Flow (EXPERIMENTAL) ===
+    # Ratio of cycles where unpacker can write to srcA/srcB buffer vs unpacker busy cycles
+    # SRCA_WRITE_AVAILABLE: Cycles where srcA buffer has space for unpacker to write
+    # SRCB_WRITE_AVAILABLE: Cycles where srcB buffer has space for unpacker to write
+    # UNPACK0/1_BUSY: Cycles where unpacker is actively processing
+    # Higher ratio (closer to 1.0) means unpacker can write when busy, no math backpressure
+    # Lower ratio means unpacker is busy but buffers are full (math not consuming fast enough)
+    srca_write_available = _avg_count(df, "TDMA_UNPACK", "SRCA_WRITE_AVAILABLE")
+    srcb_write_available = _avg_count(df, "TDMA_UNPACK", "SRCB_WRITE_AVAILABLE")
+    unpack_to_math_flow0 = _safe_div(srca_write_available, unpack0_busy)
+    unpack_to_math_flow1 = _safe_div(srcb_write_available, unpack1_busy)
+
+    # Combined unpacker-to-math data flow (average of both)
+    if unpack_to_math_flow0 is not None and unpack_to_math_flow1 is not None:
+        unpack_to_math_flow = (unpack_to_math_flow0 + unpack_to_math_flow1) / 2.0
+    elif unpack_to_math_flow0 is not None:
+        unpack_to_math_flow = unpack_to_math_flow0
+    elif unpack_to_math_flow1 is not None:
+        unpack_to_math_flow = unpack_to_math_flow1
+    else:
+        unpack_to_math_flow = None
 
     return {
-        # Cycle counts
-        "wall_cycles": wall_cycles,
-        "fpu_cycles": cycles_fpu,
-        "unpack_cycles": cycles_unpack,
-        "pack_cycles": cycles_pack,
         # Raw counts
-        "fpu_count": fpu_count,
-        "sfpu_count": sfpu_count,
-        "math_count": math_count,
         "srca_write_count": srca_write,
         "srcb_write_count": srcb_write,
         "unpack0_busy_count": unpack0_busy,
         "unpack1_busy_count": unpack1_busy,
+        "packer_dest_available_count": packer_dest_available,
         "packer_busy_count": packer_busy,
-        # Utilization ratios (0.0 - 1.0+)
-        "fpu_util": fpu_util,
-        "sfpu_util": sfpu_util,
-        "math_util": math_util,
-        "unpack0_util": unpack0_util,
-        "unpack1_util": unpack1_util,
-        "unpack_util": unpack_util,
-        "pack_util": pack_util,
-        # Utilization percentages (0.0 - 100.0+)
-        "fpu_util_pct": _pct(fpu_util),
-        "sfpu_util_pct": _pct(sfpu_util),
-        "math_util_pct": _pct(math_util),
-        "unpack0_util_pct": _pct(unpack0_util),
-        "unpack1_util_pct": _pct(unpack1_util),
-        "unpack_util_pct": _pct(unpack_util),
-        "pack_util_pct": _pct(pack_util),
+        "fpu_instruction_count": fpu_instruction,
+        "fpu_instrn_available_count": fpu_instrn_available,
+        "math_instrn_started_count": math_instrn_started,
+        "math_instrn_available_count": math_instrn_available,
+        "available_math_count": available_math,
+        "srca_write_available_count": srca_write_available,
+        "srcb_write_available_count": srcb_write_available,
+        # Efficiency ratios (0.0 - 1.0)
+        "unpack0_efficiency": unpack0_efficiency,
+        "unpack1_efficiency": unpack1_efficiency,
+        "unpack_efficiency": unpack_efficiency,
+        "pack_efficiency": pack_efficiency,
+        "fpu_efficiency": fpu_efficiency,
+        "math_pipeline_util": math_pipeline_util,
+        "math_to_pack_efficiency": math_to_pack_efficiency,
+        "unpack_to_math_flow0": unpack_to_math_flow0,
+        "unpack_to_math_flow1": unpack_to_math_flow1,
+        "unpack_to_math_flow": unpack_to_math_flow,
+        # Efficiency percentages (0.0 - 100.0)
+        "unpack0_efficiency_pct": _pct(unpack0_efficiency),
+        "unpack1_efficiency_pct": _pct(unpack1_efficiency),
+        "unpack_efficiency_pct": _pct(unpack_efficiency),
+        "pack_efficiency_pct": _pct(pack_efficiency),
+        "fpu_efficiency_pct": _pct(fpu_efficiency),
+        "math_pipeline_util_pct": _pct(math_pipeline_util),
+        "math_to_pack_efficiency_pct": _pct(math_to_pack_efficiency),
+        "unpack_to_math_flow0_pct": _pct(unpack_to_math_flow0),
+        "unpack_to_math_flow1_pct": _pct(unpack_to_math_flow1),
+        "unpack_to_math_flow_pct": _pct(unpack_to_math_flow),
     }
 
 
@@ -158,50 +233,94 @@ def print_metrics(results: pd.DataFrame) -> None:
     print("=" * 70)
 
     print(f"\n{'─' * 70}")
-    print("  CYCLE COUNTS")
+    print("  UNPACKER WRITE EFFICIENCY")
     print(f"{'─' * 70}")
-    print(f"  {'Wall Cycles:':<30} {metrics['wall_cycles']:>15,}")
-    print(f"  {'FPU Bank Cycles:':<30} {metrics['fpu_cycles']:>15,}")
-    print(f"  {'Unpack Bank Cycles:':<30} {metrics['unpack_cycles']:>15,}")
-    print(f"  {'Pack Bank Cycles:':<30} {metrics['pack_cycles']:>15,}")
-
-    print(f"\n{'─' * 70}")
-    print("  COMPUTE UTILIZATION (instructions / cycles)")
+    print("  Measures the fraction of unpacker busy cycles spent writing data.")
+    print("  Higher ratio (→1.0) = efficient, unpacker writes when busy")
+    print("  Lower ratio (→0.0) = inefficient, unpacker busy but stalled/waiting")
     print(f"{'─' * 70}")
-    print(f"  {'Metric':<30} {'Count':>12} {'Util %':>12}")
-    print(f"  {'─' * 30} {'─' * 12} {'─' * 12}")
-    print(
-        f"  {'FPU Utilization:':<30} {metrics['fpu_count']:>12.1f} {fmt(metrics['fpu_util_pct']):>11}%"
-    )
-    print(
-        f"  {'SFPU Utilization:':<30} {metrics['sfpu_count']:>12.1f} {fmt(metrics['sfpu_util_pct']):>11}%"
-    )
-    print(
-        f"  {'Math Utilization (FPU+SFPU):':<30} {metrics['math_count']:>12.1f} {fmt(metrics['math_util_pct']):>11}%"
-    )
-
-    print(f"\n{'─' * 70}")
-    print("  UNPACKER UTILIZATION (writes / busy cycles)")
-    print(f"{'─' * 70}")
-    print(f"  {'Metric':<30} {'Writes':>12} {'Busy':>12} {'Ratio':>12}")
+    print(f"  {'Metric':<30} {'Writes':>12} {'Busy':>12} {'Efficiency':>12}")
     print(f"  {'─' * 30} {'─' * 12} {'─' * 12} {'─' * 12}")
     print(
-        f"  {'Unpacker0 (SRCA):':<30} {metrics['srca_write_count']:>12.1f} {metrics['unpack0_busy_count']:>12.1f} {fmt(metrics['unpack0_util']):>12}"
+        f"  {'Unpacker0 (SRCA):':<30} {metrics['srca_write_count']:>12.1f} {metrics['unpack0_busy_count']:>12.1f} {fmt(metrics['unpack0_efficiency']):>12}"
     )
     print(
-        f"  {'Unpacker1 (SRCB):':<30} {metrics['srcb_write_count']:>12.1f} {metrics['unpack1_busy_count']:>12.1f} {fmt(metrics['unpack1_util']):>12}"
+        f"  {'Unpacker1 (SRCB):':<30} {metrics['srcb_write_count']:>12.1f} {metrics['unpack1_busy_count']:>12.1f} {fmt(metrics['unpack1_efficiency']):>12}"
     )
     print(
-        f"  {'Combined Unpacker:':<30} {'':<12} {'':<12} {fmt(metrics['unpack_util']):>12}"
+        f"  {'Combined Average:':<30} {'':<12} {'':<12} {fmt(metrics['unpack_efficiency']):>12}"
     )
 
     print(f"\n{'─' * 70}")
-    print("  PACKER UTILIZATION (busy / cycles)")
+    print("  PACKER EFFICIENCY")
     print(f"{'─' * 70}")
-    print(f"  {'Metric':<30} {'Busy':>12} {'Util %':>12}")
-    print(f"  {'─' * 30} {'─' * 12} {'─' * 12}")
+    print("  Measures the fraction of packer busy cycles with valid dest data.")
+    print("  Higher ratio (→1.0) = efficient, packer has data when busy")
+    print("  Lower ratio (→0.0) = inefficient, packer stalled waiting for dest")
+    print("  NOTE: Only valid with HW dvalid sync (not STALLWAIT)")
+    print(f"{'─' * 70}")
+    print(f"  {'Metric':<30} {'Dest Avail':>12} {'Busy':>12} {'Efficiency':>12}")
+    print(f"  {'─' * 30} {'─' * 12} {'─' * 12} {'─' * 12}")
     print(
-        f"  {'Packer:':<30} {metrics['packer_busy_count']:>12.1f} {fmt(metrics['pack_util_pct']):>11}%"
+        f"  {'Packer:':<30} {metrics['packer_dest_available_count']:>12.1f} {metrics['packer_busy_count']:>12.1f} {fmt(metrics['pack_efficiency']):>12}"
+    )
+
+    print(f"\n{'─' * 70}")
+    print("  FPU EXECUTION EFFICIENCY")
+    print(f"{'─' * 70}")
+    print("  Measures the fraction of FPU-available cycles where FPU executes.")
+    print("  Higher ratio (→1.0) = efficient, FPU executes when work available")
+    print("  Lower ratio (→0.0) = inefficient, FPU stalled despite available work")
+    print(f"{'─' * 70}")
+    print(f"  {'Metric':<30} {'FPU Instr':>12} {'Available':>12} {'Efficiency':>12}")
+    print(f"  {'─' * 30} {'─' * 12} {'─' * 12} {'─' * 12}")
+    print(
+        f"  {'Math FPU:':<30} {metrics['fpu_instruction_count']:>12.1f} {metrics['fpu_instrn_available_count']:>12.1f} {fmt(metrics['fpu_efficiency']):>12}"
+    )
+
+    print(f"\n{'─' * 70}")
+    print("  MATH PIPELINE UTILIZATION (EXPERIMENTAL)")
+    print(f"{'─' * 70}")
+    print("  Measures math pipeline instruction flow efficiency.")
+    print("  Higher ratio (→1.0) = efficient, pipeline moves instructions smoothly")
+    print("  Lower ratio (→0.0) = inefficient, pipeline stalls despite available work")
+    print(f"{'─' * 70}")
+    print(f"  {'Metric':<30} {'Started':>12} {'Available':>12} {'Utilization':>12}")
+    print(f"  {'─' * 30} {'─' * 12} {'─' * 12} {'─' * 12}")
+    print(
+        f"  {'Math Pipeline:':<30} {metrics['math_instrn_started_count']:>12.1f} {metrics['math_instrn_available_count']:>12.1f} {fmt(metrics['math_pipeline_util']):>12}"
+    )
+
+    print(f"\n{'─' * 70}")
+    print("  MATH-TO-PACK HANDOFF EFFICIENCY (EXPERIMENTAL)")
+    print(f"{'─' * 70}")
+    print("  Measures pipeline balance between math and pack stages.")
+    print("  Higher ratio (→1.0) = efficient, math keeps up with packer demand")
+    print("  Lower ratio (→0.0) = inefficient, packer waits for math output")
+    print(f"{'─' * 70}")
+    print(f"  {'Metric':<30} {'Math Avail':>12} {'Pack Busy':>12} {'Efficiency':>12}")
+    print(f"  {'─' * 30} {'─' * 12} {'─' * 12} {'─' * 12}")
+    print(
+        f"  {'Math→Pack:':<30} {metrics['available_math_count']:>12.1f} {metrics['packer_busy_count']:>12.1f} {fmt(metrics['math_to_pack_efficiency']):>12}"
+    )
+
+    print(f"\n{'─' * 70}")
+    print("  UNPACKER-TO-MATH DATA FLOW (EXPERIMENTAL)")
+    print(f"{'─' * 70}")
+    print("  Measures unpacker write availability during busy cycles.")
+    print("  Higher ratio (→1.0) = efficient, unpacker can write (no backpressure)")
+    print("  Lower ratio (→0.0) = inefficient, buffers full (math not consuming)")
+    print(f"{'─' * 70}")
+    print(f"  {'Metric':<30} {'Buf Avail':>12} {'Busy':>12} {'Data Flow':>12}")
+    print(f"  {'─' * 30} {'─' * 12} {'─' * 12} {'─' * 12}")
+    print(
+        f"  {'Unpacker0→Math (srcA):':<30} {metrics['srca_write_available_count']:>12.1f} {metrics['unpack0_busy_count']:>12.1f} {fmt(metrics['unpack_to_math_flow0']):>12}"
+    )
+    print(
+        f"  {'Unpacker1→Math (srcB):':<30} {metrics['srcb_write_available_count']:>12.1f} {metrics['unpack1_busy_count']:>12.1f} {fmt(metrics['unpack_to_math_flow1']):>12}"
+    )
+    print(
+        f"  {'Combined Average:':<30} {'':<12} {'':<12} {fmt(metrics['unpack_to_math_flow']):>12}"
     )
 
     print("\n" + "=" * 70 + "\n")

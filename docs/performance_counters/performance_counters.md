@@ -204,15 +204,40 @@ Use these to measure compute utilization: `FPU_OR_SFPU_INSTRN / cycles`. Note th
 | 6 | TDMA_EXT_UNPACK_9_10 | TDMA extended unpacker interface |
 | 7 | TDMA_PACKER_2_WR | TDMA packer 2 write interface to L1 |
 
-## Memory Layout (per TRISC thread)
+## Memory Layout (Shared Buffer Architecture)
 
-Configuration and data buffers in L1 (per thread). Layout: 86 config words (344 bytes) + 172 data words (688 bytes) = 1032 bytes per thread.
+Configuration and data buffers in L1 use a **single shared buffer** accessed by all threads (UNPACK, MATH, PACK). Layout: 86 config words (344 bytes) + 172 data words (688 bytes) + 1 sync control word = 1036 bytes total.
 
-| Thread | Config Address | Data Address |
-|--------|----------------|--------------|
-| UNPACK | 0x16A000 (86 words) | 0x16A158 (172 words) |
-| MATH | 0x16A408 (86 words) | 0x16A560 (172 words) |
-| PACK | 0x16A810 (86 words) | 0x16A968 (172 words) |
+| Buffer Component | Address | Size | Description |
+|-----------------|---------|------|-------------|
+| Config Buffer | 0x16A000 | 86 words (344 bytes) | Counter slot configurations (shared) |
+| Data Buffer | 0x16A158 | 172 words (688 bytes) | Counter results (written by last stopper) |
+| Sync Control Word | 0x16A408 | 1 word (4 bytes) | Synchronization state and last stopper ID |
+
+**Shared Buffer Semantics:**
+- All threads (UNPACK, MATH, PACK) call `start_perf_counters()` to set their start bits
+- The **first thread to call start** (when all start bits are 0) initializes hardware and is recorded as the "starter"
+- All threads call `stop_perf_counters()` to set their stop bits
+- The **last thread to call stop** (when all 3 stop bits become set) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper"
+- Python `read_counters()` returns the snapshot captured by the stopper, along with both starter and stopper thread IDs
+- **No mutex required**: Each thread atomically sets its own bit; checks are simple bit masks
+- This reduces memory usage from 3096 bytes (3 × 1032) to 1036 bytes
+
+**Sync Control Word Format (0x16A408):**
+
+| Bit(s) | Field | Description |
+|--------|-------|-------------|
+| 0 | started_unpack | UNPACK thread called start_perf_counters() |
+| 1 | started_math | MATH thread called start_perf_counters() |
+| 2 | started_pack | PACK thread called start_perf_counters() |
+| 3 | stopped_unpack | UNPACK thread called stop_perf_counters() |
+| 4 | stopped_math | MATH thread called stop_perf_counters() |
+| 5 | stopped_pack | PACK thread called stop_perf_counters() |
+| 6 | started_global | At least one thread started counters |
+| 7 | stopped_global | All threads stopped counters |
+| 9:8 | starter_id | Which thread started hardware (0=UNPACK, 1=MATH, 2=PACK) |
+| 11:10 | stopper_id | Which thread stopped hardware (0=UNPACK, 1=MATH, 2=PACK) |
+| 31:12 | reserved | Reserved for future use |
 
 **Config word encoding:** Each counter slot is a single 32-bit config word with the following format:
 
@@ -225,148 +250,236 @@ Configuration and data buffers in L1 (per thread). Layout: 86 config words (344 
 
 **Data area:** After measurement, contains interleaved `(cycles, count)` pairs (2 words each) for each valid slot.
 
+## Performance Metrics
+
+Location: `tests/python_tests/helpers/metrics.py`
+
+The metrics module computes derived efficiency metrics from raw counter data. All metrics are ratios (0.0 to 1.0) where higher values indicate better efficiency.
+
+### Base Metrics
+
+**1. Unpacker Write Efficiency**
+
+Measures how efficiently unpackers use their busy cycles for writing data.
+
+```
+Unpacker0 Efficiency = SRCA_WRITE / UNPACK0_BUSY_THREAD0
+Unpacker1 Efficiency = SRCB_WRITE / UNPACK1_BUSY_THREAD0
+Combined Efficiency = Average of both unpackers
+```
+
+- **Higher ratio (→1.0)**: Unpacker spends most busy time writing data (efficient)
+- **Lower ratio (→0.0)**: Unpacker is busy but not writing (stalled/waiting)
+
+**Use case:** Identifies unpacker stalls due to L1 memory contention or data dependencies.
+
+**2. Packer Efficiency**
+
+Measures how often the packer has valid destination data available when busy.
+
+```
+Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY
+```
+
+- **Higher ratio (→1.0)**: Packer has data available when busy (efficient)
+- **Lower ratio (→0.0)**: Packer is busy but waiting for destination data
+
+**Note:** Only valid with HW dvalid-based synchronization, not with STALLWAIT mode.
+
+**Use case:** Detects destination register stalls indicating math stage bottleneck.
+
+**3. FPU Execution Efficiency**
+
+Measures how efficiently the FPU executes when FPU instructions are available.
+
+```
+FPU Efficiency = FPU_INSTRUCTION / FPU_INSTRN_AVAILABLE_1
+```
+
+- **Higher ratio (→1.0)**: FPU executes whenever work is available (efficient)
+- **Lower ratio (→0.0)**: FPU instructions available but not executing (pipeline stalls)
+
+**Use case:** Distinguishes compute-bound (high FPU efficiency) from memory-bound (low FPU efficiency) workloads.
+
+### Experimental Metrics
+
+These metrics provide additional pipeline analysis but may require additional tests and reviews.
+
+**4. Math Pipeline Utilization (EXPERIMENTAL)**
+
+Measures math instruction flow efficiency through the pipeline.
+
+```
+Math Pipeline Utilization = MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE
+```
+
+- **Higher ratio (→1.0)**: Math pipeline efficiently moves instructions (no pipe stalls)
+- **Lower ratio (→0.0)**: Instructions in pipe but not starting (pipeline stalled)
+
+**Use case:** Detects math pipeline stalls. Values consistently at 1.0 indicate excellent pipeline health.
+
+**5. Math-to-Pack Handoff Efficiency (EXPERIMENTAL)**
+
+Measures pipeline balance between math and packer stages.
+
+```
+Math-to-Pack Efficiency = AVAILABLE_MATH / PACKER_BUSY
+```
+
+- **Higher ratio (→1.0)**: Math keeps up with packer demand (good balance)
+- **Lower ratio (→0.0)**: Packer busy but math output isn't ready (math bottleneck)
+
+**Use case:** Identifies math stage as bottleneck when packer is starved for data.
+
+**6. Unpacker-to-Math Data Flow (EXPERIMENTAL)**
+
+Measures backpressure from math stage to unpackers.
+
+```
+Unpacker0 Data Flow = SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0
+Unpacker1 Data Flow = SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0
+Combined Data Flow = Average of both unpackers
+```
+
+- **Higher ratio (→1.0)**: Unpacker can write when busy, no backpressure (efficient)
+- **Lower ratio (→0.0)**: Unpacker busy but buffers full (math not consuming fast enough)
+
+**Use case:** Detects math stage backpressure causing unpacker stalls. Compare with Unpacker Write Efficiency to distinguish backpressure stalls from other stall types.
+
+### Metrics API
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `compute_metrics(df)` | Compute all metrics from counter DataFrame. Returns dictionary with raw counts, ratios, and percentages. |
+| `print_metrics(results)` | Print formatted metrics report with explanations and efficiency ratios. |
+| `export_metrics(results, filename, test_params, worker_id)` | Export metrics to CSV in `perf_data/` directory. |
+
+**Example usage:**
+
+```python
+from helpers.counters import configure_counters, read_counters
+from helpers.metrics import print_metrics
+
+# Configure and run test
+configure_counters(location="0,0")
+# ... run kernel ...
+results = read_counters(location="0,0")
+
+# Display metrics
+print_metrics(results)
+```
+
+**Output format:**
+
+```
+======================================================================
+PERFORMANCE METRICS
+======================================================================
+
+──────────────────────────────────────────────────────────────────────
+  UNPACKER WRITE EFFICIENCY
+──────────────────────────────────────────────────────────────────────
+  Measures the fraction of unpacker busy cycles spent writing data.
+  Higher ratio (→1.0) = efficient, unpacker writes when busy
+  Lower ratio (→0.0) = inefficient, unpacker busy but stalled/waiting
+──────────────────────────────────────────────────────────────────────
+  Metric                           Writes         Busy   Efficiency
+  ────────────────────────────── ──────────── ──────────── ────────────
+  Unpacker0 (SRCA):                   1234.0      2468.0         0.50
+  Unpacker1 (SRCB):                   1356.0      2468.0         0.55
+  Combined Average:                                                0.52
+
+[... similar sections for each metric ...]
+```
+
 ## Interfaces
+
+### Python API
+
+Location: `tests/python_tests/helpers/counters.py`
+
+**Key Features:**
+- Single source of truth: All constants derived from `TestConfig`
+- Comprehensive validation: Detects missing start/stop calls with specific thread identification
+- Shared buffer support: Returns last stopper's counter snapshot
+- Pre-built counter configurations for common measurement scenarios
+
+**Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `configure_counters(location="0,0")` | Write counter configuration to shared L1 buffer. Configures all 94 counter definitions (61 INSTRN_THREAD + 3 FPU + 11 TDMA_UNPACK + 3 TDMA_PACK + 16 L1). Note: Hardware has 86 slots; L1 counters are mux-dependent (8 active at once). Clears data buffer and sync control word. |
+| `read_counters(location="0,0")` | Read counter results from shared buffer. Returns DataFrame with columns: `starter_thread`, `stopper_thread`, `bank`, `counter_name`, `counter_id`, `cycles`, `count`, `l1_mux`. Validates sync state and identifies missing start/stop calls. |
+| `print_counters(results)` | Print counter results in human-readable format with thread identification. |
+| `export_counters(results, filename, test_params, worker_id)` | Export counter DataFrame to CSV in `perf_data/` directory. |
+
+**Validation:**
+
+The `read_counters()` function performs comprehensive validation:
+- **Zero sync word**: Detects if counters were never started (all threads forgot to call `start_perf_counters()`)
+- **Missing global start**: At least one thread must call `start_perf_counters()`
+- **Missing global stop**: All threads must call `stop_perf_counters()`. Reports which specific threads (UNPACK, MATH, PACK) are missing stop calls
+- **Invalid thread IDs**: Validates both starter and stopper thread IDs are in valid range (0-2)
+- **Error messages include sync_ctrl value**: All validation errors display the raw sync control word for debugging
+
+**Example validation error:**
+```
+RuntimeError: Perf counters were not stopped by all threads.
+Missing stop_perf_counters() call from: MATH. sync_ctrl=0x0000006c
+```
+
+**Pre-built Counter List:**
+
+The module provides `ALL_COUNTERS` list with 94 pre-configured counter definitions:
+- INSTRN_THREAD: 61 counters (instruction availability, wait reasons, thread instruction counts)
+- FPU: 3 counters (FPU, SFPU, combined)
+- TDMA_UNPACK: 11 counters (unpack busy, write availability, math pipeline)
+- L1: 16 counters (8 counter IDs × 2 mux settings)
+  - mux=0: 8 counters (NOC Ring 0, L1 arbitration)
+  - mux=1: 8 counters (NOC Ring 1, TDMA arbitration)
+- TDMA_PACK: 3 counters (packer busy, dest available, math available)
+
+**Note:** The hardware supports 86 counter slots. L1 counters require setting the mux bit before measurement, so only 8 of the 16 L1 counter definitions can be active simultaneously. This means maximum concurrent counters = 61 + 3 + 11 + 3 + 8 = 86.
 
 ### C++ API
 
 Location: `tests/helpers/include/counters.h`
 
 **Types:**
-- `llk_perf::CounterBank`: Enum with values `INSTRN_THREAD`, `FPU`, `TDMA_UNPACK`, `L1`, `TDMA_PACK`
-- `llk_perf::CounterResult`: Struct with `cycles`, `count`, `bank`, `counter_id`
+- `llk_perf::counter_bank`: Enum with values `instrn_thread`, `fpu`, `tdma_unpack`, `l1`, `tdma_pack`
 
-**Class: `llk_perf::PerfCounters`**
+**Singleton Manager: `llk_perf::PerfCounterManager`**
 
-| Method | Description |
-|--------|-------------|
-| `start()` | Read config from L1 and start all configured banks. Configuration buffers must be initialized before calling `start()`. |
-| `stop()` | Stop counters, scan all slots, write results to L1, return results array |
+The `PerfCounterManager` class manages performance counter lifecycle using a singleton pattern. Direct access to the singleton is not necessary; use the public API functions instead.
 
-**RAII wrapper: `llk_perf::ScopedPerfCounters`**
+**Public API Functions:**
 
-Automatically starts on construction and stops on destruction. Use when Python pre-configures the counters.
+| Function | Description |
+|----------|-------------|
+| `llk_perf::start_perf_counters()` | Read config from shared L1 buffer and start all configured banks. Atomically sets the thread's start bit in sync control word. First thread to call this (when all start bits are 0) initializes hardware and is recorded as the "starter". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
+| `llk_perf::stop_perf_counters()` | Stop all configured banks and atomically set the thread's stop bit. Last thread to call this (when all 3 stop bits become set) reads hardware counters, writes results to the shared data buffer, and is recorded as the "stopper". **All threads must call this.** Thread-safe via atomic bit operations (no mutex needed). |
 
-**Example (Python-provided configuration):**
+**Example usage:**
 ```cpp
 #include "counters.h"
 
-void run_kernel(const volatile RuntimeParams* params) {
-    llk_perf::ScopedPerfCounters scoped;
-    // ... kernel work ...
-    // Results written to L1 on destruction
+void llk_unpack_main() {
+    llk_perf::start_perf_counters();
+    // ... unpack work ...
+    llk_perf::stop_perf_counters();
+}
+
+void llk_math_main() {
+    llk_perf::start_perf_counters();
+    // ... math work ...
+    llk_perf::stop_perf_counters();
+}
+
+void llk_pack_main() {
+    llk_perf::start_perf_counters();
+    // ... pack work ...
+    llk_perf::stop_perf_counters();
 }
 ```
-
-### Python API
-
-Location: `tests/python_tests/helpers/counters.py`
-
-**Functions:**
-
-| Function | Description |
-|----------|-------------|
-| `configure_counters(location)` | Configure all 86 counters on all threads (UNPACK, MATH, PACK) |
-| `read_counters(location)` | Read counter results from all threads |
-| `print_counters(results)` | Display formatted results |
-| `export_counters(results, filename, test_params, worker_id)` | Export counter results to CSV |
-
-**Example:**
-```python
-from helpers.counters import configure_counters, read_counters, print_counters, export_counters
-
-# Configure and run with performance counters
-configure_counters(location="0,0")
-# ... run kernel ...
-results = read_counters(location="0,0")
-
-# Display results
-print_counters(results)
-
-# Export to CSV
-export_counters(results, "my_test_counters")
-```
-
-## Derived Metrics
-
-Location: `tests/python_tests/helpers/metrics.py`
-
-The metrics module computes higher-level performance indicators from raw counter data. Platform-specific bandwidth parameters are automatically detected based on the connected chip architecture.
-
-### Usage
-
-The metrics functions automatically detect the chip architecture and apply appropriate bandwidth parameters:
-
-```python
-from helpers.metrics import print_metrics, export_metrics
-
-# Print formatted metrics to console
-print_metrics(results)
-
-# Export metrics to CSV
-export_metrics(results, "my_test_metrics")
-```
-
-**Functions:**
-
-| Function | Description |
-|----------|-------------|
-| `compute_metrics(results)` | Compute utilization metrics from counter data |
-| `print_metrics(results)` | Print kernel metrics to console |
-| `export_metrics(results, filename, test_params, worker_id)` | Export kernel metrics to CSV |
-
-### Platform Bandwidth Parameters
-
-The module internally maintains bandwidth parameters for each supported architecture:
-
-| Platform | NoC Word (bytes) | Unpacker Peak (B/cyc) | Packer Peak (B/cyc) | Notes |
-|----------|------------------|----------------------|---------------------|-------|
-| Wormhole B0 | 32 | 80.0 | 80.0 | 256-bit NoC flit; 80 B/cyc from tt-metal perf model |
-| Blackhole | 256 | 120.0 | 120.0 | 2048-bit NoC flit; wider bus enables higher bandwidth |
-| Quasar | 32 | 80.0 | 80.0 | Placeholder values |
-
-These values are used to convert raw utilization ratios into estimated bytes/cycle throughput.
-
-### Output Interpretation
-
-The metrics output shows both utilization and estimated bandwidth:
-
-| Metric | Example Output |
-|--------|----------------|
-| Unpacker | `util=0.228 → est ~18.21 B/cyc` |
-| Packer | `util=0.382 → est ~30.57 B/cyc` |
-| NoC | `45.43 B/cyc (txn/cyc 1.42)` |
-
-- **util** = fraction of cycles the component was busy (0.0–1.0)
-- **est B/cyc** = `util × peak_bytes_per_cycle` = estimated actual throughput
-- Values below peak indicate headroom; values near peak indicate saturation
-
-### Core Metrics
-
-| Metric | Formula | Description |
-|--------|---------|-------------|
-| FPU Utilization | `FPU_INSTRUCTION / cycles_fpu` | FPU activity rate |
-| SFPU Utilization | `SFPU_INSTRUCTION / cycles_fpu` | SFPU activity rate |
-| Math Utilization | `FPU_OR_SFPU_INSTRN / cycles_fpu` | Combined FPU+SFPU activity rate |
-| Unpacker0 Utilization | `SRCA_WRITE / UNPACK0_BUSY_THREAD0` | Unpacker 0 efficiency (writes per busy cycle) |
-| Unpacker1 Utilization | `SRCB_WRITE / UNPACK1_BUSY_THREAD0` | Unpacker 1 efficiency (writes per busy cycle) |
-| Packer Utilization | `PACKER_BUSY / cycles_pack` | Packer activity rate |
-
-**Interpretation:**
-- **Compute utilization** (FPU/SFPU/Math): Values 0.0–1.0 indicate fraction of cycles actively computing
-- **Unpacker utilization**: Ratio of writes to busy cycles; values near 1.0 indicate efficient data flow with minimal stalls
-- **Packer utilization**: Fraction of cycles the packer was busy; low values may indicate the kernel is compute-bound
-
-### Bound Classification
-
-The metrics module provides a heuristic classification of the performance bottleneck:
-
-| Classification | Score Based On |
-|----------------|----------------|
-| math-bound | Compute utilization |
-| unpack-bound | Unpack utilization |
-| pack-bound | Pack utilization |
-| risc-bound | Stall rate minus instruction issue efficiency |
-
-The classification with the highest score is reported as the likely bottleneck.
-
-**Note:** Bound classification is heuristic and intended for guidance, not definitive performance assessment. The "compute vs data-movement bound" classification is more relevant for tt-metal where data movement is a significant factor. In the LLK repository context, focus on the individual component bounds (math/unpack/pack/risc).
