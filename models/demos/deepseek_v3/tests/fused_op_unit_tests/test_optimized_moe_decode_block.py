@@ -127,14 +127,13 @@ def gen_torch_dispatch_input_expert_indices_tensor(
         for s in range(seq):
             token += 1
             for k in range(selected_experts_k):
-                if True:
-                    # if scheme == "sequential":
-
+                if scheme == "sequential":
                     expert = b // 2
                     expert += k
                     expert %= 256
                     expert_indices[b, 0, s, k] = expert
 
+                    # TODO: (GR)
                     # expert_indices[b, 0, s, k] = current_expert % experts
                     # current_expert += 1 + (k % 2)
                 elif scheme == "random" or scheme == "random_sequential_experts":
