@@ -2086,9 +2086,6 @@ void kernel_main() {
             }
         }
 
-#ifdef COMPILE_TEST_ONLY
-        return;
-#endif
         // ====================================================================
         // KV Cache Branch
         // Non-owning SP devices skip the entire branch and just signal the
@@ -2177,8 +2174,10 @@ void kernel_main() {
                 deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
                 sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
             }
+            DPRINT << " DONE SDPA REDUCE FORWARDER" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (Core::is_matmul4_core) {
+                DPRINT << " MATMUL4 SYNC" << ENDL();
                 constexpr uint32_t scatter_arrival_semaphore_id =
                     get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
                 volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
@@ -2190,15 +2189,18 @@ void kernel_main() {
                 constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
                 constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
                 unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
+                DPRINT << " DONE MATMUL4 SYNC" << ENDL();
             }
 #endif
         }
         {
+            DPRINT << " MATMUL4 " << ENDL();
             DeviceZoneScopedN("MATMUL4");
             deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
             matmul4(matmul4_args);
         }
         {
+            DPRINT << " GATHER2 " << ENDL();
             DeviceZoneScopedN("GATHER2");
             deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
             gather2(gather2_args);
@@ -2209,16 +2211,19 @@ void kernel_main() {
             Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
                 mcast3;
         {
+            DPRINT << " MCAST3 " << ENDL();
             DeviceZoneScopedN("MCAST3");
             mcast3(mcast3_args);
         }
 
         {
+            DPRINT << " MATMUL5 " << ENDL();
             DeviceZoneScopedN("MATMUL5");
             deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
         }
         {
+            DPRINT << " GATHER3 " << ENDL();
             DeviceZoneScopedN("GATHER3");
             deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
             gather3(gather3_args);
@@ -2263,6 +2268,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_ccl_sender_core) {
+            DPRINT << " CCL SENDER SEND" << ENDL();
             DeviceZoneScopedN("CCL_SENDER_SEND");
 
             deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
@@ -2272,6 +2278,7 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_ccl_receiver_core) {
+            DPRINT << " CCL RECEIVER COMPUTE" << ENDL();
             DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
 
             deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
@@ -2283,6 +2290,9 @@ void kernel_main() {
 
     DPRINT << " DONE POST_SDPA" << ENDL();
 
+#ifdef COMPILE_TEST_ONLY
+    return;
+#endif
     // ========================================================================
     // Phase 2: CB Reconfiguration — attention_block layout → MOE layout
     // ========================================================================
