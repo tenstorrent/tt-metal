@@ -3,12 +3,23 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat
-from helpers.golden_generators import UntilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    UntilizeGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    format_dict,
+)
 from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
@@ -35,13 +46,15 @@ from helpers.utils import passed_test
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[[96, 288], [64, 64], [32, 128], [128, 128], [32, 64]],
-    dest_sync=[DestSync.Half, DestSync.Full],
+    input_dimensions=[[64, 512], [64, 64], [32, 128], [128, 128], [32, 64]],
+    #  TODO add DestSync::Full tests when we have a solution for the static_assert in _llk_pack_untilize_init_ that requires block_ct_dim to be less or equal to 8,
+    #  which is currently a limitation for testing DestSync::Full with the Untilize blocks calculation algorithm.
+    dest_sync=[DestSync.Half],
 )
 def test_pack_untilize(
     formats, dest_acc, input_dimensions, dest_sync, workers_tensix_coordinates
 ):
-    if TestConfig.WITH_COVERAGE and input_dimensions == [96, 288]:
+    if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
         pytest.skip(
             "Skipping large dimension test in coverage mode, check issue: #1063 on TT-LLK repo"
         )
@@ -73,6 +86,17 @@ def test_pack_untilize(
             "Due to hardware limitation, cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register. Therefore using dest_acc=No is not supported in this case."
         )
 
+    # TODO: Checkout issue #1405 on tt-llk.
+    if (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and formats.input_format
+        in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b)
+        and formats.output_format == DataFormat.Float32
+        and dest_acc == DestAccumulation.No
+        and input_dimensions == [64, 512]
+    ):
+        pytest.skip("Wormhole pack_untilize does not support this format combination.")
+
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -91,10 +115,13 @@ def test_pack_untilize(
 
     # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
     # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.
-    max_bct_dim = 8 if dest_acc == DestAccumulation.No else 4
-    full_ct_dim = input_dimensions[1] // 32
-    block_ct_dim = next(
-        (bct for bct in range(max_bct_dim, 0, -1) if full_ct_dim % bct == 0), 1
+    _, block_ct_dim = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Untilize,
     )
 
     configuration = TestConfig(

@@ -1,22 +1,33 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackRowsGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    format_dict,
+)
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    NUM_BLOCKS,
     NUM_ROWS_TO_PACK,
-    TILE_COUNT,
+    NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
 from helpers.utils import passed_test
 
-max_tiles = 4
+max_tiles = 32
 tile_dim = 32
 
 dimension_combinations = [
@@ -47,6 +58,19 @@ def test_pack_rows(
 ):
     row_num_datums = 16
 
+    try:
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            dimensions,
+            [32, 32],  # tile_dimensions (pack_rows uses 32x32 tiles)
+            BlocksCalculationAlgorithm.Standard,
+        )
+    except ValueError as e:
+        # Skip test cases where tile count is not evenly divisible by block size
+        pytest.skip(f"Skipping incompatible dimension: {str(e)}")
+
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=dimensions,
@@ -73,7 +97,8 @@ def test_pack_rows(
             generate_input_dim(dimensions, dimensions),
         ],
         runtimes=[
-            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_ROWS_TO_PACK(num_rows_to_pack),
         ],
         variant_stimuli=StimuliConfig(

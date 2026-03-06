@@ -2,8 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, MathOperation
+from typing import List
+
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+    MathOperation,
+)
+from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 
 
 def get_valid_dest_accumulation_modes(formats):
@@ -68,36 +78,29 @@ def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
 def get_valid_dest_indices(
     dest_sync: DestSync,
     dest_acc: DestAccumulation,
-    tile_count: int,
+    formats: InputOutputFormat,
+    input_dimensions: List[int],
     all_indices: bool = False,
 ):
     """
     Base constraint for valid destination register indices.
 
-    Capacity of the destination register is 16 tiles with 16bit datums.
-
-    - When using DestSync.Half, the capacity is halved due to software double buffering.
-    - When using DestAccumulation.Yes, the capacity is halved due to using tiles with 32bit datums.
-
     By default the function only returns the lowest and highest possible indices.
     This is to limit the number of tests. Use all_indices=True force the function to return all possible indices.
     """
 
-    capacity_tiles = 16
-
-    if dest_sync == DestSync.Half:
-        capacity_tiles = capacity_tiles // 2
-
-    if dest_acc == DestAccumulation.Yes:
-        capacity_tiles = capacity_tiles // 2
-
-    if tile_count > capacity_tiles:
-        raise ValueError(
-            f"Tried to fit {tile_count} tiles when Dest capacity is {capacity_tiles}"
-        )
+    # Use this function to get the number of tiles that can fit in dest.
+    _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
 
     start_index = 0
-    end_index = capacity_tiles - tile_count
+    end_index = num_tiles_in_block - 1
 
     if all_indices:
         return list(range(start_index, end_index + 1))

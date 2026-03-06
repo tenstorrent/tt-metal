@@ -5,8 +5,12 @@ import torch
 from conftest import skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
+from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import DestAccumulation, L1Accumulation, Tilize, format_dict
 from helpers.param_config import (
+    BlocksCalculationAlgorithm,
+    DestSync,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
@@ -16,7 +20,9 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     L1_ACC,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     TILIZE,
     generate_input_dim,
@@ -76,7 +82,7 @@ def get_valid_num_faces_datacopy(tilize):
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
-    input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64]],
+    input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
 def test_pack_dest_bank(
     formats,
@@ -105,6 +111,19 @@ def test_pack_dest_bank(
         else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        (
+            BlocksCalculationAlgorithm.Standard
+            if tilize == Tilize.No
+            else BlocksCalculationAlgorithm.Tilize
+        ),
+    )
+
     configuration = TestConfig(
         "sources/pack_dest_bank_test.cpp",
         formats,
@@ -117,6 +136,8 @@ def test_pack_dest_bank(
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             L1_ACC(l1_acc),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
