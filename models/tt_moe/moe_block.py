@@ -43,6 +43,12 @@ from models.tt_moe.components.routers.grouped_topk_router import GroupedTopKRout
 
 # Unified expert configuration
 from models.tt_moe.config import create_deepseek_expert_config, create_gptoss_expert_config
+from models.tt_moe.config.moe_unified_config import (
+    MoEUnifiedConfig,
+    get_deepseek_config,
+    get_gptoss_decode_config,
+    get_gptoss_prefill_config,
+)
 
 
 class MoEBlock(SharedStateAddOn, AbstractModule):
@@ -657,7 +663,6 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                         router_state_dict,
                         tensor_cache_path=None,
                     )
-                    logger.info("Successfully loaded GPT-OSS router with provided weights")
                 else:
                     # Fallback: create mock router for testing
                     logger.warning("Creating mock GPT-OSS router with random weights for testing")
@@ -683,290 +688,55 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
         return weights, indices
 
     @classmethod
-    def _fwd_repeat_permute_expert_weights(
-        cls, topk_experts_weights: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig
-    ) -> ttnn.Tensor:
-        # DEPRECATED: This is now handled by MoEPreamble.forward()
-        # Kept for backward compatibility if called directly
-        logger.warning("_fwd_repeat_permute_expert_weights is deprecated. Use MoEPreamble instead.")
-        backend = cfg.get("backend", "deepseek")
-
-        if backend == "gptoss":
-            # GPT-OSS doesn't need this transformation
-            return topk_experts_weights
-
-        # DeepSeek path
-        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, **cfg["topk_weights_repeat"])
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_experts_weights_rm)
-        return topk_experts_weights
-
-    @classmethod
-    def _fwd_moe(
+    def _fwd_moe_unified(
         cls,
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
         topk_experts_weights: ttnn.Tensor,
-        cfg: RunDecodeConfig | RunPrefillConfig,
-        batch_size_per_device: int,
-        batch_size: int,
-        seq_len: int,
+        cfg: dict,
+        config: MoEUnifiedConfig,
     ) -> ttnn.Tensor:
-        backend = cfg.get("backend", "deepseek")
-        logger.info(
-            f"_fwd_moe called with backend={backend}, x.shape={x.shape}, indices.shape={topk_experts_indices.shape}, weights.shape={topk_experts_weights.shape}"
-        )
+        """Unified MoE forward pass supporting both GPT-OSS and DeepSeek backends.
 
-        # Create unified configuration based on backend
-        mode = "decode" if seq_len == 1 else "prefill"
-        hf_config = cfg.get("hf_config")
+        This function provides a single configurable implementation for MoE forward pass
+        that can handle both GPT-OSS and DeepSeek requirements through the MoEUnifiedConfig.
 
-        if backend == "gptoss":
-            logger.info("Using unified GPT-OSS path with all_to_all")
-            logger.info(f"x shape after preamble: {x.shape}")
-            logger.info(f"topk_experts_indices shape after preamble: {topk_experts_indices.shape}")
-            logger.info(f"topk_experts_weights shape after preamble: {topk_experts_weights.shape}")
-            logger.info(f"batch_size_per_device={batch_size_per_device}, seq_len={seq_len}")
+        Args:
+            x: Input tensor after preamble processing
+            topk_experts_indices: Expert routing indices
+            topk_experts_weights: Expert routing weights
+            cfg: Runtime configuration dictionary
+            config: Unified MoE configuration
 
-            # Create GPT-OSS unified configuration
-            # Ensure we use the correct intermediate_size from hf_config
-            if not hf_config:
-                # Create fallback config only if hf_config not provided
-                # Use intermediate_size from cfg if available (GPT-OSS should be 2880)
-                hf_config = type(
-                    "obj",
-                    (object,),
-                    {
-                        "hidden_size": cfg["hidden_size"],
-                        "intermediate_size": cfg.get("intermediate_size", 2880),  # GPT-OSS default
-                        "num_experts_per_tok": cfg["num_experts_per_tok"],
-                    },
-                )
-                logger.warning(f"GPT-OSS: Using fallback config with intermediate_size={hf_config.intermediate_size}")
-            else:
-                logger.info(f"GPT-OSS: Using provided hf_config with intermediate_size={hf_config.intermediate_size}")
-
-            unified_config = create_gptoss_expert_config(
-                hf_config,
-                mode=mode,
-                num_experts_per_device=cfg["num_experts_per_device"],
-                use_fused_weights=cfg.get("use_fused_gate_up", False),  # Use separate weights for now
-            )
-            cfg["unified_expert_config"] = unified_config
-
-            # Implement all_to_all for GPT-OSS (similar to DeepSeek)
-            return cls._fwd_moe_gptoss_unified(
-                x, topk_experts_indices, topk_experts_weights, cfg, batch_size_per_device, batch_size, seq_len
-            )
-
-        # DeepSeek backend continues with existing implementation
-        if not hf_config:
-            # Create a minimal config object for DeepSeek if not provided
-            hf_config = type(
-                "obj",
-                (object,),
-                {
-                    "hidden_size": cfg["hidden_size"],
-                    "moe_intermediate_size": cfg.get("moe_intermediate_size", cfg.get("intermediate_size", 4608)),
-                    "num_experts_per_tok": cfg["num_experts_per_tok"],
-                },
-            )
-
-        unified_config = create_deepseek_expert_config(
-            hf_config, mode=mode, num_experts_per_device=cfg["num_experts_per_device"]
-        )
-        cfg["unified_expert_config"] = unified_config
-
-        # DeepSeek path - inputs are already preprocessed by MoEPreamble
-        # x is already reshaped to (batch_size_per_device, 1, seq_len, hidden_size)
-        # topk_experts_indices is already reshaped to (batch_size_per_device, 1, seq_len, num_experts_per_tok)
-        # topk_experts_weights is already transformed with repeat/permute
-        tokens = batch_size * seq_len
-        x_rm = x  # Already in the right shape from MoEPreamble
-        topk_experts_indices_rm = topk_experts_indices  # Already in the right shape from MoEPreamble
-
-        # Chunk along local batch dimension to keep all_to_all_dispatch output small in prefill.
-        chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
-        output_chunks: list[ttnn.Tensor] = []
-
-        def _slice_topk_weights(batch_start: int, batch_end: int) -> ttnn.Tensor:
-            token_start = batch_start * seq_len
-            token_end = batch_end * seq_len
-            return ttnn.slice(
-                topk_experts_weights,
-                [0, 0, token_start, 0],
-                [cfg["num_experts_per_tok"], 1, token_end, cfg["hidden_size"]],
-            )
-
-        for batch_start in range(0, batch_size_per_device, chunk_size):
-            batch_end = min(batch_start + chunk_size, batch_size_per_device)
-            batch_chunk = batch_end - batch_start
-            batch_size_chunk = batch_chunk * cfg["num_dispatch_devices"]
-
-            x_chunk = ttnn.slice(
-                x_rm,
-                [batch_start, 0, 0, 0],
-                [batch_end, 1, seq_len, cfg["hidden_size"]],
-            )
-            topk_indices_chunk = ttnn.slice(
-                topk_experts_indices_rm,
-                [batch_start, 0, 0, 0],
-                [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
-            )
-
-            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
-                x_chunk,
-                topk_indices_chunk,
-                cfg["expert_mapping_tensors"],
-                **cfg["all_to_all_dispatch"],
-            )
-            ttnn.deallocate(x_chunk)
-            ttnn.deallocate(topk_indices_chunk)
-
-            dispatch_chunk = ttnn.reshape(
-                all_to_all_dispatch_output_tensors,
-                shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
-            )
-            dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
-            dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(all_to_all_dispatch_output_tensors)
-
-            # Instrumentation: Log input to experts
-            from models.tt_moe.utils.tensor_debug import log_tensor_checkpoint
-
-            log_tensor_checkpoint(dispatch_chunk, "MoEBlock_deepseek_4_experts_input")
-
-            experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
-
-            # Instrumentation: Log output of experts
-            log_tensor_checkpoint(experts_output, "MoEBlock_deepseek_5_experts_output")
-
-            ttnn.deallocate(dispatch_chunk)
-
-            experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-            experts_output = ttnn.reshape(
-                experts_output, shape=(cfg["num_experts_per_device"], batch_size_chunk, seq_len, cfg["hidden_size"])
-            )
-
-            all_to_all_dispatch_metadata_tensors = ttnn.reshape(
-                all_to_all_dispatch_metadata_tensors,
-                shape=(1, batch_size_chunk, seq_len, cfg["num_experts_per_tok"]),
-            )
-
-            all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
-                experts_output,
-                all_to_all_dispatch_metadata_tensors,
-                cfg["expert_mapping_tensors"],
-                **cfg["all_to_all_combine"],
-            )
-            ttnn.deallocate(experts_output)
-            ttnn.deallocate(all_to_all_dispatch_metadata_tensors)
-
-            post_combine_output_tensor = ttnn.reshape(
-                all_to_all_combine_output_tensors,
-                shape=(cfg["num_experts_per_tok"], 1, batch_chunk * seq_len, cfg["hidden_size"]),
-            )
-            post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
-
-            topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
-            post_combine_output_tensor = ttnn.mul(
-                post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
-            )
-            ttnn.deallocate(topk_weights_chunk)
-
-            post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-            output_chunks.append(post_combine_output_tensor)
-
-        if len(output_chunks) == 1:
-            post_combine_output_tensor = output_chunks[0]
-        else:
-            post_combine_output_tensor = ttnn.concat(output_chunks, dim=2)
-            for chunk in output_chunks:
-                ttnn.deallocate(chunk)
-
-        ttnn.deallocate(x_rm)
-        ttnn.deallocate(topk_experts_indices_rm)
-        return post_combine_output_tensor
-
-    @classmethod
-    def _fwd_moe_gptoss_unified(
-        cls,
-        x: ttnn.Tensor,
-        topk_experts_indices: ttnn.Tensor,
-        topk_experts_weights: ttnn.Tensor,
-        cfg: RunDecodeConfig | RunPrefillConfig,
-        batch_size_per_device: int,
-        batch_size: int,
-        seq_len: int,
-    ) -> ttnn.Tensor:
-        """GPT-OSS unified implementation with all_to_all dispatch and combine.
-
-        This method implements the GPT-OSS MoE using all_to_all operations
-        similar to DeepSeek, but configured for GPT-OSS requirements.
+        Returns:
+            Output tensor after MoE processing
         """
-        import os
+        from loguru import logger
 
-        import torch
+        # Determine dimensions based on expert type
+        if config.expert_type.startswith("throughput"):
+            # GPT-OSS mode: x is [batch, 1, 1, hidden] for decode or [1, 1, seq, hidden] for prefill
+            batch_size_per_device = x.shape[0] if x.shape[0] > 1 else x.shape[2]
+            seq_len = 1 if x.shape[2] == 1 else x.shape[2]
+            actual_hidden_size = x.shape[-1]
+        else:
+            # DeepSeek mode: x is [batch, 1, seq, hidden]
+            batch_size_per_device = x.shape[0]
+            seq_len = x.shape[2]
+            actual_hidden_size = x.shape[-1]
 
-        from models.tt_moe.utils.tensor_debug import log_tensor_checkpoint
+        total_tokens = batch_size_per_device * seq_len
+        output_chunks = []
 
-        # Directory to save intermediate activations
-        debug_dir = "/tmp/gptoss_unified_debug"
-        os.makedirs(debug_dir, exist_ok=True)
-
-        # Helper to convert distributed tensors to torch
-        def to_torch_debug(tensor, name="tensor"):
-            """Convert potentially distributed tensor to torch for debugging."""
-            try:
-                # Skip activation saving for distributed tensors
-                # The issue is complex with row-sharded tensors
-                # Just return None to skip saving for now
-                return None
-            except Exception as e:
-                logger.debug(f"Failed to convert {name} to torch: {e}")
-                return None
-
-        # Helper to save tensor to file
-        def save_tensor(tensor, filename, tensor_name, is_float=True):
-            """Save a tensor to file if conversion was successful."""
-            torch_tensor = to_torch_debug(tensor, tensor_name)
-            if torch_tensor is not None:
-                if is_float:
-                    torch_tensor = torch_tensor.float()
-                torch_tensor = torch_tensor.cpu()
-                torch.save(torch_tensor, f"{debug_dir}/{filename}")
-                logger.info(f"  Saved: {filename} shape={torch_tensor.shape}")
-            else:
-                logger.warning(f"  Could not save {filename}")
-
-        logger.info("=" * 80)
-        logger.info("GPT-OSS UNIFIED PATH - SHAPE INSTRUMENTATION + ACTIVATION SAVING")
-        logger.info("=" * 80)
-        logger.info(
-            f"INPUTS: x.shape={x.shape}, indices.shape={topk_experts_indices.shape}, "
-            f"weights.shape={topk_experts_weights.shape}"
-        )
-        logger.info(
-            f"PARAMS: batch_size_per_device={batch_size_per_device}, batch_size={batch_size}, seq_len={seq_len}"
-        )
-        logger.info(f"PARAMS: num_devices={cfg['num_devices']}, num_experts_per_device={cfg['num_experts_per_device']}")
-        logger.info(f"Saving intermediate activations to: {debug_dir}")
-
-        unified_config = cfg["unified_expert_config"]
-
-        # Create expert mapping tensors for all_to_all operations
-        # Format: [1, 1, num_experts, num_devices] with one-hot encoding
+        # Create expert mapping tensors if not already created
         if "expert_mapping_tensors" not in cfg:
+            import torch
+
             num_devices = cfg["num_devices"]
             num_experts_per_device = cfg["num_experts_per_device"]
             num_experts = num_devices * num_experts_per_device
 
             # Create one-hot mapping showing which device owns which expert
-            # mapping[e, d] = 1 if expert e is on device d
-            import torch
-
             mapping = (
                 torch.eye(num_devices, dtype=torch.int32)
                 .repeat_interleave(num_experts_per_device, dim=0)
@@ -982,413 +752,381 @@ class MoEBlock(SharedStateAddOn, AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-            logger.info(f"Created expert_mapping_tensors with shape: {cfg['expert_mapping_tensors'].shape}")
 
-        # Configure all_to_all dispatch and combine for GPT-OSS
-        # Use L1_MEMORY_CONFIG for decode, DRAM for prefill
-        mode = "decode" if seq_len == 1 else "prefill"
-        memory_config = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-
-        dispatch_config = {
-            "cluster_axis": 0,  # Distribute across rows
-            "memory_config": memory_config,
-            "num_links": 4,
-            "topology": ttnn.Topology.Ring,
-            "output_concat_dim": 2,  # Concatenate on seq dimension
-        }
-
-        combine_config = {
-            "cluster_axis": 0,  # Combine across rows
-            "memory_config": memory_config,
-            "num_links": 4,
-            "topology": ttnn.Topology.Ring,
-            "output_shard_dim": 2,  # Shard on seq dimension
-        }
-
-        logger.info("-" * 60)
-        logger.info("STEP 1: Prepare inputs for all_to_all_dispatch")
-
-        # Save initial inputs
-        save_tensor(x, "1_input_x.pt", "x", is_float=True)
-        save_tensor(topk_experts_indices, "1_input_indices.pt", "indices", is_float=False)
-        save_tensor(topk_experts_weights, "1_input_weights.pt", "weights", is_float=True)
-
-        # Prepare inputs for all_to_all_dispatch
-        # GPT-OSS expects: x: [batch, 1, 1, hidden], indices: [batch, K], weights: [batch, K]
-        # Need to reshape for all_to_all which expects 4D tensors
-
-        # Reshape x from [batch, 1, 1, hidden] or [1, 1, seq, hidden] to [1, 1, batch_size_per_device, hidden] for all_to_all
-        # Note: For prefill, batch_size_per_device is actually the sequence length (we treat seq as batch for all-to-all)
-        # Use actual hidden size from x, not cfg["hidden_size"], as preamble may have changed it
-        actual_hidden_size = x.shape[-1]
-        logger.info(f"  DEBUG: Reshaping x from {x.shape} to (1, 1, {batch_size_per_device}, {actual_hidden_size})")
-        logger.info(f"  DEBUG: mode={mode}, seq_len={seq_len}, batch_size_per_device={batch_size_per_device}")
-        x_reshaped = ttnn.reshape(x, shape=(1, 1, batch_size_per_device, actual_hidden_size))
-        logger.info(f"  x reshaped: {x.shape} -> {x_reshaped.shape}")
-
-        # Reshape indices from [batch, K] or [seq, K] to [1, 1, batch_size_per_device, K]
-        if len(topk_experts_indices.shape) == 2:
-            # Convert to uint32 for reshaping
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint32)
-            topk_experts_indices = ttnn.reshape(
-                topk_experts_indices, shape=(1, 1, batch_size_per_device, cfg["num_experts_per_tok"])
-            )
-            # Convert back to uint16 for all_to_all
-            topk_experts_indices_u32 = topk_experts_indices
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
-            ttnn.deallocate(topk_experts_indices_u32)
-            logger.info(f"  indices reshaped: 2D -> {topk_experts_indices.shape}")
-
-        # Convert to ROW_MAJOR layout as required by all_to_all_dispatch
-        x_rm = ttnn.to_layout(x_reshaped, ttnn.ROW_MAJOR_LAYOUT)
-        topk_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"  x layout: {x_reshaped.layout} -> {x_rm.layout}")
-        logger.info(f"  indices layout: {topk_experts_indices.layout} -> {topk_indices_rm.layout}")
-
-        logger.info("-" * 60)
-        logger.info("STEP 2: all_to_all_dispatch")
-        logger.info(f"  Inputs: x_rm={x_rm.shape}, indices_rm={topk_indices_rm.shape}")
-        logger.info(f"  expert_mapping={cfg['expert_mapping_tensors'].shape}")
-        logger.info(f"  dispatch_config: {dispatch_config}")
-
-        # Save inputs to all_to_all_dispatch
-        save_tensor(x_rm, "2_before_dispatch_x.pt", "x_rm", is_float=True)
-        save_tensor(topk_indices_rm, "2_before_dispatch_indices.pt", "indices_rm", is_float=False)
-
-        # Apply all_to_all_dispatch - route tokens to expert devices
-        dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
-            x_rm,
-            topk_indices_rm,
-            cfg["expert_mapping_tensors"],
-            **dispatch_config,
-        )
-        ttnn.deallocate(x_rm)
-        ttnn.deallocate(topk_indices_rm)
-
-        logger.info(f"  Outputs: dispatch_output={dispatch_output.shape}, dispatch_metadata={dispatch_metadata.shape}")
-
-        # Save outputs from all_to_all_dispatch
-        save_tensor(dispatch_output, "3_after_dispatch_output.pt", "dispatch_output", is_float=True)
-        save_tensor(dispatch_metadata, "3_after_dispatch_metadata.pt", "dispatch_metadata", is_float=False)
-
-        logger.info("-" * 60)
-        logger.info("STEP 3: Prepare for expert computation")
-
-        # Reshape dispatch output for expert computation
-        # dispatch_output: [num_devices, 1, batch_size, hidden_size]
-        # Need: [1, num_experts_per_device, batch_size, hidden_size]
-        # For GPT-OSS prefill, dispatch_output already has all tokens (batch_size is actually total seq)
-        if seq_len > 1:
-            # Prefill mode - dispatch_output has all seq tokens
-            total_tokens = batch_size  # batch_size is actually total seq_len for prefill
+        # Determine chunking strategy
+        if config.enable_chunking:
+            chunk_size = config.chunk_size or batch_size_per_device
+            if config.chunk_dim == 0:  # Batch chunking (DeepSeek)
+                num_chunks = (batch_size_per_device + chunk_size - 1) // chunk_size
+            else:  # Sequence chunking (GPT-OSS prefill)
+                num_chunks = (seq_len + chunk_size - 1) // chunk_size
         else:
-            # Decode mode
-            total_tokens = batch_size * seq_len
-        logger.info(f"  total_tokens = {total_tokens} (batch_size={batch_size}, seq_len={seq_len})")
+            num_chunks = 1
+            chunk_size = batch_size_per_device if config.chunk_dim == 0 else seq_len
 
-        # Use actual hidden size from dispatch_output, not cfg["hidden_size"], as preamble may have changed it
-        dispatch_hidden_size = dispatch_output.shape[-1]
-        dispatch_reshaped = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, dispatch_hidden_size))
-        logger.info(f"  dispatch reshape: {dispatch_output.shape} -> {dispatch_reshaped.shape}")
+        # Main processing loop (single iteration if no chunking)
+        for chunk_idx in range(num_chunks):
+            # Step 1: Prepare chunk inputs
+            if config.enable_chunking:
+                chunk_start = chunk_idx * chunk_size
+                if config.chunk_dim == 0:
+                    # Batch chunking (DeepSeek style)
+                    chunk_end = min((chunk_idx + 1) * chunk_size, batch_size_per_device)
+                    x_chunk = ttnn.slice(x, [chunk_start, 0, 0, 0], [chunk_end, 1, seq_len, actual_hidden_size])
+                    indices_chunk = ttnn.slice(
+                        topk_experts_indices,
+                        [chunk_start, 0, 0, 0] if len(topk_experts_indices.shape) == 4 else [chunk_start, 0],
+                        [chunk_end, 1, seq_len, topk_experts_indices.shape[-1]]
+                        if len(topk_experts_indices.shape) == 4
+                        else [chunk_end, topk_experts_indices.shape[-1]],
+                    )
+                else:  # Sequence chunking
+                    chunk_end = min((chunk_idx + 1) * chunk_size, seq_len)
+                    x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [1, 1, chunk_end, actual_hidden_size])
+                    indices_chunk = topk_experts_indices  # Indices don't change for seq chunking
+            else:
+                x_chunk = x
+                indices_chunk = topk_experts_indices
 
-        # Repeat for expert dimension
-        dispatch_repeated = ttnn.repeat(dispatch_reshaped, ttnn.Shape((1, cfg["num_experts_per_device"], 1, 1)))
-        logger.info(f"  dispatch repeat: {dispatch_reshaped.shape} -> {dispatch_repeated.shape}")
+            # Step 2: Prepare for all_to_all_dispatch
+            if config.expert_type.startswith("throughput"):
+                # GPT-OSS format: reshape to [1, 1, tokens, hidden]
+                if len(x_chunk.shape) == 4 and x_chunk.shape[0] > 1:
+                    # Decode: [batch, 1, 1, hidden] -> [1, 1, batch, hidden]
+                    x_dispatch = ttnn.reshape(x_chunk, [1, 1, x_chunk.shape[0], actual_hidden_size])
+                else:
+                    # Prefill: already [1, 1, seq, hidden]
+                    x_dispatch = x_chunk
+            else:
+                # DeepSeek format: [batch, 1, seq, hidden] -> [1, 1, batch*seq, hidden]
+                batch_chunk = x_chunk.shape[0]
+                x_dispatch = ttnn.reshape(x_chunk, [1, 1, batch_chunk * seq_len, actual_hidden_size])
 
-        dispatch_tiled = ttnn.to_layout(dispatch_repeated, ttnn.TILE_LAYOUT)
-        logger.info(f"  dispatch layout: {dispatch_repeated.layout} -> {dispatch_tiled.layout}")
-
-        ttnn.deallocate(dispatch_output)
-        ttnn.deallocate(dispatch_reshaped)
-        ttnn.deallocate(dispatch_repeated)
-
-        logger.info("-" * 60)
-        logger.info("STEP 4: Expert computation")
-
-        # Instrumentation: Log input to experts
-        log_tensor_checkpoint(dispatch_tiled, "MoEBlock_gptoss_unified_4_experts_input")
-        logger.info(f"  Expert input shape: {dispatch_tiled.shape}")
-
-        # Save expert input
-        save_tensor(dispatch_tiled, "4_expert_input.pt", "dispatch_tiled", is_float=True)
-
-        # Run expert computation - check if we need to load GPT-OSS weights
-        if "gptoss_expert_weights" not in cfg:
-            # Extract state dicts from config
-            experts_state_dict = cfg.get("moe_experts", {}).get("experts_state_dict", {})
-
-            if experts_state_dict:
-                # Load GPT-OSS specific modules
-                from models.demos.gpt_oss.tt.experts_throughput.config import (
-                    ThroughputExpertConfig,
-                    ThroughputProgramConfig,
+            # Prepare indices for dispatch (ensure 4D and match x_dispatch shape)
+            if len(indices_chunk.shape) == 2:
+                # 2D indices: [batch, K] -> [1, 1, batch, K]
+                # Convert to uint32 for reshaping
+                indices_chunk = ttnn.typecast(indices_chunk, dtype=ttnn.uint32)
+                indices_dispatch = ttnn.reshape(
+                    indices_chunk, shape=(1, 1, indices_chunk.shape[0], indices_chunk.shape[1])
                 )
-                from models.demos.gpt_oss.tt.experts_throughput.weights import load_throughput_expert_weights
+                # Convert back to uint16 for all_to_all
+                indices_dispatch = ttnn.typecast(indices_dispatch, dtype=ttnn.uint16)
+            elif len(indices_chunk.shape) == 4:
+                # 4D indices: need to reshape to match x_dispatch
+                if config.expert_type == "routed":  # DeepSeek
+                    # DeepSeek: [batch, 1, seq, K] -> [1, 1, batch*seq, K]
+                    batch_chunk = indices_chunk.shape[0]
+                    num_experts_per_tok = indices_chunk.shape[-1]
+                    # Reshape directly without typecast since indices are already uint16
+                    indices_dispatch = ttnn.reshape(
+                        indices_chunk, shape=(1, 1, batch_chunk * seq_len, num_experts_per_tok)
+                    )
+                else:
+                    # GPT-OSS: keep as-is or reshape accordingly
+                    indices_dispatch = indices_chunk
+            else:
+                indices_dispatch = indices_chunk
 
-                # Create ThroughputExpertConfig using unified_config's intermediate_size
-                # The unified_config should have the correct intermediate_size from hf_config
-                expert_config = ThroughputExpertConfig(
-                    num_experts=cfg["num_devices"] * cfg["num_experts_per_device"],
-                    num_devices=cfg["num_devices"],
-                    hidden_size=cfg["hidden_size"],
-                    intermediate_size=unified_config.intermediate_size,  # Use from unified config
-                    num_experts_per_tok=cfg["num_experts_per_tok"],
-                    alpha=unified_config.activation.swiglu_alpha if unified_config.activation else 1.702,
-                    swiglu_limit=unified_config.activation.swiglu_limit if unified_config.activation else 7.0,
-                )
+            # Convert to ROW_MAJOR for all_to_all
+            x_dispatch = ttnn.to_layout(x_dispatch, ttnn.ROW_MAJOR_LAYOUT)
+            indices_dispatch = ttnn.to_layout(indices_dispatch, ttnn.ROW_MAJOR_LAYOUT)
 
-                # Validate that intermediate_size matches weights if available
-                if "gate_up_proj" in experts_state_dict:
-                    # gate_up_proj shape: [num_experts, hidden_size, 2 * intermediate_size]
-                    gate_up_shape = experts_state_dict["gate_up_proj"].shape
-                    weight_intermediate_size = gate_up_shape[-1] // 2
-                    if weight_intermediate_size != expert_config.intermediate_size:
-                        logger.warning(
-                            f"Weight intermediate_size ({weight_intermediate_size}) doesn't match "
-                            f"config intermediate_size ({expert_config.intermediate_size}). Using weight size."
+            # Step 3: all_to_all_dispatch
+            dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
+                x_dispatch,
+                indices_dispatch,
+                cfg["expert_mapping_tensors"],
+                **config.dispatch_config,
+            )
+            ttnn.deallocate(x_dispatch)
+            ttnn.deallocate(indices_dispatch)
+
+            # Step 4: Prepare for expert computation
+            total_tokens_global = dispatch_output.shape[2]
+            dispatch_reshaped = ttnn.reshape(dispatch_output, [1, 1, total_tokens_global, dispatch_output.shape[-1]])
+
+            # Repeat for all experts on device
+            # For DeepSeek/routed experts, use the memory config from moe_experts config
+            # For GPT-OSS, use the intermediate memory config from unified config
+            if config.expert_type == "routed" and "moe_experts" in cfg:
+                # Use memory config from MoEExperts configuration
+                expert_memory_config = cfg["moe_experts"].get("input_memory_config", config.intermediate_memory_config)
+            else:
+                # Use unified config for GPT-OSS
+                expert_memory_config = config.intermediate_memory_config
+
+            dispatch_repeated = ttnn.repeat(
+                dispatch_reshaped,
+                ttnn.Shape([1, cfg["num_experts_per_device"], 1, 1]),
+                memory_config=expert_memory_config,
+            )
+            dispatch_tiled = ttnn.to_layout(dispatch_repeated, ttnn.TILE_LAYOUT, memory_config=expert_memory_config)
+
+            ttnn.deallocate(dispatch_output)
+            ttnn.deallocate(dispatch_reshaped)
+            ttnn.deallocate(dispatch_repeated)
+
+            # Step 5: Expert computation (backend-specific)
+            if config.expert_type == "routed":
+                # DeepSeek: Use MoEExperts
+                if "moe_experts" not in cfg:
+                    logger.warning("moe_experts not in cfg, creating it")
+                    # This shouldn't happen in normal flow
+                experts_output = MoEExperts._forward(dispatch_tiled, cfg["moe_experts"])
+
+            elif config.expert_type in ["throughput_decode", "throughput_prefill"]:
+                # GPT-OSS: Use expert-only computation
+                # First check if we need to load GPT-OSS weights
+                if "gptoss_expert_weights" not in cfg:
+                    # Extract state dicts from config
+                    experts_state_dict = cfg.get("moe_experts", {}).get("experts_state_dict", {})
+
+                    if experts_state_dict:
+                        from models.demos.gpt_oss.tt.experts_throughput.config import (
+                            ThroughputExpertConfig,
+                            ThroughputProgramConfig,
                         )
-                        expert_config.intermediate_size = weight_intermediate_size
+                        from models.demos.gpt_oss.tt.experts_throughput.weights import load_throughput_expert_weights
 
-                # Load and convert weights to TTNN tensors
-                logger.info(
-                    f"Loading GPT-OSS expert weights from state_dict with keys: {list(experts_state_dict.keys())}"
+                        # Get unified config from cfg if available
+                        unified_config = cfg.get("unified_expert_config")
+
+                        # Create ThroughputExpertConfig
+                        expert_config = ThroughputExpertConfig(
+                            num_experts=cfg["num_devices"] * cfg["num_experts_per_device"],
+                            num_devices=cfg["num_devices"],
+                            hidden_size=cfg["hidden_size"],
+                            intermediate_size=unified_config.intermediate_size
+                            if unified_config
+                            else cfg.get("intermediate_size", cfg["hidden_size"] * 4),
+                            num_experts_per_tok=cfg["num_experts_per_tok"],
+                            alpha=unified_config.activation.swiglu_alpha
+                            if unified_config and unified_config.activation
+                            else 1.702,
+                            swiglu_limit=unified_config.activation.swiglu_limit
+                            if unified_config and unified_config.activation
+                            else 7.0,
+                        )
+
+                        # Load weights
+                        cfg["gptoss_expert_weights"] = load_throughput_expert_weights(
+                            mesh_device=x.device(),
+                            config=expert_config,
+                            state_dict=experts_state_dict,
+                            weight_dtype=unified_config.weight_dtype
+                            if unified_config and hasattr(unified_config, "weight_dtype")
+                            else ttnn.bfloat4_b,
+                            tensor_cache_path=cfg.get("moe_experts", {}).get("cache_path"),
+                        )
+                        cfg["gptoss_expert_config"] = expert_config
+                        cfg["gptoss_program_config"] = ThroughputProgramConfig()
+
+                # Use expert-only computation
+                from models.demos.gpt_oss.tt.experts_throughput.expert_only import expert_mlp_compute_only
+
+                experts_output = expert_mlp_compute_only(
+                    dispatch_tiled,
+                    cfg["gptoss_expert_weights"],
+                    cfg["gptoss_expert_config"],
+                    config.intermediate_memory_config,
+                    cfg["gptoss_program_config"],
                 )
-                cfg["gptoss_expert_weights"] = load_throughput_expert_weights(
-                    mesh_device=x.device(),
-                    config=expert_config,
-                    state_dict=experts_state_dict,
-                    weight_dtype=unified_config.weight_dtype
-                    if hasattr(unified_config, "weight_dtype")
-                    else ttnn.bfloat4_b,
-                    tensor_cache_path=cfg.get("moe_experts", {}).get("cache_path"),
-                )
-                cfg["gptoss_expert_config"] = expert_config
 
-                # Create program config
-                cfg["gptoss_program_config"] = ThroughputProgramConfig()
+            else:
+                raise ValueError(f"Unknown expert_type: {config.expert_type}")
 
-                logger.info("Successfully loaded GPT-OSS expert weights as TTNN tensors")
-
-        # For GPT-OSS, we should use ThroughputExperts directly instead of unified path
-        # The unified path is too complex and doesn't match how ThroughputExperts works
-        if "gptoss_expert_weights" in cfg or cfg.get("backend") == "gptoss":
-            # GPT-OSS should use ThroughputExperts module directly
-            # Create ThroughputExperts if not already created
-            if "throughput_experts" not in cfg:
-                from models.demos.gpt_oss.tt.experts_throughput import ThroughputExpertConfig, ThroughputExperts
-
-                # Create config
-                expert_config = ThroughputExpertConfig(
-                    num_experts=cfg["num_devices"] * cfg["num_experts_per_device"],
-                    num_devices=cfg["num_devices"],
-                    hidden_size=unified_config.hidden_size,
-                    intermediate_size=unified_config.intermediate_size,
-                    num_experts_per_tok=cfg["num_experts_per_tok"],
-                    alpha=unified_config.activation.swiglu_alpha if unified_config.activation else 1.702,
-                    swiglu_limit=unified_config.activation.swiglu_limit if unified_config.activation else 7.0,
-                )
-
-                # Get expert weights from config or state dict
-                experts_state_dict = cfg.get("moe_experts", {}).get("experts_state_dict", {})
-
-                # Create ThroughputExperts instance
-                throughput_experts = ThroughputExperts(
-                    mesh_device=x.device(),
-                    config=expert_config,
-                    state_dict=experts_state_dict,
-                    weight_dtype=ttnn.bfloat4_b,
-                    dispatch_cluster_axis=0,
-                    decode_memory_config=ttnn.L1_MEMORY_CONFIG,
-                    tensor_cache_path=cfg.get("moe_experts", {}).get("cache_path"),
-                    mesh_config=cfg.get("mesh_config"),
-                    ccl_manager=cfg.get("ccl_manager"),
-                )
-                cfg["throughput_experts"] = throughput_experts
-                logger.info("Created ThroughputExperts instance for GPT-OSS")
-
-            # Use ThroughputExperts directly - it handles all dispatch/combine internally
-            throughput_experts = cfg["throughput_experts"]
-
-            # ThroughputExperts expects the original inputs, not the dispatch output
-            # Return to using original x, indices, and weights before all the dispatch operations
-            experts_output = throughput_experts(
-                hidden_states=x,  # Use original x
-                topk_expert_indices=topk_experts_indices,
-                topk_expert_weights=topk_experts_weights,
-                is_decode=(seq_len == 1),
+            # Step 6: Prepare for all_to_all_combine
+            experts_output_rm = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+            experts_output_reshaped = ttnn.reshape(
+                experts_output_rm, [cfg["num_experts_per_device"], 1, total_tokens_global, experts_output.shape[-1]]
             )
-            logger.info(f"ThroughputExperts output shape: {experts_output.shape}")
+            ttnn.deallocate(experts_output)
+            ttnn.deallocate(experts_output_rm)
 
-            # Convert to expected output memory config if needed
-            expected_output_memory_config = cfg.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG)
-            if experts_output.memory_config() != expected_output_memory_config:
-                experts_output = ttnn.to_memory_config(experts_output, expected_output_memory_config)
-                logger.info(f"Converted output to memory config: {expected_output_memory_config}")
+            # Reshape dispatch metadata if needed
+            if dispatch_metadata.shape[0] != 1:
+                dispatch_metadata = ttnn.reshape(
+                    dispatch_metadata,
+                    shape=(
+                        1,
+                        dispatch_metadata.shape[0] * dispatch_metadata.shape[1],
+                        dispatch_metadata.shape[2],
+                        dispatch_metadata.shape[3],
+                    ),
+                )
 
-            # ThroughputExperts handles all_reduce internally, so we can skip to the end
-            return experts_output
-        else:
-            # Fallback to previous implementation (shouldn't happen with proper setup)
-            logger.warning("GPT-OSS weights not loaded, falling back to MoEExperts._forward")
-            if "moe_experts" not in cfg:
-                moe_experts_cfg = MoEExperts._create_model_config(cfg.get("hf_config"), x.device(), mode)
-                cfg["moe_experts"] = moe_experts_cfg
-                logger.info("  Created moe_experts config")
-            experts_output = MoEExperts._forward(dispatch_tiled, cfg["moe_experts"])
-        logger.info(f"  Expert output shape: {experts_output.shape}")
-
-        # Save expert output
-        save_tensor(experts_output, "5_expert_output.pt", "experts_output", is_float=True)
-
-        # Instrumentation: Log output of experts
-        log_tensor_checkpoint(experts_output, "MoEBlock_gptoss_unified_5_experts_output")
-
-        ttnn.deallocate(dispatch_tiled)
-
-        logger.info("-" * 60)
-        logger.info("STEP 5: Prepare for all_to_all_combine")
-
-        # Prepare for all_to_all_combine
-        # experts_output: [1, num_experts_per_device, total_tokens, hidden_size]
-        # Need: [num_experts_per_device, 1, total_tokens, hidden_size] in ROW_MAJOR
-        experts_output_rm = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"  experts_output layout: {experts_output.layout} -> {experts_output_rm.layout}")
-
-        experts_output_reshaped = ttnn.reshape(
-            experts_output_rm, shape=(cfg["num_experts_per_device"], 1, total_tokens, cfg["hidden_size"])
-        )
-        logger.info(f"  experts_output reshape: {experts_output_rm.shape} -> {experts_output_reshaped.shape}")
-
-        # Reshape dispatch_metadata for combine
-        dispatch_metadata_reshaped = ttnn.reshape(
-            dispatch_metadata, shape=(1, 1, total_tokens, cfg["num_experts_per_tok"])
-        )
-        logger.info(f"  dispatch_metadata reshape: {dispatch_metadata.shape} -> {dispatch_metadata_reshaped.shape}")
-
-        logger.info("-" * 60)
-        logger.info("STEP 6: all_to_all_combine")
-        logger.info(f"  Inputs: experts={experts_output_reshaped.shape}, metadata={dispatch_metadata_reshaped.shape}")
-        logger.info(f"  combine_config: {combine_config}")
-
-        # Apply all_to_all_combine - route expert outputs back
-        # Use the same expert_mapping_tensors that was used for dispatch (like original GPT-OSS)
-        combine_output = ttnn.all_to_all_combine(
-            experts_output_reshaped,
-            dispatch_metadata_reshaped,
-            cfg["expert_mapping_tensors"],
-            **combine_config,
-        )
-        logger.info(f"  Output: combine_output={combine_output.shape}")
-
-        # NOW we can deallocate the tensors that were consumed by all_to_all_combine
-        # This matches the original GPT-OSS implementation timing
-        ttnn.deallocate(experts_output)
-        ttnn.deallocate(experts_output_rm)
-        ttnn.deallocate(experts_output_reshaped)
-        ttnn.deallocate(dispatch_metadata_reshaped)
-
-        # Save combine output
-        save_tensor(combine_output, "6_after_combine.pt", "combine_output", is_float=True)
-
-        logger.info("-" * 60)
-        logger.info("STEP 7: Apply routing weights and reduce")
-
-        # combine_output: [K, 1, batch_size_per_device, hidden_size]
-        # Convert to TILE layout
-        post_combine = ttnn.to_layout(combine_output, ttnn.TILE_LAYOUT)
-        logger.info(f"  combine_output layout: {combine_output.layout} -> {post_combine.layout}")
-        ttnn.deallocate(combine_output)
-
-        # Prepare routing weights for multiplication
-        # topk_experts_weights: [batch, K] -> [K, 1, batch, hidden_size]
-        logger.info(f"  topk_experts_weights shape: {topk_experts_weights.shape}")
-
-        if len(topk_experts_weights.shape) == 2:
-            # Expand weights to match post_combine shape
-            # First reshape to [batch, K, 1, 1]
-            weights_expanded = ttnn.reshape(
-                topk_experts_weights, shape=(batch_size_per_device, cfg["num_experts_per_tok"], 1, 1)
+            # Step 7: all_to_all_combine
+            combine_output = ttnn.all_to_all_combine(
+                experts_output_reshaped,
+                dispatch_metadata,
+                cfg["expert_mapping_tensors"],
+                **config.combine_config,
             )
-            logger.info(f"  weights expand: {topk_experts_weights.shape} -> {weights_expanded.shape}")
+            ttnn.deallocate(experts_output_reshaped)
+            ttnn.deallocate(dispatch_metadata)
 
-            # Permute to [K, 1, batch, 1]
-            weights_permuted = ttnn.permute(weights_expanded, (1, 2, 0, 3))
-            logger.info(f"  weights permute: {weights_expanded.shape} -> {weights_permuted.shape}")
+            # Step 8: Apply routing weights and sum
+            # Reshape combine output for weight multiplication
+            combine_reshaped = ttnn.reshape(
+                combine_output, shape=(cfg["num_experts_per_tok"], 1, combine_output.shape[2], combine_output.shape[3])
+            )
+            combine_tiled = ttnn.to_layout(combine_reshaped, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(combine_output)
 
-            # Repeat along hidden dimension
-            weights_repeated = ttnn.repeat(weights_permuted, ttnn.Shape((1, 1, 1, cfg["hidden_size"])))
-            logger.info(f"  weights repeat: {weights_permuted.shape} -> {weights_repeated.shape}")
+            # Get appropriate weights chunk
+            if config.enable_chunking and config.chunk_dim == 0:
+                # Extract weights for this batch chunk
+                token_start = chunk_start * seq_len
+                token_end = chunk_end * seq_len
+                if len(topk_experts_weights.shape) == 4:
+                    weights_chunk = ttnn.slice(
+                        topk_experts_weights,
+                        [0, 0, token_start, 0],
+                        [topk_experts_weights.shape[0], 1, token_end, topk_experts_weights.shape[-1]],
+                    )
+                else:
+                    # Handle 2D weights
+                    weights_chunk = topk_experts_weights[token_start:token_end]
+            else:
+                weights_chunk = topk_experts_weights
 
-            ttnn.deallocate(weights_expanded)
-            ttnn.deallocate(weights_permuted)
+            # Prepare weights for multiplication (ensure proper shape)
+            if config.expert_type.startswith("throughput"):
+                # For GPT-OSS, prepare weights similar to existing implementation
+                # Weights need to be [K, 1, batch_size, 1] to broadcast
+                if len(weights_chunk.shape) == 2:
+                    weights_rm = ttnn.to_layout(weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
+                    weights_rm = ttnn.reshape(weights_rm, [1, 1, weights_rm.shape[0], weights_rm.shape[1]])
+                    weights_rm = ttnn.permute(weights_rm, (3, 1, 2, 0))
+                    weights_prepared = ttnn.to_layout(weights_rm, ttnn.TILE_LAYOUT)
+                    ttnn.deallocate(weights_rm)
+                else:
+                    weights_prepared = weights_chunk
+            else:
+                weights_prepared = weights_chunk
+
+            # Multiply by routing weights
+            weighted_output = ttnn.mul(combine_tiled, weights_prepared, memory_config=config.output_memory_config)
+            ttnn.deallocate(combine_tiled)
+            if weights_prepared is not weights_chunk:
+                ttnn.deallocate(weights_prepared)
+
+            # Sum across experts dimension
+            chunk_output = ttnn.sum(weighted_output, dim=0, keepdim=True)
+            ttnn.deallocate(weighted_output)
+            output_chunks.append(chunk_output)
+
+        # Step 9: Concatenate chunks if needed
+        if len(output_chunks) == 1:
+            output = output_chunks[0]
         else:
-            weights_repeated = topk_experts_weights
-            logger.info(f"  weights already prepared: {weights_repeated.shape}")
+            concat_dim = 2  # Concatenate along token dimension
+            output = ttnn.concat(output_chunks, dim=concat_dim)
+            for chunk in output_chunks:
+                ttnn.deallocate(chunk)
 
-        # Apply routing weights
-        weighted_output = ttnn.mul(post_combine, weights_repeated, memory_config=unified_config.output_memory_config)
-        logger.info(f"  weighted_output: {post_combine.shape} * {weights_repeated.shape} = {weighted_output.shape}")
-        ttnn.deallocate(post_combine)
-        ttnn.deallocate(weights_repeated)
+        # Step 10: Optional all-reduce (GPT-OSS only)
+        if config.enable_all_reduce:
+            output = ttnn.all_reduce(
+                output,
+                **config.all_reduce_config,
+            )
 
-        # Sum across experts (K dimension)
-        output = ttnn.sum(weighted_output, dim=0, keepdim=True)
-        logger.info(f"  sum across experts: {weighted_output.shape} -> {output.shape}")
-        ttnn.deallocate(weighted_output)
+        # Step 11: Final reshape based on backend
+        if config.expert_type.startswith("throughput") and seq_len == 1:
+            # GPT-OSS decode: reshape from [1, 1, batch, hidden] to [batch, 1, 1, hidden]
+            output = ttnn.reshape(output, [batch_size_per_device, 1, 1, output.shape[-1]])
 
-        # All-reduce across columns (cluster_axis=1) to aggregate expert outputs
-        # This is critical for GPT-OSS! The original implementation does this after summing.
-        # Why this is needed:
-        # 1. Experts are sharded across ALL devices in 2D (rows x cols)
-        # 2. all_to_all_dispatch/combine on axis=0 handles row-wise redistribution
-        # 3. But tokens may route to experts in different COLUMNS
-        # 4. After combine, each device has partial results from experts in its column
-        # 5. We need to sum these partials across columns to get complete expert outputs
-        logger.info("STEP 8: All-reduce across columns to aggregate expert outputs")
-        output_all_reduced = ttnn.all_reduce(
-            output,
-            num_links=4,
-            topology=ttnn.Topology.Ring,
-            cluster_axis=1,  # Reduce across columns
-            memory_config=memory_config,
-        )
-        logger.info(f"  all_reduce: {output.shape} (cluster_axis=1)")
-        ttnn.deallocate(output)
-        output = output_all_reduced
-
-        # Reshape output back to original shape
-        # Decode: From [1, 1, batch, hidden] to [batch, 1, 1, hidden]
-        # Prefill: From [1, 1, seq, hidden] to [1, 1, seq, hidden] (no reshape needed)
-        if mode == "decode":
-            output = ttnn.reshape(output, shape=(batch_size_per_device, 1, 1, cfg["hidden_size"]))
-            logger.info(f"  final reshape (decode): -> {output.shape}")
-        else:
-            # Prefill mode - output is already in correct shape [1, 1, seq, hidden]
-            logger.info(f"  no reshape needed for prefill, output shape: {output.shape}")
-
-        logger.info("=" * 80)
-        logger.info(f"FINAL OUTPUT SHAPE: {output.shape}")
-        logger.info("=" * 80)
-
-        # Save final output before memory config conversion
-        save_tensor(output, "7_final_output.pt", "output", is_float=True)
-
-        # Convert to expected output memory config if needed
-        if "output_memory_config" in cfg:
-            output = ttnn.to_memory_config(output, cfg["output_memory_config"])
-            logger.info(f"Converted output to memory config: {cfg['output_memory_config']}")
-
-        # Clean up cached weights if they were loaded for this forward pass
-        if "gptoss_expert_weights" in cfg and not cfg.get("keep_expert_weights", False):
-            weights = cfg["gptoss_expert_weights"]
-            if hasattr(weights, "deallocate"):
-                weights.deallocate()
-            del cfg["gptoss_expert_weights"]
-            del cfg["gptoss_expert_config"]
-            del cfg["gptoss_program_config"]
-            logger.info("Cleaned up temporarily loaded GPT-OSS expert weights")
+        # Step 12: Convert to output memory config if needed
+        if output.memory_config() != config.output_memory_config:
+            output = ttnn.to_memory_config(output, config.output_memory_config)
 
         return output
+
+    @classmethod
+    def _fwd_moe(
+        cls,
+        x: ttnn.Tensor,
+        topk_experts_indices: ttnn.Tensor,
+        topk_experts_weights: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        batch_size_per_device: int,
+        batch_size: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Route to unified implementation based on backend.
+
+        This function creates the appropriate configuration for either GPT-OSS or DeepSeek
+        backend and calls the unified MoE forward pass.
+        """
+        backend = cfg.get("backend", "deepseek")
+        mode = "decode" if seq_len == 1 else "prefill"
+
+        # Get or create hf_config
+        hf_config = cfg.get("hf_config")
+
+        # Create unified config based on backend and mode
+        if backend == "gptoss":
+            # Ensure hf_config has necessary fields
+            if not hf_config:
+                hf_config = type(
+                    "obj",
+                    (object,),
+                    {
+                        "hidden_size": cfg["hidden_size"],
+                        "intermediate_size": cfg.get("intermediate_size", 2880),  # GPT-OSS default
+                        "num_experts_per_tok": cfg["num_experts_per_tok"],
+                    },
+                )
+                logger.warning(f"GPT-OSS: Using fallback config with intermediate_size={hf_config.intermediate_size}")
+
+            # Create GPT-OSS expert config for loading weights
+            unified_config = create_gptoss_expert_config(
+                hf_config,
+                mode=mode,
+                num_experts_per_device=cfg["num_experts_per_device"],
+                use_fused_weights=cfg.get("use_fused_gate_up", False),
+            )
+            cfg["unified_expert_config"] = unified_config
+
+            # Get MoE unified config
+            if mode == "decode":
+                config = get_gptoss_decode_config()
+            else:
+                config = get_gptoss_prefill_config()
+
+            # Use the unified forward path for GPT-OSS
+            return cls._fwd_moe_unified(x, topk_experts_indices, topk_experts_weights, cfg, config)
+
+        # DeepSeek backend - also use unified implementation
+        if not hf_config:
+            # Create a minimal config object for DeepSeek if not provided
+            hf_config = type(
+                "obj",
+                (object,),
+                {
+                    "hidden_size": cfg["hidden_size"],
+                    "moe_intermediate_size": cfg.get("moe_intermediate_size", cfg.get("intermediate_size", 4608)),
+                    "num_experts_per_tok": cfg["num_experts_per_tok"],
+                },
+            )
+
+        # Create DeepSeek expert config for loading weights
+        unified_config = create_deepseek_expert_config(
+            hf_config, mode=mode, num_experts_per_device=cfg["num_experts_per_device"]
+        )
+        cfg["unified_expert_config"] = unified_config
+
+        # Get MoE unified config for DeepSeek
+        config = get_deepseek_config(mode)
+
+        # Adjust chunk size if specified in cfg
+        if "moe_chunk_size" in cfg:
+            config.chunk_size = cfg["moe_chunk_size"]
+
+        # Use the unified forward path for DeepSeek
+        return cls._fwd_moe_unified(x, topk_experts_indices, topk_experts_weights, cfg, config)
 
     @classmethod
     def _fwd_reduce_scatter(
