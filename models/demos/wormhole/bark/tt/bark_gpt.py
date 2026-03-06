@@ -51,12 +51,13 @@ def preprocess_linear_weight(weight_tensor, device):
     """Convert a PyTorch weight tensor to a TTNN tensor for linear ops.
 
     PyTorch stores linear weights as (out_features, in_features).
-    ttnn.linear expects (in_features, out_features), so we transpose.
-    We keep the tensor as 2D to avoid inflating output rank.
+    ttnn.linear expects [1, 1, in_features, out_features] (4D TILE).
+    This is the standard TTNN transformer convention (Llama/GPT2/Falcon).
     """
     weight = weight_tensor.detach().float()
     if weight.dim() == 2:
         weight = weight.t()  # (out, in) -> (in, out) for ttnn.linear
+        weight = weight.unsqueeze(0).unsqueeze(0)  # [1, 1, in, out]
     tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_weight
 
@@ -198,6 +199,9 @@ class TtBarkAttention:
         memory_config: Optional[ttnn.MemoryConfig] = ttnn.L1_MEMORY_CONFIG,
     ) -> tuple:
         """Forward pass through attention. Fully on TTNN device."""
+        # Ensure TILE layout before QKV projection
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+
         # QKV projection in TTNN
         qkv = ttnn.linear(
             hidden_states,
@@ -206,6 +210,12 @@ class TtBarkAttention:
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        # 4D weights produce 4D output [B,1,S,3H] — reshape to 3D [B,S,3H]
+        # split_query_key_value_and_split_heads requires rank 3
+        if len(qkv.shape) == 4:
+            qkv = ttnn.reshape(qkv, (qkv.shape[0], qkv.shape[2], qkv.shape[3]))
+        qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT)
 
         # Split Q, K, V and split heads
         query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -375,9 +385,9 @@ class TtBarkGPT:
 
         # LM head
         self.lm_head_weight = preprocess_linear_weight(parameters["lm_head"]["weight"], device)
-        if self.lm_head_weight.shape[-1] != config.output_vocab_size:
+        if self.lm_head_weight.shape[3] != config.output_vocab_size:
             raise ValueError(
-                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[-1]}"
+                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[3]}"
             )
 
         # Optimization config (Stage 3)
@@ -482,6 +492,8 @@ class TtBarkGPT:
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(tt_hidden)
+
+        # 4D weights ensure logits are [B, 1, seq, vocab] — no reshape needed
 
         return logits, layer_present
 
