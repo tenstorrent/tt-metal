@@ -48,10 +48,15 @@ class BarkConfig:
 
 
 def preprocess_linear_weight(weight_tensor, device):
-    """Convert a PyTorch weight tensor to a TTNN tensor for linear ops."""
+    """Convert a PyTorch weight tensor to a TTNN tensor for linear ops.
+
+    PyTorch stores linear weights as (out_features, in_features).
+    ttnn.linear expects (in_features, out_features), so we transpose.
+    """
     weight = weight_tensor.detach().float()
     if weight.dim() == 2:
-        weight = weight.unsqueeze(0).unsqueeze(0)  # [1, 1, out, in]
+        weight = weight.t()  # (out, in) -> (in, out) for ttnn.linear
+        weight = weight.unsqueeze(0).unsqueeze(0)  # [1, 1, in, out]
     tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_weight
 
@@ -370,9 +375,9 @@ class TtBarkGPT:
 
         # LM head
         self.lm_head_weight = preprocess_linear_weight(parameters["lm_head"]["weight"], device)
-        if self.lm_head_weight.shape[2] != config.output_vocab_size:
+        if self.lm_head_weight.shape[3] != config.output_vocab_size:
             raise ValueError(
-                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[2]}"
+                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[3]}"
             )
 
         # Optimization config (Stage 3)
@@ -408,12 +413,14 @@ class TtBarkGPT:
             # Handle both torch and ttnn input_ids
             if isinstance(input_ids, torch.Tensor):
                 tt_input_ids = ttnn.from_torch(
-                    input_ids.to(torch.int32), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+                    input_ids.to(torch.int32), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
                 )
             else:
                 tt_input_ids = input_ids
 
             inputs_embeds = ttnn.embedding(tt_input_ids, self.input_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # ttnn.embedding returns ROW_MAJOR; convert to TILE for downstream ops
+            inputs_embeds = ttnn.to_layout(inputs_embeds, ttnn.TILE_LAYOUT)
 
             if isinstance(input_ids, torch.Tensor):
                 ttnn.deallocate(tt_input_ids)
@@ -428,14 +435,16 @@ class TtBarkGPT:
             position_ids = torch.arange(0, tt_input_ids.shape[-1], dtype=torch.int32)
 
         tt_position_ids = ttnn.from_torch(
-            position_ids.unsqueeze(0).unsqueeze(0), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+            position_ids.unsqueeze(0).unsqueeze(0), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         position_embeds = ttnn.embedding(
             tt_position_ids, self.position_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG
         )
         ttnn.deallocate(tt_position_ids)
+        # Convert position embeddings to TILE layout for the add
+        position_embeds = ttnn.to_layout(position_embeds, ttnn.TILE_LAYOUT)
 
-        # Combine embeddings on device
+        # Combine embeddings on device (both now TILE layout)
         tt_hidden = ttnn.add(inputs_embeds, position_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(inputs_embeds)
         ttnn.deallocate(position_embeds)
