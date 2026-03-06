@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Rank Binding for 4-Galaxy Exabox Configuration (Blackhole)
+#
+# This binds four MPI ranks to four separate Galaxies on the exabox.
+# Process 0 (rank=0): Galaxy 0 (mesh_id=0)
+# Process 1 (rank=1): Galaxy 1 (mesh_id=1)
+# Process 2 (rank=2): Galaxy 2 (mesh_id=2)
+# Process 3 (rank=3): Galaxy 3 (mesh_id=3)
+# Connection between Galaxies: 4 ethernet channels
+#
+# Note: On exabox, each Galaxy is a separate physical system managed by a single host.
+# The TT_VISIBLE_DEVICES is typically not needed when each rank runs on its own host.
+# If running all ranks from a single host (e.g., for testing), you would need to
+# set TT_VISIBLE_DEVICES appropriately based on PCIe enumeration.
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_sender_0"
+
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_1"
+
+  - rank: 2
+    mesh_id: 2
+    mesh_host_rank: 0
+    env_overrides:
+      TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_2"
+
+  - rank: 3
+    mesh_id: 3
+    mesh_host_rank: 0
+    env_overrides:
+      TT_METAL_PROFILER_DIR: "temp_profiler_artifacts_receiver_3"
+
+mesh_graph_desc_path: "configurations/pp4_galaxy/mgd.textproto"

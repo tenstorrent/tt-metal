@@ -1,0 +1,16 @@
+rank 0=bh-glx-c01u02 slot=0
+rank 1=bh-glx-c01u02 slot=0
+rank 2=bh-glx-c01u02 slot=0
+rank 3=bh-glx-c01u02 slot=0
+rank 4=bh-glx-c01u08 slot=0
+rank 5=bh-glx-c01u08 slot=0
+rank 6=bh-glx-c01u08 slot=0
+rank 7=bh-glx-c01u08 slot=0
+rank 8=bh-glx-c02u08 slot=0
+rank 9=bh-glx-c02u08 slot=0
+rank 10=bh-glx-c02u08 slot=0
+rank 11=bh-glx-c02u08 slot=0
+rank 12=bh-glx-c02u02 slot=0
+rank 13=bh-glx-c02u02 slot=0
+rank 14=bh-glx-c02u02 slot=0
+rank 15=bh-glx-c02u02 slot=0
