@@ -482,7 +482,7 @@ inline std::string op_meta_data_serialized_json(
             get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
         j["op_type"] = enchantum::to_string(OpType::tt_dnn_device);
         j["device_id"] = device_id;
-        j["program_hash"] = program_hash;
+        j["op_hash"] = program_hash;
         j["program_cache_hit"] = program_cache_hit;
         j["kernel_info"] = get_kernels_json(device_id, program);
 

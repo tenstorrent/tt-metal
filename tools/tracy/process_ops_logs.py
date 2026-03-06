@@ -1308,8 +1308,8 @@ def generate_reports(
                         csv_row[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
 
                 # Extract program hash and cache hit status
-                if "program_hash" in active_op_record:
-                    csv_row["PROGRAM HASH"] = active_op_record["program_hash"]
+                if "op_hash" in active_op_record:
+                    csv_row["PROGRAM HASH"] = active_op_record["op_hash"]
                 if "program_cache_hit" in active_op_record:
                     csv_row["PROGRAM CACHE HIT"] = active_op_record["program_cache_hit"]
 
