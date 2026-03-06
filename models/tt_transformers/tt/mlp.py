@@ -430,14 +430,6 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        if self.w2_bias is not None:
-            w2_out = ttnn.add(
-                w2_out,
-                self.w2_bias,
-                memory_config=w2_out.memory_config(),
-                dtype=activation_dtype or ttnn.bfloat16,
-            )
-
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
@@ -460,6 +452,14 @@ class MLP(LightweightModule):
             if mode == Mode.DECODE and self.prefetcher is not None
             else None,
         )
+
+        if self.w2_bias is not None:
+            w2_out_reduced = ttnn.add(
+                w2_out_reduced,
+                self.w2_bias,
+                memory_config=w2_out_reduced.memory_config(),
+                dtype=activation_dtype or ttnn.bfloat16,
+            )
 
         original_shape = w2_out_reduced.shape
         w2_out_reduced = ttnn.reshape(
