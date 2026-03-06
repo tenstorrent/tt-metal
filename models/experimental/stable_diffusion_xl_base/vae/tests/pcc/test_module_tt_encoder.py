@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import lo
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_blackhole
+from models.common.utility_functions import torch_random, is_wormhole_b0
 
 from loguru import logger
 
@@ -20,7 +20,8 @@ from loguru import logger
     "image_resolution, input_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 3, 1024, 1024), 0.97),
+        # Blackhole has lower PCC due to DRAM groupnorm numerical differences
+        ((1024, 1024), (1, 3, 1024, 1024), 0.97 if is_wormhole_b0() else 0.968),
         # 512x512 image resolution - skip on Blackhole
         pytest.param(
             (512, 512),
@@ -86,10 +87,6 @@ def test_vae_encoder(
 
     del vae
     gc.collect()
-
-    # Adjust PCC threshold for Blackhole due to DRAM groupnorm numerical differences
-    if is_blackhole() and image_resolution == (1024, 1024):
-        pcc = 0.968
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is: {pcc_message}")
