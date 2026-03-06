@@ -77,6 +77,7 @@ struct PrefillDispatchDeviceOperation {
         const Tensor weights_tensor;
         const Tensor indices_tensor;
         const Tensor chip_to_n_routed_expert_offset_tensor;
+        const Tensor expert_dispatch_table_tensor;
     };
 
     using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
@@ -147,6 +148,7 @@ prefill_dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& chip_to_n_routed_expert_offset_tensor,
+    const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t num_chips,
     uint32_t experts_per_chip,
     uint32_t n_routed_experts,

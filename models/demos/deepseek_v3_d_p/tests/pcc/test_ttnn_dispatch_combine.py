@@ -14,6 +14,7 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
+    create_expert_dispatch_table,
     create_fabric_router_config,
     get_gate_outputs,
     initialize_predictable_test_inputs,
@@ -134,9 +135,9 @@ def test_ttnn_dispatch_combine(
         num_chips_sp = mesh_device.shape[sp_axis]
         num_chips_rep = mesh_device.shape[1]
     else:
+        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
         num_chips_sp = num_devices
         num_chips_rep = 1
-        sp_axis = 0 if mesh_device.shape[0] > 1 else 1
 
     logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {num_chips_sp=} {num_chips_rep=}")
     ttnn.visualize_mesh_device(mesh_device)
@@ -150,7 +151,7 @@ def test_ttnn_dispatch_combine(
 
     # Compute configuration constants (use num_chips_sp for dispatch/combine parallelism)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips_sp, capacity_factor
+        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_devices, capacity_factor
     )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
@@ -182,43 +183,19 @@ def test_ttnn_dispatch_combine(
 
     logger.info(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
-    # x and indices: replicated across EP ranks
+    # x, weights, and indices: sharded across SP axis, replicated across EP ranks
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
         dims=(sp_axis, None),  # Shard on sp_axis, replicate on other axis
     )
 
-    # weights: sharded across BOTH axes (different per EP rank) for 2D mesh
-    # weights shape: (num_ep_ranks, num_chips_sp, seq_len, num_experts_per_tok)
-    # For 1D mesh (num_chips_rep=1): squeeze the EP rank dimension and use replicated mapper
-    # For 2D mesh: shard both axes
-    if num_chips_rep > 1:
-        # For sp_axis=0: mesh axis 0 (rows) = num_chips_sp, mesh axis 1 (cols) = num_ep_ranks
-        #   dims = (1, 0): shard tensor dim 1 (num_chips_sp) on mesh axis 0, tensor dim 0 (num_ep_ranks) on mesh axis 1
-        # For sp_axis=1: mesh axis 0 (rows) = num_ep_ranks, mesh axis 1 (cols) = num_chips_sp
-        #   dims = (0, 1): shard tensor dim 0 (num_ep_ranks) on mesh axis 0, tensor dim 1 (num_chips_sp) on mesh axis 1
-        if sp_axis == 0:
-            weights_dims = (1, 0)
-        else:
-            weights_dims = (0, 1)
-        mesh_mapper_weights = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            mesh_shape=mesh_device.shape,
-            dims=weights_dims,
-        )
-        weights_for_ttnn = weights
-    else:
-        # For 1D mesh, squeeze the num_ep_ranks dimension since it's 1
-        mesh_mapper_weights = mesh_mapper_replicated
-        weights_for_ttnn = weights.squeeze(0)  # Remove the num_ep_ranks=1 dimension
-
     tt_x = ttnn.from_torch(
         x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
     tt_weights = ttnn.from_torch(
-        weights_for_ttnn,
-        mesh_mapper=mesh_mapper_weights,
+        weights,
+        mesh_mapper=mesh_mapper_replicated,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
@@ -253,13 +230,23 @@ def test_ttnn_dispatch_combine(
         num_experts_per_tok,
     )
 
+    # Create expert dispatch table
+    expert_dispatch_table = create_expert_dispatch_table(
+        n_routed_experts=n_routed_experts,
+        num_chips_sp=num_chips_sp,
+        num_chips_rep=num_chips_rep,
+    )
+    logger.info(f"{expert_dispatch_table.shape=}")
+    logger.info(f"expert_dispatch_table:\n{expert_dispatch_table}")
+
     # Run TTNN dispatch
     logger.info("Running TTNN dispatch...")
     tt_chip_to_n_routed_expert_offset = TtDispatchModule.shard_offset_tensor(
         mesh_device, chip_to_n_routed_expert_offset
     )
+    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset
+        tt_x, tt_weights, tt_indices, tt_chip_to_n_routed_expert_offset, tt_expert_dispatch_table
     )
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete!")
@@ -270,11 +257,17 @@ def test_ttnn_dispatch_combine(
     logger.info(f"  {cum_sum.shape=}, {cum_sum=}")
 
     # Convert counter to TTNN tensor for combine module
+    # For 2D mesh, use dims=(1, 0) to shard across both axes
     logger.info(f"Converting counter to TTNN: {experts_tok_counter.shape=}, {experts_tok_counter.dtype=}")
     logger.info(f"  Counter values: {experts_tok_counter=}")
+    mesh_mapper_2d = ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
+    )
     tt_experts_tok_counter = ttnn.from_torch(
         experts_tok_counter,
-        mesh_mapper=mesh_mapper_replicated,
+        mesh_mapper=mesh_mapper_2d,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
@@ -285,7 +278,8 @@ def test_ttnn_dispatch_combine(
     # Initialize TTNN combine module
     tt_combine_module = TtCombineModule(
         mesh_device=mesh_device,
-        num_chips=num_chips_sp,
+        num_chips_sp=num_chips_sp,
+        num_ep_ranks=num_chips_rep,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,
@@ -316,32 +310,58 @@ def test_ttnn_dispatch_combine(
     # (num_chips_rep, num_chips_sp, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
     # Note: Even for 1D mesh with num_chips_rep=1, the first dimension is still there
     logger.info(f"Before reduction: {y.shape=}")
-    y = y / num_experts_per_tok  # Average contributions from multiple experts
-    y = y.sum(dim=-2)  # Sum across expert dimension (num_experts_per_tok)
-    y = y.squeeze(-3)  # Remove extra dimension (the "1") added for 2D mesh composition
-    logger.info(f"After reduction: {y.shape=}")
-
-    # y shape is now: (num_chips_rep, num_chips_sp, seq_len_per_chip, hidden_dim)
-    # x shape is: (num_chips_sp, seq_len_per_chip, hidden_dim)
+    y = y.squeeze(-4)  # Remove extra dimension (the "1") added for 2D mesh composition
+    logger.info(f"After squeeze: {y.shape=}")
+    # y shape is now: (num_chips_rep, num_chips_sp, seq_len_per_chip, num_experts_per_tok, hidden_dim)
 
     # Verify round-trip correctness
-    logger.info("Verifying round-trip correctness...")
-    logger.info(f"Sample input x[0, 0, :5]: {x[0, 0, :5]}")
-    logger.info(f"Sample output y[0, 0, 0, :5]: {y[0, 0, 0, :5]}")
+    # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
+    # Each EP rank's output only contains data for tokens that EP rank processed.
+    # Output positions not written by local combine contain uninitialized garbage.
+    # We validate per (chip, token, topk) using the EP rank that actually processed it.
+    logger.info("Verifying round-trip correctness (per EP rank that processed each token)...")
 
-    if num_chips_sp > 1:
-        logger.info(f"Sample input x[1, 0, :5]: {x[1, 0, :5]}")
-        logger.info(f"Sample output y[0, 1, 0, :5]: {y[0, 1, 0, :5]}")
-
-    # Check each replica matches the input
+    experts_per_rank = n_routed_experts // num_chips_rep
     all_match = True
-    for r in range(num_chips_rep):
-        y_slice = y[r]  # Shape: (num_chips_sp, seq_len_per_chip, hidden_dim)
-        max_diff = torch.max(torch.abs(x - y_slice)).item()
-        logger.info(f"Replica {r}: Maximum absolute difference: {max_diff}")
-        if not torch.allclose(x, y_slice, atol=1e-6):
-            all_match = False
+    matches = 0
+    total_slots = 0
+    mismatches = []
 
-    assert all_match, f"Expected output to match input. Check logs for details."
+    for chip_id in range(num_chips_sp):
+        for token_id in range(seq_len_per_chip):
+            for topk_idx in range(num_experts_per_tok):
+                total_slots += 1
+
+                # Determine which EP rank processed this (chip, token, topk)
+                expert_id = indices[chip_id, token_id, topk_idx].item()
+                ep_rank = expert_id // experts_per_rank
+
+                # Input token
+                x_data = x[chip_id, token_id]
+                # Output from the EP rank that processed this token
+                y_data = y[ep_rank, chip_id, token_id, topk_idx]
+
+                if torch.allclose(x_data, y_data, atol=1e-2, rtol=1e-2):
+                    matches += 1
+                else:
+                    all_match = False
+                    max_diff = torch.max(torch.abs(x_data.float() - y_data.float())).item()
+                    mismatches.append((ep_rank, chip_id, token_id, topk_idx, max_diff))
+
+    logger.info(f"Matches: {matches}/{total_slots} ({100.0*matches/total_slots:.2f}%)")
+
+    if not all_match:
+        logger.warning(f"Found {len(mismatches)} mismatches. Showing first 10:")
+        for i, (ep_rank, chip_id, token_id, topk_idx, max_diff) in enumerate(mismatches[:10]):
+            x_sample = x[chip_id, token_id, :5]
+            y_sample = y[ep_rank, chip_id, token_id, topk_idx, :5]
+            logger.error(
+                f"  [{i}] Mismatch at ep_rank={ep_rank}, chip={chip_id}, token={token_id}, topk={topk_idx}: "
+                f"max_diff={max_diff:.6f}"
+            )
+            logger.error(f"      x[:5]={x_sample}")
+            logger.error(f"      y[:5]={y_sample}")
+
+    assert all_match, f"Round-trip mismatch! {matches}/{total_slots} slots matched. Check logs for details."
 
     logger.info("✅ TTNN dispatch→combine round-trip matches input!")

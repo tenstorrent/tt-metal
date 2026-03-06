@@ -17,7 +17,8 @@ class TtCombineModule(LightweightModule):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
-        num_chips: int,
+        num_chips_sp: int,
+        num_ep_ranks: int,
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
@@ -30,14 +31,16 @@ class TtCombineModule(LightweightModule):
 
         Args:
             mesh_device: TTNN mesh device
-            num_chips: Number of chips in the system
+            num_chips_sp: Number of chips in the dispatch group
+            num_ep_ranks: Number of dispatch groups (EP ranks)
             experts_per_chip: Number of experts per chip
             num_experts_per_tok: Number of experts each token is routed to
             seq_len_per_chip: Sequence length per chip
         """
         super().__init__()
         self.mesh_device = mesh_device
-        self.num_chips = num_chips
+        self.num_chips_sp = num_chips_sp
+        self.num_ep_ranks = num_ep_ranks  # awareness likely not needed; it's a matter of sharding ?
         self.experts_per_chip = experts_per_chip
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
@@ -66,7 +69,7 @@ class TtCombineModule(LightweightModule):
             dispatched_buffer,
             dispatched_metadata,
             experts_tok_counter,
-            num_chips=self.num_chips,
+            num_chips=self.num_chips_sp,
             experts_per_chip=self.experts_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,

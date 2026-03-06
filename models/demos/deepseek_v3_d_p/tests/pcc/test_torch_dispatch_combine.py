@@ -11,7 +11,12 @@ from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.common import compute_constants, get_gate_outputs, initialize_test_inputs
+from models.demos.deepseek_v3_d_p.tt.moe.common import (
+    compute_constants,
+    create_expert_dispatch_table,
+    get_gate_outputs,
+    initialize_test_inputs,
+)
 
 
 @pytest.mark.parametrize(
@@ -44,6 +49,15 @@ def test_torch_dispatch_combine(
     # Squeeze the ep_rank dimension since this is a single-rank pure torch test
     weights = weights.squeeze(0)
 
+    # Create expert dispatch table (single EP rank for this test)
+    expert_dispatch_table = create_expert_dispatch_table(
+        n_routed_experts=n_routed_experts,
+        num_chips_sp=num_chips,
+        num_chips_rep=1,
+    )
+    logger.info(f"{expert_dispatch_table.shape=}")
+    logger.info(f"{expert_dispatch_table=}")
+
     # Initialize dispatch and combine modules
     dispatch_module = TorchDispatchModule(
         num_chips=num_chips,
@@ -54,6 +68,7 @@ def test_torch_dispatch_combine(
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
         seq_len_per_chip=seq_len_per_chip,
         hidden_dim=hidden_dim,
+        expert_dispatch_table=expert_dispatch_table,
     )
     combine_module = TorchCombineModule(
         num_chips=num_chips,

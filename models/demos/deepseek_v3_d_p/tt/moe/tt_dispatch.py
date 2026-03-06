@@ -71,18 +71,73 @@ class TtDispatchModule(LightweightModule):
         Returns:
             TTNN tensor sharded across mesh devices
         """
+        logger.info(
+            f"[shard_offset_tensor] INPUT: chip_to_n_routed_expert_offset.shape={chip_to_n_routed_expert_offset.shape}"
+        )
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
             dims=(0, None),
         )
-        return ttnn.from_torch(
+        result = ttnn.from_torch(
             chip_to_n_routed_expert_offset,
             mesh_mapper=mesh_mapper,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             dtype=ttnn.int32,
         )
+        logger.info(f"[shard_offset_tensor] OUTPUT: result.shape={result.shape}")
+        return result
+
+    @staticmethod
+    def shard_expert_dispatch_table(
+        mesh_device: ttnn.MeshDevice,
+        expert_dispatch_table: torch.Tensor,
+        sp_axis: int,
+    ) -> ttnn.Tensor:
+        """
+        Shard expert dispatch table: shard across EP ranks, replicate across SP axis.
+
+        The expert_dispatch_table maps expert IDs to destination chip IDs within the
+        dispatch axis. It has shape (num_chips_rep, n_routed_experts) where:
+        - Dim 0 is sharded across EP ranks (token replication axis)
+        - Dim 1 is replicated across dispatch/SP axis
+
+        Args:
+            mesh_device: Mesh device
+            expert_dispatch_table: Shape (num_chips_rep, n_routed_experts)
+            sp_axis: Dispatch/SP axis (0 or 1)
+
+        Returns:
+            TTNN tensor sharded appropriately
+        """
+        # For sp_axis=0: mesh axis 0 = SP axis, mesh axis 1 = EP ranks
+        #   dims = (None, 0): replicate on mesh rows (SP), shard tensor dim 0 on mesh cols (EP)
+        # For sp_axis=1: mesh axis 0 = EP ranks, mesh axis 1 = SP axis
+        #   dims = (0, None): shard tensor dim 0 on mesh rows (EP), replicate on mesh cols (SP)
+        logger.info(
+            f"[shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape={expert_dispatch_table.shape}, sp_axis={sp_axis}"
+        )
+        if sp_axis == 0:
+            dims = (None, 0)
+        else:
+            dims = (0, None)
+        logger.info(f"[shard_expert_dispatch_table] Using dims={dims}")
+
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=dims,
+        )
+        result = ttnn.from_torch(
+            expert_dispatch_table,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
+        )
+        logger.info(f"[shard_expert_dispatch_table] OUTPUT: result.shape={result.shape}")
+        return result
 
     def forward(
         self,
@@ -90,6 +145,7 @@ class TtDispatchModule(LightweightModule):
         weights: ttnn.Tensor,
         indices: ttnn.Tensor,
         tt_chip_to_n_routed_expert_offset: ttnn.Tensor,
+        tt_expert_dispatch_table: ttnn.Tensor,
     ):
         """
         Route tokens from their original positions to expert-specific buffers distributed across chips.
@@ -103,11 +159,27 @@ class TtDispatchModule(LightweightModule):
             indices: Expert indices of shape (num_chips, seq_len, num_experts_per_tok)
             tt_chip_to_n_routed_expert_offset: Base offset for each expert from each chip (TTNN tensor)
                 Shape: (num_chips, n_routed_experts) - use shard_offset_tensor() to create
+            tt_expert_dispatch_table: Expert dispatch table mapping expert ID to chip ID (TTNN tensor)
+                Shape: (num_chips_rep, n_routed_experts) - use shard_expert_dispatch_table() to create
 
         Returns:
             dispatched: Dispatched tokens of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
             metadata: Metadata tensor of shape (num_chips, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
+        logger.info(f"[TtDispatchModule.forward] INPUT SHAPES:")
+        logger.info(f"  x.shape={x.shape}")
+        logger.info(f"  weights.shape={weights.shape}")
+        logger.info(f"  indices.shape={indices.shape}")
+        logger.info(f"  tt_chip_to_n_routed_expert_offset.shape={tt_chip_to_n_routed_expert_offset.shape}")
+        logger.info(f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
+        logger.info(f"[TtDispatchModule.forward] CONFIG:")
+        logger.info(f"  num_chips={self.num_chips}, experts_per_chip={self.experts_per_chip}")
+        logger.info(f"  n_routed_experts={self.n_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
+        logger.info(
+            f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}"
+        )
+        logger.info(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
+
         (
             tt_dispatched_buffer,
             tt_dispatch_metadata,
@@ -116,6 +188,7 @@ class TtDispatchModule(LightweightModule):
             weights_tensor=weights,
             indices_tensor=indices,
             chip_to_n_routed_expert_offset_tensor=tt_chip_to_n_routed_expert_offset,
+            expert_dispatch_table_tensor=tt_expert_dispatch_table,
             num_chips=self.num_chips,
             experts_per_chip=self.experts_per_chip,
             n_routed_experts=self.n_routed_experts,
@@ -136,8 +209,9 @@ class TtDispatchModule(LightweightModule):
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
-        logger.info(f"{tt_dispatched_buffer_shape=}")
-        logger.info(f"{tt_dispatched_metadata_shape=}")
+        logger.info(f"[TtDispatchModule.forward] OUTPUT SHAPES:")
+        logger.info(f"  tt_dispatched_buffer.shape={tt_dispatched_buffer_shape}")
+        logger.info(f"  tt_dispatch_metadata.shape={tt_dispatched_metadata_shape}")
         # ttnn.visualize_tensor(tt_dispatch_buffer, header="Dispatch Buffer")
         # ttnn.visualize_tensor(tt_dispatch_metadata, header="Dispatch Metadata")
 
