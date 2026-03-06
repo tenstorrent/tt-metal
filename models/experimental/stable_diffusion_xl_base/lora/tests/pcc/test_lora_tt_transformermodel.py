@@ -10,7 +10,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
@@ -28,15 +28,18 @@ def _get_diffusers_pipeline(is_ci_env):
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
+    "image_resolution, input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
     [
-        ((1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
-        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.997),
+        ((1024, 1024), (1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
+        ((1024, 1024), (1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.997),
+        ((512, 512), (1, 640, 32, 32), (1, 77, 2048), 1, 640, 10, 640, 0.998),
+        ((512, 512), (1, 1280, 16, 16), (1, 77, 2048), 2, 1280, 20, 1280, 0.997),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_lora_fusion_pcc_transformermodel(
     device,
+    image_resolution,
     input_shape,
     encoder_shape,
     down_block_id,
@@ -59,7 +62,7 @@ def test_lora_fusion_pcc_transformermodel(
         device,
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0",
-        ModelOptimisations1024x1024(),
+        load_model_optimisations(image_resolution),
         query_dim,
         num_attn_heads,
         out_dim,

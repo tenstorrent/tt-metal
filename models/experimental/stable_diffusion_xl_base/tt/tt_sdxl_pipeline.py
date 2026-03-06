@@ -73,6 +73,9 @@ class TtSDXLPipeline(LightweightModule):
             "`_debug_mode` and `capture_trace` cannot both be enabled at the same time. "
             "Please set only one of them to True."
         )
+        assert len(torch_pipeline.get_list_adapters()) == 0, (
+            "Torch pipeline must not have LoRA weights loaded. " "Use TtSDXLPipeline interface to manage LoRA weights."
+        )
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"

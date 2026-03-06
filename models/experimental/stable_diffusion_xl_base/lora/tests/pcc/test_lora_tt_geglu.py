@@ -12,7 +12,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
@@ -30,14 +30,18 @@ def _get_diffusers_pipeline(is_ci_env):
 
 
 @pytest.mark.parametrize(
-    "input_shape, module_path, pcc",
+    "image_resolution, input_shape, module_path, pcc",
     [
-        ((1024, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
-        ((4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
+        ((1024, 1024), (1024, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
+        ((1024, 1024), (4096, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
+        ((512, 512), (256, 1280), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.948),
+        ((512, 512), (1024, 640), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.950),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds, lora_path):
+def test_lora_fusion_pcc_geglu(
+    device, image_resolution, input_shape, module_path, pcc, is_ci_env, reset_seeds, lora_path
+):
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 
@@ -45,7 +49,9 @@ def test_lora_fusion_pcc_geglu(device, input_shape, module_path, pcc, is_ci_env,
     state_dict = pipeline_for_tt.unet.state_dict()
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
-    tt_geglu = TtGEGLU(device, state_dict, module_path, ModelOptimisations1024x1024(), lora_weights_manager=lora_mgr)
+    tt_geglu = TtGEGLU(
+        device, state_dict, module_path, load_model_optimisations(image_resolution), lora_weights_manager=lora_mgr
+    )
 
     lora_mgr.load_lora_weights(lora_path)
     lora_mgr.fuse_lora(lora_scale=1.0)

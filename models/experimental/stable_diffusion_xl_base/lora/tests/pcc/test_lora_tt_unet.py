@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -81,15 +81,16 @@ def prepare_ttnn_tensors(
 
 def run_unet_model(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    pcc,
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
     lora_path,
     iterations=1,
 ):
@@ -101,7 +102,7 @@ def run_unet_model(
     state_dict = pipeline_for_tt.unet.state_dict()
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
-    model_config = ModelOptimisations1024x1024()
+    model_config = load_model_optimisations(image_resolution)
     tt_unet = TtUNet2DConditionModel(
         device,
         state_dict,
@@ -165,8 +166,8 @@ def run_unet_model(
 
     ttnn.ReadDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
-    logger.info(f"LoRA UNet PCC of first iteration is: {pcc_message}")
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):
         (
@@ -200,37 +201,40 @@ def run_unet_model(
 
 
 @pytest.mark.parametrize(
-    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
+    "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
-        ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9969),
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9961),
         # TODO: Add test for 9x128x128 input shape if needed (inpainting)
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
+    image_resolution,
     input_shape,
     timestep_shape,
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    pcc,
     debug_mode,
     is_ci_env,
     is_ci_v2_env,
-    model_location_generator,
     reset_seeds,
     lora_path,
 ):
     run_unet_model(
         device,
+        image_resolution,
         input_shape,
         timestep_shape,
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        pcc,
         debug_mode,
         is_ci_env,
         is_ci_v2_env,
-        model_location_generator,
         lora_path,
     )

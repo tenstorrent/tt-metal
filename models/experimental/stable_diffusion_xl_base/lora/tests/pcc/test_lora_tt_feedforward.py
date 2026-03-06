@@ -10,7 +10,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
@@ -28,16 +28,17 @@ def _get_diffusers_pipeline(is_ci_env):
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, transformer_block_id, pcc",
+    "image_resolution, input_shape, block_id, transformer_block_id, pcc",
     [
-        ((1024, 1280), 2, 0, 0.997),
-        ((4096, 640), 1, 0, 0.999),
-        ((4096, 640), 1, 1, 0.998),
+        ((1024, 1024), (1024, 1280), 2, 0, 0.997),
+        ((1024, 1024), (4096, 640), 1, 0, 0.999),
+        ((512, 512), (256, 1280), 2, 0, 0.997),
+        ((512, 512), (1024, 640), 1, 0, 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_lora_fusion_pcc_feedforward(
-    device, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds, lora_path
+    device, image_resolution, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds, lora_path
 ):
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
@@ -47,7 +48,9 @@ def test_lora_fusion_pcc_feedforward(
 
     lora_mgr = TtLoRAWeightsManager(device, pipeline_for_tt)
     module_path = f"down_blocks.{block_id}.attentions.0.transformer_blocks.{transformer_block_id}.ff"
-    tt_ff = TtFeedForward(device, state_dict, module_path, ModelOptimisations1024x1024(), lora_weights_manager=lora_mgr)
+    tt_ff = TtFeedForward(
+        device, state_dict, module_path, load_model_optimisations(image_resolution), lora_weights_manager=lora_mgr
+    )
 
     lora_mgr.load_lora_weights(lora_path)
     lora_mgr.fuse_lora(lora_scale=1.0)

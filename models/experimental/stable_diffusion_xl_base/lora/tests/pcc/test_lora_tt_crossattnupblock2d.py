@@ -10,11 +10,11 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 
 
 def _get_diffusers_pipeline(is_ci_env):
@@ -28,9 +28,10 @@ def _get_diffusers_pipeline(is_ci_env):
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, residuals, encoder_shape, query_dim, num_attn_heads, out_dim, block_id, pcc",
+    "image_resolution, input_shape, temb_shape, residuals, encoder_shape, query_dim, num_attn_heads, out_dim, block_id, pcc",
     [
         (
+            (1024, 1024),
             (1, 1280, 32, 32),
             (1, 1280),
             ((1, 640, 32, 32), (1, 1280, 32, 32), (1, 1280, 32, 32)),
@@ -39,12 +40,37 @@ def _get_diffusers_pipeline(is_ci_env):
             20,
             1280,
             0,
-            0.972,
+            0.975,
         ),
         (
+            (1024, 1024),
             (1, 1280, 64, 64),
             (1, 1280),
             ((1, 320, 64, 64), (1, 640, 64, 64), (1, 640, 64, 64)),
+            (1, 77, 2048),
+            640,
+            10,
+            640,
+            1,
+            0.993,
+        ),
+        (
+            (512, 512),
+            (1, 1280, 16, 16),
+            (1, 1280),
+            ((1, 640, 16, 16), (1, 1280, 16, 16), (1, 1280, 16, 16)),
+            (1, 77, 2048),
+            1280,
+            20,
+            1280,
+            0,
+            0.988,
+        ),
+        (
+            (512, 512),
+            (1, 1280, 32, 32),
+            (1, 1280),
+            ((1, 320, 32, 32), (1, 640, 32, 32), (1, 640, 32, 32)),
             (1, 77, 2048),
             640,
             10,
@@ -57,6 +83,7 @@ def _get_diffusers_pipeline(is_ci_env):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_lora_fusion_pcc_crossattnup(
     device,
+    image_resolution,
     input_shape,
     temb_shape,
     residuals,
@@ -82,7 +109,7 @@ def test_lora_fusion_pcc_crossattnup(
         device,
         state_dict,
         f"up_blocks.{block_id}",
-        ModelOptimisations1024x1024(),
+        load_model_optimisations(image_resolution),
         query_dim,
         num_attn_heads,
         out_dim,

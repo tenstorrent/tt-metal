@@ -37,12 +37,42 @@ class TtLoRAWeightsManager:
     def has_lora_adapter(self):
         return any(self.get_lora_adapters().values())
 
+    def _uses_dora(self):
+        adapters = self.get_lora_adapters()
+        unet_adapters = adapters.get("unet", [])
+        if not unet_adapters:
+            return False
+
+        adapter_name = unet_adapters[0]
+        unet = self._torch_pipeline.unet
+
+        for _, module in unet.named_modules():
+            use_dora_dict = getattr(module, "use_dora", None)
+            if use_dora_dict and use_dora_dict.get(adapter_name, False):
+                return True
+
+        return False
+
+    def _affects_non_unet(self):
+        adapters = self.get_lora_adapters()
+        return any(component != "unet" and adapter_list for component, adapter_list in adapters.items())
+
     def load_lora_weights(self, lora_path):
         if self.has_lora_adapter():
             logger.info("LoRA weights already loaded, skipping.")
             return
 
         self._torch_pipeline.load_lora_weights(lora_path)
+
+        if self._affects_non_unet():
+            logger.warning("Only LoRA affecting the UNet is supported, skipping loading LoRA weights")
+            self._torch_pipeline.unload_lora_weights()
+            return
+
+        if self._uses_dora():
+            logger.warning("DoRA is not supported, skipping loading LoRA weights")
+            self._torch_pipeline.unload_lora_weights()
+            return
 
     def fuse_lora(self, lora_scale=1.0):
         if not self.has_lora_adapter():

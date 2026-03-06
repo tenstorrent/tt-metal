@@ -10,11 +10,11 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 from models.experimental.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 
 
 def _get_diffusers_pipeline(is_ci_env):
@@ -28,20 +28,23 @@ def _get_diffusers_pipeline(is_ci_env):
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim",
+    "image_resolution, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, pcc",
     [
-        ((1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280),
+        ((1024, 1024), (1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 0.996),
+        ((512, 512), (1, 1280, 16, 16), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 0.996),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_lora_fusion_pcc_crossattnmid(
     device,
+    image_resolution,
     input_shape,
     temb_shape,
     encoder_shape,
     query_dim,
     num_attn_heads,
     out_dim,
+    pcc,
     debug_mode,
     is_ci_env,
     reset_seeds,
@@ -58,7 +61,7 @@ def test_lora_fusion_pcc_crossattnmid(
         device,
         state_dict,
         "mid_block",
-        ModelOptimisations1024x1024(),
+        load_model_optimisations(image_resolution),
         query_dim,
         num_attn_heads,
         out_dim,
@@ -119,5 +122,5 @@ def test_lora_fusion_pcc_crossattnmid(
     del pipeline, pipeline_for_tt, tt_crosattn, lora_mgr
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is {pcc_message}")
