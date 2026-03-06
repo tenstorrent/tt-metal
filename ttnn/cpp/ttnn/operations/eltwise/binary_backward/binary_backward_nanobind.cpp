@@ -468,7 +468,7 @@ void bind_binary_bw_mul(
                 const Tensor&,
                 float,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::mul_bw),
+                std::optional<Tensor>>(&ttnn::mul_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -482,8 +482,8 @@ void bind_binary_bw_mul(
                 const Tensor&,
                 const std::vector<bool>&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&ttnn::mul_bw),
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::mul_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -555,7 +555,7 @@ void bind_binary_bw_add(
                 const Tensor&,
                 float,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::add_bw),
+                std::optional<Tensor>>(&ttnn::add_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -569,8 +569,8 @@ void bind_binary_bw_add(
                 const Tensor&,
                 const std::vector<bool>&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&ttnn::add_bw),
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::add_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -647,7 +647,7 @@ void bind_binary_bw_sub(
                 const Tensor&,
                 float,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::sub_bw),
+                std::optional<Tensor>>(&ttnn::sub_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
@@ -661,8 +661,8 @@ void bind_binary_bw_sub(
                 const Tensor&,
                 const std::vector<bool>&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&ttnn::sub_bw),
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::sub_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
@@ -688,10 +688,14 @@ void bind_binary_bw_sub(
 
 template <ttnn::unique_string Name>
 void bind_binary_bw_div(
-    nb::module_& mod, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
+    nb::module_& mod,
+    const std::string_view description,
+    const std::string_view supported_dtype = "BFLOAT16",
+    const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
+        Supports broadcasting.
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
@@ -699,17 +703,12 @@ void bind_binary_bw_div(
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            rounding_mode (str, optional): Round mode for the operation (when input tensors are not ComplexTensor type). Can be  None, "trunc", "floor". Defaults to `None`.
             are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
+            rounding_mode (string, optional): Rounding mode. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor`. Defaults to `None`.
-            other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `other_tensor`. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_a`. Defaults to `None`.
+            other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
 
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
-        Supports broadcasting.
 
         Note:
             Supported dtypes and layouts:
@@ -724,13 +723,13 @@ void bind_binary_bw_div(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
-            Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
-
+            {4}
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
         description,
-        supported_dtype);
+        supported_dtype,
+        note);
 
     ttnn::bind_function<Name>(
         mod,
@@ -742,12 +741,12 @@ void bind_binary_bw_div(
                 float,
                 const std::optional<std::string>&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::div_bw),
+                std::optional<Tensor>>(&ttnn::div_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("scalar"),
-            nb::kw_only(),
             nb::arg("rounding_mode") = nb::none(),
+            nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none()),
         ttnn::overload_t(
@@ -758,13 +757,13 @@ void bind_binary_bw_div(
                 const std::optional<std::string>&,
                 const std::vector<bool>&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&ttnn::div_bw),
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::div_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
-            nb::kw_only(),
             nb::arg("rounding_mode") = nb::none(),
+            nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
@@ -779,178 +778,22 @@ void bind_binary_bw_div(
             nb::arg("memory_config") = nb::none()));
 }
 
-template <ttnn::unique_string Name>
-void bind_binary_backward_remainder(
-    nb::module_& mod,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        Args:
-            grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {3}
-                 - TILE, ROW_MAJOR
-
-            {4}
-        )doc",
-        std::string(Name),
-        "ttnn." + std::string(Name),
-        description,
-        supported_dtype,
-        note);
-
-    ttnn::bind_function<Name>(
+void bind_binary_backward_assign(nb::module_& mod) {
+    ttnn::bind_function<"assign_bw">(
         mod,
-        doc.c_str(),
-        ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(
-                &ttnn::remainder_bw),
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("scalar"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()),
-        ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-                &ttnn::remainder_bw),
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
-}
-
-template <ttnn::unique_string Name>
-void bind_binary_backward_fmod(
-    nb::module_& mod,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
-    auto doc = fmt::format(
         R"doc(
-        {2}
+        assign_bw(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, input_grad: Optional[ttnn.Tensor] = None) -> List[Optional[ttnn.Tensor]]
 
-        Args:
-            grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {3}
-                 - TILE, ROW_MAJOR
-
-            {4}
+        Returns the gradient of assign operation.
         )doc",
-        std::string(Name),
-        "ttnn." + std::string(Name),
-        description,
-        supported_dtype,
-        note);
-
-    ttnn::bind_function<Name>(
-        mod,
-        doc.c_str(),
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::fmod_bw),
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("scalar"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()),
-        ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-                &ttnn::fmod_bw),
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
-}
-
-template <ttnn::unique_string Name>
-void bind_binary_backward_assign(
-    nb::module_& mod, const std::string_view description, const std::string_view supported_dtype = "BFLOAT16") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        Args:
-            grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor): the input tensor.
-
-        Keyword args:
-            are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            input_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor`. Defaults to `None`.
-            other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `other_tensor`. Defaults to `None`.
-
-            rounding_mode (str, optional): Round mode for the operation. Defaults to `None`.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {3}
-                 - TILE, ROW_MAJOR
-
-        )doc",
-        std::string(Name),
-        "ttnn." + std::string(Name),
-        description,
-        supported_dtype);
-
-    ttnn::bind_function<Name>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t(
-            nb::overload_cast<
-                const Tensor&,
-                const Tensor&,
-                const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&ttnn::assign_bw),
+            nb::overload_cast<const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, std::optional<Tensor>>(
+                &ttnn::assign_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none()),
+            nb::arg("input_grad") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
@@ -958,156 +801,71 @@ void bind_binary_backward_assign(
                 const Tensor&,
                 const std::vector<bool>&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&ttnn::assign_bw),
+                std::optional<Tensor>,
+                std::optional<Tensor>>(&ttnn::assign_bw),
             nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
+            nb::arg("input_tensor"),
+            nb::arg("other_tensor"),
             nb::kw_only(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()));
+            nb::arg("input_grad") = nb::none(),
+            nb::arg("other_grad") = nb::none()));
 }
 
 }  // namespace
 
-void py_module(nb::module_& mod) {
-    bind_binary_bw_mul<"mul_bw">(
-        mod,
-        R"doc(Performs backward operations for multiply on :attr:`input_tensor_a`, :attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    bind_binary_bw_add<"add_bw">(
-        mod,
-        R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Sharding is not supported if both inputs are tensors.)doc");
-
-    bind_binary_bw_sub<"sub_bw">(
-        mod,
-        R"doc(Performs backward operations for subtract of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    bind_binary_bw_div<"div_bw">(
-        mod,
-        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`rounding_mode`,  with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    bind_binary_backward_remainder<"remainder_bw">(
-        mod,
-        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Supported only in WHB0. For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
-
-    bind_binary_backward_fmod<"fmod_bw">(
-        mod,
-        R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
-
-    bind_binary_backward_assign<"assign_bw">(
-        mod,
-        R"doc(Performs backward operations for assign of :attr:`input_tensor_a`, :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    bind_binary_backward_ops<"atan2_bw">(
-        mod,
-        &ttnn::atan2_bw,
-        R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
-
-    bind_binary_backward_sub_alpha<"subalpha_bw">(
-        mod,
-        "alpha",
-        "Alpha value",
-        1.0f,
-        R"doc(Performs backward operations for subalpha of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+void py_module(nb::module_& module) {
+    bind_binary_backward_ops<"atan2_bw">(module, &ttnn::atan2_bw, "Returns the gradient of atan2 operation.");
+    bind_binary_backward_ops<"xlogy_bw">(module, &ttnn::xlogy_bw, "Returns the gradient of xlogy operation.");
+    bind_binary_backward_ops<"hypot_bw">(module, &ttnn::hypot_bw, "Returns the gradient of hypot operation.");
+    bind_binary_backward_ops<"ldexp_bw">(module, &ttnn::ldexp_bw, "Returns the gradient of ldexp operation.");
+    bind_binary_backward_ops<"logaddexp_bw">(
+        module, &ttnn::logaddexp_bw, "Returns the gradient of logaddexp operation.");
+    bind_binary_backward_ops<"logaddexp2_bw">(
+        module, &ttnn::logaddexp2_bw, "Returns the gradient of logaddexp2 operation.");
+    bind_binary_backward_ops<"squared_difference_bw">(
+        module, &ttnn::squared_difference_bw, "Returns the gradient of squared_difference operation.");
+    bind_binary_backward_ops<"min_bw">(module, &ttnn::min_bw, "Returns the gradient of min operation.");
+    bind_binary_backward_ops<"max_bw">(module, &ttnn::max_bw, "Returns the gradient of max operation.");
 
     bind_binary_backward_addalpha<"addalpha_bw">(
-        mod,
-        "alpha",
-        "Alpha value",
-        1.0f,
-        R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        module, "alpha", "Alpha value", 1.0f, "Returns the gradient of addalpha operation.");
+    bind_binary_backward_sub_alpha<"subalpha_bw">(
+        module, "alpha", "Alpha value", 1.0f, "Returns the gradient of subalpha operation.");
 
-    bind_binary_backward_ops<"xlogy_bw">(
-        mod,
-        &ttnn::xlogy_bw,
-        R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
-
-    bind_binary_backward_ops<"hypot_bw">(
-        mod,
-        &ttnn::hypot_bw,
-        R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
-
-    bind_binary_backward_ops<"ldexp_bw">(
-        mod,
-        &ttnn::ldexp_bw,
-        R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Recommended input range : [-80, 80]. Performance of the PCC may degrade if the input falls outside this range.)doc");
-
-    bind_binary_backward_ops<"logaddexp_bw">(
-        mod,
-        &ttnn::logaddexp_bw,
-        R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
-
-    bind_binary_backward_ops<"logaddexp2_bw">(
-        mod,
-        &ttnn::logaddexp2_bw,
-        R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
-
-    bind_binary_backward_ops<"squared_difference_bw">(
-        mod,
-        &ttnn::squared_difference_bw,
-        R"doc(Performs backward operations for squared_difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_binary_backward_rsub<"rsub_bw">(module, "Returns the gradient of rsub operation.");
 
     bind_binary_backward_concat<"concat_bw">(
-        mod,
-        "dim",
-        "Dimension to concatenate",
-        0,
-        R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        module, "dim", "Dimension to concat", 0, "Returns the gradient of concat operation.");
 
-    bind_binary_backward_rsub<"rsub_bw">(
-        mod,
-        R"doc(Performs backward operations for subtraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_binary_bw_mul<"mul_bw">(module, "Returns the gradient of mul operation.");
+    bind_binary_bw_add<"add_bw">(module, "Returns the gradient of add operation.");
+    bind_binary_bw_sub<"sub_bw">(module, "Returns the gradient of sub operation.");
+    bind_binary_bw_div<"div_bw">(module, "Returns the gradient of div operation.");
 
-    bind_binary_backward_ops<"min_bw">(
-        mod,
-        &ttnn::min_bw,
-        R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
-
-    bind_binary_backward_ops<"max_bw">(
-        mod,
-        &ttnn::max_bw,
-        R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+    bind_binary_backward_assign(module);
 
     bind_binary_backward_bias_gelu<"bias_gelu_bw">(
-        mod,
+        module,
         "bias",
         "Bias value",
         "approximate",
         "Approximation type",
         "none",
-        R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+        "Returns the gradient of bias_gelu operation.");
+
+    bind_binary_backward_ops<"remainder_bw">(
+        module,
+        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+            &ttnn::remainder_bw),
+        "Returns the gradient of remainder operation.");
+
+    bind_binary_backward_ops<"fmod_bw">(
+        module,
+        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+            &ttnn::fmod_bw),
+        "Returns the gradient of fmod operation.");
 }
 
 }  // namespace ttnn::operations::binary_backward
