@@ -200,7 +200,6 @@ class TestGeluForwardSaturationResearch:
         neg_values = sorted([v for v in values if v < 0], reverse=True)  # least negative first
 
         last_nonzero_x = None
-        first_zero_x = None
 
         print("\n=== Negative Zero Saturation Research ===")
         print(f"{'x':>12s} {'GELU(x) exact':>20s} {'GELU(x) BF16':>15s} {'ULP':>6s}")
@@ -214,9 +213,7 @@ class TestGeluForwardSaturationResearch:
                 # Still in non-zero region (going more negative)
                 pass
 
-            if gelu_bf16 == 0.0 and first_zero_x is None and last_nonzero_x is not None:
-                first_zero_x = x
-                # Print transition zone
+            if gelu_bf16 == 0.0 and last_nonzero_x is not None:
                 print(f"... (transition) ...")
                 print(f"{x:12.6f} {gelu_exact:20.12e} {gelu_bf16:15.8e}  <-- FIRST ZERO")
                 break
@@ -280,7 +277,6 @@ class TestGeluForwardSaturationResearch:
         last_non_identity = None
 
         for x in pos_values:
-            gelu_exact = gelu_reference_mpmath(x)
             gelu_bf16 = gelu_expected_bf16_daz(x)
             x_bf16 = round_to_bf16_daz_ftz(x)
 
@@ -307,7 +303,6 @@ class TestGeluForwardSaturationResearch:
             gelu_exact = gelu_reference_mpmath(x)
             gelu_bf16 = gelu_expected_bf16_daz(x)
             x_bf16 = round_to_bf16_daz_ftz(x)
-            diff = gelu_bf16 - x_bf16
             is_id = "YES" if gelu_bf16 == x_bf16 else "no"
             print(f"  x={x:8.4f}  GELU={gelu_exact:15.8e}  BF16={gelu_bf16:12.6e}  x_bf16={x_bf16:12.6e}  id={is_id}")
 
