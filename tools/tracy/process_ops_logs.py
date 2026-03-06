@@ -292,14 +292,17 @@ def import_tracy_op_logs(
                                 opData["metal_trace_id"] = traceIDs[deviceID]
                     else:  # cached device op
                         opDataList = opDataStr.split(":", 1)[-1].split(",")
-                        assert len(opDataList) > 3, "Wrong cached op info format"
+                        assert len(opDataList) > 4, "Wrong cached op info format"
                         opHash = int(opDataList[1])
                         deviceID = int(opDataList[2])
-                        opID = int(opDataList[3])
+                        programCacheHitStr = opDataList[3].strip()
+                        programCacheHit = programCacheHitStr in ("1", "true", "True")
+                        opID = int(opDataList[4])
                         assert deviceID in cached_ops, "Expected hashed op info is not found"
                         assert opHash in cached_ops[deviceID], "Expected hashed op info is not found"
                         opData = cached_ops[deviceID][opHash].copy()
                         opData["global_call_count"] = opID
+                        opData["program_cache_hit"] = programCacheHit
                         opData["metal_trace_id"] = None
                         if deviceID in traceIDs:
                             opData["metal_trace_id"] = traceIDs[deviceID]
@@ -1305,8 +1308,8 @@ def generate_reports(
                         csv_row[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
 
                 # Extract program hash and cache hit status
-                if "op_hash" in active_op_record:
-                    csv_row["PROGRAM HASH"] = active_op_record["op_hash"]
+                if "program_hash" in active_op_record:
+                    csv_row["PROGRAM HASH"] = active_op_record["program_hash"]
                 if "program_cache_hit" in active_op_record:
                     csv_row["PROGRAM CACHE HIT"] = active_op_record["program_cache_hit"]
 

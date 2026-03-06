@@ -482,7 +482,7 @@ inline std::string op_meta_data_serialized_json(
             get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
         j["op_type"] = enchantum::to_string(OpType::tt_dnn_device);
         j["device_id"] = device_id;
-        j["op_hash"] = program_hash;
+        j["program_hash"] = program_hash;
         j["program_cache_hit"] = program_cache_hit;
         j["kernel_info"] = get_kernels_json(device_id, program);
 
@@ -507,7 +507,8 @@ inline std::string op_meta_data_serialized_json(
         j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
         std::string short_str =
-            fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
+            fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, {}, ",
+                j["op_code"].dump(), program_hash, device_id, program_cache_hit);
         if (cached_ops.find(device_id) == cached_ops.end()) {
             cached_ops.emplace(
                 device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{program_hash, short_str}});
