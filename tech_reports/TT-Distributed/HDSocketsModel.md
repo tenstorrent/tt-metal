@@ -478,7 +478,7 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 ### 4.2 D2H Latency
 
-**Round-trip latency (us) vs page size, showing min/median/max across all FIFO sizes.** Log-log scale makes both the protocol-overhead floor (small pages) and the DMA-time slope (large pages) visible.
+**p50 round-trip latency (us) vs page size.** The band shows min/median/max of p50 across all FIFO sizes. Log-log scale makes both the protocol-overhead floor (small pages) and the DMA-time slope (large pages) visible.
 
 ![D2H Round-Trip Latency - Gen 4 x8](asdasd/x8_d2h_latency.png)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
@@ -532,7 +532,7 @@ Each chart is shown for both the **Gen 4 x8 high-bandwidth chip** (ASIC 6) and a
 
 ### 4.4 H2D Latency
 
-**Round-trip latency (us) vs page size, `HOST_PUSH` (left) and `DEVICE_PULL` (right) in separate panels.** Each panel shows min/median/max across all FIFO sizes on a log-log scale. The primary chart for mode selection: lower latency at small pages favours `HOST_PUSH`; the gap narrows as page size grows.
+**p50 round-trip latency (us) vs page size, `HOST_PUSH` (left) and `DEVICE_PULL` (right) in separate panels.** Each panel shows min/median/max of p50 across all FIFO sizes on a log-log scale. The primary chart for mode selection: lower latency at small pages favours `HOST_PUSH`; the gap narrows as page size grows.
 
 ![H2D Round-Trip Latency - Gen 4 x8](asdasd/x8_h2d_latency.png)
 *Gen 4 x8 - high-bandwidth chip (ASIC 6)*
@@ -577,17 +577,17 @@ Latency grows with page size because more data must traverse PCIe. For small pag
 - **HOST\_PUSH** generally has lower latency because the host can write directly into device L1 with a single TLB write, avoiding the device issuing a separate NOC read.
 - **DEVICE\_PULL** frees the host CPU  -  the host only updates `bytes_sent` in worker SRAM, while the device issues the bulk PCIe read. Non-posted reads require PCIe completion TLPs (Transaction Layer Packets carrying the read response), adding per-page overhead compared to posted writes, but DEVICE\_PULL can achieve higher throughput than HOST\_PUSH in practice because the device can pipeline multiple outstanding NOC reads without waiting for the host CPU to schedule each write.
 
-### Tail latency (p99 vs. avg)
+### Reading the latency band
 
-Large gaps between `avg_us` and `p99_us` indicate interference from the OS scheduler, PCIe power management, or NUMA effects. The warmup is designed to minimise this for early iterations, but OS preemption can still spike individual iterations. Training teams should budget for p99 latency, not average, when sizing timeout windows or synchronisation barriers.
+The latency charts plot **p50 (median per-iteration)** latency. The shaded band shows how p50 varies across FIFO sizes at each page size: a wide band means latency is sensitive to FIFO depth (a too-small FIFO forces the sender to stall more often). Once the FIFO is large enough that stalls are rare the band collapses to a tight line.
 
-Any iteration that spikes significantly above the median is a scheduling artefact, not a hardware limit.
+The 5 warmup iterations (`kWarmupIters=5`) are excluded from measurement. Any spike well above the p50 line is a scheduling artefact (OS preemption, PCIe power state transition), not a hardware limit. All five latency counters (`min_us`, `p50_us`, `avg_us`, `p99_us`, `max_us`) are available in the exported CSV for offline analysis.
 
 ### Per-chip throughput variation
 
 As described in **S.4** (hardware overview), the throughput gap between high-bandwidth and low-bandwidth chips does not improve with larger pages or larger FIFOs  -  it is a PCIe physical-layer constraint (see S.4.5 for measured values).
 
-Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  see **S.4.5** for the measured spread across your specific system once multi-chip charts are available.
+Within the 4 high-bandwidth chips there may also be chip-to-chip variation  -  see **S.4.5** for the measured spread across your specific system.
 
 ---
 
@@ -655,11 +655,11 @@ The baseline D2H throughput test. The device kernel (`pcie_socket_sender.cpp`) w
 
 ### BM_D2HSocketLatency
 
-Measures per-iteration round-trip latency on the D2H path with actual data DMA. Uses `pcie_socket_data_ping.cpp` on the device: each iteration sends one page to the host, then calls `socket_barrier` to wait for the host's acknowledgement. 5 warmup iterations precede 100 timed iterations (`kWarmupIters=5`, `kLatencyIters=100`); latency statistics (min, p50, avg, p99, max) are computed from the per-iteration cycle deltas. Sweeps page sizes 64 B to 256 KB and FIFO sizes 1 KB to 512 MB.
+Measures per-iteration round-trip latency on the D2H path with actual data DMA. Uses `d2h_socket_loopback_latency.cpp` on the device: each iteration sends one page to the host, then calls `socket_barrier` to wait for the host's acknowledgement. 5 warmup iterations precede 100 timed iterations (`kWarmupIters=5`, `kLatencyIters=100`); latency statistics (min, p50, avg, p99, max) are computed from the per-iteration cycle deltas. Sweeps page sizes 64 B to 256 KB and FIFO sizes 1 KB to 512 MB.
 
 ### BM_D2HSocketPing
 
-Measures **pure signalling overhead** on the D2H path  -  no data DMA occurs. Uses `pcie_socket_ping.cpp`: the device calls `socket_reserve_pages` / `socket_push_pages` / `socket_notify_receiver` / `socket_barrier` with no actual payload write. The host calls `output_socket.read()` to consume the page slot and send the ack. This isolates the flow-control protocol overhead from the data transfer cost. Fixed at 64 B page size and 4 KB FIFO.
+Measures **pure signalling overhead** on the D2H path  -  no data DMA occurs. Uses `d2h_socket_handshake_overhead.cpp`: the device calls `socket_reserve_pages` / `socket_push_pages` / `socket_notify_receiver` / `socket_barrier` with no actual payload write. The host calls `output_socket.read()` to consume the page slot and send the ack. This isolates the flow-control protocol overhead from the data transfer cost. Fixed at 64 B page size and 4 KB FIFO.
 
 ### BM_D2HSocketMultiChipThroughput
 
@@ -675,7 +675,7 @@ Measures H2D steady-state throughput for both `HOST_PUSH` and `DEVICE_PULL` mode
 
 ### BM_H2DSocketLatency
 
-Measures per-iteration round-trip latency on the H2D path for both `HOST_PUSH` and `DEVICE_PULL`. Uses `h2d_socket_data_ping_host_push.cpp` and `h2d_socket_data_ping_device_pull.cpp` respectively. Both run 5 warmup + 100 timed iterations, reporting the same latency percentiles as `BM_D2HSocketLatency`.
+Measures per-iteration round-trip latency on the H2D path for both `HOST_PUSH` and `DEVICE_PULL`. Uses `h2d_socket_latency_host_push.cpp` and `h2d_socket_latency_device_pull.cpp` respectively. Both run 5 warmup + 100 timed iterations, reporting the same latency percentiles as `BM_D2HSocketLatency`.
 
 **What the device timer captures:** Each iteration records `start = get_timestamp()` *before* calling `socket_wait_for_pages`, then `end = get_timestamp()` after `socket_notify_sender` completes. The measured cycles therefore cover the full round-trip: (a) spin-wait for the host write to arrive over PCIe, (b) device-side copy to local buffer, and (c) the acknowledgement NOC write back to device SRAM.
 
