@@ -391,8 +391,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
-          "P150b",
+          "N150-viommu",
+          "P150b-viommu-prio",
         ]
     uses: ./.github/workflows/triage.yaml
     with:
