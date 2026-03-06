@@ -191,15 +191,22 @@ class FusedMMRSConfig(NamedTuple):
 
 
 default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(8, 7), 2, 8, 8, 1, 1, None, 1)
+# core_grid: {MKN: mm_core_grid, M, K, N, sub_h, sub_w, num_w_p_link, num_buffers_per_channel, chunk_width_in_mm_blocks}
 fused_mmrs_configs = {
-    ttnn.CoreCoord(
-        8, 9
-    ): {  # core_grid, M, K, N, sub_h, sub_w, num_w_p_link, num_buffers_per_channel, chunk_width_in_mm_blocks
+    ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
-    }
+    },
+    ttnn.CoreCoord(12, 10): {
+        (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 2),
+    },
 }
 
 
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
-    config = fused_mmrs_configs.get(device_core_grid, {}).get((M, K, N), default_fused_mmrs_config)
+    config = fused_mmrs_configs.get(device_core_grid, {})
+    if len(config) == 0:
+        logger.warning(
+            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; using default"
+        )
+    config = config.get((M, K, N), default_fused_mmrs_config)
     return config.get_params(device_core_grid, num_links)
