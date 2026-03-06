@@ -254,7 +254,12 @@ struct WorkerToFabricEdmSenderImpl {
     // templatized num_slots to let callers implement bubble flow control without runtime overheads.
     template <size_t num_slots = 1>
     FORCE_INLINE bool edm_has_space_for_packet() const {
-        // invalidate_l1_cache();
+        /*
+        Without this l1 invalidation `FlowControlAllToAllMeshLowLatency_size_1024_ntype_atomic_inc_ftype_mcast` fabric test hangs, 
+        while sending packets, waiting for space in the EDM buffer. 
+        This is despite disabling the use of the l1 data cache. More investigation is needed to discover the underlying issue.
+        */
+        invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
             if constexpr (num_slots == 1) {
