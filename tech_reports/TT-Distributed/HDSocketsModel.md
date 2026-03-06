@@ -95,19 +95,19 @@ Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`
 
 The host writes data directly into the device's L1 FIFO through a TLB-mapped PCIe posted write. The device kernel polls for new pages and acknowledges consumption by writing `bytes_acked` back to host-pinned memory.
 
-```text
-Host CPU  --[TLB PCIe write]--->  Device L1 FIFO  --->  Device kernel
-           (posted, no completion required)
-```
+![H2D HOST_PUSH sequence diagram](asdasd/host_push_diag.png)
+
+*Steps #1--#3 run on the host and are nearly non-blocking: #1 reads `bytes_acked` from Pinned RAM locally (no PCIe), #2 and #3 are PCIe posted writes requiring no completion TLP -- the host does not wait for the device to acknowledge receipt before moving on. The L1 FIFO on the device is the ring buffer here; Pinned RAM plays no role in the data path. The host only stalls at #1 if the L1 FIFO is full. Step #4 is the device polling `bytes_sent` in L1 until a new page is detected. Step #5 is `socket_pop_pages`: the kernel advances the read pointer to mark the FIFO slot consumed -- no data copy occurs, the page is already in L1 from #2. Step #6 is the only device-to-host PCIe crossing: the kernel writes `bytes_acked` back to Pinned RAM via a NOC write, which unblocks the host at #1. The host CPU driving successive TLB writes (#2--#3 per page) is the throughput bottleneck.*
 
 ### 2.2 H2D: DEVICE\_PULL
 
-The host writes data to a pinned host buffer and updates `bytes_sent` in worker SRAM. The device kernel detects the notification, then issues a **NOC read** (non-posted; requires PCIe completion TLPs - Transaction Layer Packets that carry the read response back from host RAM) to pull the data from host RAM into its own L1.
+The host writes data to a pinned host buffer and updates `bytes_sent` in device L1. The device kernel detects the notification, then issues a **NOC read** (non-posted; requires PCIe completion TLPs - Transaction Layer Packets that carry the read response back from host RAM) to pull the data from host RAM into L1.
 
-```text
-Host CPU  --[writes to pinned RAM, updates bytes_sent]--->  device detects
-Device kernel  --[NOC read <--- PCIe <--- pinned host RAM]--->  data in L1
-```
+The sequence diagram below shows one full iteration of the per-page loop:
+
+![H2D DEVICE_PULL sequence diagram](asdasd/device_pull_diag.png)
+
+*Steps #1--#3 run on the host and are nearly non-blocking: #1 reads `bytes_acked` directly from Pinned RAM (no PCIe), #2 memcpys the page into a FIFO slot in that same Pinned RAM (no PCIe), and #3 is a single TLB write to update `bytes_sent` in device L1. The FIFO ring buffer in Pinned RAM is the key structural difference from HOST\_PUSH: the host writes into it locally and the device fetches from it. The host immediately re-enters the loop for the next page; it only stalls at #1 if the FIFO is full. Steps #5--#6 are pipelined: the device issues multiple outstanding NOC reads from the FIFO slots before any completion arrives -- the NOC reads deposit data directly into L1 with no intermediate copy, which is the mechanism that lets DEVICE\_PULL exceed HOST\_PUSH throughput at large page sizes despite the per-TLP overhead of non-posted reads. Step #7 marks when all completions have landed and the page is fully in L1; `socket_pop_pages` advances the read pointer with no data copy, identical to HOST\_PUSH step #5. Step #8 is the only device-to-host PCIe crossing: the kernel writes `bytes_acked` back to Pinned RAM via a NOC write, which unblocks the host at #1.*
 
 This mode frees the host CPU from driving the bulk DMA. PCIe read completions add per-page overhead compared to posted writes, but DEVICE\_PULL can still achieve higher throughput than HOST\_PUSH in practice because the device can pipeline multiple outstanding NOC reads without waiting for the host CPU to schedule each write.
 
@@ -115,16 +115,16 @@ This mode frees the host CPU from driving the bulk DMA. PCIe read completions ad
 
 The device is always the initiator. It waits for FIFO space, issues chunked NOC writes into the pinned host FIFO, then notifies the host by writing `bytes_sent` to host-pinned memory. The host polls `bytes_sent`, copies data out, and writes `bytes_acked` back to release FIFO space.
 
-```text
-Device kernel  --[NOC write ---> PCIe ---> pinned host FIFO]--->  Host CPU reads
-```
+![D2H sequence diagram](asdasd/d2h_diag.png)
+
+*The device and host run independent concurrent loops: the device loop covers #1--#4 and the host loop covers #5--#8, decoupled by the FIFO ring buffer in Pinned RAM. Steps #2 and #4 are the two device-to-host PCIe crossings per page: #2 writes the payload into the Pinned RAM FIFO slot, #4 writes `bytes_sent` to notify the host (both are PCIe posted writes, no completion required). Steps #5 and #6 are entirely host-local: the CPU polls `bytes_sent` from its own Pinned RAM and memcpys the FIFO slot into a user buffer without touching PCIe. Step #7 advances the read pointer locally. Step #8 is the only host-to-device PCIe crossing: the host writes `bytes_acked` to device L1 via a TLB write, which unblocks the device at #1 when the FIFO slot is free.*
 
 ### 2.4 Flow control (shared)
 
 All three modes share the same **`bytes_sent` / `bytes_acked`** credit protocol, but the memory location of the fields differs by direction:
 
 - **D2H:** both fields live in **host-pinned memory**. The device writes `bytes_sent` into host RAM via a PCIe posted write; the host writes `bytes_acked` back into host RAM; the device reads `bytes_acked` from host RAM via L1 cache invalidation.
-- **H2D (both modes):** both fields live in **worker SRAM (device L1)**. The host writes `bytes_sent` into device L1 via a TLB-mapped PCIe write; the device writes `bytes_acked` into device L1 locally; the host reads `bytes_acked` from device L1 via a TLB-mapped PCIe read.
+- **H2D (both modes):** both fields live in **device L1**. The host writes `bytes_sent` into device L1 via a TLB-mapped PCIe write; the device writes `bytes_acked` into device L1 locally; the host reads `bytes_acked` from device L1 via a TLB-mapped PCIe read.
 
 ```text
 Sender                                          Receiver
@@ -137,7 +137,7 @@ notify_receiver() ------------------------------>  detects new data, consumes pa
 <----------------------------- notify_sender()
 ```
 
-The sender blocks when the FIFO is full (`bytes_sent - bytes_acked == fifo_size`); the receiver spins when it is empty. For D2H, both counter writes cross PCIe (device writes `bytes_sent` into host RAM; device reads `bytes_acked` from host RAM via L1 cache invalidation). For H2D, both counters live in device SRAM: the host writes `bytes_sent` via TLB-mapped PCIe write and the device reads it directly from L1 without a cache invalidation.
+The sender blocks when the FIFO is full (`bytes_sent - bytes_acked == fifo_size`); the receiver spins when it is empty. For D2H, both counter writes cross PCIe (device writes `bytes_sent` into host RAM; device reads `bytes_acked` from host RAM via L1 cache invalidation). For H2D, both counters live in device L1: the host writes `bytes_sent` via TLB-mapped PCIe write and the device reads it directly from L1 without a cache invalidation.
 
 See **S.3** for fully annotated kernel code showing exactly how each call maps to the protocol.
 
@@ -575,7 +575,7 @@ Latency grows with page size because more data must traverse PCIe. For small pag
 ### HOST\_PUSH vs. DEVICE\_PULL (H2D)
 
 - **HOST\_PUSH** generally has lower latency because the host can write directly into device L1 with a single TLB write, avoiding the device issuing a separate NOC read.
-- **DEVICE\_PULL** frees the host CPU  -  the host only updates `bytes_sent` in worker SRAM, while the device issues the bulk PCIe read. Non-posted reads require PCIe completion TLPs (Transaction Layer Packets carrying the read response), adding per-page overhead compared to posted writes, but DEVICE\_PULL can achieve higher throughput than HOST\_PUSH in practice because the device can pipeline multiple outstanding NOC reads without waiting for the host CPU to schedule each write.
+- **DEVICE\_PULL** frees the host CPU  -  the host only updates `bytes_sent` in device L1, while the device issues the bulk PCIe read. Non-posted reads require PCIe completion TLPs (Transaction Layer Packets carrying the read response), adding per-page overhead compared to posted writes, but DEVICE\_PULL can achieve higher throughput than HOST\_PUSH in practice because the device can pipeline multiple outstanding NOC reads without waiting for the host CPU to schedule each write.
 
 ### Reading the latency band
 
@@ -677,7 +677,7 @@ Measures H2D steady-state throughput for both `HOST_PUSH` and `DEVICE_PULL` mode
 
 Measures per-iteration round-trip latency on the H2D path for both `HOST_PUSH` and `DEVICE_PULL`. Uses `h2d_socket_latency_host_push.cpp` and `h2d_socket_latency_device_pull.cpp` respectively. Both run 5 warmup + 100 timed iterations, reporting the same latency percentiles as `BM_D2HSocketLatency`.
 
-**What the device timer captures:** Each iteration records `start = get_timestamp()` *before* calling `socket_wait_for_pages`, then `end = get_timestamp()` after `socket_notify_sender` completes. The measured cycles therefore cover the full round-trip: (a) spin-wait for the host write to arrive over PCIe, (b) device-side copy to local buffer, and (c) the acknowledgement NOC write back to device SRAM.
+**What the device timer captures:** Each iteration records `start = get_timestamp()` *before* calling `socket_wait_for_pages`, then `end = get_timestamp()` after `socket_notify_sender` completes. The measured cycles therefore cover the full round-trip: (a) spin-wait for the host write to arrive over PCIe, (b) device-side copy to local buffer, and (c) the acknowledgement NOC write back to device L1.
 
 ### BM_H2DSocketPing
 
