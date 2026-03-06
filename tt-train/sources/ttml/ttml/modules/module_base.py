@@ -6,19 +6,15 @@
 
 from typing import Any, Iterable, Iterator, Optional, Union, overload
 from .._ttml.modules import ModuleBase as CppModuleBase
-from .adapter import Adapter, ForwardInvocation, IdentityAdapter
 from .parameter import Buffer, Parameter
 
 
 class AbstractModuleBase(CppModuleBase):
     """Module base with PyTorch-like auto-registration via __setattr__."""
 
-    adapter: Adapter
-
     def __init__(self) -> None:
         super().__init__()
         object.__setattr__(self, "_buffers", {})
-        object.__setattr__(self, "adapter", IdentityAdapter())
         self.create_name(self.__class__.__name__)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -34,12 +30,6 @@ class AbstractModuleBase(CppModuleBase):
         # Auto-register modules and tensors
         if isinstance(attr_value, CppModuleBase):
             self._bind_module(attr_value, attr_name)
-            return
-
-        if isinstance(attr_value, Adapter):
-            adapter_name = type(attr_value).__name__
-            for f_name, f_value in attr_value.parameters().items():
-                self._bind_tensor(f_value.tensor, f"{adapter_name}/{f_name}")
             return
 
         if isinstance(attr_value, Parameter):
@@ -120,10 +110,7 @@ class AbstractModuleBase(CppModuleBase):
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke forward(). Subclasses implement forward()."""
-        y = self.forward(*args, **kwargs)
-        return self.adapter(
-            ForwardInvocation(module=self, args=args, kwargs=kwargs, output=y)
-        )
+        return self.forward(*args, **kwargs)
 
 
 class ModuleList(AbstractModuleBase):

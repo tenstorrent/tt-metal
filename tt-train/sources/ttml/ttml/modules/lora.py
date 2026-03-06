@@ -4,6 +4,7 @@
 
 import math
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -12,9 +13,17 @@ import ml_dtypes
 import ttnn
 import ttml
 
-from .adapter import Adapter, ForwardInvocation
 from .linear import LinearLayer
+from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
+
+
+@dataclass
+class LoraConfig:
+    rank: int = 8
+    alpha: float = 16.0
+    target_modules: list[str] = field(default_factory=list)
+    use_rslora: bool = False
 
 
 def _create_lora_A(in_features: int, rank: int):
@@ -34,49 +43,77 @@ def _create_lora_B(rank: int, out_features: int):
     return ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
 
 
-class LoRA(Adapter):
-    """Low-Rank Adaptation: adds lora_B(lora_A(x)) * scaling to the base output."""
+class LoraLinear(AbstractModuleBase):
+    """Low-Rank Adaptation wrapper around a frozen LinearLayer.
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        rank: int,
-        alpha: float,
-        use_rslora: bool = False,
-    ) -> None:
-        self.scaling = alpha / math.sqrt(rank) if use_rslora else alpha / rank
+    Computes: linear(x, weight, bias) + linear(linear(x, lora_A), lora_B) * scaling
+    """
 
-        self.lora_A = Parameter(_create_lora_A(in_features, rank))
-        self.lora_B = Parameter(_create_lora_B(rank, out_features))
+    def __init__(self, linear: LinearLayer, config: LoraConfig) -> None:
+        super().__init__()
 
-    def parameters(self) -> dict:
-        """Return lora_A and lora_B as trainable parameters."""
-        return {"lora_A": self.lora_A, "lora_B": self.lora_B}
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
 
-    def __call__(self, fwd: ForwardInvocation) -> Any:
-        """Add scaled low-rank update to the base output."""
-        x = fwd.args[0]
+        self.weight = linear.weight
+        self.weight.tensor.set_requires_grad(False)
+
+        self.bias = linear.bias
+        if self.bias is not None:
+            self.bias.tensor.set_requires_grad(False)
+
+        self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
+        self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
+
+        self.scaling = (
+            config.alpha / math.sqrt(config.rank)
+            if config.use_rslora
+            else config.alpha / config.rank
+        )
+
+    def forward(self, x: Any) -> Any:
+        bias = self.bias.tensor if self.bias is not None else None
+        base = ttml.ops.linear.linear(x, self.weight.tensor, bias)
         h = ttml.ops.linear.linear(x, self.lora_A.tensor, None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
-        return fwd.output + lora_update * self.scaling
+        return base + lora_update * self.scaling
 
 
-def inject_lora(
-    model,
-    rank: int,
-    alpha: float,
-    target_modules: list[str],
-    use_rslora: bool = False,
-):
-    """Attach a LoRA adapter to every LinearLayer whose name matches any pattern in target_modules."""
-    patterns = [re.compile(p) for p in target_modules]
-    for name, module in model.named_modules():
-        if not isinstance(module, LinearLayer):
-            continue
-        if not any(p.search(name) for p in patterns):
-            continue
-        module.adapter = LoRA(
-            module.in_features, module.out_features, rank, alpha, use_rslora
-        )
-    return model
+class LoraModel(AbstractModuleBase):
+    """Wraps a model, freezes its parameters, and injects LoraLinear modules."""
+
+    def __init__(self, model: AbstractModuleBase, config: LoraConfig) -> None:
+        super().__init__()
+        self.model = model
+
+        for _, tensor in model.named_parameters():
+            tensor.set_requires_grad(False)
+
+        patterns = [re.compile(p) for p in config.target_modules]
+        self._inject(model, "", patterns, config)
+
+    def _inject(
+        self,
+        module: AbstractModuleBase,
+        prefix: str,
+        patterns: list[re.Pattern],
+        config: LoraConfig,
+    ) -> None:
+        for name, child in list(module.named_children()):
+            full_name = f"{prefix}.{name}" if prefix else name
+
+            if isinstance(child, LinearLayer) and any(
+                p.search(full_name) for p in patterns
+            ):
+                lora_linear = LoraLinear(child, config)
+                if isinstance(module, ModuleList):
+                    module[int(name)] = lora_linear
+                elif isinstance(module, ModuleDict):
+                    module[name] = lora_linear
+                else:
+                    setattr(module, name, lora_linear)
+            elif isinstance(child, AbstractModuleBase):
+                self._inject(child, full_name, patterns, config)
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        return self.model(*args, **kwargs)

@@ -16,13 +16,13 @@ from ttml.common.data import (
 )
 from ttml.common.utils import set_seed
 from ttml.models.llama import Llama, LlamaConfig
-from ttml.modules import inject_lora
+from ttml.modules import LoraConfig, LoraModel
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 SEQ_LEN = 64
 BATCH_SIZE = 4
-STEPS = 200
+STEPS = 2000
 LR = 3e-4
 WEIGHT_DECAY = 0.01
 
@@ -59,9 +59,10 @@ model = Llama(
     )
 )
 
-model = inject_lora(
-    model, rank=LORA_RANK, alpha=LORA_ALPHA, target_modules=LORA_TARGET_MODULES
+lora_config = LoraConfig(
+    rank=LORA_RANK, alpha=LORA_ALPHA, target_modules=LORA_TARGET_MODULES
 )
+model = LoraModel(model, lora_config)
 
 # ── Train only LoRA parameters ────────────────────────────────────────────────
 
