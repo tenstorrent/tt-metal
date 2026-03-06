@@ -1021,10 +1021,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
             prepare_initial_launch_msg();
 
-            uint64_t launch_addr =
-                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH);
-            uint64_t go_addr =
-                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
+            uint64_t launch_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH);
+            uint64_t go_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
             uint64_t launch_msg_rd_ptr_addr =
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
             uint64_t go_message_index_addr =
@@ -1165,8 +1163,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
             dram_core_info.view().absolute_logical_x() = dram_noc.x;
             dram_core_info.view().absolute_logical_y() = dram_noc.y;
-            uint64_t core_info_addr =
-                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
+            uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             cluster_.write_core(
                 dram_core_info.data(),
                 dram_core_info.size(),
