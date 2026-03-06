@@ -66,10 +66,9 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
         TT_FATAL(
             false,
             "group_norm: Requested core_grid (x={}, y={}) is too large for the input dimensions "
-            "(Ht={}, W={}, num_groups={}). The largest valid grid that fits is (x={}, y={}). "
-            "Use ttnn.determine_expected_group_norm_dram_grid_size() to select a compatible grid "
-            "for DRAM interleaved inputs, or ttnn.determine_expected_group_norm_sharded_config_and_grid_size() "
-            "for sharded inputs.",
+            "(Ht={}, W={}, num_groups={}). The grid must satisfy "
+            "num_virtual_rows = (grid_x / num_virtual_cols) * grid_y <= Ht. "
+            "The largest valid grid that fits is (x={}, y={}).",
             requested.x,
             requested.y,
             Ht,
@@ -82,8 +81,7 @@ void validate_dram_grid(const ttnn::CoreGrid& requested, uint32_t W, uint32_t Ht
             false,
             "group_norm: Cannot find any valid core grid for the given configuration. "
             "Input height in tiles (Ht={}) is too small for any grid with W={}, num_groups={}. "
-            "Requested grid was (x={}, y={}). "
-            "Use ttnn.determine_expected_group_norm_dram_grid_size() to select a compatible grid.",
+            "Requested grid was (x={}, y={}).",
             Ht,
             W,
             num_groups,
@@ -110,17 +108,17 @@ ttnn::Tensor get_mask_tensor(
         if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
             num_cores_across_channel = core_grid.has_value() ? core_grid.value().y : 1;
         } else {
-            // Choose number of virtual columns for DRAM params/mask generation.
-            // Tries to find the largest number of virtual columns that will evenly divide the number of channels into
-            // tiles.
-            int num_virtual_cols = std::min(static_cast<int>(core_grid.value().x), num_groups);
-            while ((num_virtual_cols > 0) && (num_channel / num_virtual_cols) % ttnn::types::TILE_SIZE != 0) {
-                num_virtual_cols -= 1;
-            }
-            if (num_virtual_cols == 0) {
-                TT_THROW("Core Grid resulted in virtual cores x = 0, Please try another core grid");
-            }
-            num_cores_across_channel = num_virtual_cols;
+            uint32_t num_virtual_cols =
+                compute_num_virtual_cols(core_grid.value().x, num_groups, static_cast<uint32_t>(num_channel));
+            TT_FATAL(
+                num_virtual_cols > 0,
+                "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
+                "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) %% TILE_SIZE == 0 "
+                "and num_groups %% nvc == 0.",
+                core_grid.value().x,
+                num_groups,
+                num_channel);
+            num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
         }
         mask = create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel);
         mask = mask.to_device(input_tensor.device());

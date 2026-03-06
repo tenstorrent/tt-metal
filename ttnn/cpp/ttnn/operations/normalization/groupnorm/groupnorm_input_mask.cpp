@@ -38,8 +38,7 @@ ttnn::Tensor create_group_norm_input_mask_impl(int64_t num_channel, int64_t num_
     TT_FATAL(
         num_groups % num_cores_across_channel == 0,
         "create_group_norm_input_mask: num_groups ({}) must be divisible by num_cores_across_channel ({}). "
-        "This typically means the core grid produced an invalid num_virtual_cols. "
-        "Ensure that dram_group_norm_virtual_columns selects a value that evenly divides both "
+        "The num_virtual_cols / num_cores_across_channel value must evenly divide both "
         "the channels into tiles and the number of groups.",
         num_groups,
         num_cores_across_channel);
