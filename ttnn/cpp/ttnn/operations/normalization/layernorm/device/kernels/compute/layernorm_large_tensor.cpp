@@ -54,6 +54,9 @@ void kernel_main() {
     uint32_t cb_fusion = tt::CBIndex::c_22;       // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto cb_accumulate = tt::CBIndex::c_26;  // For accumulating (x-E[x])^2
+
+    constexpr auto cb_in_rm = tt::CBIndex::c_27;  // input row-major (if row-major input, otherwise unused)
+
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
@@ -62,10 +65,6 @@ void kernel_main() {
 #endif
 #else
     constexpr uint32_t cb_x = cb_in;
-#endif
-
-#ifdef TILIZE_IN
-    constexpr auto cb_in_rm = tt::CBIndex::c_27;
 #endif
 
 #ifdef FUSE_PRE_ADD

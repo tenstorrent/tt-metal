@@ -68,6 +68,8 @@ void kernel_main() {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
 
+    constexpr auto cb_in_rm = tt::CBIndex::c_27;  // input row-major (if row-major input, otherwise unused)
+
     constexpr int onetile = 1;
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
@@ -85,8 +87,9 @@ void kernel_main() {
 
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
-#else
-#ifdef TILIZE_IN
+#elif defined(RMSNORM)
+    binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
+#elif defined(TILIZE_IN)
     // Initializes the MATH-PACK DST semaphore so that the first tilize_block's
     // internal llk_math_wait_for_dest_available() does not deadlock.
     // Must be called once at startup, BEFORE the ncht loop (not immediately before
@@ -95,16 +98,7 @@ void kernel_main() {
     // cb_in instead of cb_in_rm and produce garbage output).
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #else
-#ifdef RMSNORM
-    binary_op_init_common(cb_xmm, cb_xmm, cb_xmm2);
-#else
     binary_op_init_common(cb_x, cb_scaler, cb_ex);
-#endif
-#endif
-#endif
-
-#ifdef TILIZE_IN
-    constexpr auto cb_in_rm = tt::CBIndex::c_27;
 #endif
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
