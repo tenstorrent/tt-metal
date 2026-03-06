@@ -218,8 +218,6 @@ class Embedding1D(AbstractModule):
             embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
             ttnn.deallocate(x_padded)
 
-        embeddings = ttnn.unsqueeze(embeddings, 0)
-
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
         ttnn.deallocate(embeddings)
 
