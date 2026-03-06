@@ -16,6 +16,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -89,6 +90,12 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
     return ttnn::subtract(t_log_out, output, std::nullopt, output_mem_config);
 }
 
+Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::operations::unary::ExecuteUnary<unary::UnaryOpType::LGAMMA>::invoke(x, output_mem_config);
+}
+
+// Existing implementation of lgamma.
+// TODO: Remove this once the lgamma kernel for float32 is supported.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {
@@ -172,6 +179,13 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
         }
     }
     return result;
+}
+
+Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    if (x.dtype() == DataType::BFLOAT16) {
+        return _lgamma_fast(x, output_mem_config);
+    }
+    return _lgamma(x, output_mem_config);
 }
 
 // multivariate log-gamma function

@@ -10,6 +10,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/ccl/all_reduce/all_reduce.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::core::distributed {

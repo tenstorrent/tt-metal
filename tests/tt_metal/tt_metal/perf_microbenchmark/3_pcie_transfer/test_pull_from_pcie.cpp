@@ -29,12 +29,11 @@
 #include <tt_stl/assert.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "test_common.hpp"
@@ -443,7 +442,7 @@ int main(int argc, char** argv) {
 
     if (pass) {
         // goal is 70% of PCI-e Gen3 x16 for grayskull
-        // TODO: check the theoritical peak of wormhole
+        // TODO: check the theoretical peak of wormhole
         double target_bandwidth = 16.0 * 0.7;
 
         if (avg_h2d_bandwidth < target_bandwidth) {

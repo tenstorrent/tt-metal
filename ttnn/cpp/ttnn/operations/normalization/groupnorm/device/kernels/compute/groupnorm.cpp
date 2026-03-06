@@ -41,7 +41,7 @@ void kernel_main() {
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
     //
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // This is a high level description of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
     // Batch Loop:
@@ -85,7 +85,7 @@ void kernel_main() {
     //           We add beta to this value
     //
     // We are now done! Nice
-    //   To look at where the code starts and stops seach for
+    //   To look at where the code starts and stops search for
     //   Start LABEL or End Label
     //   Ex: Start Local Reduce or End Local Reduce
     // clang-format on
