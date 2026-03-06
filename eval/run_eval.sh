@@ -163,6 +163,9 @@ run_single() {
     local start_time=$SECONDS
 
     echo "[${prompt_name}:${run_id}] Starting..."
+    echo "[${prompt_name}:${run_id}]   Clone dir: ${clone_dir}"
+    echo "[${prompt_name}:${run_id}]   Log dir:   ${log_dir}"
+    echo "[${prompt_name}:${run_id}]   Prompt:    ${prompt_file}"
 
     # 1. Clone and create a unique branch from the source branch
     local run_branch="${TIMESTAMP}_run${run_id}_${prompt_name}"
