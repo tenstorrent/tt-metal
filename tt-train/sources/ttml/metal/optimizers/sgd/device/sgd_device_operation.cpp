@@ -1,17 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sgd_fused_device_operation.hpp"
+#include "sgd_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
 
-#include "sgd_fused_program_factory.hpp"
+#include "sgd_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttml::metal::optimizers::sgd_fused::device {
+namespace ttml::metal::optimizers::sgd::device {
 
-void SGDFusedDeviceOperation::validate_on_program_cache_miss(
+void SGDDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor,
                            const std::string& name,
@@ -73,33 +73,33 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-SGDFusedDeviceOperation::spec_return_value_t SGDFusedDeviceOperation::compute_output_specs(
+SGDDeviceOperation::spec_return_value_t SGDDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tensor_args.param.tensor_spec();
 }
 
-SGDFusedDeviceOperation::tensor_return_value_t SGDFusedDeviceOperation::create_output_tensors(
+SGDDeviceOperation::tensor_return_value_t SGDDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tensor_args.param;
 }
 
-ttsl::hash::hash_t SGDFusedDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t SGDDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param_tensor = tensor_args.param;
     const auto& param_logical_shape = param_tensor.logical_shape();
     auto nesterov = args.nesterov;
     auto momentum_initialized = tensor_args.momentum_buffer.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<SGDFusedDeviceOperation>(
+    auto hash = tt::tt_metal::operation::hash_operation<SGDDeviceOperation>(
         nesterov, momentum_initialized, param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }
 
-}  // namespace ttml::metal::optimizers::sgd_fused::device
+}  // namespace ttml::metal::optimizers::sgd::device
 
 namespace ttnn::prim {
 
-ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation::tensor_return_value_t ttml_sgd_fused(
+ttml::metal::optimizers::sgd::device::SGDDeviceOperation::tensor_return_value_t sgd(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     float lr,
@@ -108,7 +108,7 @@ ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation::tensor_retu
     float weight_decay,
     bool nesterov,
     const std::optional<ttnn::Tensor>& momentum_buffer) {
-    using OperationType = ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation;
+    using OperationType = ttml::metal::optimizers::sgd::device::SGDDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .lr = lr,

@@ -7,13 +7,18 @@ training_config:
   batch_size: 4
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.1
-  use_moreh_adamw: true
-  use_kahan_summation: false
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
   model_config: "configs/model_configs/gpt2s.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
   tokenizer_type: "bpe"
 
 device_config:
