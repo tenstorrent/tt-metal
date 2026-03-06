@@ -13,7 +13,6 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/types.hpp>
 
@@ -24,6 +23,9 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
+#include "tt-metalium/distributed_context.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::nanobind::autograd {
 using namespace ttml::autograd;

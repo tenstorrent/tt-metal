@@ -4,7 +4,6 @@
 
 #include "serialization.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
@@ -19,6 +18,7 @@
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
 #include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::serialization {
 

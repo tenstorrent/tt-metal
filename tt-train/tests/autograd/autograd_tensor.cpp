@@ -4,8 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"

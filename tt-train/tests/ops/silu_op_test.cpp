@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <numeric>
 
 #include "autograd/auto_context.hpp"

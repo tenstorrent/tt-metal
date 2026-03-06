@@ -4,11 +4,10 @@
 
 #include "comm_ops.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {

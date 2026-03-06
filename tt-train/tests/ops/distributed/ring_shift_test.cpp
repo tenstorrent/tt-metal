@@ -12,7 +12,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
@@ -22,6 +21,8 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ttnn/distributed/create_socket.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 

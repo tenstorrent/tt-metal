@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/ttnn_all_includes.hpp>
 #include <fstream>
 
 #include "autograd/auto_context.hpp"

@@ -4,10 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 class SliceOpTest : public ::testing::Test {
 protected:

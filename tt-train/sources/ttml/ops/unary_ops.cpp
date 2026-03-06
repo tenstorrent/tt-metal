@@ -5,7 +5,6 @@
 #include "ops/unary_ops.hpp"
 
 #include <array>
-#include <core/ttnn_all_includes.hpp>
 #include <optional>
 
 #include "autograd/auto_context.hpp"
@@ -15,6 +14,16 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
+#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
+#include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
+#include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
+#include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {

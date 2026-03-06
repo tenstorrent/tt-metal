@@ -7,13 +7,13 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <cstdlib>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct ParityCase {

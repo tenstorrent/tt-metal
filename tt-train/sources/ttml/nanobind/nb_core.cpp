@@ -18,13 +18,17 @@
 
 #include "nanobind/nb_export_enum.hpp"
 #include "serialization/serializable.hpp"
+#include "tt-metalium/distributed_context.hpp"
+#include "ttnn/distributed/create_socket.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/full_like/full_like.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 // Make NamedParameters opaque - must be before unordered_map include
 NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 
 #include <nanobind/stl/unordered_map.h>
-
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"

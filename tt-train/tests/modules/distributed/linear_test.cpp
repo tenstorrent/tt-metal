@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
 #include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
@@ -16,6 +15,9 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
