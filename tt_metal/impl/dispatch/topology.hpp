@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "device/device_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
