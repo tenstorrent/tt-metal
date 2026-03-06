@@ -36,7 +36,7 @@ def create_torch_w0_tensors(L, E, H, N):
     # for e in range(E):
     #     torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     #     torch_w0_tensors.append(torch_w0)
-    torch_w0 = torch.ones((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    torch_w0 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     torch_w0_tensors = [torch_w0.clone() for _ in range(E)]
 
     # TODO: (GR)
@@ -48,7 +48,7 @@ def create_torch_w1_tensors(L, E, H, N):
     # for e in range(E):
     #     torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     #     torch_w1_tensors.append(torch_w1)
-    torch_w1 = torch.ones((L, 1, H, N), dtype=torch.bfloat16) - 0.5
+    torch_w1 = torch.rand((L, 1, H, N), dtype=torch.bfloat16) - 0.5
     torch_w1_tensors = [torch_w1.clone() for _ in range(E)]
 
     # TODO: (GR)
@@ -60,7 +60,7 @@ def create_torch_w2_tensors(L, E, N, H):
     # for e in range(E):
     #     torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
     #     torch_w2_tensors.append(torch_w2)
-    torch_w2 = torch.ones((L, 1, N, H), dtype=torch.bfloat16) - 0.5
+    torch_w2 = torch.rand((L, 1, N, H), dtype=torch.bfloat16) - 0.5
     torch_w2_tensors = [torch_w2.clone() for _ in range(E)]
 
     # TODO: (GR)
@@ -89,14 +89,14 @@ def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
     factor = 1
     for _ in range(batch):
         for _ in range(seq):
-            if True:
+            if False:
                 # if scheme == "sequential":
                 tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) * factor)
                 factor += 1
                 if factor == 0:
                     factor += 1
             else:
-                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)))
+                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=tt_to_torch_dtype(dtype)) - 0.5)
     res = torch.cat(tokens, dim=0)
     return res.reshape(batch, 1, seq, hidden_size)
 
@@ -305,8 +305,8 @@ def gen_torch_dispatch_input_export_scores_tensor(dispatch_input_expert_indices_
 
 
 def gen_compute_matmul_cores(mesh_device):
-    MATMUL_FULL_CORES = {0, 1, 8, 9}
-    MATMUL_PAD_CORES = {2, 3, 4, 5, 6, 7, 10, 11}
+    MATMUL_FULL_CORES = {0, 3, 6, 9}
+    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
 
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     core2dram = {}
@@ -390,6 +390,34 @@ def get_batch_cluster_idxr(replication_axis, batch, batch_per_device):
     return _idxr
 
 
+# TODO: (GR) confirm on quad
+def gen_dispatch_golden(
+    torch_dispatch_input_tensor,  # [T * D, 1, 1, H]
+    torch_dispatch_input_expert_indices,  # [T * D, 1, 1, K]
+    expert_mapping_tensor,
+    batch,
+    select_experts_k,
+    hidden_size,
+    mesh_shape,
+    cluster_axis,
+):
+    _, _, devices = get_cluster_dims(cluster_axis, mesh_shape)
+
+    torch_dispatch_ref_tensor = torch.zeros(devices, batch, hidden_size).bfloat16()
+    torch_dispatch_ref_map = torch.zeros(torch_dispatch_ref_tensor.shape[:-1]).bfloat16()
+
+    for rec_d in range(devices):
+        for b in range(batch):
+            for k in range(select_experts_k):
+                e = torch_dispatch_input_expert_indices[b, 0, 0, k]
+                if _expert_on_device(e, rec_d, expert_mapping_tensor[0]):
+                    torch_dispatch_ref_tensor[rec_d, b] = torch_dispatch_input_tensor[b, 0, 0]
+                    torch_dispatch_ref_map[rec_d, b] = 1
+                    break
+
+    return torch_dispatch_ref_tensor, torch_dispatch_ref_map
+
+
 def gen_combine_golden(
     torch_dispatch_input_tensor,  # [512, 1, 1, H]
     torch_w0_tensors,  # [E, L, 1, H, N]
@@ -403,15 +431,6 @@ def gen_combine_golden(
     cluster_axis,
     mesh_shape,
 ):
-    torch.set_printoptions(
-        threshold=float("inf"),  # Print all elements (no truncation)
-        linewidth=200,  # Wider lines before wrapping
-        precision=10,  # Decimal places for floats
-        # sci_mode=False,          # Disable scientific notation
-    )
-
-    # print(torch_dispatch_input_tensor[:, :, :, 0:4])
-
     # 8, 16, 128
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
@@ -451,22 +470,22 @@ def verify_combine(iteration, mesh_device, mesh_shape, tt_combine_tensor, torch_
     )
     torch_combine_output = torch_combine_output.reshape(8, 4096, 7168)
 
-    torch.set_printoptions(
-        threshold=float("inf"),  # Print all elements (no truncation)
-        linewidth=200,  # Wider lines before wrapping
-        precision=10,  # Decimal places for floats
-        # sci_mode=False,          # Disable scientific notation
-    )
+    # torch.set_printoptions(
+    #     threshold=float("inf"),  # Print all elements (no truncation)
+    #     linewidth=200,  # Wider lines before wrapping
+    #     precision=10,  # Decimal places for floats
+    #     # sci_mode=False,          # Disable scientific notation
+    # )
 
-    print("REFERENCE")
-    print(torch_combine_golden[0, 0:512, 0:4])
+    # print("REFERENCE")
+    # print(torch_combine_golden[0, 0:64, 0:4])
 
     ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
 
-    print("TT")
+    # print("TT")
     # [8, 32, 7168] local
     # [8, 4096, 7168] global
-    print(torch_combine_output[0, 0:512, 0:4])
+    # print(torch_combine_output[0, 0:64, 0:4])
 
     eq, output = comp_pcc(torch_combine_output, torch_combine_golden)
     logger.info(f"{output}, iteration {iteration}")
@@ -651,13 +670,6 @@ def test_optimized_moe_decode_block(
         dtype=expert_mapping_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
-    )
-
-    torch.set_printoptions(
-        threshold=float("inf"),  # Print all elements (no truncation)
-        linewidth=200,  # Wider lines before wrapping
-        precision=10,  # Decimal places for floats
-        # sci_mode=False,          # Disable scientific notation
     )
 
     # ------------------------------------------------------------------------
@@ -1220,34 +1232,12 @@ def test_optimized_moe_decode_block(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
     else:
+        # run_op(0)
+
         for iteration in range(num_iterations):
-            tt_output, temp, tt_combine_output = run_op(iteration)
+            tt_output, tt_dispatch_output, tt_combine_output = run_op(iteration)
             tt_output_tensors.append(tt_output)
             tt_combine_tensors.append(tt_combine_output)
-
-            # (128, 512, 7168) global
-            # (1, 512, 7168) per device
-            torch_temp = ttnn.to_torch(
-                temp, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-            )
-
-            torch.set_printoptions(
-                threshold=float("inf"),  # Print all elements (no truncation)
-                linewidth=200,  # Wider lines before wrapping
-                precision=10,  # Decimal places for floats
-                # sci_mode=False,          # Disable scientific notation
-            )
-
-            ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
-
-            torch_temp = torch_temp[1, :, :4]
-            # print(torch_temp.shape)
-            # print(torch_temp)
-
-            # if torch.all(torch_comb_out == 1):
-            #     print("COMBINE OUTPUT ALL ONES")
-            # else:
-            #     print("COMBINE OUTPUT NOT ALL ONES")
 
     logger.info(f"Begin synchronizing devices")
     ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
