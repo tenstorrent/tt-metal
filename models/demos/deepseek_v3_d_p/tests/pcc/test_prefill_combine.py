@@ -180,20 +180,6 @@ def test_ttnn_combine(
         )
         logger.info("Using RANDOM test data")
 
-    # Step 2: Run torch dispatch to generate combine inputs (once per EP rank)
-    # def create_torch_dispatch():
-    #     return TorchDispatchModule(
-    #         num_chips=num_chips_sp,
-    #         experts_per_chip=experts_per_chip,
-    #         n_routed_experts=n_routed_experts,
-    #         num_experts_per_tok=num_experts_per_tok,
-    #         metadata_len=metadata_len,
-    #         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-    #         seq_len_per_chip=seq_len_per_chip,
-    #         hidden_dim=hidden_dim,
-    #         num_ep_ranks=num_chips_rep,
-    #     )
-
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
     chip_to_n_routed_expert_offset, experts_tok_counter, cum_sum = get_gate_outputs(
         indices,
@@ -226,38 +212,17 @@ def test_ttnn_combine(
     )
 
     # Run dispatch for each EP rank with rank-specific weights
-    # dispatched_buffer_per_rank = []
-    # dispatched_metadata_per_rank = []
-    # experts_tok_counter_per_rank = []
-    # for r in range(num_chips_rep):
-    #     torch_dispatch = create_torch_dispatch()
-    #     dispatched_buffer, dispatched_metadata = torch_dispatch(x, weights[r], indices, chip_to_n_routed_expert_offset)
-    #     dispatched_buffer_per_rank.append(dispatched_buffer)
-    #     dispatched_metadata_per_rank.append(dispatched_metadata)
-    #     experts_tok_counter_per_rank.append(experts_tok_counter)  # Same for all ranks
-    #     logger.info(f"Torch dispatch rank {r}: {dispatched_buffer.shape=}, {dispatched_metadata.shape=}")
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, chip_to_n_routed_expert_offset)
 
     logger.info("Torch dispatch outputs (OG):")
     logger.info(f"  {dispatched_buffer.shape=}")
     logger.info(f"  {dispatched_metadata.shape=}")
 
-    # Stack per-rank data into a single tensor
-    # Current shape per rank after unsqueeze: (num_chips_sp, 1, experts_per_chip, max_tok, dim)
-    # New shape: (num_chips_rep, num_chips_sp, 1, experts_per_chip, max_tok, dim)
-    # dispatched_buffer_expanded = torch.stack(dispatched_buffer_per_rank, dim=0)
-    # dispatched_metadata_expanded = torch.stack(dispatched_metadata_per_rank, dim=0)
-    # experts_tok_counter_expanded = torch.stack(experts_tok_counter_per_rank, dim=0)
-
     # Transform logical chip IDs to linearized coords
     # metadata[..., 0] contains the destination logical chip ID
     for r in range(num_chips_rep):
         # dest_linearized = dest_logical * num_chips_rep + replica_index
         dispatched_metadata[r, :, :, :, 0] = dispatched_metadata[r, :, :, :, 0] * num_chips_rep + r
-
-    # logger.info(f"  Expanded for 2D mesh: {dispatched_buffer_expanded.shape=}")
-    # logger.info(f"  Expanded for 2D mesh: {dispatched_metadata_expanded.shape=}")
-    # logger.info(f"  Expanded for 2D mesh: {experts_tok_counter_expanded.shape=}")
 
     # Use different sharding: shard both dimensions
     mesh_mapper = ttnn.ShardTensor2dMesh(

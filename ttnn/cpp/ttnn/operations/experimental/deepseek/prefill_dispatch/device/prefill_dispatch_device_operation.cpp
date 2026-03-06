@@ -129,10 +129,6 @@ PrefillDispatchDeviceOperation::topology_return_value_t PrefillDispatchDeviceOpe
 
 PrefillDispatchDeviceOperation::tensor_return_value_t PrefillDispatchDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // TODO
-    // if (tensor_args.optional_output_tensors.has_value()) {
-    //     return tensor_args.optional_output_tensors.value();
-    // }
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());

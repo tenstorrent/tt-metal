@@ -200,19 +200,10 @@ class TtDispatchModule(LightweightModule):
             topology=self.topology,
         )
 
-        torch.set_printoptions(profile="full")
-        # logger.info(f"{indices.shape=}")
-        # logger.info(f"{indices=}")
-        # logger.info(f"{host_tt_dispatched_metadata=}")
-        # logger.info(f"{host_tt_dispatched_metadata[..., 0]=}")
-        torch.set_printoptions(profile="default")
-
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
         logger.info(f"[TtDispatchModule.forward] OUTPUT SHAPES:")
         logger.info(f"  tt_dispatched_buffer.shape={tt_dispatched_buffer_shape}")
         logger.info(f"  tt_dispatch_metadata.shape={tt_dispatched_metadata_shape}")
-        # ttnn.visualize_tensor(tt_dispatch_buffer, header="Dispatch Buffer")
-        # ttnn.visualize_tensor(tt_dispatch_metadata, header="Dispatch Metadata")
 
         return (tt_dispatched_buffer, tt_dispatch_metadata)
