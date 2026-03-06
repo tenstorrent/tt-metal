@@ -52,11 +52,11 @@ def preprocess_linear_weight(weight_tensor, device):
 
     PyTorch stores linear weights as (out_features, in_features).
     ttnn.linear expects (in_features, out_features), so we transpose.
+    We keep the tensor as 2D to avoid inflating output rank.
     """
     weight = weight_tensor.detach().float()
     if weight.dim() == 2:
         weight = weight.t()  # (out, in) -> (in, out) for ttnn.linear
-        weight = weight.unsqueeze(0).unsqueeze(0)  # [1, 1, in, out]
     tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_weight
 
@@ -375,9 +375,9 @@ class TtBarkGPT:
 
         # LM head
         self.lm_head_weight = preprocess_linear_weight(parameters["lm_head"]["weight"], device)
-        if self.lm_head_weight.shape[3] != config.output_vocab_size:
+        if self.lm_head_weight.shape[-1] != config.output_vocab_size:
             raise ValueError(
-                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[3]}"
+                f"LM head weight shape mismatch: expected {config.output_vocab_size}, got {self.lm_head_weight.shape[-1]}"
             )
 
         # Optimization config (Stage 3)
@@ -428,14 +428,22 @@ class TtBarkGPT:
             raise ValueError("Either input_ids or inputs_embeds must be provided")
 
         # Position embeddings (handle offset if caching)
+        # Use [batch, seq_len] shape so embedding output is 3D [batch, seq, hidden]
+        if isinstance(input_ids, torch.Tensor):
+            seq_len = input_ids.shape[-1]
+        elif hasattr(tt_input_ids, "shape"):
+            seq_len = tt_input_ids.shape[-1]
+        else:
+            seq_len = inputs_embeds.shape[-2]
+
         if layer_past is not None:
             past_len = layer_past[0][0].shape[-2]
-            position_ids = torch.arange(past_len, past_len + tt_input_ids.shape[-1], dtype=torch.int32)
+            position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.int32).unsqueeze(0)
         else:
-            position_ids = torch.arange(0, tt_input_ids.shape[-1], dtype=torch.int32)
+            position_ids = torch.arange(0, seq_len, dtype=torch.int32).unsqueeze(0)
 
         tt_position_ids = ttnn.from_torch(
-            position_ids.unsqueeze(0).unsqueeze(0), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+            position_ids, dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         position_embeds = ttnn.embedding(
             tt_position_ids, self.position_embeds_weight, memory_config=ttnn.L1_MEMORY_CONFIG

@@ -138,11 +138,11 @@ class TtBarkFineModel:
             if not isinstance(input_ids, list):
                 ttnn.deallocate(tokens_i)
 
-        # Position embeddings
+        # Position embeddings — use [1, seq_len] for 3D output
         seq_len = tt_hidden.shape[-2]
-        position_ids = torch.arange(0, seq_len, dtype=torch.int32)
+        position_ids = torch.arange(0, seq_len, dtype=torch.int32).unsqueeze(0)
         tt_position_ids = ttnn.from_torch(
-            position_ids.unsqueeze(0).unsqueeze(0), dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+            position_ids, dtype=ttnn.uint32, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         position_embeds = ttnn.embedding(tt_position_ids, self.position_embeds_weight, memory_config=memory_config)
         ttnn.deallocate(tt_position_ids)
