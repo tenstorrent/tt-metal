@@ -19,8 +19,9 @@ void kernel_main() {
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
     const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
     uint32_t cb_length_t = get_arg_val<uint32_t>(11);
+#if CAUSAL_MASK
     uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
-    uint32_t mask_offset = get_arg_val<uint32_t>(13);
+#endif
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;

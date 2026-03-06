@@ -296,7 +296,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                 SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
             }
 
-            SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0});
+            SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0, 0});
             SetRuntimeArgs(program, writer_kernels_id, core, {0, 0, 0, 0, 0, 0});
             continue;
         }
