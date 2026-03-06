@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -206,8 +207,18 @@ void remove_unresolved_nodes(PhysicalSystemDescriptor& psd) {
 }
 
 void fix_local_global_flags_after_merge(PhysicalSystemDescriptor& psd) {
-    // After merging peer descriptors, update is_local flags based on actual hostnames
-    // Connections that were marked as global but are actually local (same hostname) should be marked as local
+    // After merging peer descriptors, update is_local flags to match the merged view of host_name.
+    //
+    // Why this is needed: In run_local_discovery we label using UMD's view — get_ethernet_connections()
+    // => is_local=true (both endpoints visible to this process), get_ethernet_connections_to_remote_devices()
+    // => is_local=false. When multiple ranks run on the same machine, UMD can see both endpoints of a
+    // link between rank 0 and rank 1, so we store that edge with is_local=true. We use hostname_key =
+    // hostname_rank (e.g. "node0_0", "node0_1") when size>1 so the merge has distinct keys per rank.
+    // After merge, that edge connects ASICs with host_name "node0_0" and "node0_1" — different keys —
+    // so the semantic we need for downstream (is_local <=> same host_name) would be wrong without this fix.
+    // Resolving hostname uniqueness before discovery does not remove the need: we still use hostname_rank
+    // when size>1, and we do not know which rank owns the other endpoint at discovery time, so we cannot
+    // label cross-rank same-machine links as non-local until after merge.
     const auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
 
@@ -608,7 +619,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
         if (my_rank_val == controller_rank) {
             remove_unresolved_nodes(psd);
             // Fix is_local flags based on actual hostnames after merge
-            fix_local_global_flags_after_merge(psd);
+            //fix_local_global_flags_after_merge(psd);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
 

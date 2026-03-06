@@ -16,6 +16,7 @@
 #include <cctype>
 #include <functional>
 #include <optional>
+#include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
 
