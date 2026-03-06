@@ -134,16 +134,17 @@ union PerfCounter {
     struct {
         uint32_t counter_value;
         uint32_t ref_cnt : 25;
-        PerfCounterType counter_type : 7;
+        uint32_t counter_type : 7;
     } __attribute__((packed));
     uint64_t raw_data;
 
     PerfCounter() = delete;
     PerfCounter(uint32_t counter_value, uint32_t ref_cnt, PerfCounterType counter_type) :
-        counter_value(counter_value), ref_cnt(ref_cnt), counter_type(counter_type) {}
+        counter_value(counter_value), ref_cnt(ref_cnt), counter_type(static_cast<uint32_t>(counter_type)) {}
 
     PerfCounter(uint64_t raw_data) : raw_data(raw_data) {}
 };
+static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-bit");
 
 #if defined(PROFILE_PERF_COUNTERS) && COMPILE_FOR_TRISC == 1
 
