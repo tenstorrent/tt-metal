@@ -53,6 +53,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 4096}",
+              "additional-benchmark-args": "--async-scheduling",
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
               "co-owner-1-id": "U08E1JCDVNX",
@@ -85,7 +86,7 @@ jobs:
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"sample_on_device_mode\": \"all\"}",
-              "additional-server-args": "--max_num_seqs 1",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "structured-output": true,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
@@ -118,6 +119,7 @@ jobs:
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\"}",
+              "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
               "multimodal": false,
@@ -135,7 +137,7 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
               "multimodal": false,
-              "additional-benchmark-args": "--random-prefix-len 128",
+              "additional-benchmark-args": "--random-prefix-len 128 --async-scheduling",
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
             },
@@ -163,6 +165,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-llama-text-ver": "tt_transformers",
+              "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
@@ -256,7 +259,7 @@ jobs:
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
-              "additional-server-args": "--max_model_len 2048",
+              "additional-server-args": "--max_model_len 2048 --async-scheduling",
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
@@ -271,6 +274,7 @@ jobs:
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
+              "additional-server-args": "--async-scheduling",
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
@@ -296,7 +300,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "N300",
               "override-tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\"}",
-              "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --input-queue-batching-delay 0",
+              "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --input-queue-batching-delay 0 --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "multimodal": false,
               "owner_id": "U08CEGF78ET"
