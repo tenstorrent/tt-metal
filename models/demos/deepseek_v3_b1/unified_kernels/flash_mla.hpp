@@ -577,8 +577,8 @@ struct FlashMLADecode {
             static_assert(out_chunk_tiles % 2 == 0, "out_chunk_tiles must be even");
 
             const bool do_reduce = args.do_reduce == 1;
-            const bool do_output = args.do_output == 1;
-            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;
+            const bool do_output = args.do_output == 1;                            // set to 0 in fused
+            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;  // set to 1 in fused
 
             constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
@@ -634,6 +634,7 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_interm_out;
                 sdpa_ms_cb = cb_interm_ms;
             } else {
+                // Fused with sdpa reduce worker
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }
