@@ -31,6 +31,9 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(20);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(21);
 
+    // Compile-time flag for whether joint tensors are provided (following standard SDPA pattern)
+    constexpr bool use_joint_tensors = L > 0;
+
     constexpr auto q_args = TensorAccessorArgs<22>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -200,14 +203,17 @@ void kernel_main() {
                 end_seq_tile = local_padded_Nt;
             }
 
-            read_block(
-                is_joint_q ? joint_q_generator : q_generator,
-                q_slice,
-                end_seq_tile,
-                cb_q_in,
-                q_tile_bytes,
-                false /*transpose*/
-            );
+            // Use compile-time conditionals to avoid TensorAccessor type mismatch
+            if constexpr (use_joint_tensors) {
+                if (is_joint_q) {
+                    read_block(joint_q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                } else {
+                    read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                }
+            } else {
+                // When joint tensors not provided, always use regular Q generator
+                read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+            }
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
@@ -264,15 +270,30 @@ void kernel_main() {
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (is_injector || !is_chain_participant || (nb != chain_batch || nq != chain_head)) {
-                    read_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        k_slice,
-                        end_seq_tile,
-                        cb_k_in,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
+                    // Use compile-time conditionals to avoid TensorAccessor type mismatch
+                    if constexpr (use_joint_tensors) {
+                        if (kv_chunk_is_joint) {
+                            read_block(
+                                joint_k_generator, k_slice, end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
+                        } else {
+                            read_block(
+                                ring_iter == 0 ? local_k_generator : gathered_k_generator,
+                                k_slice,
+                                end_seq_tile,
+                                cb_k_in,
+                                k_tile_bytes,
+                                true /*transpose*/);
+                        }
+                    } else {
+                        // When joint tensors not provided, never use joint generators
+                        read_block(
+                            ring_iter == 0 ? local_k_generator : gathered_k_generator,
+                            k_slice,
+                            end_seq_tile,
+                            cb_k_in,
+                            k_tile_bytes,
+                            true /*transpose*/);
+                    }
                 } else {
                     // Receive forwarded K chunk from previous core
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
@@ -296,15 +317,30 @@ void kernel_main() {
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                 if (is_injector || !is_chain_participant || (nb != chain_batch || nq != chain_head)) {
-                    read_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        v_slice,
-                        end_seq_tile,
-                        cb_v_in,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
+                    // Use compile-time conditionals to avoid TensorAccessor type mismatch
+                    if constexpr (use_joint_tensors) {
+                        if (kv_chunk_is_joint) {
+                            read_block(
+                                joint_v_generator, v_slice, end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
+                        } else {
+                            read_block(
+                                ring_iter == 0 ? local_v_generator : gathered_v_generator,
+                                v_slice,
+                                end_seq_tile,
+                                cb_v_in,
+                                v_tile_bytes,
+                                false /*transpose*/);
+                        }
+                    } else {
+                        // When joint tensors not provided, never use joint generators
+                        read_block(
+                            ring_iter == 0 ? local_v_generator : gathered_v_generator,
+                            v_slice,
+                            end_seq_tile,
+                            cb_v_in,
+                            v_tile_bytes,
+                            false /*transpose*/);
+                    }
                 } else {
                     // Receive forwarded V chunk from previous core
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
