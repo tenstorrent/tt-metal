@@ -15,9 +15,6 @@ import ttnn
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
 )
-MESH_GRAPH_DESC_1x8 = (
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
-)
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -67,13 +64,14 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
        uint32_t token_id; // which token in source device's buffer
        uint32_t k[2]; // k+1 if not activated
        uint32_t expert_weight[2]; // bfloat16 scores
-       uint32_t [3] _unused // 24 bytes padding
+       uint32_t [3] _unused // 12 bytes padding
     }
+    32 bytes total
     """
 
     metadata_entry_size = (
         2 * num_local_experts + 1 + 3
-    )  # token id, k[experts], score[experts], 24 bytes worth of padding
+    )  # token id, k[experts], score[experts], 12 bytes worth of padding
     dense_metadata_buffer = (
         torch.ones([devices, batch * seq, metadata_entry_size], dtype=torch.uint32) * select_experts_k
     )
@@ -465,6 +463,7 @@ def _get_tt_dense_token_maps(dense_token_maps_tensor, mesh_device):
 
 
 def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
+    mesh_shape = tuple(mesh_device.shape)
     if axis == 0:
         # need to roll my own mesh composer here for the transposed ordering
         device_shards = [ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_out)]
@@ -592,7 +591,9 @@ def _run_test(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    output_tensor = torch.zeros([select_experts_k, batch * seq, hidden_size], dtype=torch.bfloat16)
+    output_tensor = torch.zeros(
+        [select_experts_k, batch * seq * mesh_shape[1 - cluster_axis], hidden_size], dtype=torch.bfloat16
+    )
     tt_output_tensor = ttnn.from_torch(
         output_tensor,
         device=mesh_device,
@@ -654,13 +655,9 @@ def _run_test(
     "mesh_device, mesh_shape",
     [
         pytest.param(
-            (1, 8),
-            (1, 8),
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-            ),
-            id="1x8",
+            (4, 8),
+            (4, 8),
+            id="4x8",
         ),
         pytest.param(
             (1, 16),
@@ -674,11 +671,11 @@ def _run_test(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("batch", [512, 128, 64])
+@pytest.mark.parametrize("batch_per_device", [32, 16])
 @pytest.mark.parametrize("select_experts_k", [1, 2, 8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
-@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
 @pytest.mark.parametrize("token_parallel_core_dim", [4])
@@ -690,7 +687,7 @@ def _run_test(
 def test_decode(
     mesh_device,
     mesh_shape,
-    batch,
+    batch_per_device,
     select_experts_k,
     hidden_size,
     seq,
@@ -704,8 +701,12 @@ def test_decode(
     num_test_iters,
     num_inner_iters,
 ):
-    experts = experts_per_device * mesh_shape[cluster_axis]
-    mesh_device.disable_and_clear_program_cache()
+    if mesh_shape[cluster_axis] == 1:
+        pytest.mark.skip("Invalid cluster axis")
+
+    batch = batch_per_device * mesh_shape[cluster_axis]
+
+    experts = experts_per_device * math.prod(mesh_shape)
 
     worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
     mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
