@@ -513,7 +513,7 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
 
-    const uint64_t mem_bank_to_noc_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
     TT_ASSERT(
