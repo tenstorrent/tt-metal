@@ -10,7 +10,6 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-// #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 // Debug print control - set to 0 to disable dispatch debug prints, 1 to enable
 #define ENABLE_DISPATCH_DEBUG 0
@@ -320,19 +319,6 @@ void kernel_main() {
             } else {
                 // DPRINT_DISPATCH << "    Expert [" << k << "]=" << routed_expert << " is sent to " << expert_chip
                 //                 << " chip." << ENDL();
-                // auto expert_chip_og = expert_chip;;
-                // expert_chip = expert_chip * device_stride + device_begin_idx;
-                // if (expert_chip >= device_end_idx) {
-                //     DPRINT << "ERROR:    Expert [" << k << "]=" << routed_expert << " maps to chip " << expert_chip
-                //     << " which is outside of dispatch range." << ENDL();
-                //     return;
-                // }
-                // DPRINT << "expert_chip_og=" << expert_chip_og
-                //         << " => expert_chip=" << expert_chip
-                //        << " device_begin_idx=" << device_begin_idx
-                //        << " device_end_idx=" << device_end_idx
-                //        << " device_stride=" << device_stride
-                //        << ENDL();
                 if constexpr (is_1d_topology<topology>()) {
                     if (true) {
                         fabric_send_chip_unicast_noc_unicast_1d<

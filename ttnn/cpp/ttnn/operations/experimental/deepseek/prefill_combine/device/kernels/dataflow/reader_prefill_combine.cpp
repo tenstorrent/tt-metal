@@ -55,19 +55,6 @@ void kernel_main() {
     constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(20);
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(21);
 
-    // Mesh information (indices 22-26) - reader doesn't use these, but they're in the args
-    // constexpr uint32_t src_mesh_id = get_compile_time_arg_val(22);
-    // constexpr uint32_t src_chip_id = get_compile_time_arg_val(23);
-    // constexpr uint32_t mesh_rows = get_compile_time_arg_val(24);
-    // constexpr uint32_t mesh_cols = get_compile_time_arg_val(25);
-    // constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(26);
-
-    // Fabric configuration (indices 27-30) - reader doesn't use these, but they're in the args
-    // constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(27);
-    // constexpr uint32_t l1_alignment = get_compile_time_arg_val(28);
-    // constexpr uint32_t num_links = get_compile_time_arg_val(29);
-    // constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(30);
-
     // TensorAccessorArgs for all 4 tensors (starting at index 31)
     constexpr auto dispatched_buffer_args = TensorAccessorArgs<31>();
     constexpr auto dispatched_metadata_args =

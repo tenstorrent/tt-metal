@@ -66,72 +66,7 @@ void create_tensor_cb(
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
-// std::pair<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_cb_sizes(
-//     const ttnn::Tensor& input_tensor,
-//     const ttnn::Tensor& /*weights_tensor*/,
-//     const ttnn::Tensor& indices_tensor,
-//     // uint32_t metadata_len,
-//     uint32_t /*num_links*/,
-//     std::optional<uint32_t> /*axis*/) {
-//     auto aligned_input_page_size = get_aligned_page_size(input_tensor);
-//     auto aligned_indices_page_size = get_aligned_page_size(indices_tensor);
-//     // auto aligned_weights_page_size = get_aligned_page_size(weights_tensor);
-//     // auto aligned_dispatched_buffer_page_size = aligned_input_page_size; // Assuming same format for input and
-//     // dispatched buffer auto aligned_metadata_page_size = get_aligned_page_size(metadata_len);
-//     // // auto aligned_chip_to_routed_expert_tokens = ;
-
-//     // uint32_t tokens_per_device = get_num_rows(input_tensor);
-//     // uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
-
-//     // auto mapping_pages = get_num_pages(mapping_tensor);
-
-//     // auto mesh_view = input_tensor.device()->get_view();
-//     // uint32_t num_devices = mesh_view.num_devices();
-
-//     // uint32_t dispatch_devices =
-//     //     axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
-
-//     constexpr uint32_t buffering_factor = 3;
-//     // constexpr uint32_t num_packet_headers = 2;
-
-//     // auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-//     std::array<uint32_t, 2> cb_sizes = {
-//         buffering_factor * aligned_input_page_size, buffering_factor * aligned_indices_page_size,
-//         // tokens_per_core * aligned_indices_page_size,
-//         // mapping_pages * aligned_mapping_page_size,
-//         // num_devices * tokens_per_core * sizeof(uint8_t),
-//         // tokens_per_device * dispatch_devices * aligned_indices_page_size,
-//         // num_packet_headers * packet_header_size_bytes,
-//     };
-
-//     std::array<uint32_t, 2> cb_page_sizes = {
-//         aligned_input_page_size, aligned_indices_page_size,
-//         // aligned_mapping_page_size,
-//         // tokens_per_core * sizeof(uint8_t),
-//         // aligned_indices_page_size,
-//         // packet_header_size_bytes,
-//     };
-
-//     return {cb_sizes, cb_page_sizes};
-// }
-
 }  // namespace detail
-
-// PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::cached_program_t
-// PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create(
-//     const operation_attributes_t& /*operation_attributes*/,
-//     const tensor_args_t& /*tensor_args*/,
-//     tensor_return_value_t& /*tensor_return_value*/) {
-//     // TODO: Implement program creation
-//     // - Create program
-//     // - Add kernels (reader, writer)
-//     // - Configure CBs
-//     // - Set runtime args
-//     // - Return cached program with shared variables
-
-//     TT_THROW("PrefillDispatchProgramFactory::create not yet implemented");
-// }
 
 PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::cached_mesh_workload_t
 PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_mesh_workload(
@@ -148,8 +83,7 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_mesh_workl
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
-    tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -480,7 +414,6 @@ PrefillDispatchDeviceOperation::PrefillDispatchProgramFactory::create_at(
     };
 
     // Distribute work across cores
-    // uint32_t link_id = 0;  // Unused when fabric connection setup is disabled
     uint32_t tokens_per_core_start = 0;
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = reader_runtime_args;  // Copy base args
