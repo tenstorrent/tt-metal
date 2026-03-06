@@ -46,10 +46,12 @@ private:
 
 public:
     DeviceStorage() = default;
-    DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-        std::vector<distributed::MeshCoordinate> coords_,
-        std::shared_ptr<distributed::MeshBuffer> root_buffer_ = nullptr);
+
+    explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
+
+    // Copying a DeviceStorage will share the same underlying MeshBuffer.
+    DeviceStorage(const DeviceStorage&) = default;
+    DeviceStorage& operator=(const DeviceStorage&) = default;
 
     Buffer* get_buffer() const;
     const distributed::MeshBuffer& get_mesh_buffer() const;
@@ -60,6 +62,11 @@ public:
     // These functions allows the use of the get_mesh_buffer as a view.
     // These are considered internal functions and are not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        std::vector<distributed::MeshCoordinate> coords_,
+        std::shared_ptr<distributed::MeshBuffer> root_buffer_);
+
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
     void deallocate_root_mesh_buffer();
     void reset_root_mesh_buffer();
@@ -77,12 +84,8 @@ public:
 
     // These are internal functions and should be treated as a public API.
     // They are here to support distributed API.
-    DeviceStorage reduce_to_single_device_storage(const distributed::MeshCoordinate& coord) const;
     static DeviceStorage combine_to_multi_device_storage(
         std::span<std::reference_wrapper<const DeviceStorage>> storages);
-
-    // Low level function, strickly internal:
-    DeviceStorage with_coords(std::vector<distributed::MeshCoordinate> new_coords) const;
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage>;

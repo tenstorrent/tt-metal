@@ -81,7 +81,14 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+
+    // MeshBuffer provides RAII semantics for the allocated buffer,
+    // a MeshBuffer going out of scope will deallocate the underlying buffer.
     ~MeshBuffer();
+
+    // Copying must be disabled due to RAII semantics of MeshBuffer
+    MeshBuffer(const MeshBuffer&) = delete;
+    MeshBuffer& operator=(const MeshBuffer&) = delete;
 
     // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
     // destructor or the `deallocate` method deallocate the MeshBuffer.

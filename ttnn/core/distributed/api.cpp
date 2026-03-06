@@ -78,8 +78,10 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.coords.size());
         for (const auto& coord : device_storage.coords) {
-            tensors.push_back(Tensor(
-                device_storage.reduce_to_single_device_storage(coord), tensor.tensor_spec(), tensor.tensor_topology()));
+            // Copies the mesh buffer, but updates the coords so the tensor only sees the single device
+            DeviceStorage new_device_storage(device_storage);
+            new_device_storage.coords = {coord};
+            tensors.push_back(Tensor(std::move(new_device_storage), tensor.tensor_spec(), tensor.tensor_topology()));
         }
         return tensors;
     }

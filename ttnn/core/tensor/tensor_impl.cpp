@@ -594,14 +594,14 @@ void write_to_mesh_buffer(
 
 }  // namespace
 
-std::pair<std::vector<distributed::MeshCoordinate>, TensorTopology> to_device_mesh_buffer(
+TensorTopology to_device_mesh_buffer(
     const DistributedHostBuffer& host_storage,
     const distributed::MeshBuffer& mesh_buffer,
     const TensorSpec& tensor_spec,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
     const auto& host_storage_shape = host_storage.shape();
-    const auto& mesh_device_shape = mesh_buffer.device().shape();
+    const auto& mesh_device_shape = mesh_buffer.device()->shape();
 
     // If there is a single host shard, but there's more mesh devices,
     // we replicate the data to all devices.
@@ -613,18 +613,10 @@ std::pair<std::vector<distributed::MeshCoordinate>, TensorTopology> to_device_me
         // Write data
         replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id);
 
-        // Coords should match the shape of the mesh device
-        auto* mesh_device = mesh_buffer.device();
-        std::vector<distributed::MeshCoordinate> coords;
-        coords.reserve(mesh_device->shape().mesh_size());
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-            coords.push_back(coord);
-        }
-
         // Topology should be fully replicated
         auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
 
-        return {std::move(coords), std::move(topology)};
+        return topology;
     }
 
     // Expect the host buffer to have the same shape as the mesh device.
@@ -637,13 +629,8 @@ std::pair<std::vector<distributed::MeshCoordinate>, TensorTopology> to_device_me
     // Write data
     write_to_mesh_buffer(host_storage, mesh_buffer, cq_id);
 
-    // Coords should match the shape of the host buffer
-    const auto& host_buffer_coords = host_storage.shard_coords();
-    std::vector<distributed::MeshCoordinate> coords(host_buffer_coords.begin(), host_buffer_coords.end());
-
     // Topology should be pass through
-
-    return {std::move(coords), tensor_topology};
+    return tensor_topology;
 }
 
 Tensor to_device(
@@ -666,10 +653,10 @@ Tensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    auto [coords, topology] = to_device_mesh_buffer(
+    auto topology = to_device_mesh_buffer(
         tensor.host_storage().buffer(), *mesh_buffer, *tensor_spec, tensor.tensor_topology(), cq_id);
 
-    return Tensor(DeviceStorage(mesh_buffer, std::move(coords)), *tensor_spec, topology);
+    return Tensor(DeviceStorage(mesh_buffer), *tensor_spec, topology);
 }
 
 void copy_to_host(
@@ -756,18 +743,15 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
     const auto& mesh_buffer = device_tensor.mesh_buffer();
 
-    auto [coords, topology] = to_device_mesh_buffer(
+    auto topology = to_device_mesh_buffer(
         host_tensor.host_storage().buffer(),
         mesh_buffer,
         device_tensor.tensor_spec(),
         host_tensor.tensor_topology(),
         cq_id);
 
-    // TODO(River): update the device tensor instead through move assignment
-    device_tensor = Tensor(
-        device_tensor.device_storage().with_coords(std::move(coords)),
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        topology);
+    // TODO(River): update the device tensor instead
+    device_tensor = device_tensor.with_tensor_topology(topology);
 }
 
 void copy_to_device(
