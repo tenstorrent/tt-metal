@@ -20,7 +20,6 @@
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"

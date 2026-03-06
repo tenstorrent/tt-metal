@@ -24,7 +24,6 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
