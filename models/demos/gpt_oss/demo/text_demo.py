@@ -278,7 +278,7 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
-        (
+        pytest.param(
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
@@ -294,6 +294,7 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             False,  # stop_at_eos
             False,  # run_in_ci
+            marks=pytest.mark.skip(reason="4x8 mesh and prefill > 32k causes OOM"),
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
