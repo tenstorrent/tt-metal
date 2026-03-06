@@ -254,7 +254,11 @@ jobs:
             --arg venv_build '${{ needs.build-2204.outputs.python-ci-build-venv-tag }}' \
             --arg venv_test '${{ needs.build-2204.outputs.python-ci-test-venv-tag }}' \
             '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $manylinux, $venv_build, $venv_test ] | map(select(. != ""))')
-          echo "list=$IMAGES" >> $GITHUB_OUTPUT
+          {
+            echo "list<<EOF"
+            echo "$IMAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prewarm Ubuntu 22.04 images cache
         uses: ./.github/actions/prewarm-images
@@ -275,7 +279,11 @@ jobs:
             --arg venv_build '${{ needs.build-2404.outputs.python-ci-build-venv-tag }}' \
             --arg venv_test '${{ needs.build-2404.outputs.python-ci-test-venv-tag }}' \
             '[ $ci_build, $ci_test, $dev, $basic_dev, $basic_ttnn, $venv_build, $venv_test ] | map(select(. != ""))')
-          echo "list=$IMAGES" >> $GITHUB_OUTPUT
+          {
+            echo "list<<EOF"
+            echo "$IMAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prewarm Ubuntu 24.04 images cache
         uses: ./.github/actions/prewarm-images
