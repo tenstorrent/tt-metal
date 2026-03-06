@@ -1322,6 +1322,7 @@ class Generator(WarmupForwardMixin):
         Used by the async decode path: the caller submitted a trace with
         read_from_device=False and now needs to collect the results.
         """
+        # Sync should not be needed, as the reading itself will force a sync.
         # for i in range(self.data_parallel):
         #     ttnn.synchronize_device(self.model[i].mesh_device)
         to_host = self.read_decode_output(tt_decode_output)
