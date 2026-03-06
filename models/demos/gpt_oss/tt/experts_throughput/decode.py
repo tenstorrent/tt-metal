@@ -43,9 +43,13 @@ def prepare_expert_weights(
     # Prepare routing weights for broadcasting:
     # topk_expert_weights is [1, 1, tokens_per_device, K] (tokens on dim -2)
     # We want [K, 1, tokens_per_device, 1] so it can broadcast across hidden_size.
-    # to_layout creates new tensor - safe to deallocate original
-    topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(topk_expert_weights)
+    # Permute requires RM input; skip to_layout if weights are already RM
+    # (e.g. from fused topk router which always returns RM outputs).
+    if topk_expert_weights.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_expert_weights)
+    else:
+        topk_weights_rm = topk_expert_weights
     # permute to [K, 1, tokens_per_device, 1]
     topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))
     topk_weights_reshaped = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
@@ -275,19 +279,34 @@ def decode_forward(
     # STEP 0: RESHAPE TO PUT TOKENS ON DIM -2 (seq_len dimension)
     # ==========================================================================
     input_shape = hidden_states.shape
-    tokens_per_device = input_shape[0] * input_shape[2]  # B * S
+    ndim = len(input_shape)
+    if ndim == 2:
+        # 2D input from fused op: [B, hidden_size]
+        tokens_per_device = input_shape[0]
+    else:
+        # 4D input: [B, 1, S, hidden_size]
+        tokens_per_device = input_shape[0] * input_shape[2]  # B * S
 
     hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
 
-    # typecast creates new tensors - safe to deallocate originals
-    topk_expert_indices_orig = topk_expert_indices
-    topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
-    ttnn.deallocate(topk_expert_indices_orig)
+    # When the fused topk router is active, indices arrive as RM uint16 and
+    # weights as RM bf16 — skip the typecast chain and to_layout(RM) below.
+    indices_already_rm = (
+        topk_expert_indices.dtype == ttnn.uint16 and topk_expert_indices.get_layout() == ttnn.ROW_MAJOR_LAYOUT
+    )
 
-    topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
-    topk_expert_indices_u32 = topk_expert_indices
-    topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
-    ttnn.deallocate(topk_expert_indices_u32)
+    if indices_already_rm:
+        topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    else:
+        # typecast creates new tensors - safe to deallocate originals
+        topk_expert_indices_orig = topk_expert_indices
+        topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
+        ttnn.deallocate(topk_expert_indices_orig)
+
+        topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
+        topk_expert_indices_u32 = topk_expert_indices
+        topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
+        ttnn.deallocate(topk_expert_indices_u32)
 
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
 
@@ -301,12 +320,19 @@ def decode_forward(
     # ==========================================================================
     # STEP 1: PREPARE INPUTS FOR ALL_TO_ALL_DISPATCH
     # ==========================================================================
-    hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(hidden_states)
-    hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
+    if hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT:
+        # Fused op already produced RM hidden_states — skip to_layout
+        hidden_rm = ttnn.reshape(hidden_states, shape=(1, 1, tokens_per_device, config.hidden_size))
+    else:
+        hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(hidden_states)
+        hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
 
-    topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(topk_expert_indices)
+    if indices_already_rm:
+        topk_indices_rm = topk_expert_indices
+    else:
+        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_expert_indices)
     topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
 
     # ==========================================================================
