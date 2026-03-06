@@ -7,6 +7,7 @@ set(UNIT_TESTS_FABRIC_SRC
     common/fabric_command_interface.cpp
     fabric_router/test_routing_tables.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
+    fabric_router/test_physical_grouping_descriptor.cpp
     fabric_router/test_topology_mapper.cpp
     fabric_router/test_topology_mapper_utils.cpp
     fabric_router/test_topology_solver.cpp
@@ -23,6 +24,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_z_router_integration.cpp
     fabric_router/test_z_router_device_detection.cpp
     fabric_router/test_fabric_topology_helpers.cpp
+    fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp

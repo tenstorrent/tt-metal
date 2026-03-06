@@ -193,7 +193,7 @@ const core_descriptor_t& get_core_descriptor_config(
         compute_with_storage_end = compute_with_storage_end_override;
         log_warning(
             tt::LogDevice,
-            "Overrided compute_with_storage_end [x, y]=[{}, {}]",
+            "Overrode compute_with_storage_end [x, y]=[{}, {}]",
             compute_with_storage_end[0].as<std::string>(),
             compute_with_storage_end[1].as<std::string>());
     }

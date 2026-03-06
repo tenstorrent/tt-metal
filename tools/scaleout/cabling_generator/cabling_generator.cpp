@@ -1722,7 +1722,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {tt::ARCH::BLACKHOLE, "400G"},
         {tt::ARCH::Invalid, "UNKNOWN"}};
 
-    // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
+    // Unknown for lengths unable to be calculated (longer than available cables, cross-aisle/hall, etc.)
 
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;

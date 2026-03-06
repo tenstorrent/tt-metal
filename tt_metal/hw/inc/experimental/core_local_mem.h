@@ -78,7 +78,7 @@ public:
      * @return Reference to the element at the given index
      */
     T& operator[](uint32_t index) const {
-        DEBUG_SANITIZE_L1_ADDR(address_ + (index + 1) * sizeof(T), sizeof(T));
+        DEBUG_SANITIZE_L1_ADDR(address_ + index * sizeof(T), sizeof(T));
         return get_unsafe_ptr()[index];
     }
 
