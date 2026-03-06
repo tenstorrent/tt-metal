@@ -29,16 +29,6 @@ class DeviceConfig:
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
 
-        # Based on current configs, DDP and TP cannot be both enabled
-        assert not (
-            self.enable_ddp and self.enable_tp
-        ), "DDP and TP cannot be both enabled."
-
-        # we currently support only [1, N] mesh shapes
-        assert (
-            self.mesh_shape[0] == 1
-        ), f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
-
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
 
