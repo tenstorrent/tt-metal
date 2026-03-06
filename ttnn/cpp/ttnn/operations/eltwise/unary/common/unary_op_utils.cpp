@@ -96,6 +96,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
+        case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -761,6 +762,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::LGAMMA:
         case UnaryOpType::MISH:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
@@ -976,6 +978,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::LGAMMA: return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {

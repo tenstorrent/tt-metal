@@ -32,7 +32,6 @@ enum class UnaryCompositeOpType {
     FRAC,
 };
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _variance_impl(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _variance_impl(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -66,11 +65,6 @@ struct OpHandler<UnaryCompositeOpType::NORMALIZE_GLOBAL> {
 template <>
 struct OpHandler<UnaryCompositeOpType::DIGAMMA> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _digamma(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::LGAMMA> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _lgamma(t1, mem_cfg); }
 };
 
 template <>
