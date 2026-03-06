@@ -17,7 +17,7 @@ def pytest_addoption(parser):
     )
     parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
     parser.addoption(
-        "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
+        "--paged_attention", action="store", type=int, help="Whether to use paged attention or default attention"
     )
     parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
     parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
@@ -41,22 +41,22 @@ def pytest_addoption(parser):
     parser.addoption(
         "--token_accuracy",
         action="store",
-        default=False,
-        type=bool,
+        default=None,
+        type=int,
         help="Whether to compute top1 and top5 exact token matching accuracy",
     )
     parser.addoption(
         "--stress_test",
         action="store",
-        default=False,
-        type=bool,
+        default=None,
+        type=int,
         help="Run stress test (same decode iteration over a large number of iterations",
     )
     parser.addoption(
         "--enable_trace",
         action="store",
         default=None,
-        type=bool,
+        type=int,
         help="Whether to enable tracing",
     )
     parser.addoption(
@@ -76,7 +76,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--use_prefetcher",
         action="store",
-        default=False,
-        type=bool,
+        default=None,
+        type=int,
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
     )
