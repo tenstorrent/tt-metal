@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-featured NanoGPT training example matching the C++ implementation.
+"""Full-featured NanoGPT training example.
 
 This example provides a comprehensive Python implementation that mirrors the C++ nano_gpt example,
 including:
@@ -14,7 +14,7 @@ including:
 - Loss tracking and averaging
 - Configurable training parameters
 - Character tokenizer (via ttml.common.data.CharTokenizer)
-- Proper tensor shapes matching C++ implementation
+- Proper tensor shapes
 """
 
 import argparse
@@ -85,7 +85,7 @@ class TrainingConfig(BaseTrainingConfig):
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
 
-        # Re-read with C++ matching defaults (override BaseTrainingConfig defaults)
+        # Re-read with defaults (override BaseTrainingConfig defaults)
         self.seed = int(tc.get("seed", 5489))
         self.max_steps = int(tc.get("max_steps", 5000))
 
@@ -104,7 +104,7 @@ class ModelExperimentalConfig:
 class ModelConfig:
     """Model configuration aligned with ttml.common.config.TransformerConfig naming.
 
-    Field names follow the universal project format (matching YAML/C++ conventions).
+    Field names follow the universal project format (YAML conventions).
     Conversion to model-specific config (e.g. LlamaConfig) happens at model creation time.
     """
 
@@ -123,11 +123,11 @@ class ModelConfig:
     experimental: ModelExperimentalConfig = field(
         default_factory=ModelExperimentalConfig
     )
-    # Llama-specific fields (universal naming matching YAML/C++ conventions)
+    # Llama-specific fields (universal naming YAML conventions)
     num_groups: int = 3  # GQA: num_key_value_heads
     theta: float = 500000.0  # RoPE theta parameter
     intermediate_dim: Optional[int] = None  # MLP intermediate dimension
-    # RoPE NTK-aware scaling (nested under rope_scaling in YAML, matching C++ LlamaConfig)
+    # RoPE NTK-aware scaling (nested under rope_scaling in YAML)
     scaling_factor: float = 0.0  # 0.0 means no scaling
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
@@ -135,7 +135,7 @@ class ModelConfig:
 
 
 class LossAverageMeter:
-    """Loss averaging meter matching C++ LossAverageMeter."""
+    """Loss averaging meter."""
 
     def __init__(self):
         self.m_sum = 0.0
@@ -159,7 +159,7 @@ class LossAverageMeter:
 
 
 class GradientAccumulator:
-    """Gradient accumulator matching C++ GradientAccumulator."""
+    """Gradient accumulator."""
 
     def __init__(self, accumulation_steps: int):
         self.m_accumulation_steps = accumulation_steps
@@ -176,10 +176,10 @@ class GradientAccumulator:
         return self.m_steps % self.m_accumulation_steps == 0
 
     def scale(self, loss: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        """Scale loss by accumulation steps (matching C++: ttml::ops::mul(tensor, 1.0F / accumulation_steps))."""
+        """Scale loss by accumulation steps"""
         if self.m_accumulation_steps > 1:
             scale_factor = 1.0 / float(self.m_accumulation_steps)
-            # Use float overload directly (matching C++ implementation)
+            # Use float overload directly
             # This avoids creating an intermediate tensor and potential materialization issues
             return ttml.ops.binary.mul(loss, scale_factor)
         return loss
@@ -210,14 +210,13 @@ def read_file_to_str(file_path: str) -> str:
 
 
 def create_warmup_linear_scheduler(optimizer, total_steps: int):
-    """Create warmup + linear decay scheduler matching C++ SequentialScheduler."""
+    """Create warmup + linear decay scheduler."""
     warmup_factor = 0.1
     warmup_steps = int(total_steps * warmup_factor)
     linear_decay_steps = total_steps - warmup_steps
     base_lr = optimizer.get_lr()
 
     def compute_lr(step: int) -> float:
-        # +1 matches C++ LinearScheduler: m_last_step increments before computing factor
         adjusted = step + 1
         if adjusted <= warmup_steps:
             factor = float(adjusted) / float(warmup_steps)
@@ -232,10 +231,10 @@ def create_warmup_linear_scheduler(optimizer, total_steps: int):
 
 
 class InMemoryTokenDataset:
-    """Lazy token dataset matching C++ InMemoryTokenDataset.
+    """Lazy token dataset.
 
     Stores tokens once and generates (input, target) pairs on the fly
-    using a sliding window with stride=1, matching the C++ implementation.
+    using a sliding window with stride=1.
     Size = len(tokens) - seq_length (every token offset is a valid sample).
     """
 
@@ -261,7 +260,7 @@ def create_dataset_from_text(
 ) -> Tuple["InMemoryTokenDataset", CharTokenizer]:
     """Create dataset from text using CharTokenizer from ttml.common.data.
 
-    Matches C++ InMemoryTokenDataset: stores tokens once and uses a sliding
+    Stores tokens once and uses a sliding
     window with stride=1 so every token offset is a valid sample.
 
     Args:
@@ -279,7 +278,7 @@ def create_dataset_from_text(
 def collate_fn(
     samples: list, sequence_length: int
 ) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
-    """Collate function matching C++ collate_fn.
+    """Collate function.
 
     Args:
         samples: List of (sequence, target) tuples
@@ -340,11 +339,11 @@ def train_step(
     batch_size=None,
     memory_snapshot_fn=None,
 ) -> tuple:
-    """Single training step matching C++ implementation with proper gradient accumulation.
+    """Single training step with proper gradient accumulation.
 
     Args:
         mask: Optional attention mask. Pass None to let the SDPA kernel use its
-              native causal mask path (matching C++ which passes std::nullopt).
+              native causal mask path.
         batch_size: Optional cached batch size (if None, will extract from input_tokens)
         memory_snapshot_fn: Optional callback function to take memory snapshots.
                            Should accept a name string as argument.
@@ -354,11 +353,11 @@ def train_step(
     """
     start_time = time.time()
 
-    # Zero gradients only when accumulator says to (matching C++ should_zero_grad)
+    # Zero gradients only when accumulator says to
     if gradient_accumulator.should_zero_grad():
         optimizer.zero_grad()
 
-    # Forward pass (matching C++: run_model(model, features, masks))
+    # Forward pass
     # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
@@ -367,37 +366,37 @@ def train_step(
         logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN
     )
 
-    # Scale loss for gradient accumulation (matching C++: gradient_accumulator_helper.scale(loss))
+    # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
     loss_float = get_loss_value(loss)
 
-    # Memory snapshot after forward pass (matching C++: memory_snapshot("FORWARD_PASS"))
+    # Memory snapshot after forward pass
     if memory_snapshot_fn:
         memory_snapshot_fn("FORWARD_PASS")
 
     # Backward pass
     loss.backward(False)
 
-    # Memory snapshot after backward pass (matching C++: memory_snapshot("BACKWARD_PASS"))
+    # Memory snapshot after backward pass
     if memory_snapshot_fn:
         memory_snapshot_fn("BACKWARD_PASS")
 
-    # Reset computation graph after backward (matching C++: ttml::autograd::ctx().reset_graph())
+    # Reset computation graph after backward
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
     # Get number of samples for accumulator update
     # Use cached batch_size if provided to avoid shape() call
     samples = batch_size if batch_size is not None else input_tokens.shape()[0]
 
-    # Update accumulator (matching C++: gradient_accumulator_helper.update(loss_float, samples))
+    # Update accumulator
     gradient_accumulator.update(loss_float, samples)
 
     # Check if we should step the optimizer
     should_step = gradient_accumulator.should_step()
 
     if should_step:
-        # Gradient clipping (matching C++: clip_grad_norm)
+        # Gradient clipping
         if use_clip_grad_norm:
             # Use ttml.core.clip_grad_norm which works with model parameters directly
             ttml.core.clip_grad_norm(
@@ -410,7 +409,7 @@ def train_step(
         # Optimizer step
         optimizer.step()
 
-        # Apply learning rate scheduler if provided (matching C++: scheduler->step())
+        # Apply learning rate scheduler if provided)
         if compute_lr is not None:
             optimizer.set_lr(compute_lr(scheduler_step))
 
@@ -419,7 +418,7 @@ def train_step(
 
 
 def parse_model_config(yaml_config: dict) -> ModelConfig:
-    """Parse model config from YAML matching C++ parse_model_config."""
+    """Parse model config from YAML"""
     # The YAML has a "transformer_config" top-level key
     transformer_config = yaml_config.get("transformer_config", {})
     config = ModelConfig()
@@ -460,7 +459,7 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
                 "use_composite_layernorm", config.experimental.use_composite_layernorm
             )
     elif config.model_type == "llama":
-        # Llama-specific fields (matching C++ read_config in llama.cpp)
+        # Llama-specific fields
         config.num_groups = transformer_config.get("num_groups", config.num_groups)
         config.theta = transformer_config.get("theta", config.theta)
         config.intermediate_dim = transformer_config.get(
@@ -513,7 +512,7 @@ def sample_greedy(
     Returns:
         Generated text
     """
-    # Set model to eval mode (matching C++: model_to_eval - disables dropout)
+    # Set model to eval mode
     model.eval()
 
     # Reset graph before inference to ensure clean state
@@ -570,7 +569,7 @@ def sample_greedy(
         # Wrap current input tensor for model (no data transfer)
         input_tensor = ttml.autograd.Tensor(input_ttnn, False)
 
-        # Forward pass with causal mask (matching C++ model call)
+        # Forward pass with causal mask
         # Clone mask before each use to avoid TTNN memory reuse corrupting the original
         mask_for_model = ttml.autograd.Tensor(ttnn.clone(mask.get_value()), False)
 
@@ -980,10 +979,10 @@ def load_model_from_checkpoint(
 
 
 def main():
-    """Main training function matching C++ main."""
-    parser = argparse.ArgumentParser(description="NanoGPT Full C++ Example (Python)")
+    """Main training function"""
+    parser = argparse.ArgumentParser(description="NanoGPT Example")
 
-    # Default config path matching C++ example (relative to configs root)
+    # Default config path (relative to configs root)
     default_config_path = "training_shakespeare_nanogpt.yaml"
 
     parser.add_argument(
@@ -1091,7 +1090,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 70)
-    print("NanoGPT Full C++ Example (Python Implementation)")
+    print("NanoGPT Example")
     print("=" * 70)
     print()
 
@@ -1131,7 +1130,7 @@ def main():
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
     print()
 
-    # Load configs matching C++ structure using ttml.common.config utilities
+    # Load configs using ttml.common.config utilities
     tt_train_root = f"{get_tt_metal_home()}/tt-train"
     configs_root = f"{tt_train_root}/configs"
     try:
@@ -1139,8 +1138,8 @@ def main():
         yaml_config = load_config(args.config, f"{configs_root}/training_configs")
         training_config = TrainingConfig(yaml_config)
 
-        # Load model config from separate file (matching C++ behavior)
-        # Use tt_train_root as base since C++ uses paths like "configs/model_configs/..."
+        # Load model config from separate file
+        # Use tt_train_root as base
         if training_config.model_config:
             print(f"Loading model config from: {training_config.model_config}")
             model_yaml = load_config(training_config.model_config, tt_train_root)
@@ -1173,7 +1172,7 @@ def main():
         model_config.max_sequence_length = args.sequence_length
 
     # Only checkpoint when explicitly requested via --model_save_path.
-    # Matches C++ behaviour: no model_path in YAML -> no checkpointing.
+    # No model_path in YAML -> no checkpointing.
     if args.model_save_path:
         checkpoint_dir = os.path.dirname(args.model_save_path)
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1227,7 +1226,6 @@ def main():
             return
     else:
         # Training mode: load data and create model
-        # Set default data path if not provided (matching C++ behavior)
         if not training_config.data_path:
             # Try to find Shakespeare dataset
             possible_paths = [
@@ -1309,11 +1307,11 @@ def main():
 
         if not resume_path:
             print("\n2. Creating model...")
-            # Round vocab size to tile boundary (matching C++ behavior)
+            # Round vocab size to tile boundary
             print("Overriding vocab size to be divisible by 32")
             model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
 
-            # Print transformer configuration (matching C++ output)
+            # Print transformer configuration
             runner_type_str = str(model_config.runner_type).split(".")[-1]
             weight_tying_str = str(model_config.weight_tying).split(".")[-1]
             print("Transformer configuration:")
@@ -1325,8 +1323,7 @@ def main():
             # Create model
             model = create_model_from_config(model_config)
 
-            # Count parameters (matching C++ get_number_of_parameters; parameters() returns
-            # ttml.autograd.Tensor objects directly from C++, not Python Parameter wrappers)
+            # Count parameters
             total_params = sum(
                 math.prod(p.shape()) for p in model.parameters().values()
             )
@@ -1353,7 +1350,7 @@ def main():
             optimizer = None  # NoOp not available in Python API yet
         else:
             # AdamWConfig.make() requires: lr, beta1, beta2, epsilon, weight_decay
-            # Default values matching C++ implementation
+            # Default values
             beta1 = 0.9
             beta2 = 0.999
             epsilon = 1e-8
@@ -1439,7 +1436,7 @@ def main():
             )
         print()
 
-        # Set model to training mode (matching C++: model_to_train)
+        # Set model to training mode
         model.train()
 
         # Training setup
@@ -1449,7 +1446,7 @@ def main():
         )
         global_step = start_step
 
-        # Training loop (matching C++ structure)
+        # Training loop
         start_time = time.time()
         # Cache values used in hot path
         batch_size = training_config.batch_size
@@ -1466,7 +1463,7 @@ def main():
                 MemoryUsageTracker.snapshot(name)
 
         for epoch in range(training_config.num_epochs):
-            # Shuffle indices (matching C++ DataLoader shuffle=true),
+            # Shuffle indices,
             # avoids copying token data unlike shuffling a list of tuples.
             indices = np.arange(dataset_len, dtype=np.int64)
             np.random.shuffle(indices)
@@ -1516,7 +1513,7 @@ def main():
 
                     gradient_accumulator.reset()
 
-                    # Print memory usage after first iteration (matching C++)
+                    # Print memory usage after first iteration
                     if args.track_memory and not is_everything_compiled:
                         is_everything_compiled = True
                         MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
