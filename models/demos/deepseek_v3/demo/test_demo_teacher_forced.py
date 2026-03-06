@@ -35,7 +35,9 @@ REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128, 2048, 8192], ids=["128", "2048", "8192"])
-def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int, is_ci_env: bool):
+def test_demo_teacher_forcing_accuracy(
+    reference_file: Path, max_new_tokens: int, is_ci_env: bool, force_recalculate_weight_config: bool
+):
     """
     Test DeepSeek v3 demo with teacher forcing to verify accuracy.
 
@@ -161,6 +163,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
         reference_file=REFERENCE_FILE,
         tf_prompt_len=tf_prompt_len,
         enable_trace=True,
+        force_recalculate=force_recalculate_weight_config,
     )
 
     # Check results
