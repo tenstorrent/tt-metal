@@ -186,7 +186,7 @@ struct Broadcast {
                         connections[connection_idx].wait_for_empty_write_slot();
                         connections[connection_idx].send_payload_without_header_non_blocking_from_address(
                             src_base_addr + chunk_idx * CTArgs::chunk_size_bytes, size);
-                        connections[connection_idx].send_payload_flush_blocking_from_address(
+                        connections[connection_idx].send_payload_flush_non_blocking_from_address(
                             reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
                     };
 
@@ -237,6 +237,7 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
                     };
                     forward_chunks(src, sem_wait);
+                    noc_async_writes_flushed();
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
