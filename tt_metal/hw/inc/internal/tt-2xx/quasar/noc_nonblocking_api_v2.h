@@ -1390,53 +1390,53 @@ inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uin
 // Dynamic NOC functions (will fail at compile-time if used)
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     return false;
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_init() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <NocBarrierType barrier_type, uint32_t status_register, typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_barrier_init(
     uint32_t noc0_status_reg, uint32_t noc1_status_reg) {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <typename T = void>
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS, typename T = void>
 inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
-    static_assert(sizeof(T) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    static_assert(sizeof(T*) == 0, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 }
 
 // ============================================================================================================
