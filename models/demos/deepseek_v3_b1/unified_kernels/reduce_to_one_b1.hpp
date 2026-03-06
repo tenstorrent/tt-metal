@@ -267,8 +267,13 @@ struct ReduceToOneB1 {
             // ================================================================
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
+                DPRINT << "is fabric core\n";
+                DPRINT << "device role is root1: " << (uint32_t)(CTArgs::device_role == MESH_ROOT1) << "\n";
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                    DPRINT << "persistent fabric signal enable: " << (uint32_t)CTArgs::persistent_fabric_signal_enable
+                           << "\n";
                     if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
+                        DPRINT << "persistent mode for fabric\n";
                         // Persistent fabric core: wait for aggregator signal, then send
                         // cross-device atomic inc to bcast sender on entry device.
                         // Persistent args start after the worker sem addrs.
@@ -280,10 +285,17 @@ struct ReduceToOneB1 {
                         uint32_t dst_chip_id = get_arg_val<uint32_t>(p_idx++);
                         uint32_t dst_sem_addr = get_arg_val<uint32_t>(p_idx++);
 
+                        DPRINT << "dst noc coords: (" << dst_noc_x << ", " << dst_noc_y << ")\n";
+                        DPRINT << "dst mesh id: " << dst_mesh_id << "\n";
+                        DPRINT << "dst chip id: " << dst_chip_id << "\n";
+                        DPRINT << "dst sem addr: " << dst_sem_addr << "\n";
+
                         volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
+                        DPRINT << "waiting for semaphore inc\n";
                         noc_semaphore_wait_min(wait_sem_ptr, 1);
                         unified_kernels::semaphore_dec(wait_sem_ptr);
+                        DPRINT << "received sem\n";
 
                         constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
                         PacketHeaderPool::reset();
@@ -302,6 +314,7 @@ struct ReduceToOneB1 {
                         sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
                         sender.close();
                         noc_async_full_barrier();
+                        DPRINT << "sent persistent signal to entry device\n";
                     }
                     return;
                 }
@@ -364,7 +377,8 @@ struct ReduceToOneB1 {
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
 
                     if (args.socket_config_addr != 0) {
-                        // Aggregator (shard_idx==0): wait for all other workers, then stream to downstream socket.
+                        // Aggregator: wait for all other workers, then stream to downstream socket.
+                        // The aggregator core IS the output core, so all shards are already in local L1.
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
                         noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
@@ -375,23 +389,14 @@ struct ReduceToOneB1 {
                         socket_reserve_pages(sender_socket, 1);
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-                        uint32_t scratch_l1 = get_read_ptr(CTArgs::scratch_cb);
                         uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
                         for (uint32_t i = 0; i < CTArgs::total_num_workers; i++) {
-                            // Read from padded stride on output core
-                            uint64_t shard_src = get_noc_addr(
-                                CTArgs::output_core_noc_x,
-                                CTArgs::output_core_noc_y,
-                                args.output_base_addr + i * CTArgs::payload_size_bytes);
-                            noc_async_read(shard_src, scratch_l1, useful_per_shard);
-                            noc_async_read_barrier();
-
-                            // Write contiguously to downstream socket (no padding gaps)
+                            uint32_t shard_l1_addr = args.output_base_addr + i * CTArgs::payload_size_bytes;
                             uint64_t fifo_dst = get_noc_addr(
                                 downstream_enc.d2d.downstream_noc_x,
                                 downstream_enc.d2d.downstream_noc_y,
                                 fifo_base + i * useful_per_shard);
-                            noc_async_write(scratch_l1, fifo_dst, useful_per_shard);
+                            noc_async_write(shard_l1_addr, fifo_dst, useful_per_shard);
                             noc_async_writes_flushed();
                         }
                         socket_push_pages(sender_socket, 1);

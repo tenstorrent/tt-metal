@@ -280,10 +280,8 @@ def test_bcast_moe_two_stage_pipeline(
             reduce_intermediate_tensors.append(intermediate_tensor)
         logger.info(f"[rank={my_mesh_id}] reduce intermediate tensors created")
 
-        # Reduce output tensor (single-core sharded)
-        compute_grid = mesh_device.compute_with_storage_grid_size()
-        reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+        # Reduce output tensor (single-core sharded on aggregator core)
+        reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
         reduce_output_shard_spec = ttnn.ShardSpec(
             reduce_output_shard_grid,
             (1, final_output_total_width),
@@ -305,6 +303,7 @@ def test_bcast_moe_two_stage_pipeline(
         logger.info(f"[rank={my_mesh_id}] reduce output tensor created")
 
         # 4 global semaphores for reduce synchronization
+        compute_grid = mesh_device.compute_with_storage_grid_size()
         num_cores = compute_grid.x * compute_grid.y
         reduce_available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_available_cores, 0) for _ in range(4)]
@@ -656,8 +655,7 @@ def test_persistent_moe_15_stages(
                 reduce_intermediate_tensors.append(intermediate_tensor)
 
             compute_grid = mesh_device.compute_with_storage_grid_size()
-            reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-            reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+            reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
             reduce_output_shard_spec = ttnn.ShardSpec(
                 reduce_output_shard_grid,
                 (1, final_output_total_width),
