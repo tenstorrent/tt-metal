@@ -615,8 +615,8 @@ void WatcherDeviceReader::Core::Dump() const {
         if (!rtoptions.watcher_status_disabled()) {
             DumpWaypoints();
         }
-        // Ethernet and DRAM cores have firmware that starts at address 0, so no need to check
-        // for a magic value.
+        // DumpL1Status() is TENSIX-specific: it asserts programmable_core_type_ == TENSIX and
+        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM).
         if (!is_eth_core && !is_dram_core) {
             DumpL1Status();
         }
