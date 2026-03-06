@@ -314,7 +314,12 @@ def verify_device_output(
         # Each expert occupies M rows: [e*M : (e+1)*M, :]
         tt_expert_result = tt_output_result[e * M : (e + 1) * M, :]  # [M, K]
 
-        metrics = get_accuracy_metrics(reference, tt_expert_result)
+        # Compare only the last_chunk_tokens valid rows.  The combine shard may contain
+        # uninitialized L1 data beyond last_chunk_tokens; the reference pads with zeros
+        # for those rows, but the hardware does not guarantee they are zero.
+        # For the single-device test, last_chunk_tokens == M always (full chunks), so
+        # this slice is a no-op there.
+        metrics = get_accuracy_metrics(reference[:last_chunk_tokens, :], tt_expert_result[:last_chunk_tokens, :])
         pcc = metrics["pcc"]
         rmse = metrics["relative_rmse"]
 

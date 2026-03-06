@@ -290,6 +290,130 @@ def run_throughput_experts_component(
         assert passing, f"High Throughput Experts test failed. Output: {output}"
 
 
+def run_fused_throughput_experts_component(mesh_device, hidden_shape, config, decoder_layer, is_row_sharded):
+    """Test fused experts: all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine.
+
+    Uses ring-local expert IDs (0..ring_local_experts-1) for routing, since the fused
+    pipeline operates on the ring-local expert space.  PCC vs. the dense reference is
+    expected to be low (no bias add, unweighted expert sum) — the test only checks that
+    the pipeline runs without error and produces a correctly-shaped, finite output.
+    """
+    from models.demos.gpt_oss.tt.experts_throughput import create_fused_moe_gpt_config
+
+    _, _, num_tokens, hidden_size = hidden_shape
+
+    # Compute per-device token count (rows shard tokens across ring_devices)
+    cluster_axis = 0
+    ring_devices = mesh_device.shape[cluster_axis]
+    tokens_per_device = num_tokens // ring_devices  # e.g., 128 // 4 = 32
+
+    # Ring-local expert count: experts_per_device × ring_devices
+    tt_experts = decoder_layer.mlp.experts
+    tt_config = tt_experts.config
+    ring_local_experts = tt_config.num_experts_per_device * ring_devices  # e.g., 4 * 4 = 16
+
+    # Build small random weight tensors (PCC vs. reference is not checked).
+    # The factory takes the first ring_local_experts from state_dict; we use
+    # full E_total so the slice is valid for any ring size.
+    K = tt_config.hidden_size
+    N = tt_config.intermediate_size
+    E_total = tt_config.num_experts
+    fused_state_dict = {
+        "gate_up_proj": torch.randn(E_total, K, 2 * N, dtype=torch.bfloat16) * 0.01,
+        "down_proj": torch.randn(E_total, N, K, dtype=torch.bfloat16) * 0.01,
+    }
+
+    fused_config = create_fused_moe_gpt_config(
+        mesh_device=mesh_device,
+        config=tt_config,
+        state_dict=fused_state_dict,
+        tokens_per_device=tokens_per_device,
+        weight_dtype=ttnn.bfloat4_b,
+        cluster_axis=cluster_axis,
+        num_links=4,
+    )
+
+    # Create routing with ring-local expert IDs (0..ring_local_experts-1)
+    num_experts_per_tok = tt_config.num_experts_per_tok
+    indices_list = []
+    scores_list = []
+    for _ in range(num_tokens):
+        selected = torch.randperm(ring_local_experts)[:num_experts_per_tok].sort().values
+        indices_list.append(selected.to(torch.int16))
+        scores = torch.rand(num_experts_per_tok, dtype=torch.bfloat16) + 1e-5
+        scores = scores / scores.sum()
+        scores_list.append(scores)
+    indices_torch = torch.stack(indices_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
+    scores_torch = torch.stack(scores_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
+
+    # Create hidden states
+    hidden_states_torch = torch.randn(num_tokens, 1, 1, hidden_size, dtype=torch.bfloat16)
+
+    # Upload to device: row-shard tokens across mesh rows, replicate across cols
+    mesh_mapper_tokens = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape))
+
+    # Hidden states in L1 (dispatch requires L1 tokens; fused_decode_forward also converts if needed)
+    tt_hidden = ttnn.from_torch(
+        hidden_states_torch,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=mesh_mapper_tokens,
+    )
+
+    # Indices/scores must be HEIGHT_SHARDED L1 (all_to_all_dispatch_metadata requirement)
+    num_cores_y = min(8, tokens_per_device)
+    num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
+    input_shard_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+            [1, num_experts_per_tok],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_indices = ttnn.from_torch(
+        indices_torch.reshape(num_tokens, 1, 1, num_experts_per_tok).to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=input_shard_mem_config,
+        mesh_mapper=mesh_mapper_tokens,
+    )
+    tt_scores = ttnn.from_torch(
+        scores_torch.reshape(num_tokens, 1, 1, num_experts_per_tok),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=input_shard_mem_config,
+        mesh_mapper=mesh_mapper_tokens,
+    )
+
+    # Attach fused config to experts module and run forward pass
+    tt_experts.fused_config = fused_config
+    try:
+        tt_output = tt_experts(
+            hidden_states=tt_hidden,
+            topk_expert_indices=tt_indices,
+            topk_expert_weights=tt_scores,
+            is_decode=True,
+        )
+
+        # Verify output: shape should be [1, 1, tokens_per_device, H] per device
+        mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., :num_tokens, :hidden_size]
+        assert not torch.isnan(tt_output_torch).any(), "NaN detected in fused expert output"
+        assert not torch.isinf(tt_output_torch).any(), "Inf detected in fused expert output"
+        logger.info(
+            f"Fused throughput experts test PASSED. Output shape: {tt_output_torch.shape}, "
+            f"range: [{tt_output_torch.min():.4f}, {tt_output_torch.max():.4f}]"
+        )
+    finally:
+        # Always restore original fused_config (None) so other tests are unaffected
+        tt_experts.fused_config = None
+
+
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
     """Test experts component - extracted from decoder layer"""
 
@@ -629,6 +753,20 @@ def test_decoder(
             )
         else:
             logger.info("Router test only runs in decode mode (seq_len=1). Skipping...")
+
+    if should_test("fused_experts"):
+        if decoder_layer.mlp.use_throughput_experts and is_decode and is_row_sharded:
+            logger.info(f"Testing Fused Throughput Experts for mesh shape {mesh_shape}...")
+            hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
+            run_fused_throughput_experts_component(
+                setup["mesh_device"],
+                hidden_states_throughput_experts.shape,
+                config,
+                decoder_layer,
+                is_row_sharded=is_row_sharded,
+            )
+        else:
+            logger.info("Fused experts test requires throughput experts + decode mode + row-sharded. Skipping...")
 
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:

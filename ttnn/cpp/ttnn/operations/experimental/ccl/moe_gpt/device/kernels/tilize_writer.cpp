@@ -112,6 +112,10 @@ void kernel_main() {
     // Page sizes
     constexpr uint32_t tilize_output_page_size = get_named_compile_time_arg_val("tilize_output_page_size");
 
+    // Packed page sizes (= per-token stride in the CB, rows packed without alignment gaps)
+    constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
+    constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
+
     // Aligned page sizes
     constexpr uint32_t aligned_indices_page_size = get_named_compile_time_arg_val("aligned_indices_page_size");
     constexpr uint32_t aligned_mapping_page_size = get_named_compile_time_arg_val("aligned_mapping_page_size");

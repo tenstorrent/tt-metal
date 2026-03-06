@@ -41,7 +41,7 @@ void add_stagger_defines_if_needed(
 void throttle_mm_perf(
     tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines, ThrottleLevel throttle_level) {
     // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
+    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 24;
     // TODO: determine min core threshold for throttle to be needed on BH
     constexpr uint32_t BH_MM_MAX_CORES_NO_THROTTLE = 0;
     const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||

@@ -304,6 +304,8 @@ void kernel_main() {
     // Multicast coordinates for drain tilize to non-drain tilize synchronization
     constexpr uint32_t drain_core_noc_x = get_named_compile_time_arg_val("drain_core_noc_x");
     constexpr uint32_t drain_core_noc_y = get_named_compile_time_arg_val("drain_core_noc_y");
+    constexpr uint32_t dispatch_drain_noc_x = get_named_compile_time_arg_val("dispatch_drain_noc_x");
+    constexpr uint32_t dispatch_drain_noc_y = get_named_compile_time_arg_val("dispatch_drain_noc_y");
 
     // T multicast coordinates
     constexpr uint32_t num_tilize_cores = get_named_compile_time_arg_val("num_tilize_cores");
@@ -416,6 +418,8 @@ void kernel_main() {
         tilize_noc_y[i] = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
+    rt_args_idx++;  // skip DRAM output placeholder (unused in fused mode)
+
     // Read the mapping tensor page for this device (linearized_mesh_coord)
     // This gives us the expert -> device mapping from this device's perspective
     // Reserve all pages (tokens)
@@ -429,28 +433,25 @@ void kernel_main() {
     init_expert_activation_buffer_async<selected_experts_k, tokens, experts_per_device, l1_alignment>(
         expert_activation_cb_id);
 
-    // All cores read the full indices/scores tensors from interleaved DRAM/L1.
-    // In TILIZE_TO_DRAM mode this is the only path. In fused mode, the drain core's
-    // CB is not backed by a shard (single-device test uses interleaved tensors), so
-    // all cores must independently read from the interleaved storage.
-    // TODO: When multi-device sharded indices/scores are supported, non-drain cores
-    // can read from drain's L1 shard instead (with proper synchronization).
+    // Both tilize cores bulk-read indices/scores from the dispatch drain core.
+    // The dispatch drain core holds the HEIGHT_SHARDED shard but cannot host user kernels,
+    // so we copy the data here via NOC.  dispatch_drain_noc_x/y are the physical NOC coords of
+    // the dispatch drain core.  Use aligned_page_size so we copy the full buffer allocation.
+    // Note: drain_core_noc_x/y refer to tilize_cores[0] (tilize drain) for cross-tilize semaphores.
     {
-        uint32_t dest = get_read_ptr(indices_tensor_cb_id);
-        for (uint32_t page = 0; page < indices_pages; page++) {
-            noc_async_read_page(page, indices_tensor_addr_gen, dest);
-            dest += aligned_indices_page_size;
-        }
-    }
-    {
-        uint32_t dest = get_read_ptr(scores_tensor_cb_id);
-        for (uint32_t page = 0; page < scores_pages; page++) {
-            noc_async_read_page(page, scores_tensor_addr_gen, dest);
-            dest += aligned_scores_page_size;
-        }
+        uint64_t src_indices = NOC_XY_ADDR(
+            DYNAMIC_NOC_X(noc_index, dispatch_drain_noc_x),
+            DYNAMIC_NOC_Y(noc_index, dispatch_drain_noc_y),
+            indices_tensor_address);
+        noc_async_read(src_indices, get_read_ptr(indices_tensor_cb_id), aligned_indices_page_size * indices_pages);
+        uint64_t src_scores = NOC_XY_ADDR(
+            DYNAMIC_NOC_X(noc_index, dispatch_drain_noc_x),
+            DYNAMIC_NOC_Y(noc_index, dispatch_drain_noc_y),
+            scores_tensor_address);
+        noc_async_read(src_scores, get_read_ptr(scores_tensor_cb_id), aligned_scores_page_size * scores_pages);
     }
 
-    // Wait for all reads to complete (mapping + indices/scores for non-drain)
+    // Wait for all reads to complete (mapping + indices/scores)
     noc_async_read_barrier();
 
     // Now safe to signal BRISC - all data is in place

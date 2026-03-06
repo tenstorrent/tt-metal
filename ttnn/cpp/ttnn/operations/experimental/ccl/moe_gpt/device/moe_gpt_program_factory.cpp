@@ -474,9 +474,15 @@ MoEGPTMeshWorkloadFactory::create_at(
             matmul_core_set.insert({c.x, c.y});
         }
 
+        // The dispatch drain core holds the HEIGHT_SHARDED indices/scores shard from
+        // all_to_all_dispatch_metadata.  Because dispatch cores cannot host user kernels,
+        // we cannot use CB aliasing here.  Instead, both tilize cores do a single bulk NOC
+        // read from the dispatch drain core at kernel start.
+        const CoreCoord dispatch_drain_logical =
+            expert_indices.buffer()->shard_spec().tensor_shard_spec.grid.ranges().begin()->start_coord;
+
         // Pick tilize cores from the worker grid, avoiding matmul cores.
-        // Scan from the bottom-right corner of the grid (high y, high x) to
-        // stay far from the typical DRAM-bank-mapped cores.
+        // Scan from the bottom-right corner (high y, high x) to stay far from DRAM-mapped cores.
         CoreCoord worker_grid = device->compute_with_storage_grid_size();
         std::vector<CoreCoord> tilize_cores;
         tilize_cores.reserve(TILIZE_NUM_CORES);
@@ -524,7 +530,8 @@ MoEGPTMeshWorkloadFactory::create_at(
             tilize_cores_physical.push_back(device->worker_core_from_logical_core(tilize_cores.at(i)));
         }
 
-        const CoreCoord tilize_drain_core_physical = tilize_cores_physical.at(0);
+        // Physical coords of the dispatch drain core (for NOC reads from both tilize cores)
+        const CoreCoord dispatch_drain_physical = device->worker_core_from_logical_core(dispatch_drain_logical);
 
         // --- Tilize output tensors (metadata written to DRAM by reader) ---
         // These are pre-allocated: per_expert_total_tokens, expert_activation, e_t are embedded
@@ -630,6 +637,9 @@ MoEGPTMeshWorkloadFactory::create_at(
             experts_per_device,
             tt::DataFormat::UInt32);
 
+        // Indices CB: fresh on both tilize cores.  Both cores do a bulk NOC read from the
+        // dispatch drain core at kernel start.  Use aligned_page_size so the CB covers the
+        // full physical buffer allocation (num_pages * aligned_page_size bytes).
         tt::tt_metal::create_cb(
             indices_tensor_cb_id,
             program,
@@ -638,6 +648,7 @@ MoEGPTMeshWorkloadFactory::create_at(
             tilize_indices_pages,
             tilize_indices_data_format);
 
+        // Scores CB: same pattern as indices.
         tt::tt_metal::create_cb(
             scores_tensor_cb_id,
             program,
@@ -792,8 +803,11 @@ MoEGPTMeshWorkloadFactory::create_at(
             {"linearized_mesh_coord", linearized_mesh_coord},
             {"cluster_axis", cluster_axis},
 
-            {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
-            {"drain_core_noc_y", (uint32_t)tilize_drain_core_physical.y},
+            {"drain_core_noc_x", (uint32_t)tilize_cores_physical.at(0).x},
+            {"drain_core_noc_y", (uint32_t)tilize_cores_physical.at(0).y},
+
+            {"dispatch_drain_noc_x", (uint32_t)dispatch_drain_physical.x},
+            {"dispatch_drain_noc_y", (uint32_t)dispatch_drain_physical.y},
 
             {"primary_mcast_gather_group_num_cores", primary_mcast_gather_group_num_cores},
             {"secondary_mcast_gather_group_num_cores", secondary_mcast_gather_group_num_cores},
