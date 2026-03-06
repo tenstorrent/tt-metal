@@ -184,7 +184,7 @@ if(NOT TARGET TT::Metalium)
         else()
             # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
             # From tt-train/, go up ONE level to reach the repository root
-            set(TT_METAL_HOME "${CMAKE_SOURCE_DIR}/..")
+            set(TT_METAL_HOME "${TT_TRAIN_SOURCE_DIR}/..")
             if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
                 message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
             else()
