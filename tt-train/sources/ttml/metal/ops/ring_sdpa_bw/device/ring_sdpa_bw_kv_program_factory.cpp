@@ -55,43 +55,21 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
             continue;
         }
 
-        // Create TensorTopology
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
-        for (size_t i = 0; i < mesh_shape.dims(); i++) {
-            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, {mesh_coord}};
-
-        // Create single-device tensors
-        auto grad_output_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(grad_output, mesh_coord, tensor_topology);
-        auto attn_output_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(attn_output, mesh_coord, tensor_topology);
-        auto query_tensor = ttnn::distributed::get_single_device_tensor_at_coord(query, mesh_coord, tensor_topology);
-        auto key_tensor = ttnn::distributed::get_single_device_tensor_at_coord(key, mesh_coord, tensor_topology);
-        auto value_tensor = ttnn::distributed::get_single_device_tensor_at_coord(value, mesh_coord, tensor_topology);
-        auto intermediates_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(intermediates, mesh_coord, tensor_topology);
-        auto grad_key_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(grad_key, mesh_coord, tensor_topology);
-        auto grad_value_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(grad_value, mesh_coord, tensor_topology);
-
         // Create SDPA backward KV with mask_type (no explicit mask tensor needed)
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output_tensor,
-            .attn_output = attn_output_tensor,
-            .query = query_tensor,
-            .key = key_tensor,
-            .value = value_tensor,
+            .grad_output = grad_output,
+            .attn_output = attn_output,
+            .query = query,
+            .key = key,
+            .value = value,
             .attn_mask = std::nullopt,  // No explicit mask - using mask_type
-            .intermediates = intermediates_tensor,
-            .preallocated_grad_key = grad_key_tensor,
-            .preallocated_grad_value = grad_value_tensor};
+            .intermediates = intermediates,
+            .preallocated_grad_key = grad_key,
+            .preallocated_grad_value = grad_value};
 
-        sdpa_kv::tensor_return_value_t sdpa_return_value{grad_key_tensor, grad_value_tensor};
+        sdpa_kv::tensor_return_value_t sdpa_return_value{grad_key, grad_value};
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardKVProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -149,43 +127,21 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
         auto [should_execute, effective_mask_type] =
             get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
 
-        // Create TensorTopology
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(mesh_shape.dims());
-        for (size_t i = 0; i < mesh_shape.dims(); i++) {
-            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-        tt::tt_metal::TensorTopology tensor_topology{mesh_shape, placements, {start_coord}};
-
-        // Create single-device tensors
-        auto grad_output_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(grad_output, start_coord, tensor_topology);
-        auto attn_output_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(attn_output, start_coord, tensor_topology);
-        auto query_tensor = ttnn::distributed::get_single_device_tensor_at_coord(query, start_coord, tensor_topology);
-        auto key_tensor = ttnn::distributed::get_single_device_tensor_at_coord(key, start_coord, tensor_topology);
-        auto value_tensor = ttnn::distributed::get_single_device_tensor_at_coord(value, start_coord, tensor_topology);
-        auto intermediates_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(intermediates, start_coord, tensor_topology);
-        auto grad_key_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(grad_key, start_coord, tensor_topology);
-        auto grad_value_tensor =
-            ttnn::distributed::get_single_device_tensor_at_coord(grad_value, start_coord, tensor_topology);
-
         // Create SDPA attributes and tensor args
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
-            .grad_output = grad_output_tensor,
-            .attn_output = attn_output_tensor,
-            .query = query_tensor,
-            .key = key_tensor,
-            .value = value_tensor,
+            .grad_output = grad_output,
+            .attn_output = attn_output,
+            .query = query,
+            .key = key,
+            .value = value,
             .attn_mask = std::nullopt,
-            .intermediates = intermediates_tensor,
-            .preallocated_grad_key = grad_key_tensor,
-            .preallocated_grad_value = grad_value_tensor};
+            .intermediates = intermediates,
+            .preallocated_grad_key = grad_key,
+            .preallocated_grad_value = grad_value};
 
-        sdpa_kv::tensor_return_value_t sdpa_return_value{grad_key_tensor, grad_value_tensor};
+        sdpa_kv::tensor_return_value_t sdpa_return_value{grad_key, grad_value};
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardKVProgramFactory::shared_variables_t sdpa_shared_vars{
