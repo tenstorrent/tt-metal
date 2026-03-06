@@ -115,6 +115,11 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           RUN_ID="${{ github.run_id }}"
 
+          mkdir -p data
+          if [ ! -s data/compile_time.csv ]; then
+            echo "date,commit_sha,wall_time_s,cpu_time_s,branch,run_id" > data/compile_time.csv
+          fi
+
           echo "${DATE},${COMMIT_SHA},${WALL_TIME},${CPU_TIME},${BRANCH},${RUN_ID}" >> data/compile_time.csv
           echo "Appended: ${DATE},${COMMIT_SHA::7},wall=${WALL_TIME}s,cpu=${CPU_TIME}s,${BRANCH},${RUN_ID}"
 
@@ -122,11 +127,19 @@ jobs:
           git commit -m "Add compile time: wall=${WALL_TIME}s cpu=${CPU_TIME}s @ ${COMMIT_SHA::7}"
 
           # Retry with rebase in case of concurrent pushes
+          push_succeeded=false
           for attempt in 1 2 3; do
             if git push; then
+              push_succeeded=true
               echo "✅ Pushed on attempt ${attempt}"
               break
             fi
             echo "⚠️ Push failed (attempt ${attempt}/3), rebasing and retrying..."
             git pull --rebase
+            sleep 2
           done
+
+          if [ "${push_succeeded}" != true ]; then
+            echo "❌ Failed to push metrics after 3 attempts."
+            exit 1
+          fi
