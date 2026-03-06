@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import torch
@@ -60,12 +61,14 @@ class ModelPipeline:
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
 
-        logger.info(f"Building pipeline")
+        logger.info("Building pipeline")
         self.pipeline = config.build_pipeline(self.mesh_device)
 
-        logger.info(f"Setting up and running pipeline")
+        logger.info("Setting up and running pipeline")
         self.pipeline.setup_and_run()
 
+        self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
+        self.model: DeepSeekV3 | None = None
         if self.pipeline.my_mesh_id == 0:
             # Initialize host-side model interface for mesh id 0 (first stage)
             self.model = DeepSeekV3(
@@ -80,13 +83,13 @@ class ModelPipeline:
         # Host-side model interface is only invoked on mesh id 0
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
+        assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
-        page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
         prompt_token_tensors = [
             to_padded_input(
                 torch.tensor([[tid]], dtype=torch.int32),
                 batch_size=1,
-                page_size_datums=page_size_datums,
+                page_size_datums=self._page_size_datums,
             )
             for tid in tokens
         ]
@@ -100,6 +103,7 @@ class ModelPipeline:
         # Host-side model interface is only invoked on mesh id 0
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
+        assert self.model is not None
         output = self.model.decode_step(
             torch.tensor([[input_token]], dtype=torch.int32),
         )
@@ -110,21 +114,40 @@ class ModelPipeline:
         self,
         prompt_token_ids: list[int],
         max_new_tokens: int,
-        on_token: Callable[[int], None],
+        on_token: Callable[[int], None] | None = None,
         eos_token_id: int | None = None,
-    ) -> None:
+        return_generated_tokens: bool = False,
+    ) -> list[int] | None:
+        """Run full inference: prefill the prompt then decode until EOS or max_new_tokens.
+        Calls on_token(token_id) for each generated token (including the first
+        one sampled after prefill). Optionally returns the list of all generated token IDs.
+        """
         if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("run_inference() must only be called on mesh id 0")
+            raise RuntimeError("run_inference() should only be called on mesh id 0")
+        assert max_new_tokens >= 2, f"max_new_tokens must be >= 2, got {max_new_tokens}"
+
+        # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
         next_token_id = self.prefill_forward(prompt_token_ids)
-        on_token(next_token_id)
+        if on_token is not None:
+            on_token(next_token_id)
+        if return_generated_tokens:
+            generated_tokens = [next_token_id]
+
+        # Generation loop: feed y[t], get output, sample y[t+1].
         for i in range(max_new_tokens - 1):
             if eos_token_id is not None and next_token_id == eos_token_id:
                 logger.debug("EOS token {} at decode step {}", eos_token_id, i)
                 break
             next_token_id = self.decode_forward(next_token_id)
-            logger.debug("Decoded token {} at decode step {}", next_token_id, i)
-            on_token(next_token_id)
+            if on_token is not None:
+                on_token(next_token_id)
+            if return_generated_tokens:
+                generated_tokens.append(next_token_id)
+            logger.debug("Decode step {} output token: {}", i + 1, next_token_id)
+
         logger.debug("Generation complete ({} tokens generated)", i + 1)
+        if return_generated_tokens:
+            return generated_tokens
 
     def barrier(self) -> None:
         self.pipeline.barrier()

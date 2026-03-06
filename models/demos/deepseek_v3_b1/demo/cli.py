@@ -150,14 +150,15 @@ def run_demo(
             if not prompt_ids:
                 prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
 
-            generated = model_pipeline.run_inference(
+            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
+            generated_tokens = model_pipeline.run_inference(
                 prompt_token_ids=prompt_ids,
                 max_new_tokens=iterations,
-                on_token=lambda tid: logger.info("Generated token: {}", tid),
                 eos_token_id=tokenizer.eos_token_id,
+                return_generated_tokens=True,
             )
-            logger.info("Generated {} tokens total", len(generated))
-            logger.info("Output: {}", tokenizer.decode(generated, skip_special_tokens=True))
+            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         model_pipeline.barrier()
     logger.info("Pod pipeline complete")
