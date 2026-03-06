@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_downblock2d import T
 from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_wormhole_b0
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
