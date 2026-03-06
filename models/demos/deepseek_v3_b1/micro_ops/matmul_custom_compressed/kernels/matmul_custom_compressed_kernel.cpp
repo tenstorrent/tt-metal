@@ -22,7 +22,13 @@
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
-#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed.h"
+#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_constexpr_compact.h"
+#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_constexpr_unroll.h"
+#include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_runtime.h"
+
+#ifndef COMPRESSED_MM_IMPL
+#define COMPRESSED_MM_IMPL 0
+#endif
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
@@ -79,17 +85,24 @@ void kernel_main() {
 
     constexpr uint32_t total_tiles = num_tiles_k * out_w;
 
-#if defined(USE_CONSTEXPR_UNROLL)
+#if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2
     constexpr uint32_t fmt_cta_base = get_named_compile_time_arg_val("fmt_cta_base");
     constexpr uint32_t num_packed = (total_tiles + compressed::TILES_PER_UINT32 - 1) / compressed::TILES_PER_UINT32;
     static constexpr auto fmt_packed = compressed::fill_cta_array<uint32_t, fmt_cta_base, num_packed>();
-    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
+#if COMPRESSED_MM_IMPL == 2
+    compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #else
+    compressed::custom_mm_compressed_block_compact<num_tiles_k, out_w, num_packed, fmt_packed>(
+        addr_in0, addr_in1, in0_face_r_dim, 0);
+#endif
+#elif COMPRESSED_MM_IMPL == 0
     // Runtime loop: read packed pairs from L1 tensor
     constexpr uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
-    compressed::custom_mm_compressed_block_runtime_loop<num_tiles_k, out_w>(
+    compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
         fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+#else
+#error "Invalid COMPRESSED_MM_IMPL: expected 0 (runtime), 1 (constexpr_compact), or 2 (constexpr_unroll)"
 #endif
 
     tile_regs_commit();
