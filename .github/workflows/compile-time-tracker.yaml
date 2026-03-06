@@ -90,7 +90,7 @@ jobs:
       - name: 🔑 Verify metrics repo PAT
         run: |
           if [ -z "${{ secrets.CLANGSA_RESULTS_PAT }}" ]; then
-            echo "::error::WILDER_PAT secret is not set. Add a PAT with repo scope for tenstorrent/tt-metal-compile-time-tracker."
+            echo "::error::CLANGSA_RESULTS_PAT secret is not set. Add a PAT with repo scope for tenstorrent/tt-metal-compile-time-tracker."
             exit 1
           fi
 
