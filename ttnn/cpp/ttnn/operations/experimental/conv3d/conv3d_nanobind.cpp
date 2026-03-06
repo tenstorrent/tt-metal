@@ -64,12 +64,14 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
-    mod.def(
-        "prepare_conv3d_weights",
+    // Register to ttnn.experimental namespace
+    ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(
+        mod,
+        R"doc(Prepare conv3d weights for TTNN execution.)doc",
         &ttnn::operations::experimental::conv3d::prepare_conv3d_weights,
         nb::kw_only(),
         nb::arg("weight_tensor"),
-        nb::arg("groups"),
+        nb::arg("groups") = 1u,
         nb::arg("C_in_block") = 0u,
         nb::arg("alignment") = 32u,
         nb::arg("device") = nb::none());
